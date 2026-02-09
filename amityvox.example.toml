@@ -1,0 +1,68 @@
+# AmityVox Configuration
+# Copy this to amityvox.toml and edit for your deployment.
+# Environment variables override config values: AMITYVOX_DATABASE_URL, etc.
+
+[instance]
+domain = "localhost"
+name = "AmityVox"
+description = ""
+federation_mode = "closed"  # "open", "allowlist", "closed"
+
+[database]
+url = "postgres://amityvox:amityvox@localhost:5432/amityvox?sslmode=disable"
+max_connections = 25
+# For Raspberry Pi / small deployments: max_connections = 10
+
+[nats]
+url = "nats://localhost:4222"
+
+[cache]
+url = "redis://localhost:6379"  # DragonflyDB is Redis-compatible
+
+[storage]
+type = "s3"
+endpoint = "http://localhost:9000"
+bucket = "amityvox"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+region = "us-east-1"
+use_ssl = false
+
+[livekit]
+url = "ws://localhost:7880"
+api_key = ""
+api_secret = ""
+
+[search]
+enabled = true
+url = "http://localhost:7700"
+api_key = ""
+
+[auth]
+session_duration = "720h"  # 30 days
+registration_enabled = true
+invite_only = false
+require_email = false
+
+[media]
+max_upload_size = "100MB"
+image_thumbnail_sizes = [128, 256, 512]
+transcode_video = true
+strip_exif = true
+
+[http]
+listen = "0.0.0.0:8080"
+cors_origins = ["*"]
+
+[websocket]
+listen = "0.0.0.0:8081"
+heartbeat_interval = "30s"
+heartbeat_timeout = "90s"
+
+[logging]
+level = "info"  # debug, info, warn, error
+format = "json"  # json, text
+
+[metrics]
+enabled = true
+listen = "0.0.0.0:9090"  # Prometheus endpoint
