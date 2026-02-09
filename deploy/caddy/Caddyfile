@@ -1,0 +1,38 @@
+# AmityVox Caddyfile — reverse proxy configuration.
+# When a domain is configured, Caddy automatically provisions TLS certificates.
+# For local development, use localhost or the :80 block.
+#
+# To use with a real domain, replace the site address below:
+#   chat.example.com {
+#       ...
+#   }
+
+:80 {
+	# Reverse proxy API requests to AmityVox core.
+	handle /api/* {
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy health check endpoint.
+	handle /health {
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy WebSocket gateway.
+	handle /ws {
+		reverse_proxy amityvox:8081
+	}
+
+	# Reverse proxy federation discovery endpoint.
+	handle /.well-known/amityvox {
+		reverse_proxy amityvox:8080
+	}
+
+	# Serve static web client files.
+	# In production, mount the built SvelteKit output to /srv.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
