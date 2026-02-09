@@ -16,10 +16,10 @@ AmityVox is a self-hosted, federated, optionally-encrypted communication platfor
 - **Message Broker:** NATS with JetStream
 - **Cache/Sessions:** DragonflyDB (Redis-compatible)
 - **Voice/Video:** LiveKit
-- **File Storage:** MinIO (S3-compatible)
+- **File Storage:** Garage (S3-compatible) — swappable to MinIO/AWS S3/Wasabi
 - **Search:** Meilisearch
 - **Reverse Proxy:** Caddy
-- **Deployment:** Docker Compose
+- **Deployment:** Docker Compose (PostgreSQL, NATS, DragonflyDB, Garage, LiveKit, Meilisearch, Caddy)
 
 ## Project Structure
 
@@ -82,7 +82,7 @@ amityvox/
 - **Authentication:** Bearer token in `Authorization` header. Session tokens stored in `user_sessions` table.
 - **WebSocket:** Use gorilla/websocket or nhooyr.io/websocket (coder/websocket).
 - **NATS:** Use nats-io/nats.go
-- **S3:** Use minio/minio-go
+- **S3:** Use minio/minio-go (generic S3 client — works with Garage, MinIO, AWS, any S3-compatible backend)
 - **Password hashing:** Argon2id via alexedwards/argon2id
 
 ## Key Design Principles

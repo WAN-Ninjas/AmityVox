@@ -24,7 +24,7 @@ A self-hosted, federated, optionally-encrypted communication platform that combi
 | Database | PostgreSQL (always) | Relational data needs relational DB. No SQLite mode — one engine, portable everywhere |
 | Message broker | NATS + JetStream | Real-time pub/sub + persistent streams + federation queuing in one system |
 | Voice/Video | LiveKit | Open source SFU, WebRTC, screen sharing, Go-native, battle-tested |
-| File storage | MinIO (S3-compatible) | Self-hosted, swappable to AWS S3/Wasabi/Garage |
+| File storage | Garage (S3-compatible) | Lightest self-hosted S3, ~30MB RAM. Swappable to MinIO/AWS S3/Wasabi |
 | Search | Meilisearch | Lightweight full-text search, easy self-hosting |
 | Cache | DragonflyDB (Redis-compatible) | Drop-in Redis replacement, better performance and memory efficiency |
 | Reverse proxy | Caddy | Auto-TLS, HTTP/3, simple config |
@@ -49,13 +49,13 @@ A self-hosted, federated, optionally-encrypted communication platform that combi
 | PostgreSQL | 200-400MB | `shared_buffers` tuned for small instance |
 | NATS | 20-50MB | Message broker |
 | LiveKit | 100-200MB | Voice/video (when active) |
-| MinIO | 50-100MB | File storage |
+| Garage | 30-50MB | S3-compatible file storage (lighter than MinIO) |
 | Caddy | 20-30MB | Reverse proxy |
 | DragonflyDB | 30-50MB | Cache/sessions |
 | Meilisearch | 50-100MB | Search (optional on tiny deployments) |
 | Web client | ~0MB | Static files served by Caddy |
 | OS overhead | 200-300MB | Linux kernel, systemd, etc. |
-| **Total** | **~720MB - 1.3GB** | **Leaves 6.7-7.3GB free on 8GB RPi5** |
+| **Total** | **~700MB - 1.2GB** | **Leaves 6.8-7.3GB free on 8GB RPi5** |
 
 ### Test Deployment Matrix
 
@@ -117,7 +117,7 @@ Target universal formats that work everywhere:
               ┌───────────────┤      │      │      ├───────────────┐
               │               │      │      │      │               │
        ┌──────▼──────┐ ┌─────▼──────▼┐ ┌──▼──────▼──┐    ┌──────▼──────┐
-       │ PostgreSQL   │ │    NATS     │ │   MinIO     │    │ DragonflyDB │
+       │ PostgreSQL   │ │    NATS     │ │   Garage    │    │ DragonflyDB │
        │ (Data)       │ │ (Pub/Sub +  │ │ (S3 Files)  │    │ (Cache/     │
        │              │ │  JetStream) │ │             │    │  Sessions)  │
        └──────────────┘ └──────┬──────┘ └─────────────┘    └─────────────┘
@@ -215,7 +215,7 @@ Machine B (Database):
   - postgresql (streaming replica, for read scaling)
 
 Machine C (Media):
-  - minio (distributed mode)
+  - garage (S3-compatible storage)
   - livekit-server
   - amityvox media-worker (transcode jobs)
 
@@ -983,7 +983,7 @@ Phase 2: Core Features (Weeks 4-8)
 ├── Message send/receive/edit/delete (REST)
 ├── WebSocket gateway + event dispatch
 ├── Permission system (full bitfield implementation)
-├── File upload (MinIO integration)
+├── File upload (S3/Garage integration)
 └── Typing indicators + presence
 
 Phase 3: Rich Features (Weeks 9-12)
@@ -1038,11 +1038,12 @@ url = "redis://localhost:6379"  # DragonflyDB is Redis-compatible
 
 [storage]
 type = "s3"
-endpoint = "http://localhost:9000"
+endpoint = "http://localhost:3900"   # Garage S3 API port (MinIO uses 9000)
 bucket = "amityvox"
-access_key = "minioadmin"
-secret_key = "minioadmin"
-region = "us-east-1"
+access_key = ""                       # Set from Garage admin CLI
+secret_key = ""                       # Set from Garage admin CLI
+region = "garage"
+# Compatible with: Garage (default), MinIO, AWS S3, Wasabi, Backblaze B2
 
 [livekit]
 url = "ws://localhost:7880"

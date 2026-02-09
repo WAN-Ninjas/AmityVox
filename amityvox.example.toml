@@ -21,12 +21,14 @@ url = "redis://localhost:6379"  # DragonflyDB is Redis-compatible
 
 [storage]
 type = "s3"
-endpoint = "http://localhost:9000"
+endpoint = "http://localhost:3900"   # Garage S3 API port
 bucket = "amityvox"
-access_key = "minioadmin"
-secret_key = "minioadmin"
-region = "us-east-1"
+access_key = ""                       # Set from: garage key info <key_name>
+secret_key = ""                       # Set from: garage key info <key_name>
+region = "garage"
 use_ssl = false
+# Compatible with any S3 backend: Garage (default), MinIO, AWS S3, Wasabi, Backblaze B2
+# For MinIO: endpoint = "http://localhost:9000", region = "us-east-1"
 
 [livekit]
 url = "ws://localhost:7880"
