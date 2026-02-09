@@ -1,0 +1,191 @@
+# AmityVox Docker Compose — full stack deployment.
+# Includes all required services: AmityVox core, PostgreSQL, NATS, DragonflyDB,
+# Garage (S3), LiveKit, Meilisearch, and Caddy reverse proxy.
+
+services:
+  # ============================================================
+  # AmityVox Core Server
+  # ============================================================
+  amityvox:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: amityvox
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      AMITYVOX_DATABASE_URL: "postgres://amityvox:amityvox@postgresql:5432/amityvox?sslmode=disable"
+      AMITYVOX_NATS_URL: "nats://nats:4222"
+      AMITYVOX_CACHE_URL: "redis://dragonflydb:6379"
+      AMITYVOX_STORAGE_ENDPOINT: "http://garage:3900"
+      AMITYVOX_STORAGE_BUCKET: "amityvox"
+      AMITYVOX_STORAGE_REGION: "garage"
+      AMITYVOX_LIVEKIT_URL: "ws://livekit:7880"
+      AMITYVOX_SEARCH_URL: "http://meilisearch:7700"
+      AMITYVOX_HTTP_LISTEN: "0.0.0.0:8080"
+      AMITYVOX_WEBSOCKET_LISTEN: "0.0.0.0:8081"
+      AMITYVOX_LOGGING_LEVEL: "info"
+      AMITYVOX_LOGGING_FORMAT: "json"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      dragonflydb:
+        condition: service_started
+    networks:
+      - amityvox
+
+  # ============================================================
+  # PostgreSQL — primary data store
+  # ============================================================
+  postgresql:
+    image: postgres:16-alpine
+    container_name: amityvox-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: amityvox
+      POSTGRES_USER: amityvox
+      POSTGRES_PASSWORD: amityvox
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amityvox -d amityvox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amityvox
+
+  # ============================================================
+  # NATS — message broker with JetStream
+  # ============================================================
+  nats:
+    image: nats:2-alpine
+    container_name: amityvox-nats
+    restart: unless-stopped
+    command: ["--jetstream", "--store_dir", "/data"]
+    volumes:
+      - nats_data:/data
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "nats-server", "--signal", "ldm"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - amityvox
+
+  # ============================================================
+  # DragonflyDB — cache and sessions (Redis-compatible)
+  # ============================================================
+  dragonflydb:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: amityvox-dragonflydb
+    restart: unless-stopped
+    volumes:
+      - dragonfly_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Garage — S3-compatible file storage
+  # ============================================================
+  garage:
+    image: dxflrs/garage:v1.0
+    container_name: amityvox-garage
+    restart: unless-stopped
+    volumes:
+      - garage_data:/var/lib/garage/data
+      - garage_meta:/var/lib/garage/meta
+    ports:
+      - "3900:3900"
+      - "3902:3902"
+    environment:
+      GARAGE_ALLOW_WORLD_READABLE_TMPDIR: "true"
+    networks:
+      - amityvox
+
+  # ============================================================
+  # LiveKit — voice and video (WebRTC SFU)
+  # ============================================================
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: amityvox-livekit
+    restart: unless-stopped
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    environment:
+      LIVEKIT_KEYS: "devkey: secret"
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Meilisearch — full-text search
+  # ============================================================
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
+    container_name: amityvox-meilisearch
+    restart: unless-stopped
+    volumes:
+      - meili_data:/meili_data
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_ENV: development
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7700/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Caddy — reverse proxy with auto-TLS
+  # ============================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: amityvox-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ../../deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - amityvox
+    networks:
+      - amityvox
+
+volumes:
+  postgres_data:
+  nats_data:
+  dragonfly_data:
+  garage_data:
+  garage_meta:
+  meili_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  amityvox:
+    driver: bridge
