@@ -152,6 +152,16 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check max members limit.
+	var maxMembers, currentMembers int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT max_members, (SELECT COUNT(*) FROM guild_members WHERE guild_id = $1)
+		 FROM guilds WHERE id = $1`, inv.GuildID).Scan(&maxMembers, &currentMembers)
+	if maxMembers > 0 && currentMembers >= maxMembers {
+		writeError(w, http.StatusForbidden, "guild_full", "This guild has reached its maximum member count")
+		return
+	}
+
 	now := time.Now().UTC()
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
