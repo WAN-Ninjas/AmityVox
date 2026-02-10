@@ -255,6 +255,7 @@ type Message struct {
 	Encrypted           bool         `json:"encrypted"`
 	EncryptionSessionID *string      `json:"encryption_session_id,omitempty"`
 	Attachments         []Attachment `json:"attachments,omitempty"`
+	Embeds              []Embed      `json:"embeds,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 }
 
