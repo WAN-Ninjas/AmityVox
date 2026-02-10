@@ -1743,9 +1743,7 @@ func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, 
 	err := h.Pool.QueryRow(ctx,
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
 		        g.default_permissions, g.flags, g.nsfw, g.discoverable, g.preferred_locale,
-		        g.max_members, g.vanity_url,
-		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
-		        g.created_at
+		        g.max_members, g.vanity_url, g.member_count, g.created_at
 		 FROM guilds g WHERE g.id = $1`,
 		guildID,
 	).Scan(
@@ -1766,8 +1764,7 @@ func (h *Handler) HandleGetGuildPreview(w http.ResponseWriter, r *http.Request) 
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
 		        g.flags, g.nsfw, g.discoverable, g.preferred_locale,
-		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
-		        g.created_at
+		        g.member_count, g.created_at
 		 FROM guilds g WHERE g.id = $1`,
 		guildID,
 	).Scan(
@@ -1916,8 +1913,9 @@ func (h *Handler) HandleResolveVanityURL(w http.ResponseWriter, r *http.Request)
 	code := chi.URLParam(r, "code")
 
 	var guildID, guildName string
+	var memberCount int
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT id, name FROM guilds WHERE vanity_url = $1`, code).Scan(&guildID, &guildName)
+		`SELECT id, name, member_count FROM guilds WHERE vanity_url = $1`, code).Scan(&guildID, &guildName, &memberCount)
 	if err == pgx.ErrNoRows {
 		writeError(w, http.StatusNotFound, "vanity_not_found", "No guild found with this vanity URL")
 		return
@@ -1926,10 +1924,6 @@ func (h *Handler) HandleResolveVanityURL(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve vanity URL")
 		return
 	}
-
-	var memberCount int
-	h.Pool.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM guild_members WHERE guild_id = $1`, guildID).Scan(&memberCount)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"guild_id":     guildID,
@@ -1948,17 +1942,16 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 	baseSQL := `SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 	            g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
 	            g.preferred_locale, g.max_members, g.vanity_url,
-	            (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
-	            g.created_at
+	            g.member_count, g.created_at
 	     FROM guilds g
 	     WHERE g.discoverable = true`
 
 	var args []interface{}
 	if query != "" {
-		baseSQL += ` AND g.name ILIKE '%' || $1 || '%' ORDER BY (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) DESC LIMIT $2`
+		baseSQL += ` AND g.name ILIKE '%' || $1 || '%' ORDER BY g.member_count DESC LIMIT $2`
 		args = append(args, query, limit)
 	} else {
-		baseSQL += ` ORDER BY (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) DESC LIMIT $1`
+		baseSQL += ` ORDER BY g.member_count DESC LIMIT $1`
 		args = append(args, limit)
 	}
 
@@ -2041,6 +2034,121 @@ func (h *Handler) hasGuildPermission(ctx context.Context, guildID, userID string
 	}
 
 	return computedPerms&perm != 0
+}
+
+// HandleAddMemberRole adds a single role to a guild member.
+// PUT /api/v1/guilds/{guildID}/members/{memberID}/roles/{roleID}
+func (h *Handler) HandleAddMemberRole(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	memberID := chi.URLParam(r, "memberID")
+	roleID := chi.URLParam(r, "roleID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.AssignRoles) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need ASSIGN_ROLES permission")
+		return
+	}
+
+	// Verify the role belongs to this guild.
+	var exists bool
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1 AND guild_id = $2)`, roleID, guildID).Scan(&exists)
+	if err != nil || !exists {
+		writeError(w, http.StatusNotFound, "role_not_found", "Role not found in this guild")
+		return
+	}
+
+	// Verify the member exists.
+	err = h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`, guildID, memberID).Scan(&exists)
+	if err != nil || !exists {
+		writeError(w, http.StatusNotFound, "member_not_found", "Member not found in this guild")
+		return
+	}
+
+	_, err = h.Pool.Exec(r.Context(),
+		`INSERT INTO member_roles (guild_id, user_id, role_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+		guildID, memberID, roleID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add role")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "member_role_add", "role", roleID, nil)
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]string{
+		"guild_id": guildID, "user_id": memberID, "role_id": roleID, "action": "role_add",
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleRemoveMemberRole removes a single role from a guild member.
+// DELETE /api/v1/guilds/{guildID}/members/{memberID}/roles/{roleID}
+func (h *Handler) HandleRemoveMemberRole(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	memberID := chi.URLParam(r, "memberID")
+	roleID := chi.URLParam(r, "roleID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.AssignRoles) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need ASSIGN_ROLES permission")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM member_roles WHERE guild_id = $1 AND user_id = $2 AND role_id = $3`,
+		guildID, memberID, roleID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove role")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "role_not_assigned", "Member does not have this role")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "member_role_remove", "role", roleID, nil)
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]string{
+		"guild_id": guildID, "user_id": memberID, "role_id": roleID, "action": "role_remove",
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetMemberRoles returns the roles assigned to a guild member.
+// GET /api/v1/guilds/{guildID}/members/{memberID}/roles
+func (h *Handler) HandleGetMemberRoles(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+	memberID := chi.URLParam(r, "memberID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT r.id, r.guild_id, r.name, r.color, r.hoist, r.mentionable, r.position,
+		        r.permissions_allow, r.permissions_deny, r.created_at
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		guildID, memberID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get member roles")
+		return
+	}
+	defer rows.Close()
+
+	roles := make([]models.Role, 0)
+	for rows.Next() {
+		var role models.Role
+		if err := rows.Scan(
+			&role.ID, &role.GuildID, &role.Name, &role.Color, &role.Hoist, &role.Mentionable,
+			&role.Position, &role.PermissionsAllow, &role.PermissionsDeny, &role.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read roles")
+			return
+		}
+		roles = append(roles, role)
+	}
+
+	writeJSON(w, http.StatusOK, roles)
 }
 
 func (h *Handler) logAudit(ctx context.Context, guildID, actorID, action, targetType, targetID string, reason *string) {

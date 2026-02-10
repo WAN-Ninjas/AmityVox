@@ -1130,6 +1130,75 @@ func (h *Handler) loadEmbeds(ctx context.Context, messageID string) []models.Emb
 	return embeds
 }
 
+// HandleCrosspostMessage forwards a message to another channel.
+// POST /api/v1/channels/{channelID}/messages/{messageID}/crosspost
+func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	sourceChannelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	var req struct {
+		TargetChannelID string `json:"target_channel_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TargetChannelID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "target_channel_id is required")
+		return
+	}
+
+	if req.TargetChannelID == sourceChannelID {
+		writeError(w, http.StatusBadRequest, "same_channel", "Cannot crosspost to the same channel")
+		return
+	}
+
+	// Check permission in target channel's guild.
+	if !h.hasChannelPermission(r.Context(), req.TargetChannelID, userID, permissions.SendMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need SEND_MESSAGES permission in the target channel")
+		return
+	}
+
+	// Fetch the original message.
+	var content *string
+	var authorID string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT author_id, content FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, sourceChannelID,
+	).Scan(&authorID, &content)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "message_not_found", "Source message not found")
+		return
+	}
+
+	// Create the forwarded message in the target channel.
+	newMsgID := models.NewULID().String()
+	var msg models.Message
+	err = h.Pool.QueryRow(r.Context(),
+		`INSERT INTO messages (id, channel_id, author_id, content, message_type, flags, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, now())
+		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		           encrypted, encryption_session_id, created_at`,
+		newMsgID, req.TargetChannelID, userID, content, models.MessageTypeDefault, models.MessageFlagCrosspost,
+	).Scan(
+		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to crosspost message", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to crosspost message")
+		return
+	}
+
+	h.Pool.Exec(r.Context(),
+		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, newMsgID, req.TargetChannelID)
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
+
+	writeJSON(w, http.StatusCreated, msg)
+}
+
 // hasChannelPermission checks if a user has a specific permission in the guild
 // that owns this channel. Returns false for DM channels.
 func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID string, perm uint64) bool {

@@ -272,6 +272,13 @@ const (
 	MessageTypeThreadCreated = "thread_created"
 )
 
+// MessageFlag constants for messages.flags bitfield.
+const (
+	MessageFlagCrosspost = 1 << 0
+	MessageFlagPinned    = 1 << 1
+	MessageFlagUrgent    = 1 << 2
+)
+
 // Attachment represents a file attached to a message, stored in S3-compatible
 // object storage. Corresponds to the attachments table.
 type Attachment struct {
