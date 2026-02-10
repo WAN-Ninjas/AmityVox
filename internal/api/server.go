@@ -77,6 +77,7 @@ func (s *Server) registerMiddleware() {
 	s.Router.Use(corsMiddleware(s.Config.HTTP.CORSOrigins))
 	s.Router.Use(middleware.Compress(5))
 	s.Router.Use(middleware.Timeout(30 * time.Second))
+	s.Router.Use(maxBodySize(1 << 20)) // 1MB default body limit
 	s.Router.Use(s.rateLimitMiddleware())
 }
 
@@ -171,6 +172,7 @@ func (s *Server) registerRoutes() {
 				r.Patch("/{guildID}/channels", guildH.HandleReorderGuildChannels)
 				r.Post("/{guildID}/channels", guildH.HandleCreateGuildChannel)
 				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
+				r.Get("/{guildID}/members/search", guildH.HandleSearchGuildMembers)
 				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)
 				r.Patch("/{guildID}/members/{memberID}", guildH.HandleUpdateGuildMember)
 				r.Delete("/{guildID}/members/{memberID}", guildH.HandleRemoveGuildMember)
@@ -498,6 +500,18 @@ func slogMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 				slog.String("remote", r.RemoteAddr),
 				slog.String("request_id", middleware.GetReqID(r.Context())),
 			)
+		})
+	}
+}
+
+// maxBodySize limits the request body to the given number of bytes.
+func maxBodySize(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, n)
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
