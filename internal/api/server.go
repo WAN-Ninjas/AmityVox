@@ -176,6 +176,10 @@ func (s *Server) registerRoutes() {
 				r.Get("/{guildID}/audit-log", guildH.HandleGetGuildAuditLog)
 				r.Get("/{guildID}/emoji", guildH.HandleGetGuildEmoji)
 				r.Post("/{guildID}/emoji", guildH.HandleCreateGuildEmoji)
+				r.Get("/{guildID}/webhooks", guildH.HandleGetGuildWebhooks)
+				r.Post("/{guildID}/webhooks", guildH.HandleCreateGuildWebhook)
+				r.Patch("/{guildID}/webhooks/{webhookID}", guildH.HandleUpdateGuildWebhook)
+				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
 			})
 
 			// Channel routes.

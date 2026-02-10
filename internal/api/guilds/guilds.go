@@ -1069,6 +1069,180 @@ func (h *Handler) HandleCreateGuildEmoji(w http.ResponseWriter, r *http.Request)
 
 // --- Internal helpers ---
 
+// HandleGetGuildWebhooks lists all webhooks for a guild.
+// GET /api/v1/guilds/{guildID}/webhooks
+func (h *Handler) HandleGetGuildWebhooks(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, guild_id, channel_id, creator_id, name, avatar_id, token,
+		        webhook_type, outgoing_url, created_at
+		 FROM webhooks WHERE guild_id = $1
+		 ORDER BY created_at DESC`,
+		guildID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get webhooks")
+		return
+	}
+	defer rows.Close()
+
+	webhooks := make([]models.Webhook, 0)
+	for rows.Next() {
+		var wh models.Webhook
+		if err := rows.Scan(
+			&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
+			&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhooks")
+			return
+		}
+		webhooks = append(webhooks, wh)
+	}
+
+	writeJSON(w, http.StatusOK, webhooks)
+}
+
+// HandleCreateGuildWebhook creates a new webhook for a guild channel.
+// POST /api/v1/guilds/{guildID}/webhooks
+func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	var req struct {
+		Name      string  `json:"name"`
+		ChannelID string  `json:"channel_id"`
+		AvatarID  *string `json:"avatar_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Name == "" || req.ChannelID == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields", "Name and channel_id are required")
+		return
+	}
+
+	// Verify the channel belongs to this guild.
+	var channelGuildID *string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, req.ChannelID).Scan(&channelGuildID)
+	if err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		writeError(w, http.StatusBadRequest, "invalid_channel", "Channel not found in this guild")
+		return
+	}
+
+	webhookID := models.NewULID().String()
+	token := generateInviteCode() + generateInviteCode() + generateInviteCode() // 36 char token
+
+	var wh models.Webhook
+	err = h.Pool.QueryRow(r.Context(),
+		`INSERT INTO webhooks (id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'incoming', now())
+		 RETURNING id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, created_at`,
+		webhookID, guildID, req.ChannelID, userID, req.Name, req.AvatarID, token,
+	).Scan(
+		&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
+		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create webhook", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create webhook")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "WEBHOOK_CREATE", "webhook", webhookID, nil)
+	writeJSON(w, http.StatusCreated, wh)
+}
+
+// HandleUpdateGuildWebhook updates an existing webhook.
+// PATCH /api/v1/guilds/{guildID}/webhooks/{webhookID}
+func (h *Handler) HandleUpdateGuildWebhook(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	webhookID := chi.URLParam(r, "webhookID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	var req struct {
+		Name      *string `json:"name"`
+		ChannelID *string `json:"channel_id"`
+		AvatarID  *string `json:"avatar_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var wh models.Webhook
+	err := h.Pool.QueryRow(r.Context(),
+		`UPDATE webhooks SET
+			name = COALESCE($1, name),
+			channel_id = COALESCE($2, channel_id),
+			avatar_id = COALESCE($3, avatar_id)
+		 WHERE id = $4 AND guild_id = $5
+		 RETURNING id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, created_at`,
+		req.Name, req.ChannelID, req.AvatarID, webhookID, guildID,
+	).Scan(
+		&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
+		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update webhook")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "WEBHOOK_UPDATE", "webhook", webhookID, nil)
+	writeJSON(w, http.StatusOK, wh)
+}
+
+// HandleDeleteGuildWebhook deletes a webhook.
+// DELETE /api/v1/guilds/{guildID}/webhooks/{webhookID}
+func (h *Handler) HandleDeleteGuildWebhook(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	webhookID := chi.URLParam(r, "webhookID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	result, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM webhooks WHERE id = $1 AND guild_id = $2`, webhookID, guildID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete webhook")
+		return
+	}
+
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "WEBHOOK_DELETE", "webhook", webhookID, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, error) {
 	var g models.Guild
 	err := h.Pool.QueryRow(ctx,
