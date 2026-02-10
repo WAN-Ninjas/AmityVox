@@ -337,6 +337,7 @@ func (h *Handler) HandleGetMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg.Attachments = h.loadAttachments(r.Context(), messageID)
+	msg.Embeds = h.loadEmbeds(r.Context(), messageID)
 
 	writeJSON(w, http.StatusOK, msg)
 }
@@ -841,6 +842,35 @@ func (h *Handler) loadAttachments(ctx context.Context, messageID string) []model
 		attachments = append(attachments, a)
 	}
 	return attachments
+}
+
+func (h *Handler) loadEmbeds(ctx context.Context, messageID string) []models.Embed {
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, message_id, embed_type, url, title, description, site_name,
+		        icon_url, color, image_url, image_width, image_height,
+		        video_url, special_type, special_id, created_at
+		 FROM embeds WHERE message_id = $1
+		 ORDER BY created_at`,
+		messageID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var embeds []models.Embed
+	for rows.Next() {
+		var e models.Embed
+		if err := rows.Scan(
+			&e.ID, &e.MessageID, &e.EmbedType, &e.URL, &e.Title, &e.Description,
+			&e.SiteName, &e.IconURL, &e.Color, &e.ImageURL, &e.ImageWidth, &e.ImageHeight,
+			&e.VideoURL, &e.SpecialType, &e.SpecialID, &e.CreatedAt,
+		); err != nil {
+			return nil
+		}
+		embeds = append(embeds, e)
+	}
+	return embeds
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
