@@ -363,6 +363,59 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 	return nil
 }
 
+// ChangeEmailRequest is the request body for changing a user's email.
+type ChangeEmailRequest struct {
+	Password string `json:"password"`
+	NewEmail string `json:"new_email"`
+}
+
+// ChangeEmail validates the password and updates the user's email address.
+func (s *Service) ChangeEmail(ctx context.Context, userID string, req ChangeEmailRequest) error {
+	if req.NewEmail == "" || len(req.NewEmail) > 254 {
+		return &AuthError{Code: "invalid_email", Message: "A valid email address is required", Status: 400}
+	}
+
+	// Get current password hash.
+	var passwordHash *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT password_hash FROM users WHERE id = $1`, userID,
+	).Scan(&passwordHash)
+	if err != nil {
+		return fmt.Errorf("querying user: %w", err)
+	}
+
+	if passwordHash == nil {
+		return &AuthError{Code: "no_password", Message: "Account does not have a password set", Status: 400}
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.Password, *passwordHash)
+	if err != nil {
+		return fmt.Errorf("comparing password hash: %w", err)
+	}
+	if !match {
+		return &AuthError{Code: "invalid_password", Message: "Password is incorrect", Status: 401}
+	}
+
+	// Check if email is already taken.
+	var exists bool
+	s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 AND id != $2)`,
+		req.NewEmail, userID,
+	).Scan(&exists)
+	if exists {
+		return &AuthError{Code: "email_taken", Message: "This email address is already in use", Status: 409}
+	}
+
+	_, err = s.pool.Exec(ctx,
+		`UPDATE users SET email = $2 WHERE id = $1`, userID, req.NewEmail)
+	if err != nil {
+		return fmt.Errorf("updating email: %w", err)
+	}
+
+	s.logger.Info("user changed email", slog.String("user_id", userID))
+	return nil
+}
+
 // GetUser retrieves a user by ID from the database.
 func (s *Service) GetUser(ctx context.Context, userID string) (*models.User, error) {
 	var user models.User

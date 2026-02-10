@@ -721,6 +721,41 @@ func (h *Handler) HandleRemoveReaction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleRemoveUserReaction removes another user's reaction (moderator action).
+// DELETE /api/v1/channels/{channelID}/messages/{messageID}/reactions/{emoji}/{userID}
+func (h *Handler) HandleRemoveUserReaction(w http.ResponseWriter, r *http.Request) {
+	actorID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	emoji := chi.URLParam(r, "emoji")
+	targetUserID := chi.URLParam(r, "targetUserID")
+
+	// Permission check: ManageMessages required to remove others' reactions.
+	if !h.hasChannelPermission(r.Context(), channelID, actorID, permissions.ManageMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_MESSAGES permission")
+		return
+	}
+
+	result, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+		messageID, targetUserID, emoji,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove reaction")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "reaction_not_found", "Reaction not found")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageReactionDel, "MESSAGE_REACTION_REMOVE", map[string]string{
+		"message_id": messageID, "channel_id": channelID, "user_id": targetUserID, "emoji": emoji,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // HandleGetPins returns pinned messages in a channel.
 // GET /api/v1/channels/{channelID}/pins
 func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
