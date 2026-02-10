@@ -13,35 +13,43 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/search"
 )
 
 // Manager coordinates background workers and periodic jobs.
 type Manager struct {
-	pool   *pgxpool.Pool
-	bus    *events.Bus
-	search *search.Service
-	logger *slog.Logger
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	pool          *pgxpool.Pool
+	bus           *events.Bus
+	search        *search.Service
+	automod       *automod.Service
+	notifications *notifications.Service
+	logger        *slog.Logger
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 }
 
 // Config holds the configuration for the worker manager.
 type Config struct {
-	Pool   *pgxpool.Pool
-	Bus    *events.Bus
-	Search *search.Service // nil if search is disabled
-	Logger *slog.Logger
+	Pool          *pgxpool.Pool
+	Bus           *events.Bus
+	Search        *search.Service        // nil if search is disabled
+	AutoMod       *automod.Service       // nil if automod is disabled
+	Notifications *notifications.Service // nil if push is disabled
+	Logger        *slog.Logger
 }
 
 // New creates a new worker manager.
 func New(cfg Config) *Manager {
 	return &Manager{
-		pool:   cfg.Pool,
-		bus:    cfg.Bus,
-		search: cfg.Search,
-		logger: cfg.Logger,
+		pool:          cfg.Pool,
+		bus:           cfg.Bus,
+		search:        cfg.Search,
+		automod:       cfg.AutoMod,
+		notifications: cfg.Notifications,
+		logger:        cfg.Logger,
 	}
 }
 
@@ -58,6 +66,24 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startPeriodic(ctx, "search-sync", 5*time.Minute, m.syncSearchIndex)
 		m.startEventWorker(ctx)
 	}
+
+	// Start media workers (transcode + embed unfurling).
+	m.startTranscodeWorker(ctx)
+	m.startEmbedWorker(ctx)
+
+	// Start automod worker (message content evaluation).
+	if m.automod != nil {
+		m.startAutomodWorker(ctx)
+	}
+
+	// Start push notification worker if enabled.
+	if m.notifications != nil && m.notifications.Enabled() {
+		m.startNotificationWorker(ctx)
+		m.startPeriodic(ctx, "push-sub-cleanup", 24*time.Hour, m.cleanStalePushSubscriptions)
+	}
+
+	// Periodic MLS key package cleanup.
+	m.startPeriodic(ctx, "mls-key-cleanup", 6*time.Hour, m.cleanExpiredKeyPackages)
 
 	m.logger.Info("background workers started")
 }
@@ -129,6 +155,10 @@ func (m *Manager) startEventWorker(ctx context.Context) {
 }
 
 // --- Periodic Job Implementations ---
+
+func (m *Manager) cleanStalePushSubscriptions(ctx context.Context) error {
+	return m.notifications.CleanupStaleSubscriptions(ctx, 90*24*time.Hour) // 90 days
+}
 
 func (m *Manager) cleanExpiredSessions(ctx context.Context) error {
 	tag, err := m.pool.Exec(ctx,

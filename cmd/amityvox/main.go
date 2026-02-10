@@ -23,6 +23,7 @@ import (
 
 	"github.com/amityvox/amityvox/internal/api"
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/encryption"
@@ -31,6 +32,7 @@ import (
 	"github.com/amityvox/amityvox/internal/gateway"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
 	"github.com/amityvox/amityvox/internal/voice"
@@ -236,12 +238,34 @@ func runServe() error {
 		Logger:     logger,
 	})
 
-	// Start background workers.
-	workerMgr := workers.New(workers.Config{
+	// Create AutoMod service.
+	automodSvc := automod.NewService(automod.Config{
 		Pool:   db.Pool,
 		Bus:    bus,
-		Search: searchSvc,
 		Logger: logger,
+	})
+
+	// Create push notification service (optional — only when VAPID keys are configured).
+	var notifSvc *notifications.Service
+	if cfg.Push.VAPIDPublicKey != "" && cfg.Push.VAPIDPrivateKey != "" {
+		notifSvc = notifications.NewService(notifications.Config{
+			Pool:              db.Pool,
+			Logger:            logger,
+			VAPIDPublicKey:    cfg.Push.VAPIDPublicKey,
+			VAPIDPrivateKey:   cfg.Push.VAPIDPrivateKey,
+			VAPIDContactEmail: cfg.Push.VAPIDContactEmail,
+		})
+		logger.Info("push notifications enabled")
+	}
+
+	// Start background workers.
+	workerMgr := workers.New(workers.Config{
+		Pool:          db.Pool,
+		Bus:           bus,
+		Search:        searchSvc,
+		AutoMod:       automodSvc,
+		Notifications: notifSvc,
+		Logger:        logger,
 	})
 	workerMgr.Start(ctx)
 
@@ -272,6 +296,8 @@ func runServe() error {
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)
 	srv.Encryption = encryptionSvc
+	srv.AutoMod = automodSvc
+	srv.Notifications = notifSvc
 	srv.Version = version
 
 	// Mount federation endpoints.

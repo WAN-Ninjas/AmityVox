@@ -59,6 +59,9 @@ const (
 	// Read state events.
 	SubjectChannelAck = "amityvox.channel.ack"
 
+	// AutoMod events.
+	SubjectAutomodAction = "amityvox.automod.action"
+
 	// Federation events.
 	SubjectFederationRetry = "amityvox.federation.retry"
 )

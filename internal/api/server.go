@@ -24,11 +24,13 @@ import (
 	"github.com/amityvox/amityvox/internal/api/users"
 	"github.com/amityvox/amityvox/internal/api/webhooks"
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/media"
+	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
 	"github.com/amityvox/amityvox/internal/voice"
@@ -47,7 +49,9 @@ type Server struct {
 	Search      *search.Service
 	Voice      *voice.Service
 	Encryption *encryption.Service
-	WebAuthn   *webauthn.WebAuthn
+	AutoMod       *automod.Service
+	Notifications *notifications.Service
+	WebAuthn      *webauthn.WebAuthn
 	InstanceID string
 	Version     string
 	Logger      *slog.Logger
@@ -244,6 +248,18 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
 				r.Get("/{guildID}/vanity-url", guildH.HandleGetGuildVanityURL)
 				r.Patch("/{guildID}/vanity-url", guildH.HandleSetGuildVanityURL)
+
+				// AutoMod rules management.
+				if s.AutoMod != nil {
+					r.Route("/{guildID}/automod", func(r chi.Router) {
+						r.Get("/rules", s.AutoMod.HandleListRules)
+						r.Post("/rules", s.AutoMod.HandleCreateRule)
+						r.Get("/rules/{ruleID}", s.AutoMod.HandleGetRule)
+						r.Patch("/rules/{ruleID}", s.AutoMod.HandleUpdateRule)
+						r.Delete("/rules/{ruleID}", s.AutoMod.HandleDeleteRule)
+						r.Get("/actions", s.AutoMod.HandleGetActions)
+					})
+				}
 			})
 
 			// Channel routes.
@@ -317,6 +333,18 @@ func (s *Server) registerRoutes() {
 					// Commits.
 					r.Post("/channels/{channelID}/commits", s.Encryption.HandlePublishCommit)
 					r.Get("/channels/{channelID}/commits", s.Encryption.HandleGetCommits)
+				})
+			}
+
+			// Push notification routes.
+			if s.Notifications != nil {
+				r.Route("/notifications", func(r chi.Router) {
+					r.Get("/vapid-key", s.Notifications.HandleGetVAPIDKey)
+					r.Post("/subscriptions", s.Notifications.HandleSubscribe)
+					r.Get("/subscriptions", s.Notifications.HandleListSubscriptions)
+					r.Delete("/subscriptions/{subscriptionID}", s.Notifications.HandleUnsubscribe)
+					r.Get("/preferences", s.Notifications.HandleGetPreferences)
+					r.Patch("/preferences", s.Notifications.HandleUpdatePreferences)
 				})
 			}
 
