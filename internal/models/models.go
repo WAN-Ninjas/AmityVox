@@ -123,6 +123,8 @@ type Guild struct {
 	SystemChannelBan     *string   `json:"system_channel_ban,omitempty"`
 	PreferredLocale      string    `json:"preferred_locale"`
 	MaxMembers           int       `json:"max_members"`
+	VanityURL            *string   `json:"vanity_url,omitempty"`
+	MemberCount          int       `json:"member_count,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }
 
@@ -251,9 +253,11 @@ type Message struct {
 	MasqueradeName      *string    `json:"masquerade_name,omitempty"`
 	MasqueradeAvatar    *string    `json:"masquerade_avatar,omitempty"`
 	MasqueradeColor     *string    `json:"masquerade_color,omitempty"`
-	Encrypted           bool       `json:"encrypted"`
-	EncryptionSessionID *string    `json:"encryption_session_id,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
+	Encrypted           bool         `json:"encrypted"`
+	EncryptionSessionID *string      `json:"encryption_session_id,omitempty"`
+	Attachments         []Attachment `json:"attachments,omitempty"`
+	Embeds              []Embed      `json:"embeds,omitempty"`
+	CreatedAt           time.Time    `json:"created_at"`
 }
 
 // MessageType constants for messages.message_type.
@@ -266,6 +270,13 @@ const (
 	MessageTypeSystemPin     = "system_pin"
 	MessageTypeReply         = "reply"
 	MessageTypeThreadCreated = "thread_created"
+)
+
+// MessageFlag constants for messages.flags bitfield.
+const (
+	MessageFlagCrosspost = 1 << 0
+	MessageFlagPinned    = 1 << 1
+	MessageFlagUrgent    = 1 << 2
 )
 
 // Attachment represents a file attached to a message, stored in S3-compatible
@@ -402,6 +413,32 @@ const (
 
 // AuditLogEntry represents an administrative action recorded for auditing purposes.
 // Corresponds to the audit_log table.
+// Audit log action constants for categorizing guild events.
+const (
+	AuditActionGuildUpdate         = "guild_update"
+	AuditActionChannelCreate       = "channel_create"
+	AuditActionChannelUpdate       = "channel_update"
+	AuditActionChannelDelete       = "channel_delete"
+	AuditActionRoleCreate          = "role_create"
+	AuditActionRoleUpdate          = "role_update"
+	AuditActionRoleDelete          = "role_delete"
+	AuditActionMemberKick          = "member_kick"
+	AuditActionMemberBan           = "member_ban"
+	AuditActionMemberUnban         = "member_unban"
+	AuditActionMemberUpdate        = "member_update"
+	AuditActionInviteCreate        = "invite_create"
+	AuditActionInviteDelete        = "invite_delete"
+	AuditActionWebhookCreate       = "webhook_create"
+	AuditActionWebhookUpdate       = "webhook_update"
+	AuditActionWebhookDelete       = "webhook_delete"
+	AuditActionEmojiCreate         = "emoji_create"
+	AuditActionEmojiUpdate         = "emoji_update"
+	AuditActionEmojiDelete         = "emoji_delete"
+	AuditActionMessageDelete       = "message_delete"
+	AuditActionMessageBulkDelete   = "message_bulk_delete"
+	AuditActionOwnershipTransfer   = "ownership_transfer"
+)
+
 type AuditLogEntry struct {
 	ID         string                 `json:"id"`
 	GuildID    string                 `json:"guild_id"`
