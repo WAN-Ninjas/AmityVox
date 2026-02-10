@@ -164,7 +164,7 @@ func runServe() error {
 	})
 
 	// Create and start HTTP API server.
-	srv := api.NewServer(db, cfg, authSvc, bus, cache, logger)
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, instanceID, logger)
 
 	// Parse WebSocket settings.
 	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()
