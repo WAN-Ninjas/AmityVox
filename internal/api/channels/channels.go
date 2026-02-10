@@ -86,7 +86,13 @@ func (h *Handler) HandleGetChannel(w http.ResponseWriter, r *http.Request) {
 // HandleUpdateChannel updates a channel's settings.
 // PATCH /api/v1/channels/{channelID}
 func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
 
 	var req updateChannelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -129,7 +135,13 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 // HandleDeleteChannel deletes a channel.
 // DELETE /api/v1/channels/{channelID}
 func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channels WHERE id = $1`, channelID)
 	if err != nil {
@@ -358,8 +370,15 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 // HandleGetMessage returns a single message by ID.
 // GET /api/v1/channels/{channelID}/messages/{messageID}
 func (h *Handler) HandleGetMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
 
 	msg, err := h.getMessage(r.Context(), channelID, messageID)
 	if err != nil {
@@ -447,8 +466,15 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 // HandleGetMessageEdits returns the edit history for a message.
 // GET /api/v1/channels/{channelID}/messages/{messageID}/edits
 func (h *Handler) HandleGetMessageEdits(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
+
+	// Permission check: ReadHistory.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ReadHistory) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need READ_HISTORY permission")
+		return
+	}
 
 	// Verify the message exists in this channel.
 	var exists bool
@@ -536,7 +562,13 @@ func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 // HandleBulkDeleteMessages deletes multiple messages in a channel at once.
 // POST /api/v1/channels/{channelID}/messages/bulk-delete
 func (h *Handler) HandleBulkDeleteMessages(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_MESSAGES permission")
+		return
+	}
 
 	var req struct {
 		MessageIDs []string `json:"message_ids"`
@@ -581,7 +613,15 @@ func (h *Handler) HandleBulkDeleteMessages(w http.ResponseWriter, r *http.Reques
 // HandleGetReactions returns aggregated reaction counts and the reacting users for a message.
 // GET /api/v1/channels/{channelID}/messages/{messageID}/reactions
 func (h *Handler) HandleGetReactions(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT emoji, COUNT(*) as count, array_agg(user_id ORDER BY created_at) as users
@@ -684,7 +724,14 @@ func (h *Handler) HandleRemoveReaction(w http.ResponseWriter, r *http.Request) {
 // HandleGetPins returns pinned messages in a channel.
 // GET /api/v1/channels/{channelID}/pins
 func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type,
@@ -728,6 +775,11 @@ func (h *Handler) HandlePinMessage(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
 
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_MESSAGES permission")
+		return
+	}
+
 	// Verify message exists.
 	var exists bool
 	h.Pool.QueryRow(r.Context(),
@@ -769,8 +821,15 @@ func (h *Handler) HandlePinMessage(w http.ResponseWriter, r *http.Request) {
 // HandleUnpinMessage unpins a message from a channel.
 // DELETE /api/v1/channels/{channelID}/pins/{messageID}
 func (h *Handler) HandleUnpinMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
+
+	// Permission check: ManageMessages.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_MESSAGES permission")
+		return
+	}
 
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM pins WHERE channel_id = $1 AND message_id = $2`, channelID, messageID)
@@ -796,6 +855,12 @@ func (h *Handler) HandleTriggerTyping(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
+	// Permission check: SendMessages (typing implies intent to send).
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.SendMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need SEND_MESSAGES permission")
+		return
+	}
+
 	h.EventBus.PublishJSON(r.Context(), events.SubjectTypingStart, "TYPING_START", map[string]string{
 		"channel_id": channelID,
 		"user_id":    userID,
@@ -809,6 +874,12 @@ func (h *Handler) HandleTriggerTyping(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleAckChannel(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
 
 	// Get the latest message ID for this channel.
 	var lastMessageID *string
@@ -835,8 +906,15 @@ func (h *Handler) HandleAckChannel(w http.ResponseWriter, r *http.Request) {
 // HandleSetChannelPermission sets a permission override on a channel.
 // PUT /api/v1/channels/{channelID}/permissions/{overrideID}
 func (h *Handler) HandleSetChannelPermission(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	overrideID := chi.URLParam(r, "overrideID")
+
+	// Permission check: ManageChannels.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
 
 	var req permissionOverrideRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -877,8 +955,15 @@ func (h *Handler) HandleSetChannelPermission(w http.ResponseWriter, r *http.Requ
 // HandleDeleteChannelPermission removes a permission override from a channel.
 // DELETE /api/v1/channels/{channelID}/permissions/{overrideID}
 func (h *Handler) HandleDeleteChannelPermission(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	overrideID := chi.URLParam(r, "overrideID")
+
+	// Permission check: ManageChannels.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
 
 	_, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM channel_permission_overrides WHERE channel_id = $1 AND target_id = $2`,
@@ -898,6 +983,12 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
+
+	// Permission check: SendMessages (thread creation requires ability to send).
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.SendMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need SEND_MESSAGES permission")
+		return
+	}
 
 	var req struct {
 		Name string `json:"name"`
@@ -984,7 +1075,14 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 // HandleGetThreads lists active threads in a channel.
 // GET /api/v1/channels/{channelID}/threads
 func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
 
 	// Get the guild_id of this channel so we can find threads.
 	var guildID *string
@@ -1035,7 +1133,14 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 // HandleGetChannelWebhooks lists all webhooks for a channel.
 // GET /api/v1/channels/{channelID}/webhooks
 func (h *Handler) HandleGetChannelWebhooks(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ManageWebhooks.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT id, guild_id, channel_id, creator_id, name, avatar_id, token,
