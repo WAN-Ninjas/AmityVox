@@ -668,6 +668,40 @@ func (h *Handler) HandleDeleteChannelPermission(w http.ResponseWriter, r *http.R
 
 // --- Internal helpers ---
 
+// HandleGetChannelWebhooks lists all webhooks for a channel.
+// GET /api/v1/channels/{channelID}/webhooks
+func (h *Handler) HandleGetChannelWebhooks(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, guild_id, channel_id, creator_id, name, avatar_id, token,
+		        webhook_type, outgoing_url, created_at
+		 FROM webhooks WHERE channel_id = $1
+		 ORDER BY created_at DESC`,
+		channelID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get webhooks")
+		return
+	}
+	defer rows.Close()
+
+	webhooks := make([]models.Webhook, 0)
+	for rows.Next() {
+		var wh models.Webhook
+		if err := rows.Scan(
+			&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
+			&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhooks")
+			return
+		}
+		webhooks = append(webhooks, wh)
+	}
+
+	writeJSON(w, http.StatusOK, webhooks)
+}
+
 func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Channel, error) {
 	var c models.Channel
 	err := h.Pool.QueryRow(ctx,

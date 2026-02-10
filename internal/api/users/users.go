@@ -459,6 +459,79 @@ func (h *Handler) HandleUnblockUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleGetSelfSessions lists all active sessions for the authenticated user.
+// GET /api/v1/users/@me/sessions
+func (h *Handler) HandleGetSelfSessions(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, user_id, device_name, user_agent, created_at, last_active_at, expires_at
+		 FROM user_sessions WHERE user_id = $1
+		 ORDER BY last_active_at DESC`,
+		userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get sessions")
+		return
+	}
+	defer rows.Close()
+
+	sessions := make([]map[string]interface{}, 0)
+	currentSessionID := auth.SessionIDFromContext(r.Context())
+	for rows.Next() {
+		var s models.UserSession
+		if err := rows.Scan(
+			&s.ID, &s.UserID, &s.DeviceName,
+			&s.UserAgent, &s.CreatedAt, &s.LastActiveAt, &s.ExpiresAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read sessions")
+			return
+		}
+		session := map[string]interface{}{
+			"id":             s.ID,
+			"device_name":    s.DeviceName,
+			"user_agent":     s.UserAgent,
+			"created_at":     s.CreatedAt,
+			"last_active_at": s.LastActiveAt,
+			"expires_at":     s.ExpiresAt,
+			"current":        s.ID == currentSessionID,
+		}
+		sessions = append(sessions, session)
+	}
+
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+// HandleDeleteSelfSession revokes a specific session for the authenticated user.
+// DELETE /api/v1/users/@me/sessions/{sessionID}
+func (h *Handler) HandleDeleteSelfSession(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "sessionID")
+
+	result, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM user_sessions WHERE id = $1 AND user_id = $2`, sessionID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete session")
+		return
+	}
+
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "session_not_found", "Session not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Internal helpers ---
 
 func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, error) {
