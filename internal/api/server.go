@@ -167,8 +167,9 @@ func (s *Server) registerRoutes() {
 			r.Route("/guilds", func(r chi.Router) {
 				r.Post("/", guildH.HandleCreateGuild)
 				r.Get("/discover", guildH.HandleDiscoverGuilds)
+				r.Get("/vanity/{code}", guildH.HandleResolveVanityURL)
 				r.Get("/{guildID}/preview", guildH.HandleGetGuildPreview)
-			r.Get("/{guildID}", guildH.HandleGetGuild)
+				r.Get("/{guildID}", guildH.HandleGetGuild)
 				r.Patch("/{guildID}", guildH.HandleUpdateGuild)
 				r.Delete("/{guildID}", guildH.HandleDeleteGuild)
 				r.Post("/{guildID}/leave", guildH.HandleLeaveGuild)
@@ -198,6 +199,8 @@ func (s *Server) registerRoutes() {
 				r.Post("/{guildID}/webhooks", guildH.HandleCreateGuildWebhook)
 				r.Patch("/{guildID}/webhooks/{webhookID}", guildH.HandleUpdateGuildWebhook)
 				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
+				r.Get("/{guildID}/vanity-url", guildH.HandleGetGuildVanityURL)
+				r.Patch("/{guildID}/vanity-url", guildH.HandleSetGuildVanityURL)
 			})
 
 			// Channel routes.
