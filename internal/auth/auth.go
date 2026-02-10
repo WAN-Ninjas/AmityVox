@@ -235,6 +235,9 @@ func (s *Service) ValidateSession(ctx context.Context, sessionID string) (string
 			s.cache.DeleteSession(ctx, sessionID)
 			return "", &AuthError{Code: "session_expired", Message: "Session has expired", Status: 401}
 		}
+		if err := s.checkUserFlags(ctx, cached.UserID); err != nil {
+			return "", err
+		}
 		return cached.UserID, nil
 	}
 
@@ -263,6 +266,11 @@ func (s *Service) ValidateSession(ctx context.Context, sessionID string) (string
 		ExpiresAt: expiresAt,
 	})
 
+	// Check if user is suspended or deleted.
+	if err := s.checkUserFlags(ctx, userID); err != nil {
+		return "", err
+	}
+
 	// Update last_active_at asynchronously.
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -271,6 +279,24 @@ func (s *Service) ValidateSession(ctx context.Context, sessionID string) (string
 	}()
 
 	return userID, nil
+}
+
+// checkUserFlags verifies a user is not suspended or deleted.
+func (s *Service) checkUserFlags(ctx context.Context, userID string) error {
+	var flags int
+	err := s.pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
+	if err != nil {
+		return nil // if we can't read flags, don't block — let the handler deal with it
+	}
+	const flagSuspended = 1 << 0
+	const flagDeleted = 1 << 1
+	if flags&flagSuspended != 0 {
+		return &AuthError{Code: "account_suspended", Message: "Your account has been suspended", Status: 403}
+	}
+	if flags&flagDeleted != 0 {
+		return &AuthError{Code: "account_deleted", Message: "This account has been deleted", Status: 403}
+	}
+	return nil
 }
 
 // ChangePasswordRequest is the request body for changing a user's password.
