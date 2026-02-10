@@ -889,6 +889,64 @@ func (h *Handler) HandleGetGuildInvites(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, invites)
 }
 
+// HandleCreateGuildInvite creates a new invite for a guild.
+// POST /api/v1/guilds/{guildID}/invites
+func (h *Handler) HandleCreateGuildInvite(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.CreateInvites) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need CREATE_INVITES permission")
+		return
+	}
+
+	var req struct {
+		ChannelID     *string `json:"channel_id"`
+		MaxUses       *int    `json:"max_uses"`
+		MaxAgeSeconds *int    `json:"max_age_seconds"`
+		Temporary     bool    `json:"temporary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Empty body is fine — use defaults.
+		req = struct {
+			ChannelID     *string `json:"channel_id"`
+			MaxUses       *int    `json:"max_uses"`
+			MaxAgeSeconds *int    `json:"max_age_seconds"`
+			Temporary     bool    `json:"temporary"`
+		}{}
+	}
+
+	code := generateInviteCode()
+
+	// Default max age: 24 hours.
+	var expiresAt *time.Time
+	if req.MaxAgeSeconds != nil && *req.MaxAgeSeconds > 0 {
+		t := time.Now().Add(time.Duration(*req.MaxAgeSeconds) * time.Second)
+		expiresAt = &t
+	} else {
+		t := time.Now().Add(24 * time.Hour)
+		expiresAt = &t
+	}
+
+	var inv models.Invite
+	err := h.Pool.QueryRow(r.Context(),
+		`INSERT INTO invites (code, guild_id, channel_id, creator_id, max_uses, max_age_seconds, temporary, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
+		 RETURNING code, guild_id, channel_id, creator_id, max_uses, uses, max_age_seconds, temporary, created_at, expires_at`,
+		code, guildID, req.ChannelID, userID, req.MaxUses, req.MaxAgeSeconds, req.Temporary, expiresAt,
+	).Scan(
+		&inv.Code, &inv.GuildID, &inv.ChannelID, &inv.CreatorID, &inv.MaxUses,
+		&inv.Uses, &inv.MaxAgeSeconds, &inv.Temporary, &inv.CreatedAt, &inv.ExpiresAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create invite", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create invite")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, inv)
+}
+
 // HandleGetGuildAuditLog returns the audit log for a guild.
 // GET /api/v1/guilds/{guildID}/audit-log
 func (h *Handler) HandleGetGuildAuditLog(w http.ResponseWriter, r *http.Request) {
