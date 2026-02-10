@@ -263,6 +263,7 @@ func runServe() error {
 		AuthService:       authSvc,
 		EventBus:          bus,
 		Cache:             cache,
+		Pool:              db.Pool,
 		HeartbeatInterval: heartbeatInterval,
 		HeartbeatTimeout:  heartbeatTimeout,
 		ListenAddr:        cfg.WebSocket.Listen,

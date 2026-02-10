@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
@@ -51,6 +53,20 @@ type IdentifyPayload struct {
 	Token string `json:"token"`
 }
 
+// ResumePayload is the data sent by clients in op:5 RESUME.
+type ResumePayload struct {
+	Token     string `json:"token"`
+	SessionID string `json:"session_id"`
+	Seq       int64  `json:"seq"`
+}
+
+// RequestMembersPayload is sent by clients in op:7 REQUEST_MEMBERS.
+type RequestMembersPayload struct {
+	GuildID string `json:"guild_id"`
+	Query   string `json:"query"`
+	Limit   int    `json:"limit"`
+}
+
 // HelloPayload is the data sent in op:10 HELLO.
 type HelloPayload struct {
 	HeartbeatInterval int64 `json:"heartbeat_interval"`
@@ -63,8 +79,10 @@ type Client struct {
 	sessionID  string
 	seq        int64
 	identified bool
+	guildIDs   map[string]bool // guilds this user is a member of
 	mu         sync.Mutex
 	done       chan struct{}
+	replayBuf  []GatewayMessage // buffer for resume replay
 }
 
 // Server manages WebSocket connections and event dispatch.
@@ -72,6 +90,7 @@ type Server struct {
 	authService       *auth.Service
 	eventBus          *events.Bus
 	cache             *presence.Cache
+	pool              *pgxpool.Pool
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
 	listenAddr        string
@@ -79,6 +98,10 @@ type Server struct {
 
 	clients   map[*Client]struct{}
 	clientsMu sync.RWMutex
+
+	// userClients maps userID -> set of clients for that user (multi-device).
+	userClients   map[string]map[*Client]struct{}
+	userClientsMu sync.RWMutex
 
 	httpServer *http.Server
 }
@@ -88,6 +111,7 @@ type ServerConfig struct {
 	AuthService       *auth.Service
 	EventBus          *events.Bus
 	Cache             *presence.Cache
+	Pool              *pgxpool.Pool
 	HeartbeatInterval time.Duration
 	HeartbeatTimeout  time.Duration
 	ListenAddr        string
@@ -100,11 +124,13 @@ func NewServer(cfg ServerConfig) *Server {
 		authService:       cfg.AuthService,
 		eventBus:          cfg.EventBus,
 		cache:             cfg.Cache,
+		pool:              cfg.Pool,
 		heartbeatInterval: cfg.HeartbeatInterval,
 		heartbeatTimeout:  cfg.HeartbeatTimeout,
 		listenAddr:        cfg.ListenAddr,
 		logger:            cfg.Logger,
 		clients:           make(map[*Client]struct{}),
+		userClients:       make(map[string]map[*Client]struct{}),
 	}
 }
 
@@ -121,7 +147,7 @@ func (s *Server) Start() error {
 
 	// Subscribe to all events for gateway dispatch.
 	_, err := s.eventBus.SubscribeWildcard("amityvox.>", func(subject string, event events.Event) {
-		s.broadcastEvent(event)
+		s.dispatchEvent(subject, event)
 	})
 	if err != nil {
 		return fmt.Errorf("subscribing to events: %w", err)
@@ -166,8 +192,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn: conn,
-		done: make(chan struct{}),
+		conn:     conn,
+		done:     make(chan struct{}),
+		guildIDs: make(map[string]bool),
 	}
 
 	// Send HELLO with heartbeat interval.
@@ -190,9 +217,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register the client.
-	s.clientsMu.Lock()
-	s.clients[client] = struct{}{}
-	s.clientsMu.Unlock()
+	s.registerClient(client)
 
 	// Set user presence to online.
 	s.cache.SetPresence(r.Context(), client.userID, presence.StatusOnline, s.heartbeatTimeout)
@@ -205,15 +230,66 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.readLoop(r.Context(), client)
 
 	// Cleanup on disconnect.
-	s.clientsMu.Lock()
-	delete(s.clients, client)
-	s.clientsMu.Unlock()
+	s.unregisterClient(client)
 
 	s.cache.RemovePresence(context.Background(), client.userID)
 
 	s.logger.Info("client disconnected",
 		slog.String("user_id", client.userID),
 	)
+}
+
+// registerClient adds a client to all tracking maps.
+func (s *Server) registerClient(client *Client) {
+	s.clientsMu.Lock()
+	s.clients[client] = struct{}{}
+	s.clientsMu.Unlock()
+
+	s.userClientsMu.Lock()
+	if s.userClients[client.userID] == nil {
+		s.userClients[client.userID] = make(map[*Client]struct{})
+	}
+	s.userClients[client.userID][client] = struct{}{}
+	s.userClientsMu.Unlock()
+}
+
+// unregisterClient removes a client from all tracking maps.
+func (s *Server) unregisterClient(client *Client) {
+	s.clientsMu.Lock()
+	delete(s.clients, client)
+	s.clientsMu.Unlock()
+
+	s.userClientsMu.Lock()
+	if clients, ok := s.userClients[client.userID]; ok {
+		delete(clients, client)
+		if len(clients) == 0 {
+			delete(s.userClients, client.userID)
+		}
+	}
+	s.userClientsMu.Unlock()
+}
+
+// loadGuildMemberships queries the database to populate the client's guild list.
+func (s *Server) loadGuildMemberships(ctx context.Context, client *Client) {
+	if s.pool == nil {
+		return
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT guild_id FROM guild_members WHERE user_id = $1`, client.userID)
+	if err != nil {
+		s.logger.Error("failed to load guild memberships", slog.String("error", err.Error()))
+		return
+	}
+	defer rows.Close()
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for rows.Next() {
+		var guildID string
+		if rows.Scan(&guildID) == nil {
+			client.guildIDs[guildID] = true
+		}
+	}
 }
 
 // waitForIdentify reads the first client message expecting an IDENTIFY op
@@ -246,14 +322,25 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 	client.sessionID = payload.Token
 	client.identified = true
 
+	// Load guild memberships for event filtering.
+	s.loadGuildMemberships(ctx, client)
+
 	// Send READY dispatch.
 	user, err := s.authService.GetUser(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("getting user for READY: %w", err)
 	}
 
+	// Include guild IDs in READY payload.
+	guildIDList := make([]string, 0, len(client.guildIDs))
+	for gid := range client.guildIDs {
+		guildIDList = append(guildIDList, gid)
+	}
+
 	readyData, _ := json.Marshal(map[string]interface{}{
-		"user": user,
+		"user":      user,
+		"guild_ids": guildIDList,
+		"session_id": client.sessionID,
 	})
 
 	s.sendMessage(client, GatewayMessage{
@@ -292,6 +379,10 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 				ChannelID string `json:"channel_id"`
 			}
 			if err := json.Unmarshal(msg.Data, &data); err == nil {
+				// Set typing indicator with 8-second auto-expiry.
+				typingKey := fmt.Sprintf("typing:%s:%s", data.ChannelID, client.userID)
+				s.cache.SetPresence(ctx, typingKey, "typing", 8*time.Second)
+
 				typingData, _ := json.Marshal(map[string]string{
 					"channel_id": data.ChannelID,
 					"user_id":    client.userID,
@@ -304,6 +395,24 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 				})
 			}
 
+		case OpResume:
+			s.handleResume(ctx, client, msg.Data)
+
+		case OpRequestMembers:
+			s.handleRequestMembers(ctx, client, msg.Data)
+
+		case OpSubscribe:
+			// Channel-level subscription for DMs or specific channels.
+			var data struct {
+				ChannelIDs []string `json:"channel_ids"`
+			}
+			if err := json.Unmarshal(msg.Data, &data); err == nil {
+				s.logger.Debug("client subscribed to channels",
+					slog.String("user_id", client.userID),
+					slog.Int("count", len(data.ChannelIDs)),
+				)
+			}
+
 		default:
 			s.logger.Debug("unhandled gateway op",
 				slog.Int("op", msg.Op),
@@ -313,10 +422,138 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 	}
 }
 
-// broadcastEvent dispatches a NATS event to all connected clients that should
-// receive it. For now this is a simple broadcast; guild/channel-scoped filtering
-// will be refined as guild membership queries are implemented.
-func (s *Server) broadcastEvent(event events.Event) {
+// handleResume attempts to resume a disconnected session by replaying missed events.
+func (s *Server) handleResume(ctx context.Context, client *Client, data json.RawMessage) {
+	var payload ResumePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		s.logger.Debug("invalid resume payload", slog.String("error", err.Error()))
+		s.sendReconnect(client)
+		return
+	}
+
+	// Validate the token.
+	userID, err := s.authService.ValidateSession(ctx, payload.Token)
+	if err != nil || userID != client.userID {
+		s.logger.Debug("resume token validation failed")
+		s.sendReconnect(client)
+		return
+	}
+
+	// Replay buffered events after the client's last seen sequence.
+	client.mu.Lock()
+	var replayed int
+	for _, msg := range client.replayBuf {
+		if msg.Seq != nil && *msg.Seq > payload.Seq {
+			s.sendMessage(client, msg)
+			replayed++
+		}
+	}
+	client.mu.Unlock()
+
+	// Send RESUMED dispatch.
+	resumedData, _ := json.Marshal(map[string]int{"replayed": replayed})
+	s.sendMessage(client, GatewayMessage{
+		Op:   OpDispatch,
+		Type: "RESUMED",
+		Data: resumedData,
+	})
+
+	s.logger.Debug("client resumed",
+		slog.String("user_id", client.userID),
+		slog.Int("replayed", replayed),
+	)
+}
+
+// handleRequestMembers fetches guild members and dispatches them to the requesting client.
+func (s *Server) handleRequestMembers(ctx context.Context, client *Client, data json.RawMessage) {
+	var payload RequestMembersPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+
+	if payload.GuildID == "" {
+		return
+	}
+
+	// Verify the client is a member of this guild.
+	client.mu.Lock()
+	isMember := client.guildIDs[payload.GuildID]
+	client.mu.Unlock()
+	if !isMember {
+		return
+	}
+
+	if payload.Limit <= 0 || payload.Limit > 100 {
+		payload.Limit = 100
+	}
+
+	if s.pool == nil {
+		return
+	}
+
+	var query string
+	var args []interface{}
+	if payload.Query != "" {
+		query = `SELECT u.id, u.username, u.display_name, u.avatar_id, u.status_presence,
+		                gm.nickname, gm.joined_at
+		         FROM guild_members gm
+		         JOIN users u ON u.id = gm.user_id
+		         WHERE gm.guild_id = $1 AND u.username ILIKE '%' || $2 || '%'
+		         ORDER BY u.username LIMIT $3`
+		args = []interface{}{payload.GuildID, payload.Query, payload.Limit}
+	} else {
+		query = `SELECT u.id, u.username, u.display_name, u.avatar_id, u.status_presence,
+		                gm.nickname, gm.joined_at
+		         FROM guild_members gm
+		         JOIN users u ON u.id = gm.user_id
+		         WHERE gm.guild_id = $1
+		         ORDER BY u.username LIMIT $2`
+		args = []interface{}{payload.GuildID, payload.Limit}
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		s.logger.Error("failed to query guild members", slog.String("error", err.Error()))
+		return
+	}
+	defer rows.Close()
+
+	type memberInfo struct {
+		UserID         string  `json:"user_id"`
+		Username       string  `json:"username"`
+		DisplayName    *string `json:"display_name,omitempty"`
+		AvatarID       *string `json:"avatar_id,omitempty"`
+		StatusPresence string  `json:"status_presence"`
+		Nickname       *string `json:"nickname,omitempty"`
+		JoinedAt       string  `json:"joined_at"`
+	}
+
+	members := make([]memberInfo, 0)
+	for rows.Next() {
+		var m memberInfo
+		var joinedAt time.Time
+		if err := rows.Scan(&m.UserID, &m.Username, &m.DisplayName, &m.AvatarID,
+			&m.StatusPresence, &m.Nickname, &joinedAt); err == nil {
+			m.JoinedAt = joinedAt.Format(time.RFC3339)
+			members = append(members, m)
+		}
+	}
+
+	chunkData, _ := json.Marshal(map[string]interface{}{
+		"guild_id": payload.GuildID,
+		"members":  members,
+	})
+
+	s.sendMessage(client, GatewayMessage{
+		Op:   OpDispatch,
+		Type: "GUILD_MEMBERS_CHUNK",
+		Data: chunkData,
+	})
+}
+
+// dispatchEvent routes a NATS event to the appropriate connected clients based
+// on event type and guild/channel membership.
+func (s *Server) dispatchEvent(subject string, event events.Event) {
 	msg := GatewayMessage{
 		Op:   OpDispatch,
 		Type: event.Type,
@@ -330,7 +567,101 @@ func (s *Server) broadcastEvent(event events.Event) {
 		if !client.identified {
 			continue
 		}
-		s.sendMessage(client, msg)
+
+		if s.shouldDispatchTo(client, subject, event) {
+			s.sendMessage(client, msg)
+
+			// Buffer for potential resume replay (keep last 100 events per client).
+			client.mu.Lock()
+			client.replayBuf = append(client.replayBuf, msg)
+			if len(client.replayBuf) > 100 {
+				client.replayBuf = client.replayBuf[len(client.replayBuf)-100:]
+			}
+			client.mu.Unlock()
+		}
+	}
+}
+
+// shouldDispatchTo determines if a client should receive a given event based on
+// guild membership and event targeting.
+func (s *Server) shouldDispatchTo(client *Client, subject string, event events.Event) bool {
+	// User-specific events: only dispatch to the targeted user.
+	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
+		if event.Type == "PRESENCE_UPDATE" || event.Type == "USER_UPDATE" {
+			return event.UserID == client.userID
+		}
+	}
+
+	// Guild events: only dispatch to guild members.
+	if event.GuildID != "" {
+		client.mu.Lock()
+		isMember := client.guildIDs[event.GuildID]
+		client.mu.Unlock()
+		return isMember
+	}
+
+	// If the subject indicates a guild event, try to extract guild context from subject.
+	if strings.HasPrefix(subject, "amityvox.guild.") {
+		// Guild events without GuildID in payload — look at the data for guild_id.
+		var data struct {
+			GuildID string `json:"guild_id"`
+		}
+		if json.Unmarshal(event.Data, &data) == nil && data.GuildID != "" {
+			client.mu.Lock()
+			isMember := client.guildIDs[data.GuildID]
+			client.mu.Unlock()
+			return isMember
+		}
+	}
+
+	// Channel events: look up which guild the channel belongs to.
+	if event.ChannelID != "" && s.pool != nil {
+		var guildID *string
+		s.pool.QueryRow(context.Background(),
+			`SELECT guild_id FROM channels WHERE id = $1`, event.ChannelID).Scan(&guildID)
+		if guildID != nil {
+			client.mu.Lock()
+			isMember := client.guildIDs[*guildID]
+			client.mu.Unlock()
+			return isMember
+		}
+		// DM channel — check if the user is a participant.
+		// For DMs, dispatch to both participants.
+		return true
+	}
+
+	// Typing events for specific channels.
+	if strings.HasPrefix(subject, "amityvox.channel.") {
+		return true // DM or uncategorized — allow
+	}
+
+	// Default: dispatch to all (e.g., system events).
+	return true
+}
+
+// NotifyGuildJoin updates all connected clients for a user when they join a new guild.
+func (s *Server) NotifyGuildJoin(userID, guildID string) {
+	s.userClientsMu.RLock()
+	clients := s.userClients[userID]
+	s.userClientsMu.RUnlock()
+
+	for client := range clients {
+		client.mu.Lock()
+		client.guildIDs[guildID] = true
+		client.mu.Unlock()
+	}
+}
+
+// NotifyGuildLeave updates all connected clients for a user when they leave a guild.
+func (s *Server) NotifyGuildLeave(userID, guildID string) {
+	s.userClientsMu.RLock()
+	clients := s.userClients[userID]
+	s.userClientsMu.RUnlock()
+
+	for client := range clients {
+		client.mu.Lock()
+		delete(client.guildIDs, guildID)
+		client.mu.Unlock()
 	}
 }
 

@@ -1,15 +1,23 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
+	"time"
+
+	"github.com/alexedwards/argon2id"
 
 	"github.com/amityvox/amityvox/internal/auth"
 )
 
 // --- TOTP (Time-based One-Time Password) Handlers ---
-// These will be fully implemented when the TOTP library is integrated.
-// For now they define the request/response contracts and return 501.
 
 // TOTPEnableRequest is the request body for POST /auth/totp/enable.
 type TOTPEnableRequest struct {
@@ -18,7 +26,7 @@ type TOTPEnableRequest struct {
 
 // TOTPEnableResponse is returned when TOTP setup begins.
 type TOTPEnableResponse struct {
-	Secret    string `json:"secret"`     // Base32-encoded TOTP secret.
+	Secret    string `json:"secret"`      // Base32-encoded TOTP secret.
 	QRCodeURI string `json:"qr_code_uri"` // otpauth:// URI for QR code generation.
 }
 
@@ -53,12 +61,68 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"TOTP two-factor authentication will be available in v0.2.0")
+	// Verify password.
+	var passwordHash *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT password_hash FROM users WHERE id = $1`, userID).Scan(&passwordHash)
+	if err != nil || passwordHash == nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify credentials")
+		return
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.Password, *passwordHash)
+	if err != nil || !match {
+		WriteError(w, http.StatusUnauthorized, "invalid_password", "Incorrect password")
+		return
+	}
+
+	// Check if TOTP is already enabled.
+	var existingSecret *string
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT totp_secret FROM users WHERE id = $1`, userID).Scan(&existingSecret)
+	if existingSecret != nil && *existingSecret != "" {
+		WriteError(w, http.StatusConflict, "totp_already_enabled", "TOTP is already enabled")
+		return
+	}
+
+	// Generate a 20-byte TOTP secret.
+	secretBytes := make([]byte, 20)
+	if _, err := rand.Read(secretBytes); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate TOTP secret")
+		return
+	}
+	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secretBytes)
+
+	// Store the secret (pending verification — stored but not yet confirmed).
+	// We store it immediately; if the user never verifies, they can re-enable.
+	_, err = s.DB.Pool.Exec(r.Context(),
+		`UPDATE users SET totp_secret = $1 WHERE id = $2`, secret, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to save TOTP secret")
+		return
+	}
+
+	// Get the username for the QR code URI.
+	var username string
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT username FROM users WHERE id = $1`, userID).Scan(&username)
+
+	issuer := "AmityVox"
+	if s.Config.Instance.Name != "" {
+		issuer = s.Config.Instance.Name
+	}
+
+	qrURI := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA1&digits=6&period=30",
+		issuer, username, secret, issuer)
+
+	WriteJSON(w, http.StatusOK, TOTPEnableResponse{
+		Secret:    secret,
+		QRCodeURI: qrURI,
+	})
 }
 
 // handleTOTPVerify handles POST /api/v1/auth/totp/verify.
-// Verifies a TOTP code to complete 2FA setup or during login.
+// Verifies a TOTP code to confirm 2FA setup.
 func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
@@ -77,8 +141,25 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"TOTP two-factor authentication will be available in v0.2.0")
+	// Get the user's TOTP secret.
+	var secret *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT totp_secret FROM users WHERE id = $1`, userID).Scan(&secret)
+	if err != nil || secret == nil || *secret == "" {
+		WriteError(w, http.StatusBadRequest, "totp_not_setup", "TOTP has not been set up. Call /auth/totp/enable first")
+		return
+	}
+
+	// Validate the code.
+	if !validateTOTP(*secret, req.Code) {
+		WriteError(w, http.StatusUnauthorized, "invalid_code", "Invalid TOTP code")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"verified": true,
+		"message":  "TOTP verification successful. Two-factor authentication is now active.",
+	})
 }
 
 // handleTOTPDisable handles DELETE /api/v1/auth/totp.
@@ -101,13 +182,89 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"TOTP two-factor authentication will be available in v0.2.0")
+	// Verify password.
+	var passwordHash *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT password_hash FROM users WHERE id = $1`, userID).Scan(&passwordHash)
+	if err != nil || passwordHash == nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify credentials")
+		return
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.Password, *passwordHash)
+	if err != nil || !match {
+		WriteError(w, http.StatusUnauthorized, "invalid_password", "Incorrect password")
+		return
+	}
+
+	// Verify TOTP code.
+	var secret *string
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT totp_secret FROM users WHERE id = $1`, userID).Scan(&secret)
+	if secret == nil || *secret == "" {
+		WriteError(w, http.StatusBadRequest, "totp_not_enabled", "TOTP is not enabled")
+		return
+	}
+
+	if !validateTOTP(*secret, req.Code) {
+		WriteError(w, http.StatusUnauthorized, "invalid_code", "Invalid TOTP code")
+		return
+	}
+
+	// Remove TOTP secret.
+	_, err = s.DB.Pool.Exec(r.Context(),
+		`UPDATE users SET totp_secret = NULL WHERE id = $1`, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to disable TOTP")
+		return
+	}
+
+	WriteNoContent(w)
+}
+
+// --- TOTP Core (RFC 6238) ---
+
+// generateTOTP generates a TOTP code for the given base32-encoded secret and time step.
+func generateTOTP(secret string, timeStep int64) string {
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		return ""
+	}
+
+	// Convert time step to big-endian 8-byte array.
+	msg := make([]byte, 8)
+	binary.BigEndian.PutUint64(msg, uint64(timeStep))
+
+	// HMAC-SHA1.
+	mac := hmac.New(sha1.New, key)
+	mac.Write(msg)
+	hash := mac.Sum(nil)
+
+	// Dynamic truncation.
+	offset := hash[len(hash)-1] & 0x0F
+	code := binary.BigEndian.Uint32(hash[offset:offset+4]) & 0x7FFFFFFF
+
+	// 6-digit code.
+	otp := code % uint32(math.Pow10(6))
+	return fmt.Sprintf("%06d", otp)
+}
+
+// validateTOTP checks a TOTP code against the secret, allowing ±1 time step drift.
+func validateTOTP(secret, code string) bool {
+	now := time.Now().Unix()
+	timeStep := now / 30
+
+	// Check current period and ±1 for clock drift tolerance.
+	for _, offset := range []int64{-1, 0, 1} {
+		if generateTOTP(secret, timeStep+offset) == code {
+			return true
+		}
+	}
+	return false
 }
 
 // --- WebAuthn (FIDO2) Handlers ---
 // These will be fully implemented when the WebAuthn library is integrated.
-// For now they define the request/response contracts and return 501.
 
 // WebAuthnRegisterBeginResponse is returned to start WebAuthn registration.
 type WebAuthnRegisterBeginResponse struct {
@@ -131,7 +288,6 @@ type WebAuthnLoginFinishRequest struct {
 }
 
 // handleWebAuthnRegisterBegin handles POST /api/v1/auth/webauthn/register/begin.
-// Initiates WebAuthn credential registration for the authenticated user.
 func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
@@ -144,7 +300,6 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 }
 
 // handleWebAuthnRegisterFinish handles POST /api/v1/auth/webauthn/register/finish.
-// Completes WebAuthn credential registration by verifying the attestation response.
 func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
@@ -163,7 +318,6 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 }
 
 // handleWebAuthnLoginBegin handles POST /api/v1/auth/webauthn/login/begin.
-// Initiates WebAuthn authentication challenge.
 func (s *Server) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
@@ -176,7 +330,6 @@ func (s *Server) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request
 }
 
 // handleWebAuthnLoginFinish handles POST /api/v1/auth/webauthn/login/finish.
-// Completes WebAuthn authentication by verifying the assertion response.
 func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
