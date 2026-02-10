@@ -127,6 +127,16 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if user is banned from this guild.
+	var banned bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
+		inv.GuildID, userID).Scan(&banned)
+	if banned {
+		writeError(w, http.StatusForbidden, "banned", "You are banned from this guild")
+		return
+	}
+
 	// Check if already a member.
 	var exists bool
 	err = h.Pool.QueryRow(r.Context(),

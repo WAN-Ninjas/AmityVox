@@ -534,6 +534,42 @@ func (h *Handler) HandleDeleteSelfSession(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleGetSelfReadState returns the unread state for all channels the user has.
+// GET /api/v1/users/@me/read-state
+func (h *Handler) HandleGetSelfReadState(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT rs.channel_id, rs.last_read_id, rs.mention_count
+		 FROM read_state rs
+		 WHERE rs.user_id = $1`,
+		userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get read state")
+		return
+	}
+	defer rows.Close()
+
+	type readState struct {
+		ChannelID    string  `json:"channel_id"`
+		LastReadID   *string `json:"last_read_id"`
+		MentionCount int     `json:"mention_count"`
+	}
+
+	states := make([]readState, 0)
+	for rows.Next() {
+		var rs readState
+		if err := rows.Scan(&rs.ChannelID, &rs.LastReadID, &rs.MentionCount); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read state")
+			return
+		}
+		states = append(states, rs)
+	}
+
+	writeJSON(w, http.StatusOK, states)
+}
+
 // HandleDeleteSelf soft-deletes the authenticated user's account.
 // The account is flagged as deleted and personal data is cleared.
 // DELETE /api/v1/users/@me

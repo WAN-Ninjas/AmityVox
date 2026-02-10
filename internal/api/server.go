@@ -147,6 +147,7 @@ func (s *Server) registerRoutes() {
 				r.Delete("/@me", userH.HandleDeleteSelf)
 				r.Get("/@me/guilds", userH.HandleGetSelfGuilds)
 				r.Get("/@me/dms", userH.HandleGetSelfDMs)
+				r.Get("/@me/read-state", userH.HandleGetSelfReadState)
 				r.Get("/@me/sessions", userH.HandleGetSelfSessions)
 				r.Delete("/@me/sessions/{sessionID}", userH.HandleDeleteSelfSession)
 				r.Get("/{userID}", userH.HandleGetUser)
