@@ -144,6 +144,8 @@ func (s *Server) registerRoutes() {
 				r.Patch("/@me", userH.HandleUpdateSelf)
 				r.Get("/@me/guilds", userH.HandleGetSelfGuilds)
 				r.Get("/@me/dms", userH.HandleGetSelfDMs)
+				r.Get("/@me/sessions", userH.HandleGetSelfSessions)
+				r.Delete("/@me/sessions/{sessionID}", userH.HandleDeleteSelfSession)
 				r.Get("/{userID}", userH.HandleGetUser)
 				r.Post("/{userID}/dm", userH.HandleCreateDM)
 				r.Put("/{userID}/friend", userH.HandleAddFriend)
@@ -201,6 +203,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/ack", channelH.HandleAckChannel)
 				r.Put("/{channelID}/permissions/{overrideID}", channelH.HandleSetChannelPermission)
 				r.Delete("/{channelID}/permissions/{overrideID}", channelH.HandleDeleteChannelPermission)
+				r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 			})
 
 			// Invite routes.
