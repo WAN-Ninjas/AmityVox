@@ -27,6 +27,7 @@ import (
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/presence"
+	"github.com/amityvox/amityvox/internal/search"
 )
 
 // Server is the HTTP API server for AmityVox. It holds the chi router, database
@@ -39,13 +40,14 @@ type Server struct {
 	EventBus    *events.Bus
 	Cache       *presence.Cache
 	Media       *media.Service
+	Search      *search.Service
 	InstanceID  string
 	Logger      *slog.Logger
 	server      *http.Server
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, instanceID string, logger *slog.Logger) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, searchSvc *search.Service, instanceID string, logger *slog.Logger) *Server {
 	s := &Server{
 		Router:      chi.NewRouter(),
 		DB:          db,
@@ -54,6 +56,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 		EventBus:    bus,
 		Cache:       cache,
 		Media:       mediaSvc,
+		Search:      searchSvc,
 		InstanceID:  instanceID,
 		Logger:      logger,
 	}
@@ -73,6 +76,7 @@ func (s *Server) registerMiddleware() {
 	s.Router.Use(corsMiddleware(s.Config.HTTP.CORSOrigins))
 	s.Router.Use(middleware.Compress(5))
 	s.Router.Use(middleware.Timeout(30 * time.Second))
+	s.Router.Use(s.rateLimitMiddleware())
 }
 
 // registerRoutes mounts all API route groups on the router.
@@ -121,10 +125,13 @@ func (s *Server) registerRoutes() {
 			r.Post("/register", s.handleRegister)
 			r.Post("/login", s.handleLogin)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/logout", s.handleLogout)
-			r.Post("/totp/enable", stubHandler("totp_enable"))
-			r.Post("/totp/verify", stubHandler("totp_verify"))
-			r.Post("/webauthn/register", stubHandler("webauthn_register"))
-			r.Post("/webauthn/verify", stubHandler("webauthn_verify"))
+			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/enable", s.handleTOTPEnable)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/verify", s.handleTOTPVerify)
+			r.With(auth.RequireAuth(s.AuthService)).Delete("/totp", s.handleTOTPDisable)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
 		})
 
 		// Authenticated routes — require Bearer token.
@@ -204,6 +211,13 @@ func (s *Server) registerRoutes() {
 			} else {
 				r.Post("/files/upload", stubHandler("upload_file"))
 			}
+
+			// Search routes (with search-specific rate limit).
+			r.With(s.RateLimitSearch).Route("/search", func(r chi.Router) {
+				r.Get("/messages", s.handleSearchMessages)
+				r.Get("/users", s.handleSearchUsers)
+				r.Get("/guilds", s.handleSearchGuilds)
+			})
 
 			// Admin routes.
 			r.Route("/admin", func(r chi.Router) {
