@@ -1,12 +1,16 @@
 // Package main is the CLI entrypoint for AmityVox. It provides subcommands for
 // running the server (serve), managing database migrations (migrate), and
 // printing version information (version). The serve command loads configuration,
-// connects to PostgreSQL, runs pending migrations, starts the HTTP API server,
-// and handles graceful shutdown on SIGINT/SIGTERM.
+// connects to PostgreSQL, NATS, and DragonflyDB, runs pending migrations, starts
+// the HTTP API server and WebSocket gateway, and handles graceful shutdown on
+// SIGINT/SIGTERM.
 package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,9 +19,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alexedwards/argon2id"
+
 	"github.com/amityvox/amityvox/internal/api"
+	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/federation"
+	"github.com/amityvox/amityvox/internal/gateway"
+	"github.com/amityvox/amityvox/internal/media"
+	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/presence"
+	"github.com/amityvox/amityvox/internal/search"
+	"github.com/amityvox/amityvox/internal/workers"
 )
 
 // Build-time variables set via ldflags.
@@ -44,6 +59,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "admin":
+		if err := runAdmin(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		runVersion()
 	case "help", "--help", "-h":
@@ -65,6 +85,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  serve     Start the AmityVox server")
 	fmt.Println("  migrate   Run database migrations")
+	fmt.Println("  admin     Manage users and instance settings")
 	fmt.Println("  version   Print version information")
 	fmt.Println("  help      Show this help message")
 	fmt.Println()
@@ -73,9 +94,10 @@ func printUsage() {
 	fmt.Println("  Env prefix:   AMITYVOX_ (e.g. AMITYVOX_DATABASE_URL)")
 }
 
-// runServe starts the full AmityVox server: loads config, connects to the
-// database, runs migrations, and starts the HTTP API server with graceful
-// shutdown on SIGINT/SIGTERM.
+// runServe starts the full AmityVox server: loads config, connects to all
+// services (PostgreSQL, NATS, DragonflyDB), runs migrations, bootstraps the
+// local instance, creates the auth service, starts the HTTP API server and
+// WebSocket gateway, and handles graceful shutdown on SIGINT/SIGTERM.
 func runServe() error {
 	logger := setupLogger("info", "json")
 
@@ -95,8 +117,9 @@ func runServe() error {
 	logger = setupLogger(cfg.Logging.Level, cfg.Logging.Format)
 	logger.Info("configuration loaded", slog.String("path", cfgPath))
 
-	// Connect to database.
 	ctx := context.Background()
+
+	// Connect to database.
 	db, err := database.New(ctx, cfg.Database.URL, cfg.Database.MaxConnections, logger)
 	if err != nil {
 		return fmt.Errorf("connecting to database: %w", err)
@@ -108,18 +131,166 @@ func runServe() error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Create and start HTTP server.
-	srv := api.NewServer(db, cfg, logger)
+	// Bootstrap local instance record.
+	instanceID, err := ensureLocalInstance(ctx, db, cfg)
+	if err != nil {
+		return fmt.Errorf("bootstrapping local instance: %w", err)
+	}
+	logger.Info("local instance ready", slog.String("instance_id", instanceID))
+
+	// Connect to NATS event bus.
+	bus, err := events.New(cfg.NATS.URL, logger)
+	if err != nil {
+		return fmt.Errorf("connecting to NATS: %w", err)
+	}
+	defer bus.Close()
+
+	// Ensure JetStream streams exist.
+	if err := bus.EnsureStreams(); err != nil {
+		return fmt.Errorf("ensuring NATS streams: %w", err)
+	}
+
+	// Connect to DragonflyDB/Redis cache.
+	cache, err := presence.New(cfg.Cache.URL, logger)
+	if err != nil {
+		return fmt.Errorf("connecting to cache: %w", err)
+	}
+	defer cache.Close()
+
+	// Parse auth settings.
+	sessionDuration, err := cfg.Auth.SessionDurationParsed()
+	if err != nil {
+		return fmt.Errorf("parsing session duration: %w", err)
+	}
+
+	// Create auth service.
+	authSvc := auth.NewService(auth.Config{
+		Pool:            db.Pool,
+		Cache:           cache,
+		InstanceID:      instanceID,
+		SessionDuration: sessionDuration,
+		RegEnabled:      cfg.Auth.RegistrationEnabled,
+		InviteOnly:      cfg.Auth.InviteOnly,
+		RequireEmail:    cfg.Auth.RequireEmail,
+		Logger:          logger,
+	})
+
+	// Create media/S3 storage service.
+	var mediaSvc *media.Service
+	if cfg.Storage.Endpoint != "" {
+		maxMB, _ := cfg.Media.MaxUploadSizeBytes()
+		if maxMB <= 0 {
+			maxMB = 100 * 1024 * 1024
+		}
+		svc, err := media.New(media.Config{
+			Endpoint:    cfg.Storage.Endpoint,
+			Bucket:      cfg.Storage.Bucket,
+			AccessKey:   cfg.Storage.AccessKey,
+			SecretKey:   cfg.Storage.SecretKey,
+			Region:      cfg.Storage.Region,
+			UseSSL:      cfg.Storage.UseSSL,
+			MaxUploadMB: maxMB / (1024 * 1024),
+			Pool:        db.Pool,
+			Logger:      logger,
+		})
+		if err != nil {
+			logger.Warn("media service unavailable, file uploads disabled", slog.String("error", err.Error()))
+		} else {
+			if err := svc.EnsureBucket(ctx); err != nil {
+				logger.Warn("could not ensure S3 bucket", slog.String("error", err.Error()))
+			}
+			mediaSvc = svc
+			logger.Info("media service ready", slog.String("endpoint", cfg.Storage.Endpoint))
+		}
+	}
+
+	// Create Meilisearch search service (optional).
+	var searchSvc *search.Service
+	if cfg.Search.Enabled && cfg.Search.URL != "" {
+		svc, err := search.New(search.Config{
+			URL:    cfg.Search.URL,
+			APIKey: cfg.Search.APIKey,
+			Pool:   db.Pool,
+			Logger: logger,
+		})
+		if err != nil {
+			logger.Warn("search service unavailable", slog.String("error", err.Error()))
+		} else {
+			if err := svc.EnsureIndexes(ctx); err != nil {
+				logger.Warn("could not ensure search indexes", slog.String("error", err.Error()))
+			}
+			searchSvc = svc
+			logger.Info("search service ready", slog.String("url", cfg.Search.URL))
+		}
+	}
+
+	// Create federation service.
+	fedSvc := federation.New(federation.Config{
+		Pool:       db.Pool,
+		InstanceID: instanceID,
+		Domain:     cfg.Instance.Domain,
+		Logger:     logger,
+	})
+
+	// Start background workers.
+	workerMgr := workers.New(workers.Config{
+		Pool:   db.Pool,
+		Bus:    bus,
+		Search: searchSvc,
+		Logger: logger,
+	})
+	workerMgr.Start(ctx)
+
+	// Create and start HTTP API server.
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, instanceID, logger)
+	srv.Version = version
+
+	// Mount federation discovery endpoint.
+	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
+
+	// Parse WebSocket settings.
+	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()
+	if err != nil {
+		return fmt.Errorf("parsing heartbeat interval: %w", err)
+	}
+	heartbeatTimeout, err := cfg.WebSocket.HeartbeatTimeoutParsed()
+	if err != nil {
+		return fmt.Errorf("parsing heartbeat timeout: %w", err)
+	}
+
+	// Create WebSocket gateway server.
+	gw := gateway.NewServer(gateway.ServerConfig{
+		AuthService:       authSvc,
+		EventBus:          bus,
+		Cache:             cache,
+		Pool:              db.Pool,
+		HeartbeatInterval: heartbeatInterval,
+		HeartbeatTimeout:  heartbeatTimeout,
+		ListenAddr:        cfg.WebSocket.Listen,
+		Logger:            logger,
+	})
 
 	// Graceful shutdown handler.
 	shutdownCh := make(chan os.Signal, 1)
 	signal.Notify(shutdownCh, syscall.SIGINT, syscall.SIGTERM)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+
+	// Start HTTP API server.
 	go func() {
-		errCh <- srv.Start()
+		if err := srv.Start(); err != nil {
+			errCh <- fmt.Errorf("HTTP server: %w", err)
+		}
 	}()
 
+	// Start WebSocket gateway.
+	go func() {
+		if err := gw.Start(); err != nil {
+			errCh <- fmt.Errorf("WebSocket gateway: %w", err)
+		}
+	}()
+
+	// Wait for shutdown signal or server error.
 	select {
 	case err := <-errCh:
 		return err
@@ -131,12 +302,74 @@ func runServe() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("server shutdown: %w", err)
+	// Shut down gateway first (sends RECONNECT to clients).
+	if err := gw.Shutdown(shutdownCtx); err != nil {
+		logger.Error("gateway shutdown error", slog.String("error", err.Error()))
 	}
+
+	// Then shut down HTTP server.
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("HTTP server shutdown error", slog.String("error", err.Error()))
+	}
+
+	// Stop background workers.
+	workerMgr.Stop()
 
 	logger.Info("AmityVox stopped")
 	return nil
+}
+
+// ensureLocalInstance checks if the local instance record exists in the database
+// (matched by domain). If not, it creates one with a generated Ed25519 key pair
+// for federation signing. Returns the instance ID.
+func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Config) (string, error) {
+	var id string
+	err := db.Pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`,
+		cfg.Instance.Domain,
+	).Scan(&id)
+
+	if err == nil {
+		return id, nil
+	}
+
+	// Instance doesn't exist yet — generate an Ed25519 key pair and create it.
+	pubKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return "", fmt.Errorf("generating Ed25519 key pair: %w", err)
+	}
+
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return "", fmt.Errorf("marshaling public key: %w", err)
+	}
+
+	pubKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubKeyBytes,
+	})
+
+	id = models.NewULID().String()
+	_, err = db.Pool.Exec(ctx,
+		`INSERT INTO instances (id, domain, public_key, name, description, software_version, federation_mode, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		 ON CONFLICT (domain) DO NOTHING`,
+		id, cfg.Instance.Domain, string(pubKeyPEM), cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
+	)
+	if err != nil {
+		return "", fmt.Errorf("creating local instance record: %w", err)
+	}
+
+	// Re-read in case of race (ON CONFLICT DO NOTHING).
+	err = db.Pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`,
+		cfg.Instance.Domain,
+	).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("reading instance ID after insert: %w", err)
+	}
+
+	return id, nil
 }
 
 // runMigrate handles the migrate subcommand with up/down/status operations.
@@ -171,6 +404,160 @@ func runMigrate() error {
 	default:
 		return fmt.Errorf("unknown migrate action: %s (use: up, down, status)", action)
 	}
+}
+
+// runAdmin handles admin subcommands for user and instance management.
+func runAdmin() error {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: amityvox admin <action>")
+		fmt.Println()
+		fmt.Println("Actions:")
+		fmt.Println("  create-user  Create a new user account")
+		fmt.Println("  suspend      Suspend a user account")
+		fmt.Println("  unsuspend    Unsuspend a user account")
+		fmt.Println("  set-admin    Grant admin flag to a user")
+		fmt.Println("  unset-admin  Remove admin flag from a user")
+		fmt.Println("  list-users   List all user accounts")
+		return nil
+	}
+
+	logger := setupLogger("info", "text")
+
+	cfgPath := configPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	ctx := context.Background()
+	db, err := database.New(ctx, cfg.Database.URL, cfg.Database.MaxConnections, logger)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer db.Close()
+
+	switch os.Args[2] {
+	case "create-user":
+		if len(os.Args) < 5 {
+			return fmt.Errorf("usage: amityvox admin create-user <username> <password>")
+		}
+		username, password := os.Args[3], os.Args[4]
+
+		// Get local instance ID.
+		var instanceID string
+		if err := db.Pool.QueryRow(ctx, `SELECT id FROM instances WHERE domain = $1`, cfg.Instance.Domain).Scan(&instanceID); err != nil {
+			return fmt.Errorf("instance not found — run 'amityvox serve' first to bootstrap")
+		}
+
+		// Hash password.
+		hash, err := argon2id.CreateHash(password, argon2id.DefaultParams)
+		if err != nil {
+			return fmt.Errorf("hashing password: %w", err)
+		}
+
+		userID := models.NewULID().String()
+		_, err = db.Pool.Exec(ctx,
+			`INSERT INTO users (id, instance_id, username, password_hash, created_at) VALUES ($1, $2, $3, $4, now())`,
+			userID, instanceID, username, hash)
+		if err != nil {
+			return fmt.Errorf("creating user: %w", err)
+		}
+		fmt.Printf("Created user %s (ID: %s)\n", username, userID)
+
+	case "suspend":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin suspend <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags | $1 WHERE username = $2`,
+			models.UserFlagSuspended, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("suspending user: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Suspended user %s\n", os.Args[3])
+
+	case "unsuspend":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin unsuspend <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags & ~$1 WHERE username = $2`,
+			models.UserFlagSuspended, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("unsuspending user: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Unsuspended user %s\n", os.Args[3])
+
+	case "set-admin":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin set-admin <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags | $1 WHERE username = $2`,
+			models.UserFlagAdmin, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("setting admin: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Granted admin to %s\n", os.Args[3])
+
+	case "unset-admin":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin unset-admin <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags & ~$1 WHERE username = $2`,
+			models.UserFlagAdmin, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("unsetting admin: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Removed admin from %s\n", os.Args[3])
+
+	case "list-users":
+		rows, err := db.Pool.Query(ctx,
+			`SELECT id, username, display_name, email, flags, created_at FROM users ORDER BY created_at`)
+		if err != nil {
+			return fmt.Errorf("listing users: %w", err)
+		}
+		defer rows.Close()
+
+		fmt.Printf("%-28s %-20s %-20s %-30s %6s %s\n", "ID", "Username", "DisplayName", "Email", "Flags", "Created")
+		fmt.Println(strings.Repeat("-", 130))
+		for rows.Next() {
+			var id, username string
+			var displayName, email *string
+			var flags int
+			var createdAt time.Time
+			if err := rows.Scan(&id, &username, &displayName, &email, &flags, &createdAt); err != nil {
+				return fmt.Errorf("scanning user: %w", err)
+			}
+			dn := ""
+			if displayName != nil {
+				dn = *displayName
+			}
+			em := ""
+			if email != nil {
+				em = *email
+			}
+			fmt.Printf("%-28s %-20s %-20s %-30s %6d %s\n", id, username, dn, em, flags, createdAt.Format(time.RFC3339))
+		}
+
+	default:
+		return fmt.Errorf("unknown admin action: %s", os.Args[2])
+	}
+
+	return nil
 }
 
 // runVersion prints version information and exits.
