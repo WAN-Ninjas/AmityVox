@@ -128,9 +128,12 @@ func (s *Server) registerRoutes() {
 			r.Post("/login", s.handleLogin)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/logout", s.handleLogout)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/password", s.handleChangePassword)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/email", s.handleChangeEmail)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/enable", s.handleTOTPEnable)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/verify", s.handleTOTPVerify)
 			r.With(auth.RequireAuth(s.AuthService)).Delete("/totp", s.handleTOTPDisable)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/backup-codes", s.handleGenerateBackupCodes)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/backup-codes/verify", s.handleConsumeBackupCode)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
@@ -187,6 +190,8 @@ func (s *Server) registerRoutes() {
 				r.Get("/{guildID}/members/{memberID}/roles", guildH.HandleGetMemberRoles)
 				r.Put("/{guildID}/members/{memberID}/roles/{roleID}", guildH.HandleAddMemberRole)
 				r.Delete("/{guildID}/members/{memberID}/roles/{roleID}", guildH.HandleRemoveMemberRole)
+				r.Get("/{guildID}/prune", guildH.HandleGetGuildPruneCount)
+				r.Post("/{guildID}/prune", guildH.HandleGuildPrune)
 				r.Get("/{guildID}/bans", guildH.HandleGetGuildBans)
 				r.Put("/{guildID}/bans/{userID}", guildH.HandleCreateGuildBan)
 				r.Delete("/{guildID}/bans/{userID}", guildH.HandleRemoveGuildBan)
@@ -230,6 +235,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{channelID}/messages/{messageID}/reactions", channelH.HandleGetReactions)
 				r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleAddReaction)
 				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleRemoveReaction)
+				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}/{targetUserID}", channelH.HandleRemoveUserReaction)
 				r.Get("/{channelID}/pins", channelH.HandleGetPins)
 				r.Put("/{channelID}/pins/{messageID}", channelH.HandlePinMessage)
 				r.Delete("/{channelID}/pins/{messageID}", channelH.HandleUnpinMessage)
@@ -403,6 +409,34 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Logger.Error("password change failed", slog.String("error", err.Error()))
 		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to change password")
+		return
+	}
+
+	WriteNoContent(w)
+}
+
+// handleChangeEmail handles POST /api/v1/auth/email.
+func (s *Server) handleChangeEmail(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var req auth.ChangeEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Password == "" || req.NewEmail == "" {
+		WriteError(w, http.StatusBadRequest, "missing_fields", "Both password and new_email are required")
+		return
+	}
+
+	if err := s.AuthService.ChangeEmail(r.Context(), userID, req); err != nil {
+		if authErr, ok := err.(*auth.AuthError); ok {
+			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
+			return
+		}
+		s.Logger.Error("email change failed", slog.String("error", err.Error()))
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to change email")
 		return
 	}
 

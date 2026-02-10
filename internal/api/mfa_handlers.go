@@ -222,6 +222,142 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	WriteNoContent(w)
 }
 
+// --- 2FA Backup Codes ---
+
+// handleGenerateBackupCodes generates new backup recovery codes for the authenticated user.
+// POST /api/v1/auth/backup-codes
+func (s *Server) handleGenerateBackupCodes(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Password is required")
+		return
+	}
+
+	// Verify password.
+	var passwordHash *string
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT password_hash FROM users WHERE id = $1`, userID).Scan(&passwordHash)
+	if passwordHash == nil {
+		WriteError(w, http.StatusBadRequest, "no_password", "Account has no password")
+		return
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.Password, *passwordHash)
+	if err != nil || !match {
+		WriteError(w, http.StatusUnauthorized, "invalid_password", "Password is incorrect")
+		return
+	}
+
+	// Verify TOTP is enabled (backup codes only make sense with 2FA).
+	var totpSecret *string
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT totp_secret FROM users WHERE id = $1`, userID).Scan(&totpSecret)
+	if totpSecret == nil || *totpSecret == "" {
+		WriteError(w, http.StatusBadRequest, "totp_not_enabled", "Enable TOTP before generating backup codes")
+		return
+	}
+
+	// Generate 10 backup codes.
+	codes := make([]string, 10)
+	for i := range codes {
+		buf := make([]byte, 4)
+		if _, err := rand.Read(buf); err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate codes")
+			return
+		}
+		codes[i] = fmt.Sprintf("%08x", buf)
+	}
+
+	// Delete old codes and insert new ones.
+	tx, err := s.DB.Pool.Begin(r.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate codes")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	tx.Exec(r.Context(), `DELETE FROM backup_codes WHERE user_id = $1`, userID)
+	for _, code := range codes {
+		hash, err := argon2id.CreateHash(code, argon2id.DefaultParams)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to hash code")
+			return
+		}
+		tx.Exec(r.Context(),
+			`INSERT INTO backup_codes (user_id, code_hash, used) VALUES ($1, $2, false)`,
+			userID, hash)
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to save codes")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"codes": codes,
+	})
+}
+
+// handleConsumeBackupCode validates and consumes a backup code during login.
+// POST /api/v1/auth/backup-codes/verify
+func (s *Server) handleConsumeBackupCode(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Code is required")
+		return
+	}
+
+	// Get all unused backup codes for this user.
+	rows, err := s.DB.Pool.Query(r.Context(),
+		`SELECT id, code_hash FROM backup_codes WHERE user_id = $1 AND used = false`,
+		userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify code")
+		return
+	}
+	defer rows.Close()
+
+	var matchedID string
+	for rows.Next() {
+		var id, hash string
+		if err := rows.Scan(&id, &hash); err != nil {
+			continue
+		}
+		match, err := argon2id.ComparePasswordAndHash(req.Code, hash)
+		if err == nil && match {
+			matchedID = id
+			break
+		}
+	}
+
+	if matchedID == "" {
+		WriteError(w, http.StatusUnauthorized, "invalid_code", "Invalid or already used backup code")
+		return
+	}
+
+	// Mark the code as used.
+	s.DB.Pool.Exec(r.Context(),
+		`UPDATE backup_codes SET used = true, used_at = now() WHERE id = $1`, matchedID)
+
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "verified"})
+}
+
 // --- TOTP Core (RFC 6238) ---
 
 // generateTOTP generates a TOTP code for the given base32-encoded secret and time step.

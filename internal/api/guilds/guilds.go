@@ -2166,6 +2166,88 @@ func generateInviteCode() string {
 	return hex.EncodeToString(b)
 }
 
+// HandleGetGuildPruneCount previews how many members would be pruned.
+// GET /api/v1/guilds/{guildID}/prune?days=7
+func (h *Handler) HandleGetGuildPruneCount(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.KickMembers) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need KICK_MEMBERS permission")
+		return
+	}
+
+	days := 7
+	if d := r.URL.Query().Get("days"); d != "" {
+		if parsed, err := fmt.Sscanf(d, "%d", &days); err != nil || parsed != 1 || days < 1 || days > 30 {
+			days = 7
+		}
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -days)
+	var count int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM guild_members gm
+		 JOIN users u ON u.id = gm.user_id
+		 WHERE gm.guild_id = $1
+		   AND gm.user_id != (SELECT owner_id FROM guilds WHERE id = $1)
+		   AND NOT EXISTS (
+		       SELECT 1 FROM messages m
+		       JOIN channels c ON c.id = m.channel_id
+		       WHERE m.author_id = gm.user_id AND c.guild_id = $1 AND m.created_at > $2
+		   )`,
+		guildID, cutoff,
+	).Scan(&count)
+
+	writeJSON(w, http.StatusOK, map[string]int{"pruned": count})
+}
+
+// HandleGuildPrune removes inactive members from a guild.
+// POST /api/v1/guilds/{guildID}/prune?days=7
+func (h *Handler) HandleGuildPrune(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.KickMembers) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need KICK_MEMBERS permission")
+		return
+	}
+
+	days := 7
+	if d := r.URL.Query().Get("days"); d != "" {
+		if parsed, err := fmt.Sscanf(d, "%d", &days); err != nil || parsed != 1 || days < 1 || days > 30 {
+			days = 7
+		}
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -days)
+	result, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM guild_members
+		 WHERE guild_id = $1
+		   AND user_id != (SELECT owner_id FROM guilds WHERE id = $1)
+		   AND NOT EXISTS (
+		       SELECT 1 FROM messages m
+		       JOIN channels c ON c.id = m.channel_id
+		       WHERE m.author_id = guild_members.user_id AND c.guild_id = $1 AND m.created_at > $2
+		   )`,
+		guildID, cutoff,
+	)
+	if err != nil {
+		h.Logger.Error("guild prune failed", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to prune members")
+		return
+	}
+
+	pruned := int(result.RowsAffected())
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberRemove, "GUILD_MEMBERS_PRUNE", map[string]interface{}{
+		"guild_id": guildID,
+		"pruned":   pruned,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]int{"pruned": pruned})
+}
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

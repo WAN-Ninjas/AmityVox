@@ -401,6 +401,39 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 		case OpRequestMembers:
 			s.handleRequestMembers(ctx, client, msg.Data)
 
+		case OpVoiceStateUpdate:
+			var data struct {
+				GuildID   *string `json:"guild_id"`
+				ChannelID *string `json:"channel_id"` // nil = disconnect
+				SelfMute  bool    `json:"self_mute"`
+				SelfDeaf  bool    `json:"self_deaf"`
+			}
+			if err := json.Unmarshal(msg.Data, &data); err == nil {
+				voiceState := map[string]interface{}{
+					"user_id":   client.userID,
+					"self_mute": data.SelfMute,
+					"self_deaf": data.SelfDeaf,
+				}
+				if data.GuildID != nil {
+					voiceState["guild_id"] = *data.GuildID
+				}
+				if data.ChannelID != nil {
+					voiceState["channel_id"] = *data.ChannelID
+				}
+
+				eventData, _ := json.Marshal(voiceState)
+				guildID := ""
+				if data.GuildID != nil {
+					guildID = *data.GuildID
+				}
+				s.eventBus.Publish(ctx, events.SubjectVoiceStateUpdate, events.Event{
+					Type:    "VOICE_STATE_UPDATE",
+					GuildID: guildID,
+					UserID:  client.userID,
+					Data:    eventData,
+				})
+			}
+
 		case OpSubscribe:
 			// Channel-level subscription for DMs or specific channels.
 			var data struct {
