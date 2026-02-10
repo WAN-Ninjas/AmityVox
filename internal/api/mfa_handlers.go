@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/alexedwards/argon2id"
+	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/models"
 )
 
 // --- TOTP (Time-based One-Time Password) Handlers ---
@@ -400,85 +402,262 @@ func validateTOTP(secret, code string) bool {
 }
 
 // --- WebAuthn (FIDO2) Handlers ---
-// These will be fully implemented when the WebAuthn library is integrated.
 
-// WebAuthnRegisterBeginResponse is returned to start WebAuthn registration.
-type WebAuthnRegisterBeginResponse struct {
-	Options interface{} `json:"options"` // PublicKeyCredentialCreationOptions from WebAuthn spec.
+// webauthnUser adapts a database user row to the webauthn.User interface.
+type webauthnUser struct {
+	id          string
+	username    string
+	displayName string
+	credentials []webauthn.Credential
 }
 
-// WebAuthnRegisterFinishRequest completes WebAuthn registration.
-type WebAuthnRegisterFinishRequest struct {
-	Credential interface{} `json:"credential"` // AuthenticatorAttestationResponse from browser.
-	Name       string      `json:"name"`       // User-friendly name for this credential.
+func (u *webauthnUser) WebAuthnID() []byte          { return []byte(u.id) }
+func (u *webauthnUser) WebAuthnName() string         { return u.username }
+func (u *webauthnUser) WebAuthnDisplayName() string  { return u.displayName }
+func (u *webauthnUser) WebAuthnCredentials() []webauthn.Credential { return u.credentials }
+
+// loadWebAuthnUser loads a user and their WebAuthn credentials from the database.
+func (s *Server) loadWebAuthnUser(r *http.Request, userID string) (*webauthnUser, error) {
+	var username string
+	var displayName *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT username, display_name FROM users WHERE id = $1`, userID,
+	).Scan(&username, &displayName)
+	if err != nil {
+		return nil, fmt.Errorf("loading user: %w", err)
+	}
+
+	dn := username
+	if displayName != nil && *displayName != "" {
+		dn = *displayName
+	}
+
+	// Load existing WebAuthn credentials.
+	rows, err := s.DB.Pool.Query(r.Context(),
+		`SELECT credential_id, public_key, sign_count FROM webauthn_credentials WHERE user_id = $1`,
+		userID)
+	if err != nil {
+		return nil, fmt.Errorf("loading credentials: %w", err)
+	}
+	defer rows.Close()
+
+	var creds []webauthn.Credential
+	for rows.Next() {
+		var credID, pubKey []byte
+		var signCount int64
+		if err := rows.Scan(&credID, &pubKey, &signCount); err != nil {
+			continue
+		}
+		creds = append(creds, webauthn.Credential{
+			ID:        credID,
+			PublicKey: pubKey,
+			Authenticator: webauthn.Authenticator{
+				SignCount: uint32(signCount),
+			},
+		})
+	}
+
+	return &webauthnUser{
+		id:          userID,
+		username:    username,
+		displayName: dn,
+		credentials: creds,
+	}, nil
 }
 
-// WebAuthnLoginBeginResponse is returned to start WebAuthn authentication.
-type WebAuthnLoginBeginResponse struct {
-	Options interface{} `json:"options"` // PublicKeyCredentialRequestOptions from WebAuthn spec.
-}
-
-// WebAuthnLoginFinishRequest completes WebAuthn authentication.
-type WebAuthnLoginFinishRequest struct {
-	Credential interface{} `json:"credential"` // AuthenticatorAssertionResponse from browser.
+// webauthnSessionKey returns the cache key for a WebAuthn session challenge.
+func webauthnSessionKey(userID, ceremony string) string {
+	return "webauthn:" + ceremony + ":" + userID
 }
 
 // handleWebAuthnRegisterBegin handles POST /api/v1/auth/webauthn/register/begin.
+// Generates a WebAuthn registration challenge and returns options to the client.
 func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Request) {
+	if s.WebAuthn == nil {
+		WriteError(w, http.StatusServiceUnavailable, "webauthn_disabled", "WebAuthn is not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"WebAuthn registration will be available in v0.2.0")
+	user, err := s.loadWebAuthnUser(r, userID)
+	if err != nil {
+		s.Logger.Error("failed to load user for WebAuthn", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load user data")
+		return
+	}
+
+	options, session, err := s.WebAuthn.BeginRegistration(user)
+	if err != nil {
+		s.Logger.Error("WebAuthn BeginRegistration failed", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "webauthn_error", "Failed to begin registration")
+		return
+	}
+
+	// Store session data in cache with 5-minute TTL.
+	if err := s.Cache.Set(r.Context(), webauthnSessionKey(userID, "register"), session, 5*time.Minute); err != nil {
+		s.Logger.Error("failed to store WebAuthn session", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store session")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"options": options,
+	})
 }
 
 // handleWebAuthnRegisterFinish handles POST /api/v1/auth/webauthn/register/finish.
+// Validates the attestation response and stores the new credential.
 func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Request) {
+	if s.WebAuthn == nil {
+		WriteError(w, http.StatusServiceUnavailable, "webauthn_disabled", "WebAuthn is not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
-	var req WebAuthnRegisterFinishRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	user, err := s.loadWebAuthnUser(r, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load user data")
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"WebAuthn registration will be available in v0.2.0")
+	// Retrieve session data from cache.
+	var session webauthn.SessionData
+	found, err := s.Cache.Get(r.Context(), webauthnSessionKey(userID, "register"), &session)
+	if err != nil || !found {
+		WriteError(w, http.StatusBadRequest, "session_expired", "Registration session expired or not found")
+		return
+	}
+
+	// Parse the credential name from a query parameter or header.
+	credName := r.URL.Query().Get("name")
+	if credName == "" {
+		credName = "Security Key"
+	}
+
+	credential, err := s.WebAuthn.FinishRegistration(user, session, r)
+	if err != nil {
+		s.Logger.Error("WebAuthn FinishRegistration failed", "error", err.Error())
+		WriteError(w, http.StatusBadRequest, "registration_failed", "Failed to verify registration")
+		return
+	}
+
+	// Store the credential in the database.
+	credID := models.NewULID().String()
+	_, err = s.DB.Pool.Exec(r.Context(),
+		`INSERT INTO webauthn_credentials (id, user_id, credential_id, public_key, sign_count, name, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, now())`,
+		credID, userID, credential.ID, credential.PublicKey, credential.Authenticator.SignCount, credName,
+	)
+	if err != nil {
+		s.Logger.Error("failed to store WebAuthn credential", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store credential")
+		return
+	}
+
+	WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":         credID,
+		"name":       credName,
+		"created_at": time.Now().UTC(),
+	})
 }
 
 // handleWebAuthnLoginBegin handles POST /api/v1/auth/webauthn/login/begin.
+// Generates a WebAuthn assertion challenge for an authenticated user.
 func (s *Server) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request) {
+	if s.WebAuthn == nil {
+		WriteError(w, http.StatusServiceUnavailable, "webauthn_disabled", "WebAuthn is not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"WebAuthn authentication will be available in v0.2.0")
+	user, err := s.loadWebAuthnUser(r, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load user data")
+		return
+	}
+
+	if len(user.credentials) == 0 {
+		WriteError(w, http.StatusBadRequest, "no_credentials", "No WebAuthn credentials registered")
+		return
+	}
+
+	options, session, err := s.WebAuthn.BeginLogin(user)
+	if err != nil {
+		s.Logger.Error("WebAuthn BeginLogin failed", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "webauthn_error", "Failed to begin login")
+		return
+	}
+
+	// Store session data in cache with 5-minute TTL.
+	if err := s.Cache.Set(r.Context(), webauthnSessionKey(userID, "login"), session, 5*time.Minute); err != nil {
+		s.Logger.Error("failed to store WebAuthn login session", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store session")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"options": options,
+	})
 }
 
 // handleWebAuthnLoginFinish handles POST /api/v1/auth/webauthn/login/finish.
+// Validates the assertion response, verifying the user's security key.
 func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Request) {
+	if s.WebAuthn == nil {
+		WriteError(w, http.StatusServiceUnavailable, "webauthn_disabled", "WebAuthn is not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
-	var req WebAuthnLoginFinishRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	user, err := s.loadWebAuthnUser(r, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load user data")
 		return
 	}
 
-	WriteError(w, http.StatusNotImplemented, "not_implemented",
-		"WebAuthn authentication will be available in v0.2.0")
+	// Retrieve session data from cache.
+	var session webauthn.SessionData
+	found, err := s.Cache.Get(r.Context(), webauthnSessionKey(userID, "login"), &session)
+	if err != nil || !found {
+		WriteError(w, http.StatusBadRequest, "session_expired", "Login session expired or not found")
+		return
+	}
+
+	credential, err := s.WebAuthn.FinishLogin(user, session, r)
+	if err != nil {
+		s.Logger.Error("WebAuthn FinishLogin failed", "error", err.Error())
+		WriteError(w, http.StatusUnauthorized, "login_failed", "Failed to verify security key")
+		return
+	}
+
+	// Update sign count in database to detect cloned keys.
+	s.DB.Pool.Exec(r.Context(),
+		`UPDATE webauthn_credentials SET sign_count = $1 WHERE credential_id = $2 AND user_id = $3`,
+		credential.Authenticator.SignCount, credential.ID, userID,
+	)
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"verified": true,
+		"message":  "WebAuthn authentication successful",
+	})
 }

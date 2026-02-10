@@ -15,6 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/go-webauthn/webauthn/webauthn"
+
 	"github.com/amityvox/amityvox/internal/api/admin"
 	"github.com/amityvox/amityvox/internal/api/channels"
 	"github.com/amityvox/amityvox/internal/api/guilds"
@@ -24,6 +26,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/presence"
@@ -42,8 +45,10 @@ type Server struct {
 	Cache       *presence.Cache
 	Media       *media.Service
 	Search      *search.Service
-	Voice       *voice.Service
-	InstanceID  string
+	Voice      *voice.Service
+	Encryption *encryption.Service
+	WebAuthn   *webauthn.WebAuthn
+	InstanceID string
 	Version     string
 	Logger      *slog.Logger
 	server      *http.Server
@@ -63,6 +68,25 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 		Voice:       voiceSvc,
 		InstanceID:  instanceID,
 		Logger:      logger,
+	}
+
+	// Initialize WebAuthn if configured.
+	if cfg.Auth.WebAuthn.RPID != "" && len(cfg.Auth.WebAuthn.RPOrigins) > 0 {
+		displayName := cfg.Auth.WebAuthn.RPDisplayName
+		if displayName == "" {
+			displayName = cfg.Instance.Name
+		}
+		wa, err := webauthn.New(&webauthn.Config{
+			RPDisplayName: displayName,
+			RPID:          cfg.Auth.WebAuthn.RPID,
+			RPOrigins:     cfg.Auth.WebAuthn.RPOrigins,
+		})
+		if err != nil {
+			logger.Warn("WebAuthn initialization failed", slog.String("error", err.Error()))
+		} else {
+			s.WebAuthn = wa
+			logger.Info("WebAuthn enabled", slog.String("rp_id", cfg.Auth.WebAuthn.RPID))
+		}
 	}
 
 	s.registerMiddleware()
@@ -270,6 +294,30 @@ func (s *Server) registerRoutes() {
 				r.Post("/files/upload", s.Media.HandleUpload)
 			} else {
 				r.Post("/files/upload", stubHandler("upload_file"))
+			}
+
+			// MLS encryption delivery service routes.
+			if s.Encryption != nil {
+				r.Route("/encryption", func(r chi.Router) {
+					// Key package management.
+					r.Post("/key-packages", s.Encryption.HandleUploadKeyPackage)
+					r.Get("/key-packages/{userID}", s.Encryption.HandleGetKeyPackages)
+					r.Post("/key-packages/{userID}/claim", s.Encryption.HandleClaimKeyPackage)
+					r.Delete("/key-packages/{packageID}", s.Encryption.HandleDeleteKeyPackage)
+
+					// Welcome messages.
+					r.Post("/channels/{channelID}/welcome", s.Encryption.HandleSendWelcome)
+					r.Get("/welcome", s.Encryption.HandleGetWelcomes)
+					r.Delete("/welcome/{welcomeID}", s.Encryption.HandleAckWelcome)
+
+					// Group state.
+					r.Get("/channels/{channelID}/group-state", s.Encryption.HandleGetGroupState)
+					r.Put("/channels/{channelID}/group-state", s.Encryption.HandleUpdateGroupState)
+
+					// Commits.
+					r.Post("/channels/{channelID}/commits", s.Encryption.HandlePublishCommit)
+					r.Get("/channels/{channelID}/commits", s.Encryption.HandleGetCommits)
+				})
 			}
 
 			// Search routes (with search-specific rate limit).

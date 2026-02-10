@@ -58,6 +58,9 @@ const (
 
 	// Read state events.
 	SubjectChannelAck = "amityvox.channel.ack"
+
+	// Federation events.
+	SubjectFederationRetry = "amityvox.federation.retry"
 )
 
 // Event is the envelope for all events published through NATS. It mirrors the

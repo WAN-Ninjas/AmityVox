@@ -25,6 +25,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/gateway"
@@ -184,15 +185,17 @@ func runServe() error {
 			maxMB = 100 * 1024 * 1024
 		}
 		svc, err := media.New(media.Config{
-			Endpoint:    cfg.Storage.Endpoint,
-			Bucket:      cfg.Storage.Bucket,
-			AccessKey:   cfg.Storage.AccessKey,
-			SecretKey:   cfg.Storage.SecretKey,
-			Region:      cfg.Storage.Region,
-			UseSSL:      cfg.Storage.UseSSL,
-			MaxUploadMB: maxMB / (1024 * 1024),
-			Pool:        db.Pool,
-			Logger:      logger,
+			Endpoint:       cfg.Storage.Endpoint,
+			Bucket:         cfg.Storage.Bucket,
+			AccessKey:      cfg.Storage.AccessKey,
+			SecretKey:      cfg.Storage.SecretKey,
+			Region:         cfg.Storage.Region,
+			UseSSL:         cfg.Storage.UseSSL,
+			MaxUploadMB:    maxMB / (1024 * 1024),
+			ThumbnailSizes: cfg.Media.ImageThumbnailSizes,
+			StripExif:      cfg.Media.StripExif,
+			Pool:           db.Pool,
+			Logger:         logger,
 		})
 		if err != nil {
 			logger.Warn("media service unavailable, file uploads disabled", slog.String("error", err.Error()))
@@ -260,12 +263,27 @@ func runServe() error {
 		}
 	}
 
+	// Create MLS encryption delivery service.
+	encryptionSvc := encryption.NewService(encryption.Config{
+		Pool:   db.Pool,
+		Logger: logger,
+	})
+
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)
+	srv.Encryption = encryptionSvc
 	srv.Version = version
 
-	// Mount federation discovery endpoint.
+	// Mount federation endpoints.
 	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
+
+	// Create and start federation sync service (message routing between instances).
+	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
+	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	if cfg.Instance.FederationMode != "closed" {
+		syncSvc.StartRouter(ctx)
+		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))
+	}
 
 	// Parse WebSocket settings.
 	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()

@@ -82,10 +82,18 @@ type SearchConfig struct {
 
 // AuthConfig defines authentication and registration settings.
 type AuthConfig struct {
-	SessionDuration     string `toml:"session_duration"`
-	RegistrationEnabled bool   `toml:"registration_enabled"`
-	InviteOnly          bool   `toml:"invite_only"`
-	RequireEmail        bool   `toml:"require_email"`
+	SessionDuration     string         `toml:"session_duration"`
+	RegistrationEnabled bool           `toml:"registration_enabled"`
+	InviteOnly          bool           `toml:"invite_only"`
+	RequireEmail        bool           `toml:"require_email"`
+	WebAuthn            WebAuthnConfig `toml:"webauthn"`
+}
+
+// WebAuthnConfig defines WebAuthn/FIDO2 relying party settings.
+type WebAuthnConfig struct {
+	RPDisplayName string   `toml:"rp_display_name"`
+	RPID          string   `toml:"rp_id"`
+	RPOrigins     []string `toml:"rp_origins"`
 }
 
 // SessionDurationParsed returns the session duration as a time.Duration.
