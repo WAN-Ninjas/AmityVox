@@ -273,6 +273,54 @@ func (s *Service) ValidateSession(ctx context.Context, sessionID string) (string
 	return userID, nil
 }
 
+// ChangePasswordRequest is the request body for changing a user's password.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// ChangePassword validates the current password and updates it to a new one.
+func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangePasswordRequest) error {
+	if err := validatePassword(req.NewPassword); err != nil {
+		return err
+	}
+
+	// Get current password hash.
+	var passwordHash *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT password_hash FROM users WHERE id = $1`, userID,
+	).Scan(&passwordHash)
+	if err != nil {
+		return fmt.Errorf("querying user: %w", err)
+	}
+
+	if passwordHash == nil {
+		return &AuthError{Code: "no_password", Message: "Account does not have a password set", Status: 400}
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.CurrentPassword, *passwordHash)
+	if err != nil {
+		return fmt.Errorf("comparing password hash: %w", err)
+	}
+	if !match {
+		return &AuthError{Code: "invalid_password", Message: "Current password is incorrect", Status: 401}
+	}
+
+	newHash, err := argon2id.CreateHash(req.NewPassword, argon2id.DefaultParams)
+	if err != nil {
+		return fmt.Errorf("hashing new password: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx,
+		`UPDATE users SET password_hash = $2 WHERE id = $1`, userID, newHash)
+	if err != nil {
+		return fmt.Errorf("updating password: %w", err)
+	}
+
+	s.logger.Info("user changed password", slog.String("user_id", userID))
+	return nil
+}
+
 // GetUser retrieves a user by ID from the database.
 func (s *Service) GetUser(ctx context.Context, userID string) (*models.User, error) {
 	var user models.User
