@@ -123,6 +123,7 @@ type Guild struct {
 	SystemChannelBan     *string   `json:"system_channel_ban,omitempty"`
 	PreferredLocale      string    `json:"preferred_locale"`
 	MaxMembers           int       `json:"max_members"`
+	VanityURL            *string   `json:"vanity_url,omitempty"`
 	MemberCount          int       `json:"member_count,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }

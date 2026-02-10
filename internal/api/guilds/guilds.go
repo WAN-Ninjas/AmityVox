@@ -1498,7 +1498,8 @@ func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, 
 	var g models.Guild
 	err := h.Pool.QueryRow(ctx,
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
-		        g.default_permissions, g.flags, g.nsfw, g.discoverable, g.preferred_locale, g.max_members,
+		        g.default_permissions, g.flags, g.nsfw, g.discoverable, g.preferred_locale,
+		        g.max_members, g.vanity_url,
 		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
 		        g.created_at
 		 FROM guilds g WHERE g.id = $1`,
@@ -1506,7 +1507,7 @@ func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, 
 	).Scan(
 		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 		&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-		&g.PreferredLocale, &g.MaxMembers, &g.MemberCount, &g.CreatedAt,
+		&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.MemberCount, &g.CreatedAt,
 	)
 	return &g, err
 }
@@ -1581,6 +1582,119 @@ func (h *Handler) HandleGetGuildPreview(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// HandleGetGuildVanityURL returns the current vanity URL for a guild.
+// GET /api/v1/guilds/{guildID}/vanity-url
+func (h *Handler) HandleGetGuildVanityURL(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+
+	var vanityURL *string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT vanity_url FROM guilds WHERE id = $1`, guildID).Scan(&vanityURL)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get vanity URL")
+		return
+	}
+
+	code := ""
+	if vanityURL != nil {
+		code = *vanityURL
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"code": code,
+	})
+}
+
+// HandleSetGuildVanityURL sets or updates the vanity URL for a guild.
+// Only the guild owner can set a vanity URL.
+// PATCH /api/v1/guilds/{guildID}/vanity-url
+func (h *Handler) HandleSetGuildVanityURL(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+	userID := auth.UserIDFromContext(r.Context())
+
+	// Only guild owner can set vanity URL.
+	var ownerID string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild")
+		return
+	}
+	if ownerID != userID {
+		writeError(w, http.StatusForbidden, "not_owner", "Only the guild owner can set a vanity URL")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	// Validate: 3-32 characters, alphanumeric and hyphens only.
+	if len(req.Code) < 3 || len(req.Code) > 32 {
+		writeError(w, http.StatusBadRequest, "invalid_code", "Vanity URL must be 3-32 characters")
+		return
+	}
+	for _, c := range req.Code {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			writeError(w, http.StatusBadRequest, "invalid_code", "Vanity URL must be lowercase alphanumeric or hyphens")
+			return
+		}
+	}
+
+	_, err = h.Pool.Exec(r.Context(),
+		`UPDATE guilds SET vanity_url = $1 WHERE id = $2`, req.Code, guildID)
+	if err != nil {
+		// Unique constraint violation.
+		writeError(w, http.StatusConflict, "vanity_taken", "This vanity URL is already in use")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"code": req.Code,
+	})
+}
+
+// HandleResolveVanityURL resolves a vanity URL to a guild invite-like object.
+// GET /api/v1/guilds/vanity/{code}
+func (h *Handler) HandleResolveVanityURL(w http.ResponseWriter, r *http.Request) {
+	code := chi.URLParam(r, "code")
+
+	var guildID, guildName string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT id, name FROM guilds WHERE vanity_url = $1`, code).Scan(&guildID, &guildName)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusNotFound, "vanity_not_found", "No guild found with this vanity URL")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve vanity URL")
+		return
+	}
+
+	var memberCount int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM guild_members WHERE guild_id = $1`, guildID).Scan(&memberCount)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"guild_id":     guildID,
+		"guild_name":   guildName,
+		"code":         code,
+		"member_count": memberCount,
+	})
+}
+
 // HandleDiscoverGuilds returns a list of public, discoverable guilds.
 // GET /api/v1/guilds/discover
 func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
@@ -1589,7 +1703,7 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 
 	baseSQL := `SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 	            g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
-	            g.preferred_locale, g.max_members,
+	            g.preferred_locale, g.max_members, g.vanity_url,
 	            (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
 	            g.created_at
 	     FROM guilds g
@@ -1617,7 +1731,7 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 			&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-			&g.PreferredLocale, &g.MaxMembers, &g.MemberCount, &g.CreatedAt,
+			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.MemberCount, &g.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")
 			return
