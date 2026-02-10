@@ -20,6 +20,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // Handler implements channel-related REST API endpoints.
@@ -419,11 +420,11 @@ func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if authorID != userID {
-		// For non-authors, would need MANAGE_MESSAGES permission check.
-		// Simplified: allow deletion if user is in the same guild and has the permission,
-		// or is the channel owner for DMs.
-		writeError(w, http.StatusForbidden, "not_author", "You can only delete your own messages")
-		return
+		// Non-authors need MANAGE_MESSAGES permission in the guild.
+		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) {
+			writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_MESSAGES permission to delete others' messages")
+			return
+		}
 	}
 
 	_, err = h.Pool.Exec(r.Context(),
@@ -1055,6 +1056,60 @@ func (h *Handler) loadEmbeds(ctx context.Context, messageID string) []models.Emb
 		embeds = append(embeds, e)
 	}
 	return embeds
+}
+
+// hasChannelPermission checks if a user has a specific permission in the guild
+// that owns this channel. Returns false for DM channels.
+func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID string, perm uint64) bool {
+	var guildID *string
+	h.Pool.QueryRow(ctx, `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if guildID == nil {
+		return false
+	}
+
+	// Owner has all permissions.
+	var ownerID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, *guildID).Scan(&ownerID); err != nil {
+		return false
+	}
+	if userID == ownerID {
+		return true
+	}
+
+	// Admin flag.
+	var userFlags int
+	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
+	if userFlags&models.UserFlagAdmin != 0 {
+		return true
+	}
+
+	// Default permissions + role permissions.
+	var defaultPerms int64
+	h.Pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, *guildID).Scan(&defaultPerms)
+	computed := uint64(defaultPerms)
+
+	rows, _ := h.Pool.Query(ctx,
+		`SELECT r.permissions_allow, r.permissions_deny
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		*guildID, userID,
+	)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var allow, deny int64
+			rows.Scan(&allow, &deny)
+			computed |= uint64(allow)
+			computed &^= uint64(deny)
+		}
+	}
+
+	if computed&permissions.Administrator != 0 {
+		return true
+	}
+	return computed&perm != 0
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

@@ -638,6 +638,126 @@ func (h *Handler) HandleDeleteSelf(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleGetUserNote returns the authenticated user's personal note about another user.
+// GET /api/v1/users/{userID}/note
+func (h *Handler) HandleGetUserNote(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	targetID := chi.URLParam(r, "userID")
+
+	var note string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT note FROM user_notes WHERE user_id = $1 AND target_id = $2`,
+		userID, targetID,
+	).Scan(&note)
+	if err == pgx.ErrNoRows {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"target_id": targetID,
+			"note":      "",
+		})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get note")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"target_id": targetID,
+		"note":      note,
+	})
+}
+
+// HandleSetUserNote sets a personal note about another user.
+// PUT /api/v1/users/{userID}/note
+func (h *Handler) HandleSetUserNote(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	targetID := chi.URLParam(r, "userID")
+
+	var req struct {
+		Note string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if len(req.Note) > 256 {
+		writeError(w, http.StatusBadRequest, "note_too_long", "Note must be at most 256 characters")
+		return
+	}
+
+	if req.Note == "" {
+		h.Pool.Exec(r.Context(),
+			`DELETE FROM user_notes WHERE user_id = $1 AND target_id = $2`,
+			userID, targetID)
+	} else {
+		_, err := h.Pool.Exec(r.Context(),
+			`INSERT INTO user_notes (user_id, target_id, note, updated_at)
+			 VALUES ($1, $2, $3, now())
+			 ON CONFLICT (user_id, target_id) DO UPDATE SET note = $3, updated_at = now()`,
+			userID, targetID, req.Note)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to save note")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"target_id": targetID,
+		"note":      req.Note,
+	})
+}
+
+// HandleGetUserSettings returns the authenticated user's client settings.
+// GET /api/v1/users/@me/settings
+func (h *Handler) HandleGetUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var settings json.RawMessage
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT settings FROM user_settings WHERE user_id = $1`, userID,
+	).Scan(&settings)
+	if err == pgx.ErrNoRows {
+		writeJSON(w, http.StatusOK, map[string]interface{}{})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get settings")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": settings})
+}
+
+// HandleUpdateUserSettings updates the authenticated user's client settings.
+// PATCH /api/v1/users/@me/settings
+func (h *Handler) HandleUpdateUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var settings json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid JSON body")
+		return
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO user_settings (user_id, settings, updated_at)
+		 VALUES ($1, $2, now())
+		 ON CONFLICT (user_id) DO UPDATE SET settings = $2, updated_at = now()`,
+		userID, settings)
+	if err != nil {
+		h.Logger.Error("failed to update settings", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update settings")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": settings})
+}
+
 // --- Internal helpers ---
 
 func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, error) {
