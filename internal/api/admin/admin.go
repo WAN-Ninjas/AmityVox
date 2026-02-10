@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -264,14 +265,24 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type stats struct {
-		Users       int64  `json:"users"`
-		Guilds      int64  `json:"guilds"`
-		Channels    int64  `json:"channels"`
-		Messages    int64  `json:"messages"`
-		Files       int64  `json:"files"`
-		FedPeers    int64  `json:"federation_peers"`
-		DBSizeMB    string `json:"database_size_mb"`
-		GoVersion   string `json:"go_version"`
+		Users        int64  `json:"users"`
+		OnlineUsers  int64  `json:"online_users"`
+		Guilds       int64  `json:"guilds"`
+		Channels     int64  `json:"channels"`
+		Messages     int64  `json:"messages"`
+		MessagesToday int64 `json:"messages_today"`
+		Files        int64  `json:"files"`
+		Roles        int64  `json:"roles"`
+		Emoji        int64  `json:"emoji"`
+		Invites      int64  `json:"invites"`
+		FedPeers     int64  `json:"federation_peers"`
+		DBSize       string `json:"database_size"`
+		GoVersion    string `json:"go_version"`
+		NumGoroutine int    `json:"goroutines"`
+		MemAllocMB   uint64 `json:"mem_alloc_mb"`
+		MemSysMB     uint64 `json:"mem_sys_mb"`
+		NumCPU       int    `json:"num_cpu"`
+		Uptime       string `json:"uptime"`
 	}
 
 	var s stats
@@ -284,13 +295,17 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 		{`SELECT COUNT(*) FROM guilds`, &s.Guilds},
 		{`SELECT COUNT(*) FROM channels`, &s.Channels},
 		{`SELECT COUNT(*) FROM messages`, &s.Messages},
+		{`SELECT COUNT(*) FROM messages WHERE created_at >= CURRENT_DATE`, &s.MessagesToday},
 		{`SELECT COUNT(*) FROM files`, &s.Files},
+		{`SELECT COUNT(*) FROM roles`, &s.Roles},
+		{`SELECT COUNT(*) FROM guild_emoji`, &s.Emoji},
+		{`SELECT COUNT(*) FROM invites WHERE expires_at IS NULL OR expires_at > now()`, &s.Invites},
 		{`SELECT COUNT(*) FROM federation_peers WHERE instance_id = $1`, &s.FedPeers},
+		{`SELECT COUNT(*) FROM user_sessions WHERE expires_at > now()`, &s.OnlineUsers},
 	}
 
 	for _, q := range queries {
 		if err := h.Pool.QueryRow(r.Context(), q.sql, h.InstanceID).Scan(q.dest); err != nil {
-			// Table might not exist yet; default to 0.
 			*q.dest = 0
 		}
 	}
@@ -302,8 +317,23 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		dbSize = "unknown"
 	}
-	s.DBSizeMB = dbSize
-	s.GoVersion = "go1.23"
+	s.DBSize = dbSize
+
+	// Runtime stats.
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	s.GoVersion = runtime.Version()
+	s.NumGoroutine = runtime.NumGoroutine()
+	s.MemAllocMB = memStats.Alloc / 1024 / 1024
+	s.MemSysMB = memStats.Sys / 1024 / 1024
+	s.NumCPU = runtime.NumCPU()
+
+	// Server uptime from instance created_at.
+	var createdAt time.Time
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT created_at FROM instances WHERE id = $1`, h.InstanceID).Scan(&createdAt); err == nil {
+		s.Uptime = time.Since(createdAt).Truncate(time.Second).String()
+	}
 
 	writeJSON(w, http.StatusOK, s)
 }

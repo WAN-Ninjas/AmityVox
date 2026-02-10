@@ -111,8 +111,7 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 		        g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
 		        g.preferred_locale, g.max_members, g.vanity_url,
-		        (SELECT COUNT(*) FROM guild_members gm2 WHERE gm2.guild_id = g.id),
-		        g.created_at
+		        g.member_count, g.created_at
 		 FROM guilds g
 		 JOIN guild_members gm ON g.id = gm.guild_id
 		 WHERE gm.user_id = $1
