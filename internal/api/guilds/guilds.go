@@ -1511,6 +1511,76 @@ func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, 
 	return &g, err
 }
 
+// HandleGetGuildPreview returns a limited preview of a guild for non-members.
+// Includes basic info, approximate member count, emoji count, and top channels.
+// GET /api/v1/guilds/{guildID}/preview
+func (h *Handler) HandleGetGuildPreview(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+
+	var g models.Guild
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
+		        g.flags, g.nsfw, g.discoverable, g.preferred_locale,
+		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
+		        g.created_at
+		 FROM guilds g WHERE g.id = $1`,
+		guildID,
+	).Scan(
+		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
+		&g.BannerID, &g.Flags, &g.NSFW, &g.Discoverable, &g.PreferredLocale,
+		&g.MemberCount, &g.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild preview")
+		return
+	}
+
+	var emojiCount int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM custom_emoji WHERE guild_id = $1`, guildID).Scan(&emojiCount)
+
+	type channelPreview struct {
+		ID          string  `json:"id"`
+		ChannelType string  `json:"channel_type"`
+		Name        *string `json:"name"`
+	}
+	channelPreviews := make([]channelPreview, 0)
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, channel_type, name
+		 FROM channels WHERE guild_id = $1
+		 ORDER BY position
+		 LIMIT 5`,
+		guildID,
+	)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var cp channelPreview
+			if err := rows.Scan(&cp.ID, &cp.ChannelType, &cp.Name); err == nil {
+				channelPreviews = append(channelPreviews, cp)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":           g.ID,
+		"name":         g.Name,
+		"description":  g.Description,
+		"icon_id":      g.IconID,
+		"banner_id":    g.BannerID,
+		"nsfw":         g.NSFW,
+		"discoverable": g.Discoverable,
+		"member_count": g.MemberCount,
+		"emoji_count":  emojiCount,
+		"channels":     channelPreviews,
+		"created_at":   g.CreatedAt,
+	})
+}
+
 // HandleDiscoverGuilds returns a list of public, discoverable guilds.
 // GET /api/v1/guilds/discover
 func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {

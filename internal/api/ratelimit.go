@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/presence"
 )
 
 // Rate limit tiers for different endpoint categories.
@@ -47,13 +48,14 @@ func (s *Server) rateLimitMiddleware() func(http.Handler) http.Handler {
 			}
 
 			// Check global rate limit.
-			allowed, err := s.Cache.CheckRateLimit(r.Context(), "global:"+key, globalRateLimit, globalRateWindow)
+			result, err := s.Cache.CheckRateLimitInfo(r.Context(), "global:"+key, globalRateLimit, globalRateWindow)
 			if err != nil {
 				s.Logger.Debug("rate limit check failed", slog.String("error", err.Error()))
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !allowed {
+			setRateLimitHeaders(w, result, globalRateWindow)
+			if !result.Allowed {
 				writeRateLimitResponse(w, globalRateWindow)
 				return
 			}
@@ -61,8 +63,9 @@ func (s *Server) rateLimitMiddleware() func(http.Handler) http.Handler {
 			// Check endpoint-specific rate limits.
 			if isAuthEndpoint(r) {
 				ip := clientIP(r)
-				allowed, err := s.Cache.CheckRateLimit(r.Context(), "auth:"+ip, authRateLimit, authRateWindow)
-				if err == nil && !allowed {
+				authResult, err := s.Cache.CheckRateLimitInfo(r.Context(), "auth:"+ip, authRateLimit, authRateWindow)
+				if err == nil && !authResult.Allowed {
+					setRateLimitHeaders(w, authResult, authRateWindow)
 					writeRateLimitResponse(w, authRateWindow)
 					return
 				}
@@ -88,13 +91,14 @@ func (s *Server) RateLimitMessages(next http.Handler) http.Handler {
 			return
 		}
 
-		allowed, err := s.Cache.CheckRateLimit(r.Context(), "msg:"+userID, messageRateLimit, messageRateWindow)
+		result, err := s.Cache.CheckRateLimitInfo(r.Context(), "msg:"+userID, messageRateLimit, messageRateWindow)
 		if err != nil {
 			s.Logger.Debug("message rate limit check failed", slog.String("error", err.Error()))
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !allowed {
+		setRateLimitHeaders(w, result, messageRateWindow)
+		if !result.Allowed {
 			writeRateLimitResponse(w, messageRateWindow)
 			return
 		}
@@ -117,13 +121,14 @@ func (s *Server) RateLimitSearch(next http.Handler) http.Handler {
 			return
 		}
 
-		allowed, err := s.Cache.CheckRateLimit(r.Context(), "search:"+userID, searchRateLimit, searchRateWindow)
+		result, err := s.Cache.CheckRateLimitInfo(r.Context(), "search:"+userID, searchRateLimit, searchRateWindow)
 		if err != nil {
 			s.Logger.Debug("search rate limit check failed", slog.String("error", err.Error()))
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !allowed {
+		setRateLimitHeaders(w, result, searchRateWindow)
+		if !result.Allowed {
 			writeRateLimitResponse(w, searchRateWindow)
 			return
 		}
@@ -132,11 +137,18 @@ func (s *Server) RateLimitSearch(next http.Handler) http.Handler {
 	})
 }
 
+// setRateLimitHeaders sets X-RateLimit-* headers on every response so clients
+// can track their remaining quota proactively.
+func setRateLimitHeaders(w http.ResponseWriter, result presence.RateLimitResult, window time.Duration) {
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(result.Limit))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(result.Remaining))
+	w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(window).Unix()))
+}
+
 // writeRateLimitResponse sends a 429 Too Many Requests response with
 // standard rate limit headers.
 func writeRateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
 	w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-	w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(retryAfter).Unix()))
 	WriteError(w, http.StatusTooManyRequests, "rate_limited", "You are being rate limited. Please try again later.")
 }
 

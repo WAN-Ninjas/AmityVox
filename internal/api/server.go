@@ -163,7 +163,8 @@ func (s *Server) registerRoutes() {
 			r.Route("/guilds", func(r chi.Router) {
 				r.Post("/", guildH.HandleCreateGuild)
 				r.Get("/discover", guildH.HandleDiscoverGuilds)
-				r.Get("/{guildID}", guildH.HandleGetGuild)
+				r.Get("/{guildID}/preview", guildH.HandleGetGuildPreview)
+			r.Get("/{guildID}", guildH.HandleGetGuild)
 				r.Patch("/{guildID}", guildH.HandleUpdateGuild)
 				r.Delete("/{guildID}", guildH.HandleDeleteGuild)
 				r.Post("/{guildID}/leave", guildH.HandleLeaveGuild)
@@ -216,7 +217,9 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/ack", channelH.HandleAckChannel)
 				r.Put("/{channelID}/permissions/{overrideID}", channelH.HandleSetChannelPermission)
 				r.Delete("/{channelID}/permissions/{overrideID}", channelH.HandleDeleteChannelPermission)
-				r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
+				r.Post("/{channelID}/messages/{messageID}/threads", channelH.HandleCreateThread)
+			r.Get("/{channelID}/threads", channelH.HandleGetThreads)
+			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 			})
 
 			// Invite routes.

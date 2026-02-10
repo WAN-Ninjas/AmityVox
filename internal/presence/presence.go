@@ -203,9 +203,25 @@ func (c *Cache) RemovePresence(ctx context.Context, userID string) error {
 
 // --- Rate Limiting ---
 
+// RateLimitResult contains the result of a rate limit check, including the
+// current count and remaining requests for response header population.
+type RateLimitResult struct {
+	Allowed   bool
+	Limit     int
+	Remaining int
+	Count     int64
+}
+
 // CheckRateLimit implements a sliding window rate limiter using Redis.
 // Returns true if the request is allowed, false if rate limited.
 func (c *Cache) CheckRateLimit(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+	r, err := c.CheckRateLimitInfo(ctx, key, limit, window)
+	return r.Allowed, err
+}
+
+// CheckRateLimitInfo implements a sliding window rate limiter using Redis and
+// returns detailed rate limit state for populating response headers.
+func (c *Cache) CheckRateLimitInfo(ctx context.Context, key string, limit int, window time.Duration) (RateLimitResult, error) {
 	fullKey := PrefixRateLimit + key
 
 	pipe := c.client.Pipeline()
@@ -214,11 +230,20 @@ func (c *Cache) CheckRateLimit(ctx context.Context, key string, limit int, windo
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		return true, fmt.Errorf("checking rate limit for %s: %w", key, err)
+		return RateLimitResult{Allowed: true, Limit: limit, Remaining: limit}, fmt.Errorf("checking rate limit for %s: %w", key, err)
 	}
 
 	count := incr.Val()
-	return count <= int64(limit), nil
+	remaining := limit - int(count)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return RateLimitResult{
+		Allowed:   count <= int64(limit),
+		Limit:     limit,
+		Remaining: remaining,
+		Count:     count,
+	}, nil
 }
 
 // --- Generic Cache Operations ---

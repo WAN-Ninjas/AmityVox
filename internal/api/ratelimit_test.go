@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/presence"
 )
 
 func TestIsAuthEndpoint(t *testing.T) {
@@ -55,8 +57,26 @@ func TestWriteRateLimitResponse(t *testing.T) {
 	if ra := w.Header().Get("Retry-After"); ra == "" {
 		t.Error("Retry-After header should be set")
 	}
-	if xrl := w.Header().Get("X-RateLimit-Reset"); xrl == "" {
-		t.Error("X-RateLimit-Reset header should be set")
+}
+
+func TestSetRateLimitHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	result := presence.RateLimitResult{
+		Allowed:   true,
+		Limit:     120,
+		Remaining: 100,
+		Count:     20,
+	}
+	setRateLimitHeaders(w, result, globalRateWindow)
+
+	if v := w.Header().Get("X-RateLimit-Limit"); v != "120" {
+		t.Errorf("X-RateLimit-Limit = %q, want %q", v, "120")
+	}
+	if v := w.Header().Get("X-RateLimit-Remaining"); v != "100" {
+		t.Errorf("X-RateLimit-Remaining = %q, want %q", v, "100")
+	}
+	if v := w.Header().Get("X-RateLimit-Reset"); v == "" {
+		t.Error("X-RateLimit-Reset should be set")
 	}
 }
 
