@@ -234,7 +234,7 @@ func runServe() error {
 	workerMgr.Start(ctx)
 
 	// Create and start HTTP API server.
-	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, instanceID, logger)
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, instanceID, logger)
 
 	// Mount federation discovery endpoint.
 	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
