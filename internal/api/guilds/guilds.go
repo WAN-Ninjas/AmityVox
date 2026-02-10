@@ -301,6 +301,68 @@ func (h *Handler) HandleLeaveGuild(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleTransferGuildOwnership transfers guild ownership to another member.
+// POST /api/v1/guilds/{guildID}/transfer
+func (h *Handler) HandleTransferGuildOwnership(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	// Only the owner can transfer ownership.
+	var ownerID string
+	if err := h.Pool.QueryRow(r.Context(), `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		return
+	}
+	if ownerID != userID {
+		writeError(w, http.StatusForbidden, "not_owner", "Only the guild owner can transfer ownership")
+		return
+	}
+
+	var req struct {
+		NewOwnerID string `json:"new_owner_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.NewOwnerID == "" {
+		writeError(w, http.StatusBadRequest, "missing_new_owner", "new_owner_id is required")
+		return
+	}
+	if req.NewOwnerID == userID {
+		writeError(w, http.StatusBadRequest, "already_owner", "You are already the owner")
+		return
+	}
+
+	// Verify new owner is a member.
+	if !h.isMember(r.Context(), guildID, req.NewOwnerID) {
+		writeError(w, http.StatusBadRequest, "not_member", "New owner must be a member of the guild")
+		return
+	}
+
+	var guild models.Guild
+	err := h.Pool.QueryRow(r.Context(),
+		`UPDATE guilds SET owner_id = $2
+		 WHERE id = $1
+		 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
+		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members, created_at`,
+		guildID, req.NewOwnerID,
+	).Scan(
+		&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
+		&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
+		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers, &guild.CreatedAt,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to transfer ownership")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "guild_transfer", "guild", guildID, nil)
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildUpdate, "GUILD_UPDATE", guild)
+
+	writeJSON(w, http.StatusOK, guild)
+}
+
 // HandleGetGuildChannels lists all channels in a guild.
 // GET /api/v1/guilds/{guildID}/channels
 func (h *Handler) HandleGetGuildChannels(w http.ResponseWriter, r *http.Request) {
@@ -885,6 +947,108 @@ func (h *Handler) HandleDeleteGuildRole(w http.ResponseWriter, r *http.Request) 
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleReorderGuildRoles updates the positions of multiple roles at once.
+// PATCH /api/v1/guilds/{guildID}/roles
+func (h *Handler) HandleReorderGuildRoles(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageRoles) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_ROLES permission")
+		return
+	}
+
+	var req []struct {
+		ID       string `json:"id"`
+		Position int    `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Expected array of {id, position} objects")
+		return
+	}
+
+	if len(req) == 0 {
+		writeError(w, http.StatusBadRequest, "empty_array", "At least one role position is required")
+		return
+	}
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder roles")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	for _, item := range req {
+		_, err := tx.Exec(r.Context(),
+			`UPDATE roles SET position = $3 WHERE id = $1 AND guild_id = $2`,
+			item.ID, guildID, item.Position)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder roles")
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder roles")
+		return
+	}
+
+	// Return updated role list.
+	h.HandleGetGuildRoles(w, r)
+}
+
+// HandleReorderGuildChannels updates the positions of multiple channels at once.
+// PATCH /api/v1/guilds/{guildID}/channels
+func (h *Handler) HandleReorderGuildChannels(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	var req []struct {
+		ID       string `json:"id"`
+		Position int    `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Expected array of {id, position} objects")
+		return
+	}
+
+	if len(req) == 0 {
+		writeError(w, http.StatusBadRequest, "empty_array", "At least one channel position is required")
+		return
+	}
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder channels")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	for _, item := range req {
+		_, err := tx.Exec(r.Context(),
+			`UPDATE channels SET position = $3 WHERE id = $1 AND guild_id = $2`,
+			item.ID, guildID, item.Position)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder channels")
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder channels")
+		return
+	}
+
+	// Return updated channel list.
+	h.HandleGetGuildChannels(w, r)
 }
 
 // HandleGetGuildInvites lists all invites for a guild.

@@ -532,6 +532,74 @@ func (h *Handler) HandleDeleteSelfSession(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleDeleteSelf soft-deletes the authenticated user's account.
+// The account is flagged as deleted and personal data is cleared.
+// DELETE /api/v1/users/@me
+func (h *Handler) HandleDeleteSelf(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	// Check that user is not the owner of any guild.
+	var ownedCount int
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM guilds WHERE owner_id = $1`, userID,
+	).Scan(&ownedCount); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check guild ownership")
+		return
+	}
+	if ownedCount > 0 {
+		writeError(w, http.StatusBadRequest, "owns_guilds",
+			"Transfer or delete all guilds you own before deleting your account")
+		return
+	}
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete account")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Soft-delete: set deleted flag, clear personal data.
+	_, err = tx.Exec(r.Context(),
+		`UPDATE users SET
+			flags = flags | $2,
+			display_name = NULL,
+			avatar_id = NULL,
+			status_text = NULL,
+			bio = NULL,
+			email = NULL,
+			password_hash = NULL
+		 WHERE id = $1`,
+		userID, models.UserFlagDeleted,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete account")
+		return
+	}
+
+	// Remove from all guilds.
+	tx.Exec(r.Context(), `DELETE FROM guild_members WHERE user_id = $1`, userID)
+	tx.Exec(r.Context(), `DELETE FROM member_roles WHERE user_id = $1`, userID)
+
+	// Remove all relationships.
+	tx.Exec(r.Context(), `DELETE FROM user_relationships WHERE user_id = $1 OR target_id = $1`, userID)
+
+	// Invalidate all sessions.
+	tx.Exec(r.Context(), `DELETE FROM user_sessions WHERE user_id = $1`, userID)
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete account")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectUserUpdate, "USER_UPDATE", map[string]interface{}{
+		"id":      userID,
+		"deleted": true,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Internal helpers ---
 
 func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, error) {
