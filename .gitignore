@@ -1,0 +1,45 @@
+# Go build artifacts
+/amityvox
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Config files with secrets
+amityvox.toml
+*.env
+.env
+.env.*
+
+# Dependencies (vendored separately if needed)
+/vendor/
+
+# Docker volumes and local data
+data/
+*.db
+*.sqlite
+
+# Debug binary
+__debug_bin*
+
+# OS-specific
+.DS_Store
+.Spotlight-V100
+.Trashes
+ehthumbs.db
