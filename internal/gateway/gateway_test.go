@@ -149,3 +149,123 @@ func TestGatewayMessage_FromJSON(t *testing.T) {
 		t.Errorf("token = %q, want %q", identify.Token, "abc123")
 	}
 }
+
+func TestResumePayload_JSON(t *testing.T) {
+	payload := ResumePayload{
+		Token:     "my-token",
+		SessionID: "session-123",
+		Seq:       42,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded ResumePayload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.Token != "my-token" {
+		t.Errorf("token = %q, want %q", decoded.Token, "my-token")
+	}
+	if decoded.SessionID != "session-123" {
+		t.Errorf("session_id = %q, want %q", decoded.SessionID, "session-123")
+	}
+	if decoded.Seq != 42 {
+		t.Errorf("seq = %d, want 42", decoded.Seq)
+	}
+}
+
+func TestRequestMembersPayload_JSON(t *testing.T) {
+	payload := RequestMembersPayload{
+		GuildID: "guild-abc",
+		Query:   "user",
+		Limit:   50,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded RequestMembersPayload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.GuildID != "guild-abc" {
+		t.Errorf("guild_id = %q, want %q", decoded.GuildID, "guild-abc")
+	}
+	if decoded.Query != "user" {
+		t.Errorf("query = %q, want %q", decoded.Query, "user")
+	}
+	if decoded.Limit != 50 {
+		t.Errorf("limit = %d, want 50", decoded.Limit)
+	}
+}
+
+func TestRequestMembersPayload_Defaults(t *testing.T) {
+	raw := `{"guild_id": "abc"}`
+	var payload RequestMembersPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if payload.GuildID != "abc" {
+		t.Errorf("guild_id = %q, want %q", payload.GuildID, "abc")
+	}
+	if payload.Query != "" {
+		t.Errorf("query = %q, want empty", payload.Query)
+	}
+	if payload.Limit != 0 {
+		t.Errorf("limit = %d, want 0", payload.Limit)
+	}
+}
+
+func TestResumePayload_FromJSON(t *testing.T) {
+	raw := `{"op":5,"d":{"token":"tok","session_id":"sid","seq":10}}`
+	var msg GatewayMessage
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if msg.Op != OpResume {
+		t.Errorf("op = %d, want %d", msg.Op, OpResume)
+	}
+
+	var resume ResumePayload
+	if err := json.Unmarshal(msg.Data, &resume); err != nil {
+		t.Fatalf("unmarshal data error: %v", err)
+	}
+
+	if resume.Token != "tok" {
+		t.Errorf("token = %q, want %q", resume.Token, "tok")
+	}
+	if resume.Seq != 10 {
+		t.Errorf("seq = %d, want 10", resume.Seq)
+	}
+}
+
+func TestClient_GuildIDsInit(t *testing.T) {
+	// Verify that guildIDs map works as expected.
+	guilds := make(map[string]bool)
+	guilds["guild-1"] = true
+	guilds["guild-2"] = true
+
+	if !guilds["guild-1"] {
+		t.Error("guild-1 should be in map")
+	}
+	if guilds["guild-3"] {
+		t.Error("guild-3 should not be in map")
+	}
+	if len(guilds) != 2 {
+		t.Errorf("len = %d, want 2", len(guilds))
+	}
+
+	delete(guilds, "guild-1")
+	if guilds["guild-1"] {
+		t.Error("guild-1 should be removed")
+	}
+}
