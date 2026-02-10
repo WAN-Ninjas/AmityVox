@@ -275,7 +275,7 @@ func (s *Server) registerRoutes() {
 		})
 
 		// Webhook execution — uses token auth, no Bearer token needed.
-		r.Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
+		r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
 	})
 }
 

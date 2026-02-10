@@ -28,6 +28,10 @@ const (
 	// Search: 30 queries per minute per user.
 	searchRateLimit  = 30
 	searchRateWindow = 1 * time.Minute
+
+	// Webhook execution: 30 calls per minute per webhook.
+	webhookRateLimit  = 30
+	webhookRateWindow = 1 * time.Minute
 )
 
 // rateLimitMiddleware returns middleware that enforces rate limits using
@@ -130,6 +134,32 @@ func (s *Server) RateLimitSearch(next http.Handler) http.Handler {
 		setRateLimitHeaders(w, result, searchRateWindow)
 		if !result.Allowed {
 			writeRateLimitResponse(w, searchRateWindow)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RateLimitWebhooks is middleware for webhook execution with per-webhook rate limits.
+func (s *Server) RateLimitWebhooks(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Cache == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Use the webhook ID from URL path as the rate limit key.
+		key := "webhook:" + r.URL.Path
+		result, err := s.Cache.CheckRateLimitInfo(r.Context(), key, webhookRateLimit, webhookRateWindow)
+		if err != nil {
+			s.Logger.Debug("webhook rate limit check failed", slog.String("error", err.Error()))
+			next.ServeHTTP(w, r)
+			return
+		}
+		setRateLimitHeaders(w, result, webhookRateWindow)
+		if !result.Allowed {
+			writeRateLimitResponse(w, webhookRateWindow)
 			return
 		}
 

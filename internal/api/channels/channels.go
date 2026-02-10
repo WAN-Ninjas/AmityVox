@@ -1331,11 +1331,25 @@ func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request)
 }
 
 // hasChannelPermission checks if a user has a specific permission in the guild
-// that owns this channel. Returns false for DM channels.
+// that owns this channel. For DM/group channels (no guild), it checks that the
+// user is a participant — DM participants implicitly have all permissions.
 func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID string, perm uint64) bool {
 	var guildID *string
-	h.Pool.QueryRow(ctx, `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	var channelType string
+	h.Pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&guildID, &channelType)
+
 	if guildID == nil {
+		// DM or group channel — check if user is a participant.
+		if channelType == "dm" || channelType == "group" {
+			var isRecipient bool
+			h.Pool.QueryRow(ctx,
+				`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+				channelID, userID,
+			).Scan(&isRecipient)
+			return isRecipient
+		}
 		return false
 	}
 
