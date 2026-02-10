@@ -61,7 +61,14 @@ type permissionOverrideRequest struct {
 // HandleGetChannel returns a channel's details.
 // GET /api/v1/channels/{channelID}
 func (h *Handler) HandleGetChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
 
 	channel, err := h.getChannel(r.Context(), channelID)
 	if err != nil {
@@ -144,7 +151,14 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 // HandleGetMessages returns paginated messages from a channel.
 // GET /api/v1/channels/{channelID}/messages?before=&after=&around=&limit=
 func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ViewChannel + ReadHistory.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ReadHistory) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need READ_HISTORY permission")
+		return
+	}
 
 	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -236,6 +250,12 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: SendMessages.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.SendMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need SEND_MESSAGES permission")
+		return
+	}
 
 	var req createMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -602,6 +622,12 @@ func (h *Handler) HandleAddReaction(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
 	emoji := chi.URLParam(r, "emoji")
+
+	// Permission check: AddReactions.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.AddReactions) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need ADD_REACTIONS permission")
+		return
+	}
 
 	// Verify message exists in channel.
 	var exists bool
