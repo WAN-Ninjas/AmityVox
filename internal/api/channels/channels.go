@@ -7,9 +7,11 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -247,9 +249,29 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(*req.Content) > 4000 {
+	if hasContent && len(*req.Content) > 4000 {
 		writeError(w, http.StatusBadRequest, "content_too_long", "Message content must be at most 4000 characters")
 		return
+	}
+
+	// Enforce slowmode: check if the user posted too recently in this channel.
+	var slowmodeSec int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(slowmode_seconds, 0) FROM channels WHERE id = $1`, channelID).Scan(&slowmodeSec)
+	if slowmodeSec > 0 {
+		var lastSent *time.Time
+		h.Pool.QueryRow(r.Context(),
+			`SELECT MAX(created_at) FROM messages WHERE channel_id = $1 AND author_id = $2`,
+			channelID, userID).Scan(&lastSent)
+		if lastSent != nil {
+			elapsed := time.Since(*lastSent)
+			if elapsed < time.Duration(slowmodeSec)*time.Second {
+				remaining := time.Duration(slowmodeSec)*time.Second - elapsed
+				writeError(w, http.StatusTooManyRequests, "slowmode",
+					fmt.Sprintf("Slowmode active. Try again in %.0f seconds", remaining.Seconds()))
+				return
+			}
+		}
 	}
 
 	msgID := models.NewULID().String()

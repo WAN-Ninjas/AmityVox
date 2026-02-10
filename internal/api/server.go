@@ -160,6 +160,7 @@ func (s *Server) registerRoutes() {
 			// Guild routes.
 			r.Route("/guilds", func(r chi.Router) {
 				r.Post("/", guildH.HandleCreateGuild)
+				r.Get("/discover", guildH.HandleDiscoverGuilds)
 				r.Get("/{guildID}", guildH.HandleGetGuild)
 				r.Patch("/{guildID}", guildH.HandleUpdateGuild)
 				r.Delete("/{guildID}", guildH.HandleDeleteGuild)
