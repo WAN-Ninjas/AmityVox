@@ -275,6 +275,20 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check if the user is timed out in this guild (communication disabled).
+	var guildID *string
+	h.Pool.QueryRow(r.Context(), `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if guildID != nil {
+		var timeoutUntil *time.Time
+		h.Pool.QueryRow(r.Context(),
+			`SELECT timeout_until FROM guild_members WHERE guild_id = $1 AND user_id = $2`,
+			*guildID, userID).Scan(&timeoutUntil)
+		if timeoutUntil != nil && timeoutUntil.After(time.Now()) {
+			writeError(w, http.StatusForbidden, "timed_out", "You are timed out and cannot send messages")
+			return
+		}
+	}
+
 	msgID := models.NewULID().String()
 	msgType := models.MessageTypeDefault
 	if len(req.ReplyToIDs) > 0 {
