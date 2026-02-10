@@ -25,6 +25,7 @@ import (
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/gateway"
+	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/presence"
 )
@@ -163,8 +164,37 @@ func runServe() error {
 		Logger:          logger,
 	})
 
+	// Create media/S3 storage service.
+	var mediaSvc *media.Service
+	if cfg.Storage.Endpoint != "" {
+		maxMB, _ := cfg.Media.MaxUploadSizeBytes()
+		if maxMB <= 0 {
+			maxMB = 100 * 1024 * 1024
+		}
+		svc, err := media.New(media.Config{
+			Endpoint:    cfg.Storage.Endpoint,
+			Bucket:      cfg.Storage.Bucket,
+			AccessKey:   cfg.Storage.AccessKey,
+			SecretKey:   cfg.Storage.SecretKey,
+			Region:      cfg.Storage.Region,
+			UseSSL:      cfg.Storage.UseSSL,
+			MaxUploadMB: maxMB / (1024 * 1024),
+			Pool:        db.Pool,
+			Logger:      logger,
+		})
+		if err != nil {
+			logger.Warn("media service unavailable, file uploads disabled", slog.String("error", err.Error()))
+		} else {
+			if err := svc.EnsureBucket(ctx); err != nil {
+				logger.Warn("could not ensure S3 bucket", slog.String("error", err.Error()))
+			}
+			mediaSvc = svc
+			logger.Info("media service ready", slog.String("endpoint", cfg.Storage.Endpoint))
+		}
+	}
+
 	// Create and start HTTP API server.
-	srv := api.NewServer(db, cfg, authSvc, bus, cache, instanceID, logger)
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, instanceID, logger)
 
 	// Parse WebSocket settings.
 	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()
