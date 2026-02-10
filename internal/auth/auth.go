@@ -7,10 +7,15 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"regexp"
 	"strings"
@@ -74,8 +79,9 @@ type RegisterRequest struct {
 
 // LoginRequest is the request body for user login.
 type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string  `json:"username"`
+	Password string  `json:"password"`
+	TOTPCode *string `json:"totp_code,omitempty"` // Required if user has TOTP enabled.
 }
 
 // AuthError represents an authentication-related error with an HTTP-friendly code.
@@ -156,14 +162,14 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip, userAgent str
 	var passwordHash *string
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id, status_text,
-		        status_presence, bio, bot_owner_id, password_hash, email, flags, created_at
+		        status_presence, bio, bot_owner_id, password_hash, totp_secret, email, flags, created_at
 		 FROM users
 		 WHERE username = $1 AND instance_id = $2`,
 		req.Username, s.instanceID,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
 		&user.AvatarID, &user.StatusText, &user.StatusPresence, &user.Bio,
-		&user.BotOwnerID, &passwordHash, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.BotOwnerID, &passwordHash, &user.TOTPSecret, &user.Email, &user.Flags, &user.CreatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil, &AuthError{Code: "invalid_credentials", Message: "Invalid username or password", Status: 401}
@@ -190,6 +196,16 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip, userAgent str
 	}
 	if !match {
 		return nil, nil, &AuthError{Code: "invalid_credentials", Message: "Invalid username or password", Status: 401}
+	}
+
+	// Check if TOTP is enabled and verify the code.
+	if user.TOTPSecret != nil && *user.TOTPSecret != "" {
+		if req.TOTPCode == nil || *req.TOTPCode == "" {
+			return nil, nil, &AuthError{Code: "totp_required", Message: "Two-factor authentication code is required", Status: 403}
+		}
+		if !s.validateTOTP(*user.TOTPSecret, *req.TOTPCode) {
+			return nil, nil, &AuthError{Code: "invalid_totp", Message: "Invalid two-factor authentication code", Status: 401}
+		}
 	}
 
 	session, err := s.createSession(ctx, user.ID, ip, userAgent)
@@ -434,6 +450,39 @@ func validateUsername(username string) *AuthError {
 		}
 	}
 	return nil
+}
+
+// validateTOTP checks a TOTP code against the secret, allowing ±1 time step drift.
+func (s *Service) validateTOTP(secret, code string) bool {
+	now := time.Now().Unix()
+	timeStep := now / 30
+
+	for _, offset := range []int64{-1, 0, 1} {
+		if generateTOTPCode(secret, timeStep+offset) == code {
+			return true
+		}
+	}
+	return false
+}
+
+// generateTOTPCode generates a 6-digit TOTP code per RFC 6238.
+func generateTOTPCode(secret string, timeStep int64) string {
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		return ""
+	}
+
+	msg := make([]byte, 8)
+	binary.BigEndian.PutUint64(msg, uint64(timeStep))
+
+	mac := hmac.New(sha1.New, key)
+	mac.Write(msg)
+	hash := mac.Sum(nil)
+
+	offset := hash[len(hash)-1] & 0x0F
+	code := binary.BigEndian.Uint32(hash[offset:offset+4]) & 0x7FFFFFFF
+	otp := code % uint32(math.Pow10(6))
+	return fmt.Sprintf("%06d", otp)
 }
 
 func validatePassword(password string) *AuthError {
