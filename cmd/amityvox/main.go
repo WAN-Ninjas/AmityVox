@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alexedwards/argon2id"
+
 	"github.com/amityvox/amityvox/internal/api"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
@@ -57,6 +59,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "admin":
+		if err := runAdmin(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		runVersion()
 	case "help", "--help", "-h":
@@ -78,6 +85,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  serve     Start the AmityVox server")
 	fmt.Println("  migrate   Run database migrations")
+	fmt.Println("  admin     Manage users and instance settings")
 	fmt.Println("  version   Print version information")
 	fmt.Println("  help      Show this help message")
 	fmt.Println()
@@ -235,6 +243,7 @@ func runServe() error {
 
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, instanceID, logger)
+	srv.Version = version
 
 	// Mount federation discovery endpoint.
 	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
@@ -394,6 +403,160 @@ func runMigrate() error {
 	default:
 		return fmt.Errorf("unknown migrate action: %s (use: up, down, status)", action)
 	}
+}
+
+// runAdmin handles admin subcommands for user and instance management.
+func runAdmin() error {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: amityvox admin <action>")
+		fmt.Println()
+		fmt.Println("Actions:")
+		fmt.Println("  create-user  Create a new user account")
+		fmt.Println("  suspend      Suspend a user account")
+		fmt.Println("  unsuspend    Unsuspend a user account")
+		fmt.Println("  set-admin    Grant admin flag to a user")
+		fmt.Println("  unset-admin  Remove admin flag from a user")
+		fmt.Println("  list-users   List all user accounts")
+		return nil
+	}
+
+	logger := setupLogger("info", "text")
+
+	cfgPath := configPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	ctx := context.Background()
+	db, err := database.New(ctx, cfg.Database.URL, cfg.Database.MaxConnections, logger)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer db.Close()
+
+	switch os.Args[2] {
+	case "create-user":
+		if len(os.Args) < 5 {
+			return fmt.Errorf("usage: amityvox admin create-user <username> <password>")
+		}
+		username, password := os.Args[3], os.Args[4]
+
+		// Get local instance ID.
+		var instanceID string
+		if err := db.Pool.QueryRow(ctx, `SELECT id FROM instances WHERE domain = $1`, cfg.Instance.Domain).Scan(&instanceID); err != nil {
+			return fmt.Errorf("instance not found — run 'amityvox serve' first to bootstrap")
+		}
+
+		// Hash password.
+		hash, err := argon2id.CreateHash(password, argon2id.DefaultParams)
+		if err != nil {
+			return fmt.Errorf("hashing password: %w", err)
+		}
+
+		userID := models.NewULID().String()
+		_, err = db.Pool.Exec(ctx,
+			`INSERT INTO users (id, instance_id, username, password_hash, created_at) VALUES ($1, $2, $3, $4, now())`,
+			userID, instanceID, username, hash)
+		if err != nil {
+			return fmt.Errorf("creating user: %w", err)
+		}
+		fmt.Printf("Created user %s (ID: %s)\n", username, userID)
+
+	case "suspend":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin suspend <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags | $1 WHERE username = $2`,
+			models.UserFlagSuspended, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("suspending user: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Suspended user %s\n", os.Args[3])
+
+	case "unsuspend":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin unsuspend <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags & ~$1 WHERE username = $2`,
+			models.UserFlagSuspended, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("unsuspending user: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Unsuspended user %s\n", os.Args[3])
+
+	case "set-admin":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin set-admin <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags | $1 WHERE username = $2`,
+			models.UserFlagAdmin, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("setting admin: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Granted admin to %s\n", os.Args[3])
+
+	case "unset-admin":
+		if len(os.Args) < 4 {
+			return fmt.Errorf("usage: amityvox admin unset-admin <username>")
+		}
+		tag, err := db.Pool.Exec(ctx,
+			`UPDATE users SET flags = flags & ~$1 WHERE username = $2`,
+			models.UserFlagAdmin, os.Args[3])
+		if err != nil {
+			return fmt.Errorf("unsetting admin: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("user %q not found", os.Args[3])
+		}
+		fmt.Printf("Removed admin from %s\n", os.Args[3])
+
+	case "list-users":
+		rows, err := db.Pool.Query(ctx,
+			`SELECT id, username, display_name, email, flags, created_at FROM users ORDER BY created_at`)
+		if err != nil {
+			return fmt.Errorf("listing users: %w", err)
+		}
+		defer rows.Close()
+
+		fmt.Printf("%-28s %-20s %-20s %-30s %6s %s\n", "ID", "Username", "DisplayName", "Email", "Flags", "Created")
+		fmt.Println(strings.Repeat("-", 130))
+		for rows.Next() {
+			var id, username string
+			var displayName, email *string
+			var flags int
+			var createdAt time.Time
+			if err := rows.Scan(&id, &username, &displayName, &email, &flags, &createdAt); err != nil {
+				return fmt.Errorf("scanning user: %w", err)
+			}
+			dn := ""
+			if displayName != nil {
+				dn = *displayName
+			}
+			em := ""
+			if email != nil {
+				em = *email
+			}
+			fmt.Printf("%-28s %-20s %-20s %-30s %6d %s\n", id, username, dn, em, flags, createdAt.Format(time.RFC3339))
+		}
+
+	default:
+		return fmt.Errorf("unknown admin action: %s", os.Args[2])
+	}
+
+	return nil
 }
 
 // runVersion prints version information and exits.

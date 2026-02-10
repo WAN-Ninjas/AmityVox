@@ -1448,14 +1448,16 @@ func (h *Handler) HandleDeleteGuildWebhook(w http.ResponseWriter, r *http.Reques
 func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, error) {
 	var g models.Guild
 	err := h.Pool.QueryRow(ctx,
-		`SELECT id, instance_id, owner_id, name, description, icon_id, banner_id,
-		        default_permissions, flags, nsfw, discoverable, preferred_locale, max_members, created_at
-		 FROM guilds WHERE id = $1`,
+		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
+		        g.default_permissions, g.flags, g.nsfw, g.discoverable, g.preferred_locale, g.max_members,
+		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
+		        g.created_at
+		 FROM guilds g WHERE g.id = $1`,
 		guildID,
 	).Scan(
 		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 		&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-		&g.PreferredLocale, &g.MaxMembers, &g.CreatedAt,
+		&g.PreferredLocale, &g.MaxMembers, &g.MemberCount, &g.CreatedAt,
 	)
 	return &g, err
 }

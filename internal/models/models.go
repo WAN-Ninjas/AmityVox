@@ -123,6 +123,7 @@ type Guild struct {
 	SystemChannelBan     *string   `json:"system_channel_ban,omitempty"`
 	PreferredLocale      string    `json:"preferred_locale"`
 	MaxMembers           int       `json:"max_members"`
+	MemberCount          int       `json:"member_count,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }
 
@@ -251,9 +252,10 @@ type Message struct {
 	MasqueradeName      *string    `json:"masquerade_name,omitempty"`
 	MasqueradeAvatar    *string    `json:"masquerade_avatar,omitempty"`
 	MasqueradeColor     *string    `json:"masquerade_color,omitempty"`
-	Encrypted           bool       `json:"encrypted"`
-	EncryptionSessionID *string    `json:"encryption_session_id,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
+	Encrypted           bool         `json:"encrypted"`
+	EncryptionSessionID *string      `json:"encryption_session_id,omitempty"`
+	Attachments         []Attachment `json:"attachments,omitempty"`
+	CreatedAt           time.Time    `json:"created_at"`
 }
 
 // MessageType constants for messages.message_type.
