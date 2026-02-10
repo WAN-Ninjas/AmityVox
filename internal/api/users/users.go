@@ -758,6 +758,91 @@ func (h *Handler) HandleUpdateUserSettings(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": settings})
 }
 
+// HandleGetMutualFriends returns mutual friends between the current user and a target.
+// GET /api/v1/users/{userID}/mutual-friends
+func (h *Handler) HandleGetMutualFriends(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	targetID := chi.URLParam(r, "userID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_presence, u.bio, u.bot_owner_id, u.flags, u.created_at
+		 FROM users u
+		 WHERE u.id IN (
+			SELECT r1.target_id FROM user_relationships r1
+			WHERE r1.user_id = $1 AND r1.status = 'friend'
+			INTERSECT
+			SELECT r2.target_id FROM user_relationships r2
+			WHERE r2.user_id = $2 AND r2.status = 'friend'
+		 )`,
+		userID, targetID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get mutual friends")
+		return
+	}
+	defer rows.Close()
+
+	friends := make([]models.User, 0)
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusPresence, &u.Bio, &u.BotOwnerID, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read mutual friends")
+			return
+		}
+		friends = append(friends, u)
+	}
+
+	writeJSON(w, http.StatusOK, friends)
+}
+
+// HandleGetMutualGuilds returns guilds that both the current user and a target share.
+// GET /api/v1/users/{userID}/mutual-guilds
+func (h *Handler) HandleGetMutualGuilds(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	targetID := chi.URLParam(r, "userID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT g.id, g.name, g.icon_id
+		 FROM guilds g
+		 WHERE g.id IN (
+			SELECT gm1.guild_id FROM guild_members gm1
+			WHERE gm1.user_id = $1
+			INTERSECT
+			SELECT gm2.guild_id FROM guild_members gm2
+			WHERE gm2.user_id = $2
+		 )
+		 ORDER BY g.name`,
+		userID, targetID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get mutual guilds")
+		return
+	}
+	defer rows.Close()
+
+	type mutualGuild struct {
+		ID     string  `json:"id"`
+		Name   string  `json:"name"`
+		IconID *string `json:"icon_id,omitempty"`
+	}
+
+	guilds := make([]mutualGuild, 0)
+	for rows.Next() {
+		var g mutualGuild
+		if err := rows.Scan(&g.ID, &g.Name, &g.IconID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read mutual guilds")
+			return
+		}
+		guilds = append(guilds, g)
+	}
+
+	writeJSON(w, http.StatusOK, guilds)
+}
+
 // --- Internal helpers ---
 
 func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, error) {

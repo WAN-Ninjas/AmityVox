@@ -1411,6 +1411,157 @@ func (h *Handler) HandleDeleteGuildEmoji(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleGetGuildCategories lists channel categories for a guild.
+// GET /api/v1/guilds/{guildID}/categories
+func (h *Handler) HandleGetGuildCategories(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+	userID := auth.UserIDFromContext(r.Context())
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, guild_id, name, position, created_at
+		 FROM guild_categories WHERE guild_id = $1
+		 ORDER BY position`,
+		guildID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get categories")
+		return
+	}
+	defer rows.Close()
+
+	categories := make([]models.GuildCategory, 0)
+	for rows.Next() {
+		var c models.GuildCategory
+		if err := rows.Scan(&c.ID, &c.GuildID, &c.Name, &c.Position, &c.CreatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read categories")
+			return
+		}
+		categories = append(categories, c)
+	}
+
+	writeJSON(w, http.StatusOK, categories)
+}
+
+// HandleCreateGuildCategory creates a new channel category.
+// POST /api/v1/guilds/{guildID}/categories
+func (h *Handler) HandleCreateGuildCategory(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+	userID := auth.UserIDFromContext(r.Context())
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	var req struct {
+		Name     string `json:"name"`
+		Position *int   `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.Name == "" || len(req.Name) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Category name must be 1-100 characters")
+		return
+	}
+
+	catID := models.NewULID().String()
+	position := 0
+	if req.Position != nil {
+		position = *req.Position
+	}
+
+	var cat models.GuildCategory
+	err := h.Pool.QueryRow(r.Context(),
+		`INSERT INTO guild_categories (id, guild_id, name, position, created_at)
+		 VALUES ($1, $2, $3, $4, now())
+		 RETURNING id, guild_id, name, position, created_at`,
+		catID, guildID, req.Name, position,
+	).Scan(&cat.ID, &cat.GuildID, &cat.Name, &cat.Position, &cat.CreatedAt)
+	if err != nil {
+		h.Logger.Error("failed to create category", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create category")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, cat)
+}
+
+// HandleUpdateGuildCategory updates a channel category's name or position.
+// PATCH /api/v1/guilds/{guildID}/categories/{categoryID}
+func (h *Handler) HandleUpdateGuildCategory(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+	categoryID := chi.URLParam(r, "categoryID")
+	userID := auth.UserIDFromContext(r.Context())
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	var req struct {
+		Name     *string `json:"name"`
+		Position *int    `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var cat models.GuildCategory
+	err := h.Pool.QueryRow(r.Context(),
+		`UPDATE guild_categories SET
+			name = COALESCE($3, name),
+			position = COALESCE($4, position)
+		 WHERE id = $1 AND guild_id = $2
+		 RETURNING id, guild_id, name, position, created_at`,
+		categoryID, guildID, req.Name, req.Position,
+	).Scan(&cat.ID, &cat.GuildID, &cat.Name, &cat.Position, &cat.CreatedAt)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusNotFound, "category_not_found", "Category not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update category")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, cat)
+}
+
+// HandleDeleteGuildCategory deletes a channel category. Channels in this
+// category will have their category_id set to NULL.
+// DELETE /api/v1/guilds/{guildID}/categories/{categoryID}
+func (h *Handler) HandleDeleteGuildCategory(w http.ResponseWriter, r *http.Request) {
+	guildID := chi.URLParam(r, "guildID")
+	categoryID := chi.URLParam(r, "categoryID")
+	userID := auth.UserIDFromContext(r.Context())
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM guild_categories WHERE id = $1 AND guild_id = $2`, categoryID, guildID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete category")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "category_not_found", "Category not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Internal helpers ---
 
 // HandleGetGuildWebhooks lists all webhooks for a guild.

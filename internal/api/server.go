@@ -161,6 +161,8 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{userID}/friend", userH.HandleRemoveFriend)
 				r.Put("/{userID}/block", userH.HandleBlockUser)
 				r.Delete("/{userID}/block", userH.HandleUnblockUser)
+				r.Get("/{userID}/mutual-friends", userH.HandleGetMutualFriends)
+				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)
 			})
 
 			// Guild routes.
@@ -192,6 +194,10 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{guildID}/roles/{roleID}", guildH.HandleDeleteGuildRole)
 				r.Get("/{guildID}/invites", guildH.HandleGetGuildInvites)
 				r.Post("/{guildID}/invites", guildH.HandleCreateGuildInvite)
+				r.Get("/{guildID}/categories", guildH.HandleGetGuildCategories)
+				r.Post("/{guildID}/categories", guildH.HandleCreateGuildCategory)
+				r.Patch("/{guildID}/categories/{categoryID}", guildH.HandleUpdateGuildCategory)
+				r.Delete("/{guildID}/categories/{categoryID}", guildH.HandleDeleteGuildCategory)
 				r.Get("/{guildID}/audit-log", guildH.HandleGetGuildAuditLog)
 				r.Get("/{guildID}/emoji", guildH.HandleGetGuildEmoji)
 				r.Post("/{guildID}/emoji", guildH.HandleCreateGuildEmoji)
@@ -504,7 +510,7 @@ func slogMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(ww, r)
 
-			logger.Info("http request",
+			attrs := []slog.Attr{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.Int("status", ww.Status()),
@@ -512,7 +518,11 @@ func slogMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 				slog.Duration("duration", time.Since(start)),
 				slog.String("remote", r.RemoteAddr),
 				slog.String("request_id", middleware.GetReqID(r.Context())),
-			)
+			}
+			if uid := auth.UserIDFromContext(r.Context()); uid != "" {
+				attrs = append(attrs, slog.String("user_id", uid))
+			}
+			logger.LogAttrs(r.Context(), slog.LevelInfo, "http request", attrs...)
 		})
 	}
 }
