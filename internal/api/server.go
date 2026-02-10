@@ -203,6 +203,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{channelID}/messages/{messageID}", channelH.HandleGetMessage)
 				r.Patch("/{channelID}/messages/{messageID}", channelH.HandleUpdateMessage)
 				r.Delete("/{channelID}/messages/{messageID}", channelH.HandleDeleteMessage)
+				r.Get("/{channelID}/messages/{messageID}/reactions", channelH.HandleGetReactions)
 				r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleAddReaction)
 				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleRemoveReaction)
 				r.Get("/{channelID}/pins", channelH.HandleGetPins)

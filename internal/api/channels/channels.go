@@ -485,6 +485,43 @@ func (h *Handler) HandleBulkDeleteMessages(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleGetReactions returns aggregated reaction counts and the reacting users for a message.
+// GET /api/v1/channels/{channelID}/messages/{messageID}/reactions
+func (h *Handler) HandleGetReactions(w http.ResponseWriter, r *http.Request) {
+	messageID := chi.URLParam(r, "messageID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT emoji, COUNT(*) as count, array_agg(user_id ORDER BY created_at) as users
+		 FROM reactions WHERE message_id = $1
+		 GROUP BY emoji
+		 ORDER BY count DESC`,
+		messageID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get reactions")
+		return
+	}
+	defer rows.Close()
+
+	type reactionGroup struct {
+		Emoji string   `json:"emoji"`
+		Count int      `json:"count"`
+		Users []string `json:"users"`
+	}
+
+	reactions := make([]reactionGroup, 0)
+	for rows.Next() {
+		var rg reactionGroup
+		if err := rows.Scan(&rg.Emoji, &rg.Count, &rg.Users); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read reactions")
+			return
+		}
+		reactions = append(reactions, rg)
+	}
+
+	writeJSON(w, http.StatusOK, reactions)
+}
+
 // HandleAddReaction adds an emoji reaction to a message.
 // PUT /api/v1/channels/{channelID}/messages/{messageID}/reactions/{emoji}
 func (h *Handler) HandleAddReaction(w http.ResponseWriter, r *http.Request) {
