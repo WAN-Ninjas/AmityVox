@@ -32,6 +32,7 @@ import (
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
+	"github.com/amityvox/amityvox/internal/voice"
 	"github.com/amityvox/amityvox/internal/workers"
 )
 
@@ -241,8 +242,26 @@ func runServe() error {
 	})
 	workerMgr.Start(ctx)
 
+	// Create voice service (optional — only when LiveKit is configured).
+	var voiceSvc *voice.Service
+	if cfg.LiveKit.URL != "" && cfg.LiveKit.APIKey != "" && cfg.LiveKit.APISecret != "" {
+		svc, err := voice.New(voice.Config{
+			URL:       cfg.LiveKit.URL,
+			APIKey:    cfg.LiveKit.APIKey,
+			APISecret: cfg.LiveKit.APISecret,
+			Pool:      db.Pool,
+			Logger:    logger,
+		})
+		if err != nil {
+			logger.Warn("voice service unavailable", slog.String("error", err.Error()))
+		} else {
+			voiceSvc = svc
+			logger.Info("voice service ready", slog.String("url", cfg.LiveKit.URL))
+		}
+	}
+
 	// Create and start HTTP API server.
-	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, instanceID, logger)
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)
 	srv.Version = version
 
 	// Mount federation discovery endpoint.
