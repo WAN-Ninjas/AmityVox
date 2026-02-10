@@ -24,10 +24,13 @@ import (
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/gateway"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/presence"
+	"github.com/amityvox/amityvox/internal/search"
+	"github.com/amityvox/amityvox/internal/workers"
 )
 
 // Build-time variables set via ldflags.
@@ -193,8 +196,48 @@ func runServe() error {
 		}
 	}
 
+	// Create Meilisearch search service (optional).
+	var searchSvc *search.Service
+	if cfg.Search.Enabled && cfg.Search.URL != "" {
+		svc, err := search.New(search.Config{
+			URL:    cfg.Search.URL,
+			APIKey: cfg.Search.APIKey,
+			Pool:   db.Pool,
+			Logger: logger,
+		})
+		if err != nil {
+			logger.Warn("search service unavailable", slog.String("error", err.Error()))
+		} else {
+			if err := svc.EnsureIndexes(ctx); err != nil {
+				logger.Warn("could not ensure search indexes", slog.String("error", err.Error()))
+			}
+			searchSvc = svc
+			logger.Info("search service ready", slog.String("url", cfg.Search.URL))
+		}
+	}
+
+	// Create federation service.
+	fedSvc := federation.New(federation.Config{
+		Pool:       db.Pool,
+		InstanceID: instanceID,
+		Domain:     cfg.Instance.Domain,
+		Logger:     logger,
+	})
+
+	// Start background workers.
+	workerMgr := workers.New(workers.Config{
+		Pool:   db.Pool,
+		Bus:    bus,
+		Search: searchSvc,
+		Logger: logger,
+	})
+	workerMgr.Start(ctx)
+
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, instanceID, logger)
+
+	// Mount federation discovery endpoint.
+	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
 
 	// Parse WebSocket settings.
 	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()
@@ -258,6 +301,9 @@ func runServe() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown error", slog.String("error", err.Error()))
 	}
+
+	// Stop background workers.
+	workerMgr.Stop()
 
 	logger.Info("AmityVox stopped")
 	return nil
