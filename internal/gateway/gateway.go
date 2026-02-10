@@ -74,15 +74,17 @@ type HelloPayload struct {
 
 // Client represents a single connected WebSocket client.
 type Client struct {
-	conn       *websocket.Conn
-	userID     string
-	sessionID  string
-	seq        int64
-	identified bool
-	guildIDs   map[string]bool // guilds this user is a member of
-	mu         sync.Mutex
-	done       chan struct{}
-	replayBuf  []GatewayMessage // buffer for resume replay
+	conn          *websocket.Conn
+	userID        string
+	sessionID     string
+	seq           int64
+	identified    bool
+	guildIDs      map[string]bool // guilds this user is a member of
+	mu            sync.Mutex
+	done          chan struct{}
+	replayBuf     []GatewayMessage // buffer for resume replay
+	lastHeartbeat time.Time        // tracks when last heartbeat was received
+	cancelRead    context.CancelFunc
 }
 
 // Server manages WebSocket connections and event dispatch.
@@ -222,12 +224,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Set user presence to online.
 	s.cache.SetPresence(r.Context(), client.userID, presence.StatusOnline, s.heartbeatTimeout)
 
+	client.mu.Lock()
+	client.lastHeartbeat = time.Now()
+	client.mu.Unlock()
+
 	s.logger.Info("client connected",
 		slog.String("user_id", client.userID),
 	)
 
-	// Run the read loop until disconnect.
-	s.readLoop(r.Context(), client)
+	// Create a cancellable context for the read loop. A background goroutine
+	// monitors the heartbeat deadline and cancels the context if the client
+	// stops sending heartbeats, which causes the read loop to exit.
+	readCtx, readCancel := context.WithCancel(r.Context())
+	client.cancelRead = readCancel
+
+	go s.heartbeatMonitor(readCtx, client)
+
+	// Run the read loop until disconnect or heartbeat timeout.
+	s.readLoop(readCtx, client)
+	readCancel()
 
 	// Cleanup on disconnect.
 	s.unregisterClient(client)
@@ -267,6 +282,35 @@ func (s *Server) unregisterClient(client *Client) {
 		}
 	}
 	s.userClientsMu.Unlock()
+}
+
+// heartbeatMonitor periodically checks that a client has sent a heartbeat recently.
+// If the heartbeat timeout is exceeded, it cancels the read context, which causes
+// the read loop to return and the client to disconnect.
+func (s *Server) heartbeatMonitor(ctx context.Context, client *Client) {
+	ticker := time.NewTicker(s.heartbeatTimeout / 2)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			client.mu.Lock()
+			lastHB := client.lastHeartbeat
+			client.mu.Unlock()
+
+			if time.Since(lastHB) > s.heartbeatTimeout {
+				s.logger.Info("client heartbeat timeout, disconnecting",
+					slog.String("user_id", client.userID),
+					slog.Duration("since_last", time.Since(lastHB)),
+				)
+				client.cancelRead()
+				client.conn.Close(websocket.StatusPolicyViolation, "heartbeat timeout")
+				return
+			}
+		}
+	}
 }
 
 // loadGuildMemberships queries the database to populate the client's guild list.
@@ -364,6 +408,9 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 		switch msg.Op {
 		case OpHeartbeat:
 			s.sendMessage(client, GatewayMessage{Op: OpHeartbeatAck})
+			client.mu.Lock()
+			client.lastHeartbeat = time.Now()
+			client.mu.Unlock()
 			s.cache.SetPresence(ctx, client.userID, presence.StatusOnline, s.heartbeatTimeout)
 
 		case OpPresenceUpdate:
