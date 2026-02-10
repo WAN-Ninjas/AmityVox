@@ -20,10 +20,12 @@ import (
 	"github.com/amityvox/amityvox/internal/api/guilds"
 	"github.com/amityvox/amityvox/internal/api/invites"
 	"github.com/amityvox/amityvox/internal/api/users"
+	"github.com/amityvox/amityvox/internal/api/webhooks"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/presence"
 )
 
@@ -36,13 +38,14 @@ type Server struct {
 	AuthService *auth.Service
 	EventBus    *events.Bus
 	Cache       *presence.Cache
+	Media       *media.Service
 	InstanceID  string
 	Logger      *slog.Logger
 	server      *http.Server
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, instanceID string, logger *slog.Logger) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, instanceID string, logger *slog.Logger) *Server {
 	s := &Server{
 		Router:      chi.NewRouter(),
 		DB:          db,
@@ -50,6 +53,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 		AuthService: authSvc,
 		EventBus:    bus,
 		Cache:       cache,
+		Media:       mediaSvc,
 		InstanceID:  instanceID,
 		Logger:      logger,
 	}
@@ -100,6 +104,11 @@ func (s *Server) registerRoutes() {
 		Pool:       s.DB.Pool,
 		InstanceID: s.InstanceID,
 		Logger:     s.Logger,
+	}
+	webhookH := &webhooks.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
 	}
 
 	// Health check — outside versioned API prefix.
@@ -190,7 +199,11 @@ func (s *Server) registerRoutes() {
 			})
 
 			// File upload.
-			r.Post("/files/upload", stubHandler("upload_file"))
+			if s.Media != nil {
+				r.Post("/files/upload", s.Media.HandleUpload)
+			} else {
+				r.Post("/files/upload", stubHandler("upload_file"))
+			}
 
 			// Admin routes.
 			r.Route("/admin", func(r chi.Router) {
@@ -204,7 +217,7 @@ func (s *Server) registerRoutes() {
 		})
 
 		// Webhook execution — uses token auth, no Bearer token needed.
-		r.Post("/webhooks/{webhookID}/{token}", stubHandler("execute_webhook"))
+		r.Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
 	})
 }
 
