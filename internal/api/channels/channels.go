@@ -793,6 +793,144 @@ func (h *Handler) HandleDeleteChannelPermission(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleCreateThread creates a new thread from a message.
+// POST /api/v1/channels/{channelID}/messages/{messageID}/threads
+func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.Name == "" || len(req.Name) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Thread name must be 1-100 characters")
+		return
+	}
+
+	// Verify the parent message exists.
+	var exists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
+		messageID, channelID).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+
+	// Check the parent channel is in a guild.
+	var guildID *string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if guildID == nil {
+		writeError(w, http.StatusBadRequest, "invalid_channel", "Threads can only be created in guild channels")
+		return
+	}
+
+	threadID := models.NewULID().String()
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create thread")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Create the thread as a new channel linked to the guild.
+	var thread models.Channel
+	err = tx.QueryRow(r.Context(),
+		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, created_at)
+		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, now())
+		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+		           default_permissions, created_at`,
+		threadID, guildID, req.Name, userID,
+	).Scan(
+		&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
+		&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,
+		&thread.LastMessageID, &thread.OwnerID, &thread.DefaultPermissions, &thread.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create thread channel", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create thread")
+		return
+	}
+
+	// Link the parent message to the thread.
+	tx.Exec(r.Context(),
+		`UPDATE messages SET thread_id = $1 WHERE id = $2 AND channel_id = $3`,
+		threadID, messageID, channelID)
+
+	// Create a system message about thread creation.
+	sysMsgID := models.NewULID().String()
+	tx.Exec(r.Context(),
+		`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
+		 VALUES ($1, $2, $3, $4, $5, now())`,
+		sysMsgID, channelID, userID, req.Name, models.MessageTypeThreadCreated)
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create thread")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "THREAD_CREATE", thread)
+
+	writeJSON(w, http.StatusCreated, thread)
+}
+
+// HandleGetThreads lists active threads in a channel.
+// GET /api/v1/channels/{channelID}/threads
+func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	// Get the guild_id of this channel so we can find threads.
+	var guildID *string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if guildID == nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found or is not a guild channel")
+		return
+	}
+
+	// Find all threads originating from messages in this channel.
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT DISTINCT c.id, c.guild_id, c.category_id, c.channel_type, c.name, c.topic,
+		        c.position, c.slowmode_seconds, c.nsfw, c.encrypted, c.last_message_id,
+		        c.owner_id, c.default_permissions, c.created_at
+		 FROM channels c
+		 JOIN messages m ON m.thread_id = c.id
+		 WHERE m.channel_id = $1
+		 ORDER BY c.created_at DESC
+		 LIMIT 50`,
+		channelID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get threads")
+		return
+	}
+	defer rows.Close()
+
+	threads := make([]models.Channel, 0)
+	for rows.Next() {
+		var c models.Channel
+		if err := rows.Scan(
+			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
+			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
+			&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read threads")
+			return
+		}
+		threads = append(threads, c)
+	}
+
+	writeJSON(w, http.StatusOK, threads)
+}
+
 // --- Internal helpers ---
 
 // HandleGetChannelWebhooks lists all webhooks for a channel.
