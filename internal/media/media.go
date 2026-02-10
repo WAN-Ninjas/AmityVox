@@ -7,6 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -161,11 +165,16 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine width/height for images (basic detection).
+	// Determine width/height for images using DecodeConfig (reads headers only).
 	var width, height *int
 	if strings.HasPrefix(contentType, "image/") {
-		// TODO: decode image headers for dimensions without reading full image.
-		// For now we skip dimension extraction — can be added with image.DecodeConfig.
+		if _, err := file.Seek(0, io.SeekStart); err == nil {
+			if cfg, _, err := image.DecodeConfig(file); err == nil {
+				w, h := cfg.Width, cfg.Height
+				width = &w
+				height = &h
+			}
+		}
 	}
 
 	attachment := models.Attachment{
