@@ -15,6 +15,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/amityvox/amityvox/internal/api/admin"
+	"github.com/amityvox/amityvox/internal/api/channels"
+	"github.com/amityvox/amityvox/internal/api/guilds"
+	"github.com/amityvox/amityvox/internal/api/invites"
+	"github.com/amityvox/amityvox/internal/api/users"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
@@ -31,12 +36,13 @@ type Server struct {
 	AuthService *auth.Service
 	EventBus    *events.Bus
 	Cache       *presence.Cache
+	InstanceID  string
 	Logger      *slog.Logger
 	server      *http.Server
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, logger *slog.Logger) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, instanceID string, logger *slog.Logger) *Server {
 	s := &Server{
 		Router:      chi.NewRouter(),
 		DB:          db,
@@ -44,6 +50,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 		AuthService: authSvc,
 		EventBus:    bus,
 		Cache:       cache,
+		InstanceID:  instanceID,
 		Logger:      logger,
 	}
 
@@ -66,6 +73,35 @@ func (s *Server) registerMiddleware() {
 
 // registerRoutes mounts all API route groups on the router.
 func (s *Server) registerRoutes() {
+	// Create domain handlers.
+	userH := &users.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	guildH := &guilds.Handler{
+		Pool:       s.DB.Pool,
+		EventBus:   s.EventBus,
+		InstanceID: s.InstanceID,
+		Logger:     s.Logger,
+	}
+	channelH := &channels.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	inviteH := &invites.Handler{
+		Pool:       s.DB.Pool,
+		EventBus:   s.EventBus,
+		InstanceID: s.InstanceID,
+		Logger:     s.Logger,
+	}
+	adminH := &admin.Handler{
+		Pool:       s.DB.Pool,
+		InstanceID: s.InstanceID,
+		Logger:     s.Logger,
+	}
+
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
 
@@ -88,69 +124,69 @@ func (s *Server) registerRoutes() {
 
 			// User routes.
 			r.Route("/users", func(r chi.Router) {
-				r.Get("/@me", s.handleGetSelf)
-				r.Patch("/@me", stubHandler("update_self"))
-				r.Get("/@me/guilds", stubHandler("get_self_guilds"))
-				r.Get("/@me/dms", stubHandler("get_self_dms"))
-				r.Get("/{userID}", stubHandler("get_user"))
-				r.Post("/{userID}/dm", stubHandler("create_dm"))
-				r.Put("/{userID}/friend", stubHandler("add_friend"))
-				r.Delete("/{userID}/friend", stubHandler("remove_friend"))
-				r.Put("/{userID}/block", stubHandler("block_user"))
-				r.Delete("/{userID}/block", stubHandler("unblock_user"))
+				r.Get("/@me", userH.HandleGetSelf)
+				r.Patch("/@me", userH.HandleUpdateSelf)
+				r.Get("/@me/guilds", userH.HandleGetSelfGuilds)
+				r.Get("/@me/dms", userH.HandleGetSelfDMs)
+				r.Get("/{userID}", userH.HandleGetUser)
+				r.Post("/{userID}/dm", userH.HandleCreateDM)
+				r.Put("/{userID}/friend", userH.HandleAddFriend)
+				r.Delete("/{userID}/friend", userH.HandleRemoveFriend)
+				r.Put("/{userID}/block", userH.HandleBlockUser)
+				r.Delete("/{userID}/block", userH.HandleUnblockUser)
 			})
 
 			// Guild routes.
 			r.Route("/guilds", func(r chi.Router) {
-				r.Post("/", stubHandler("create_guild"))
-				r.Get("/{guildID}", stubHandler("get_guild"))
-				r.Patch("/{guildID}", stubHandler("update_guild"))
-				r.Delete("/{guildID}", stubHandler("delete_guild"))
-				r.Get("/{guildID}/channels", stubHandler("get_guild_channels"))
-				r.Post("/{guildID}/channels", stubHandler("create_guild_channel"))
-				r.Get("/{guildID}/members", stubHandler("get_guild_members"))
-				r.Get("/{guildID}/members/{memberID}", stubHandler("get_guild_member"))
-				r.Patch("/{guildID}/members/{memberID}", stubHandler("update_guild_member"))
-				r.Delete("/{guildID}/members/{memberID}", stubHandler("remove_guild_member"))
-				r.Get("/{guildID}/bans", stubHandler("get_guild_bans"))
-				r.Put("/{guildID}/bans/{userID}", stubHandler("create_guild_ban"))
-				r.Delete("/{guildID}/bans/{userID}", stubHandler("remove_guild_ban"))
-				r.Get("/{guildID}/roles", stubHandler("get_guild_roles"))
-				r.Post("/{guildID}/roles", stubHandler("create_guild_role"))
-				r.Patch("/{guildID}/roles/{roleID}", stubHandler("update_guild_role"))
-				r.Delete("/{guildID}/roles/{roleID}", stubHandler("delete_guild_role"))
-				r.Get("/{guildID}/invites", stubHandler("get_guild_invites"))
-				r.Get("/{guildID}/audit-log", stubHandler("get_guild_audit_log"))
-				r.Get("/{guildID}/emoji", stubHandler("get_guild_emoji"))
-				r.Post("/{guildID}/emoji", stubHandler("create_guild_emoji"))
+				r.Post("/", guildH.HandleCreateGuild)
+				r.Get("/{guildID}", guildH.HandleGetGuild)
+				r.Patch("/{guildID}", guildH.HandleUpdateGuild)
+				r.Delete("/{guildID}", guildH.HandleDeleteGuild)
+				r.Get("/{guildID}/channels", guildH.HandleGetGuildChannels)
+				r.Post("/{guildID}/channels", guildH.HandleCreateGuildChannel)
+				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
+				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)
+				r.Patch("/{guildID}/members/{memberID}", guildH.HandleUpdateGuildMember)
+				r.Delete("/{guildID}/members/{memberID}", guildH.HandleRemoveGuildMember)
+				r.Get("/{guildID}/bans", guildH.HandleGetGuildBans)
+				r.Put("/{guildID}/bans/{userID}", guildH.HandleCreateGuildBan)
+				r.Delete("/{guildID}/bans/{userID}", guildH.HandleRemoveGuildBan)
+				r.Get("/{guildID}/roles", guildH.HandleGetGuildRoles)
+				r.Post("/{guildID}/roles", guildH.HandleCreateGuildRole)
+				r.Patch("/{guildID}/roles/{roleID}", guildH.HandleUpdateGuildRole)
+				r.Delete("/{guildID}/roles/{roleID}", guildH.HandleDeleteGuildRole)
+				r.Get("/{guildID}/invites", guildH.HandleGetGuildInvites)
+				r.Get("/{guildID}/audit-log", guildH.HandleGetGuildAuditLog)
+				r.Get("/{guildID}/emoji", guildH.HandleGetGuildEmoji)
+				r.Post("/{guildID}/emoji", guildH.HandleCreateGuildEmoji)
 			})
 
 			// Channel routes.
 			r.Route("/channels", func(r chi.Router) {
-				r.Get("/{channelID}", stubHandler("get_channel"))
-				r.Patch("/{channelID}", stubHandler("update_channel"))
-				r.Delete("/{channelID}", stubHandler("delete_channel"))
-				r.Get("/{channelID}/messages", stubHandler("get_messages"))
-				r.Post("/{channelID}/messages", stubHandler("create_message"))
-				r.Get("/{channelID}/messages/{messageID}", stubHandler("get_message"))
-				r.Patch("/{channelID}/messages/{messageID}", stubHandler("update_message"))
-				r.Delete("/{channelID}/messages/{messageID}", stubHandler("delete_message"))
-				r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", stubHandler("add_reaction"))
-				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", stubHandler("remove_reaction"))
-				r.Get("/{channelID}/pins", stubHandler("get_pins"))
-				r.Put("/{channelID}/pins/{messageID}", stubHandler("pin_message"))
-				r.Delete("/{channelID}/pins/{messageID}", stubHandler("unpin_message"))
-				r.Post("/{channelID}/typing", stubHandler("trigger_typing"))
-				r.Post("/{channelID}/ack", stubHandler("ack_channel"))
-				r.Put("/{channelID}/permissions/{overrideID}", stubHandler("set_channel_permission"))
-				r.Delete("/{channelID}/permissions/{overrideID}", stubHandler("delete_channel_permission"))
+				r.Get("/{channelID}", channelH.HandleGetChannel)
+				r.Patch("/{channelID}", channelH.HandleUpdateChannel)
+				r.Delete("/{channelID}", channelH.HandleDeleteChannel)
+				r.Get("/{channelID}/messages", channelH.HandleGetMessages)
+				r.Post("/{channelID}/messages", channelH.HandleCreateMessage)
+				r.Get("/{channelID}/messages/{messageID}", channelH.HandleGetMessage)
+				r.Patch("/{channelID}/messages/{messageID}", channelH.HandleUpdateMessage)
+				r.Delete("/{channelID}/messages/{messageID}", channelH.HandleDeleteMessage)
+				r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleAddReaction)
+				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleRemoveReaction)
+				r.Get("/{channelID}/pins", channelH.HandleGetPins)
+				r.Put("/{channelID}/pins/{messageID}", channelH.HandlePinMessage)
+				r.Delete("/{channelID}/pins/{messageID}", channelH.HandleUnpinMessage)
+				r.Post("/{channelID}/typing", channelH.HandleTriggerTyping)
+				r.Post("/{channelID}/ack", channelH.HandleAckChannel)
+				r.Put("/{channelID}/permissions/{overrideID}", channelH.HandleSetChannelPermission)
+				r.Delete("/{channelID}/permissions/{overrideID}", channelH.HandleDeleteChannelPermission)
 			})
 
 			// Invite routes.
 			r.Route("/invites", func(r chi.Router) {
-				r.Get("/{code}", stubHandler("get_invite"))
-				r.Post("/{code}", stubHandler("accept_invite"))
-				r.Delete("/{code}", stubHandler("delete_invite"))
+				r.Get("/{code}", inviteH.HandleGetInvite)
+				r.Post("/{code}", inviteH.HandleAcceptInvite)
+				r.Delete("/{code}", inviteH.HandleDeleteInvite)
 			})
 
 			// File upload.
@@ -158,12 +194,12 @@ func (s *Server) registerRoutes() {
 
 			// Admin routes.
 			r.Route("/admin", func(r chi.Router) {
-				r.Get("/instance", stubHandler("get_instance"))
-				r.Patch("/instance", stubHandler("update_instance"))
-				r.Get("/federation/peers", stubHandler("get_federation_peers"))
-				r.Post("/federation/peers", stubHandler("add_federation_peer"))
-				r.Delete("/federation/peers/{peerID}", stubHandler("remove_federation_peer"))
-				r.Get("/stats", stubHandler("get_stats"))
+				r.Get("/instance", adminH.HandleGetInstance)
+				r.Patch("/instance", adminH.HandleUpdateInstance)
+				r.Get("/federation/peers", adminH.HandleGetFederationPeers)
+				r.Post("/federation/peers", adminH.HandleAddFederationPeer)
+				r.Delete("/federation/peers/{peerID}", adminH.HandleRemoveFederationPeer)
+				r.Get("/stats", adminH.HandleGetStats)
 			})
 		})
 
@@ -272,24 +308,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteNoContent(w)
-}
-
-// handleGetSelf handles GET /api/v1/users/@me.
-func (s *Server) handleGetSelf(w http.ResponseWriter, r *http.Request) {
-	userID := auth.UserIDFromContext(r.Context())
-
-	user, err := s.AuthService.GetUser(r.Context(), userID)
-	if err != nil {
-		if authErr, ok := err.(*auth.AuthError); ok {
-			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
-			return
-		}
-		s.Logger.Error("get self failed", slog.String("error", err.Error()))
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user")
-		return
-	}
-
-	WriteJSON(w, http.StatusOK, user)
 }
 
 // handleHealthCheck responds with the health status of the server and its dependencies.

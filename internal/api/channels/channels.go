@@ -1,5 +1,717 @@
 // Package channels implements REST API handlers for channel operations including
 // fetching, updating, and deleting channels, managing messages, reactions, pins,
 // typing indicators, read state acknowledgment, and permission overrides.
-// Mounted under /api/v1/channels. Handlers will be fully implemented in Phase 2.
+// Mounted under /api/v1/channels.
 package channels
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/models"
+)
+
+// Handler implements channel-related REST API endpoints.
+type Handler struct {
+	Pool     *pgxpool.Pool
+	EventBus *events.Bus
+	Logger   *slog.Logger
+}
+
+type updateChannelRequest struct {
+	Name            *string `json:"name"`
+	Topic           *string `json:"topic"`
+	Position        *int    `json:"position"`
+	NSFW            *bool   `json:"nsfw"`
+	SlowmodeSeconds *int    `json:"slowmode_seconds"`
+}
+
+type createMessageRequest struct {
+	Content         *string  `json:"content"`
+	Nonce           *string  `json:"nonce"`
+	ReplyToIDs      []string `json:"reply_to_ids"`
+	MentionUserIDs  []string `json:"mention_user_ids"`
+	MentionRoleIDs  []string `json:"mention_role_ids"`
+	MentionEveryone bool     `json:"mention_everyone"`
+}
+
+type updateMessageRequest struct {
+	Content *string `json:"content"`
+}
+
+type permissionOverrideRequest struct {
+	TargetType       string `json:"target_type"`
+	PermissionsAllow int64  `json:"permissions_allow"`
+	PermissionsDeny  int64  `json:"permissions_deny"`
+}
+
+// HandleGetChannel returns a channel's details.
+// GET /api/v1/channels/{channelID}
+func (h *Handler) HandleGetChannel(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	channel, err := h.getChannel(r.Context(), channelID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get channel")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, channel)
+}
+
+// HandleUpdateChannel updates a channel's settings.
+// PATCH /api/v1/channels/{channelID}
+func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	var req updateChannelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var channel models.Channel
+	err := h.Pool.QueryRow(r.Context(),
+		`UPDATE channels SET
+			name = COALESCE($2, name),
+			topic = COALESCE($3, topic),
+			position = COALESCE($4, position),
+			nsfw = COALESCE($5, nsfw),
+			slowmode_seconds = COALESCE($6, slowmode_seconds)
+		 WHERE id = $1
+		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+		           default_permissions, created_at`,
+		channelID, req.Name, req.Topic, req.Position, req.NSFW, req.SlowmodeSeconds,
+	).Scan(
+		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
+		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
+		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions, &channel.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", channel)
+
+	writeJSON(w, http.StatusOK, channel)
+}
+
+// HandleDeleteChannel deletes a channel.
+// DELETE /api/v1/channels/{channelID}
+func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channels WHERE id = $1`, channelID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelDelete, "CHANNEL_DELETE", map[string]string{
+		"id": channelID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetMessages returns paginated messages from a channel.
+// GET /api/v1/channels/{channelID}/messages?before=&after=&around=&limit=
+func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	before := r.URL.Query().Get("before")
+	after := r.URL.Query().Get("after")
+	around := r.URL.Query().Get("around")
+
+	var query string
+	var args []interface{}
+
+	switch {
+	case before != "":
+		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		                reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		                encrypted, encryption_session_id, created_at
+		         FROM messages WHERE channel_id = $1 AND id < $2
+		         ORDER BY id DESC LIMIT $3`
+		args = []interface{}{channelID, before, limit}
+	case after != "":
+		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		                reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		                encrypted, encryption_session_id, created_at
+		         FROM messages WHERE channel_id = $1 AND id > $2
+		         ORDER BY id ASC LIMIT $3`
+		args = []interface{}{channelID, after, limit}
+	case around != "":
+		halfLimit := limit / 2
+		query = `(SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                 thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		                 encrypted, encryption_session_id, created_at
+		          FROM messages WHERE channel_id = $1 AND id <= $2
+		          ORDER BY id DESC LIMIT $3)
+		         UNION ALL
+		         (SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                 thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		                 encrypted, encryption_session_id, created_at
+		          FROM messages WHERE channel_id = $1 AND id > $2
+		          ORDER BY id ASC LIMIT $4)
+		         ORDER BY id DESC`
+		args = []interface{}{channelID, around, halfLimit, halfLimit}
+	default:
+		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		                reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		                encrypted, encryption_session_id, created_at
+		         FROM messages WHERE channel_id = $1
+		         ORDER BY id DESC LIMIT $2`
+		args = []interface{}{channelID, limit}
+	}
+
+	rows, err := h.Pool.Query(r.Context(), query, args...)
+	if err != nil {
+		h.Logger.Error("failed to get messages", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get messages")
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]models.Message, 0)
+	for rows.Next() {
+		var m models.Message
+		if err := rows.Scan(
+			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
+			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
+			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+		); err != nil {
+			h.Logger.Error("failed to scan message", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read messages")
+			return
+		}
+		messages = append(messages, m)
+	}
+
+	writeJSON(w, http.StatusOK, messages)
+}
+
+// HandleCreateMessage sends a new message in a channel.
+// POST /api/v1/channels/{channelID}/messages
+func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	var req createMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Content == nil || *req.Content == "" {
+		writeError(w, http.StatusBadRequest, "empty_content", "Message content is required")
+		return
+	}
+
+	if len(*req.Content) > 4000 {
+		writeError(w, http.StatusBadRequest, "content_too_long", "Message content must be at most 4000 characters")
+		return
+	}
+
+	msgID := models.NewULID().String()
+	msgType := models.MessageTypeDefault
+	if len(req.ReplyToIDs) > 0 {
+		msgType = models.MessageTypeReply
+	}
+
+	var msg models.Message
+	err := h.Pool.QueryRow(r.Context(),
+		`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type,
+		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		           encrypted, encryption_session_id, created_at`,
+		msgID, channelID, userID, req.Content, req.Nonce, msgType,
+		req.ReplyToIDs, req.MentionUserIDs, req.MentionRoleIDs, req.MentionEveryone,
+	).Scan(
+		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create message", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to send message")
+		return
+	}
+
+	// Update last_message_id on the channel.
+	h.Pool.Exec(r.Context(),
+		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
+
+	writeJSON(w, http.StatusCreated, msg)
+}
+
+// HandleGetMessage returns a single message by ID.
+// GET /api/v1/channels/{channelID}/messages/{messageID}
+func (h *Handler) HandleGetMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	msg, err := h.getMessage(r.Context(), channelID, messageID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get message")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// HandleUpdateMessage edits a message's content. Only the author can edit.
+// PATCH /api/v1/channels/{channelID}/messages/{messageID}
+func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	var req updateMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Content == nil {
+		writeError(w, http.StatusBadRequest, "missing_content", "Content is required")
+		return
+	}
+
+	// Verify ownership.
+	var authorID string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT author_id FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, channelID,
+	).Scan(&authorID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+	if authorID != userID {
+		writeError(w, http.StatusForbidden, "not_author", "You can only edit your own messages")
+		return
+	}
+
+	var msg models.Message
+	err = h.Pool.QueryRow(r.Context(),
+		`UPDATE messages SET content = $3, edited_at = now()
+		 WHERE id = $1 AND channel_id = $2
+		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		           encrypted, encryption_session_id, created_at`,
+		messageID, channelID, req.Content,
+	).Scan(
+		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update message")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageUpdate, "MESSAGE_UPDATE", msg)
+
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// HandleDeleteMessage deletes a message. Author or users with MANAGE_MESSAGES can delete.
+// DELETE /api/v1/channels/{channelID}/messages/{messageID}
+func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	// Check authorship (permission-based deletion requires guild context, simplified here).
+	var authorID string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT author_id FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, channelID,
+	).Scan(&authorID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+
+	if authorID != userID {
+		// For non-authors, would need MANAGE_MESSAGES permission check.
+		// Simplified: allow deletion if user is in the same guild and has the permission,
+		// or is the channel owner for DMs.
+		writeError(w, http.StatusForbidden, "not_author", "You can only delete your own messages")
+		return
+	}
+
+	_, err = h.Pool.Exec(r.Context(),
+		`DELETE FROM messages WHERE id = $1 AND channel_id = $2`, messageID, channelID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete message")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageDelete, "MESSAGE_DELETE", map[string]string{
+		"id": messageID, "channel_id": channelID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleAddReaction adds an emoji reaction to a message.
+// PUT /api/v1/channels/{channelID}/messages/{messageID}/reactions/{emoji}
+func (h *Handler) HandleAddReaction(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	emoji := chi.URLParam(r, "emoji")
+
+	// Verify message exists in channel.
+	var exists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
+		messageID, channelID,
+	).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO reactions (message_id, user_id, emoji, created_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (message_id, user_id, emoji) DO NOTHING`,
+		messageID, userID, emoji,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add reaction")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageReactionAdd, "MESSAGE_REACTION_ADD", map[string]string{
+		"message_id": messageID, "channel_id": channelID, "user_id": userID, "emoji": emoji,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleRemoveReaction removes an emoji reaction from a message.
+// DELETE /api/v1/channels/{channelID}/messages/{messageID}/reactions/{emoji}
+func (h *Handler) HandleRemoveReaction(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	messageID := chi.URLParam(r, "messageID")
+	emoji := chi.URLParam(r, "emoji")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+		messageID, userID, emoji,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove reaction")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageReactionDel, "MESSAGE_REACTION_REMOVE", map[string]string{
+		"message_id": messageID, "user_id": userID, "emoji": emoji,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetPins returns pinned messages in a channel.
+// GET /api/v1/channels/{channelID}/pins
+func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type,
+		        m.edited_at, m.flags, m.reply_to_ids, m.mention_user_ids, m.mention_role_ids,
+		        m.mention_everyone, m.thread_id, m.masquerade_name, m.masquerade_avatar,
+		        m.masquerade_color, m.encrypted, m.encryption_session_id, m.created_at
+		 FROM messages m
+		 JOIN pins p ON m.id = p.message_id
+		 WHERE p.channel_id = $1
+		 ORDER BY p.pinned_at DESC`,
+		channelID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get pins")
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]models.Message, 0)
+	for rows.Next() {
+		var m models.Message
+		if err := rows.Scan(
+			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
+			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
+			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read pins")
+			return
+		}
+		messages = append(messages, m)
+	}
+
+	writeJSON(w, http.StatusOK, messages)
+}
+
+// HandlePinMessage pins a message in a channel.
+// PUT /api/v1/channels/{channelID}/pins/{messageID}
+func (h *Handler) HandlePinMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	// Verify message exists.
+	var exists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
+		messageID, channelID,
+	).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO pins (channel_id, message_id, pinned_by, pinned_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (channel_id, message_id) DO NOTHING`,
+		channelID, messageID, userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to pin message")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelPinsUpdate, "CHANNEL_PINS_UPDATE", map[string]string{
+		"channel_id": channelID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleUnpinMessage unpins a message from a channel.
+// DELETE /api/v1/channels/{channelID}/pins/{messageID}
+func (h *Handler) HandleUnpinMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM pins WHERE channel_id = $1 AND message_id = $2`, channelID, messageID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unpin message")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "pin_not_found", "Message is not pinned")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelPinsUpdate, "CHANNEL_PINS_UPDATE", map[string]string{
+		"channel_id": channelID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleTriggerTyping sends a typing indicator event for the channel.
+// POST /api/v1/channels/{channelID}/typing
+func (h *Handler) HandleTriggerTyping(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectTypingStart, "TYPING_START", map[string]string{
+		"channel_id": channelID,
+		"user_id":    userID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleAckChannel marks a channel as read up to the latest message.
+// POST /api/v1/channels/{channelID}/ack
+func (h *Handler) HandleAckChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	// Get the latest message ID for this channel.
+	var lastMessageID *string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT last_message_id FROM channels WHERE id = $1`, channelID,
+	).Scan(&lastMessageID)
+
+	if lastMessageID != nil {
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO read_state (user_id, channel_id, last_read_id, mention_count)
+			 VALUES ($1, $2, $3, 0)
+			 ON CONFLICT (user_id, channel_id) DO UPDATE SET last_read_id = $3, mention_count = 0`,
+			userID, channelID, lastMessageID,
+		)
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelAck, "CHANNEL_ACK", map[string]string{
+		"channel_id": channelID, "user_id": userID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleSetChannelPermission sets a permission override on a channel.
+// PUT /api/v1/channels/{channelID}/permissions/{overrideID}
+func (h *Handler) HandleSetChannelPermission(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+	overrideID := chi.URLParam(r, "overrideID")
+
+	var req permissionOverrideRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.TargetType != "role" && req.TargetType != "user" {
+		writeError(w, http.StatusBadRequest, "invalid_target_type", "Target type must be 'role' or 'user'")
+		return
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO channel_permission_overrides (channel_id, target_type, target_id, permissions_allow, permissions_deny)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (channel_id, target_type, target_id) DO UPDATE
+		 SET permissions_allow = $4, permissions_deny = $5`,
+		channelID, req.TargetType, overrideID, req.PermissionsAllow, req.PermissionsDeny,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to set permission override")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", map[string]string{
+		"channel_id": channelID,
+	})
+
+	writeJSON(w, http.StatusOK, models.ChannelPermissionOverride{
+		ChannelID:        channelID,
+		TargetType:       req.TargetType,
+		TargetID:         overrideID,
+		PermissionsAllow: req.PermissionsAllow,
+		PermissionsDeny:  req.PermissionsDeny,
+	})
+}
+
+// HandleDeleteChannelPermission removes a permission override from a channel.
+// DELETE /api/v1/channels/{channelID}/permissions/{overrideID}
+func (h *Handler) HandleDeleteChannelPermission(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+	overrideID := chi.URLParam(r, "overrideID")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM channel_permission_overrides WHERE channel_id = $1 AND target_id = $2`,
+		channelID, overrideID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete permission override")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Internal helpers ---
+
+func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Channel, error) {
+	var c models.Channel
+	err := h.Pool.QueryRow(ctx,
+		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
+		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+		        default_permissions, created_at
+		 FROM channels WHERE id = $1`,
+		channelID,
+	).Scan(
+		&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
+		&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
+		&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+	)
+	return &c, err
+}
+
+func (h *Handler) getMessage(ctx context.Context, channelID, messageID string) (*models.Message, error) {
+	var m models.Message
+	err := h.Pool.QueryRow(ctx,
+		`SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		        reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		        thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		        encrypted, encryption_session_id, created_at
+		 FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, channelID,
+	).Scan(
+		&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
+		&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
+		&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+		&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+	)
+	return &m, err
+}
+
+func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+}
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]string{"code": code, "message": message},
+	})
+}

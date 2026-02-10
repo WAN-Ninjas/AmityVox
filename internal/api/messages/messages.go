@@ -1,5 +1,5 @@
-// Package messages implements REST API handlers for message operations including
-// sending, editing, deleting, and paginating messages within channels. This
-// package handles message-specific logic while the channel package handles
-// the routing. Handlers will be fully implemented in Phase 2.
+// Package messages is reserved for future message-specific utilities.
+// Message CRUD, pagination, reactions, and pin operations are implemented
+// in the channels package as they share the /channels/{channelID}/... route
+// namespace.
 package messages
