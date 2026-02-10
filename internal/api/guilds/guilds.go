@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -1209,13 +1210,31 @@ func (h *Handler) HandleGetGuildAuditLog(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rows, err := h.Pool.Query(r.Context(),
-		`SELECT id, guild_id, actor_id, action, target_type, target_id, reason, changes, created_at
-		 FROM audit_log WHERE guild_id = $1
-		 ORDER BY created_at DESC
-		 LIMIT 100`,
-		guildID,
-	)
+	// Build filtered query for audit log.
+	baseSQL := `SELECT id, guild_id, actor_id, action, target_type, target_id, reason, changes, created_at
+		 FROM audit_log WHERE guild_id = $1`
+	args := []interface{}{guildID}
+	argIdx := 2
+
+	if action := r.URL.Query().Get("action"); action != "" {
+		baseSQL += fmt.Sprintf(` AND action = $%d`, argIdx)
+		args = append(args, action)
+		argIdx++
+	}
+	if actorID := r.URL.Query().Get("actor_id"); actorID != "" {
+		baseSQL += fmt.Sprintf(` AND actor_id = $%d`, argIdx)
+		args = append(args, actorID)
+		argIdx++
+	}
+	if before := r.URL.Query().Get("before"); before != "" {
+		baseSQL += fmt.Sprintf(` AND id < $%d`, argIdx)
+		args = append(args, before)
+		argIdx++
+	}
+
+	baseSQL += ` ORDER BY created_at DESC LIMIT 100`
+
+	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get audit log")
 		return
@@ -1316,6 +1335,80 @@ func (h *Handler) HandleCreateGuildEmoji(w http.ResponseWriter, r *http.Request)
 	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildEmojiUpdate, "GUILD_EMOJI_UPDATE", emoji)
 
 	writeJSON(w, http.StatusCreated, emoji)
+}
+
+// HandleUpdateGuildEmoji updates a custom emoji's name.
+// PATCH /api/v1/guilds/{guildID}/emoji/{emojiID}
+func (h *Handler) HandleUpdateGuildEmoji(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	emojiID := chi.URLParam(r, "emojiID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageEmoji) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_EMOJI permission")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.Name == "" || len(req.Name) > 32 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Emoji name must be 1-32 characters")
+		return
+	}
+
+	var emoji models.CustomEmoji
+	err := h.Pool.QueryRow(r.Context(),
+		`UPDATE custom_emoji SET name = $1
+		 WHERE id = $2 AND guild_id = $3
+		 RETURNING id, guild_id, name, creator_id, animated, s3_key, created_at`,
+		req.Name, emojiID, guildID,
+	).Scan(&emoji.ID, &emoji.GuildID, &emoji.Name, &emoji.CreatorID, &emoji.Animated, &emoji.S3Key, &emoji.CreatedAt)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusNotFound, "emoji_not_found", "Emoji not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update emoji")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildEmojiUpdate, "GUILD_EMOJI_UPDATE", emoji)
+
+	writeJSON(w, http.StatusOK, emoji)
+}
+
+// HandleDeleteGuildEmoji deletes a custom emoji.
+// DELETE /api/v1/guilds/{guildID}/emoji/{emojiID}
+func (h *Handler) HandleDeleteGuildEmoji(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	emojiID := chi.URLParam(r, "emojiID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageEmoji) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_EMOJI permission")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM custom_emoji WHERE id = $1 AND guild_id = $2`, emojiID, guildID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "emoji_not_found", "Emoji not found")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildEmojiUpdate, "GUILD_EMOJI_DELETE",
+		map[string]string{"id": emojiID, "guild_id": guildID})
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Internal helpers ---

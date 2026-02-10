@@ -406,6 +406,32 @@ const (
 
 // AuditLogEntry represents an administrative action recorded for auditing purposes.
 // Corresponds to the audit_log table.
+// Audit log action constants for categorizing guild events.
+const (
+	AuditActionGuildUpdate         = "guild_update"
+	AuditActionChannelCreate       = "channel_create"
+	AuditActionChannelUpdate       = "channel_update"
+	AuditActionChannelDelete       = "channel_delete"
+	AuditActionRoleCreate          = "role_create"
+	AuditActionRoleUpdate          = "role_update"
+	AuditActionRoleDelete          = "role_delete"
+	AuditActionMemberKick          = "member_kick"
+	AuditActionMemberBan           = "member_ban"
+	AuditActionMemberUnban         = "member_unban"
+	AuditActionMemberUpdate        = "member_update"
+	AuditActionInviteCreate        = "invite_create"
+	AuditActionInviteDelete        = "invite_delete"
+	AuditActionWebhookCreate       = "webhook_create"
+	AuditActionWebhookUpdate       = "webhook_update"
+	AuditActionWebhookDelete       = "webhook_delete"
+	AuditActionEmojiCreate         = "emoji_create"
+	AuditActionEmojiUpdate         = "emoji_update"
+	AuditActionEmojiDelete         = "emoji_delete"
+	AuditActionMessageDelete       = "message_delete"
+	AuditActionMessageBulkDelete   = "message_bulk_delete"
+	AuditActionOwnershipTransfer   = "ownership_transfer"
+)
+
 type AuditLogEntry struct {
 	ID         string                 `json:"id"`
 	GuildID    string                 `json:"guild_id"`

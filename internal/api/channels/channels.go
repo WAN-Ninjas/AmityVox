@@ -361,12 +361,13 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership.
+	// Verify ownership and get current content for edit history.
 	var authorID string
+	var currentContent *string
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT author_id FROM messages WHERE id = $1 AND channel_id = $2`,
+		`SELECT author_id, content FROM messages WHERE id = $1 AND channel_id = $2`,
 		messageID, channelID,
-	).Scan(&authorID)
+	).Scan(&authorID, &currentContent)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
 		return
@@ -374,6 +375,14 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 	if authorID != userID {
 		writeError(w, http.StatusForbidden, "not_author", "You can only edit your own messages")
 		return
+	}
+
+	// Save previous content to edit history.
+	if currentContent != nil {
+		editID := models.NewULID().String()
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO message_edits (id, message_id, content, edited_at) VALUES ($1, $2, $3, now())`,
+			editID, messageID, *currentContent)
 	}
 
 	var msg models.Message
@@ -399,6 +408,55 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageUpdate, "MESSAGE_UPDATE", msg)
 
 	writeJSON(w, http.StatusOK, msg)
+}
+
+// HandleGetMessageEdits returns the edit history for a message.
+// GET /api/v1/channels/{channelID}/messages/{messageID}/edits
+func (h *Handler) HandleGetMessageEdits(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	// Verify the message exists in this channel.
+	var exists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
+		messageID, channelID).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, message_id, content, edited_at
+		 FROM message_edits WHERE message_id = $1
+		 ORDER BY edited_at DESC
+		 LIMIT 50`,
+		messageID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get edit history")
+		return
+	}
+	defer rows.Close()
+
+	type editEntry struct {
+		ID        string    `json:"id"`
+		MessageID string    `json:"message_id"`
+		Content   string    `json:"content"`
+		EditedAt  time.Time `json:"edited_at"`
+	}
+
+	edits := make([]editEntry, 0)
+	for rows.Next() {
+		var e editEntry
+		if err := rows.Scan(&e.ID, &e.MessageID, &e.Content, &e.EditedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read edit history")
+			return
+		}
+		edits = append(edits, e)
+	}
+
+	writeJSON(w, http.StatusOK, edits)
 }
 
 // HandleDeleteMessage deletes a message. Author or users with MANAGE_MESSAGES can delete.
