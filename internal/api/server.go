@@ -15,27 +15,36 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/presence"
 )
 
 // Server is the HTTP API server for AmityVox. It holds the chi router, database
-// reference, configuration, and logger.
+// reference, services, configuration, and logger.
 type Server struct {
-	Router *chi.Mux
-	DB     *database.DB
-	Config *config.Config
-	Logger *slog.Logger
-	server *http.Server
+	Router      *chi.Mux
+	DB          *database.DB
+	Config      *config.Config
+	AuthService *auth.Service
+	EventBus    *events.Bus
+	Cache       *presence.Cache
+	Logger      *slog.Logger
+	server      *http.Server
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
-func NewServer(db *database.DB, cfg *config.Config, logger *slog.Logger) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, logger *slog.Logger) *Server {
 	s := &Server{
-		Router: chi.NewRouter(),
-		DB:     db,
-		Config: cfg,
-		Logger: logger,
+		Router:      chi.NewRouter(),
+		DB:          db,
+		Config:      cfg,
+		AuthService: authSvc,
+		EventBus:    bus,
+		Cache:       cache,
+		Logger:      logger,
 	}
 
 	s.registerMiddleware()
@@ -62,101 +71,104 @@ func (s *Server) registerRoutes() {
 
 	// API v1 routes.
 	s.Router.Route("/api/v1", func(r chi.Router) {
-		// Auth routes (Phase 2).
+		// Auth routes — public, no Bearer token required.
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/register", stubHandler("register"))
-			r.Post("/login", stubHandler("login"))
-			r.Post("/logout", stubHandler("logout"))
+			r.Post("/register", s.handleRegister)
+			r.Post("/login", s.handleLogin)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/logout", s.handleLogout)
 			r.Post("/totp/enable", stubHandler("totp_enable"))
 			r.Post("/totp/verify", stubHandler("totp_verify"))
 			r.Post("/webauthn/register", stubHandler("webauthn_register"))
 			r.Post("/webauthn/verify", stubHandler("webauthn_verify"))
 		})
 
-		// User routes (Phase 2).
-		r.Route("/users", func(r chi.Router) {
-			r.Get("/@me", stubHandler("get_self"))
-			r.Patch("/@me", stubHandler("update_self"))
-			r.Get("/@me/guilds", stubHandler("get_self_guilds"))
-			r.Get("/@me/dms", stubHandler("get_self_dms"))
-			r.Get("/{userID}", stubHandler("get_user"))
-			r.Post("/{userID}/dm", stubHandler("create_dm"))
-			r.Put("/{userID}/friend", stubHandler("add_friend"))
-			r.Delete("/{userID}/friend", stubHandler("remove_friend"))
-			r.Put("/{userID}/block", stubHandler("block_user"))
-			r.Delete("/{userID}/block", stubHandler("unblock_user"))
+		// Authenticated routes — require Bearer token.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireAuth(s.AuthService))
+
+			// User routes.
+			r.Route("/users", func(r chi.Router) {
+				r.Get("/@me", s.handleGetSelf)
+				r.Patch("/@me", stubHandler("update_self"))
+				r.Get("/@me/guilds", stubHandler("get_self_guilds"))
+				r.Get("/@me/dms", stubHandler("get_self_dms"))
+				r.Get("/{userID}", stubHandler("get_user"))
+				r.Post("/{userID}/dm", stubHandler("create_dm"))
+				r.Put("/{userID}/friend", stubHandler("add_friend"))
+				r.Delete("/{userID}/friend", stubHandler("remove_friend"))
+				r.Put("/{userID}/block", stubHandler("block_user"))
+				r.Delete("/{userID}/block", stubHandler("unblock_user"))
+			})
+
+			// Guild routes.
+			r.Route("/guilds", func(r chi.Router) {
+				r.Post("/", stubHandler("create_guild"))
+				r.Get("/{guildID}", stubHandler("get_guild"))
+				r.Patch("/{guildID}", stubHandler("update_guild"))
+				r.Delete("/{guildID}", stubHandler("delete_guild"))
+				r.Get("/{guildID}/channels", stubHandler("get_guild_channels"))
+				r.Post("/{guildID}/channels", stubHandler("create_guild_channel"))
+				r.Get("/{guildID}/members", stubHandler("get_guild_members"))
+				r.Get("/{guildID}/members/{memberID}", stubHandler("get_guild_member"))
+				r.Patch("/{guildID}/members/{memberID}", stubHandler("update_guild_member"))
+				r.Delete("/{guildID}/members/{memberID}", stubHandler("remove_guild_member"))
+				r.Get("/{guildID}/bans", stubHandler("get_guild_bans"))
+				r.Put("/{guildID}/bans/{userID}", stubHandler("create_guild_ban"))
+				r.Delete("/{guildID}/bans/{userID}", stubHandler("remove_guild_ban"))
+				r.Get("/{guildID}/roles", stubHandler("get_guild_roles"))
+				r.Post("/{guildID}/roles", stubHandler("create_guild_role"))
+				r.Patch("/{guildID}/roles/{roleID}", stubHandler("update_guild_role"))
+				r.Delete("/{guildID}/roles/{roleID}", stubHandler("delete_guild_role"))
+				r.Get("/{guildID}/invites", stubHandler("get_guild_invites"))
+				r.Get("/{guildID}/audit-log", stubHandler("get_guild_audit_log"))
+				r.Get("/{guildID}/emoji", stubHandler("get_guild_emoji"))
+				r.Post("/{guildID}/emoji", stubHandler("create_guild_emoji"))
+			})
+
+			// Channel routes.
+			r.Route("/channels", func(r chi.Router) {
+				r.Get("/{channelID}", stubHandler("get_channel"))
+				r.Patch("/{channelID}", stubHandler("update_channel"))
+				r.Delete("/{channelID}", stubHandler("delete_channel"))
+				r.Get("/{channelID}/messages", stubHandler("get_messages"))
+				r.Post("/{channelID}/messages", stubHandler("create_message"))
+				r.Get("/{channelID}/messages/{messageID}", stubHandler("get_message"))
+				r.Patch("/{channelID}/messages/{messageID}", stubHandler("update_message"))
+				r.Delete("/{channelID}/messages/{messageID}", stubHandler("delete_message"))
+				r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", stubHandler("add_reaction"))
+				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", stubHandler("remove_reaction"))
+				r.Get("/{channelID}/pins", stubHandler("get_pins"))
+				r.Put("/{channelID}/pins/{messageID}", stubHandler("pin_message"))
+				r.Delete("/{channelID}/pins/{messageID}", stubHandler("unpin_message"))
+				r.Post("/{channelID}/typing", stubHandler("trigger_typing"))
+				r.Post("/{channelID}/ack", stubHandler("ack_channel"))
+				r.Put("/{channelID}/permissions/{overrideID}", stubHandler("set_channel_permission"))
+				r.Delete("/{channelID}/permissions/{overrideID}", stubHandler("delete_channel_permission"))
+			})
+
+			// Invite routes.
+			r.Route("/invites", func(r chi.Router) {
+				r.Get("/{code}", stubHandler("get_invite"))
+				r.Post("/{code}", stubHandler("accept_invite"))
+				r.Delete("/{code}", stubHandler("delete_invite"))
+			})
+
+			// File upload.
+			r.Post("/files/upload", stubHandler("upload_file"))
+
+			// Admin routes.
+			r.Route("/admin", func(r chi.Router) {
+				r.Get("/instance", stubHandler("get_instance"))
+				r.Patch("/instance", stubHandler("update_instance"))
+				r.Get("/federation/peers", stubHandler("get_federation_peers"))
+				r.Post("/federation/peers", stubHandler("add_federation_peer"))
+				r.Delete("/federation/peers/{peerID}", stubHandler("remove_federation_peer"))
+				r.Get("/stats", stubHandler("get_stats"))
+			})
 		})
 
-		// Guild routes (Phase 2).
-		r.Route("/guilds", func(r chi.Router) {
-			r.Post("/", stubHandler("create_guild"))
-			r.Get("/{guildID}", stubHandler("get_guild"))
-			r.Patch("/{guildID}", stubHandler("update_guild"))
-			r.Delete("/{guildID}", stubHandler("delete_guild"))
-			r.Get("/{guildID}/channels", stubHandler("get_guild_channels"))
-			r.Post("/{guildID}/channels", stubHandler("create_guild_channel"))
-			r.Get("/{guildID}/members", stubHandler("get_guild_members"))
-			r.Get("/{guildID}/members/{memberID}", stubHandler("get_guild_member"))
-			r.Patch("/{guildID}/members/{memberID}", stubHandler("update_guild_member"))
-			r.Delete("/{guildID}/members/{memberID}", stubHandler("remove_guild_member"))
-			r.Get("/{guildID}/bans", stubHandler("get_guild_bans"))
-			r.Put("/{guildID}/bans/{userID}", stubHandler("create_guild_ban"))
-			r.Delete("/{guildID}/bans/{userID}", stubHandler("remove_guild_ban"))
-			r.Get("/{guildID}/roles", stubHandler("get_guild_roles"))
-			r.Post("/{guildID}/roles", stubHandler("create_guild_role"))
-			r.Patch("/{guildID}/roles/{roleID}", stubHandler("update_guild_role"))
-			r.Delete("/{guildID}/roles/{roleID}", stubHandler("delete_guild_role"))
-			r.Get("/{guildID}/invites", stubHandler("get_guild_invites"))
-			r.Get("/{guildID}/audit-log", stubHandler("get_guild_audit_log"))
-			r.Get("/{guildID}/emoji", stubHandler("get_guild_emoji"))
-			r.Post("/{guildID}/emoji", stubHandler("create_guild_emoji"))
-		})
-
-		// Channel routes (Phase 2).
-		r.Route("/channels", func(r chi.Router) {
-			r.Get("/{channelID}", stubHandler("get_channel"))
-			r.Patch("/{channelID}", stubHandler("update_channel"))
-			r.Delete("/{channelID}", stubHandler("delete_channel"))
-			r.Get("/{channelID}/messages", stubHandler("get_messages"))
-			r.Post("/{channelID}/messages", stubHandler("create_message"))
-			r.Get("/{channelID}/messages/{messageID}", stubHandler("get_message"))
-			r.Patch("/{channelID}/messages/{messageID}", stubHandler("update_message"))
-			r.Delete("/{channelID}/messages/{messageID}", stubHandler("delete_message"))
-			r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", stubHandler("add_reaction"))
-			r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", stubHandler("remove_reaction"))
-			r.Get("/{channelID}/pins", stubHandler("get_pins"))
-			r.Put("/{channelID}/pins/{messageID}", stubHandler("pin_message"))
-			r.Delete("/{channelID}/pins/{messageID}", stubHandler("unpin_message"))
-			r.Post("/{channelID}/typing", stubHandler("trigger_typing"))
-			r.Post("/{channelID}/ack", stubHandler("ack_channel"))
-			r.Put("/{channelID}/permissions/{overrideID}", stubHandler("set_channel_permission"))
-			r.Delete("/{channelID}/permissions/{overrideID}", stubHandler("delete_channel_permission"))
-		})
-
-		// Invite routes (Phase 2).
-		r.Route("/invites", func(r chi.Router) {
-			r.Get("/{code}", stubHandler("get_invite"))
-			r.Post("/{code}", stubHandler("accept_invite"))
-			r.Delete("/{code}", stubHandler("delete_invite"))
-		})
-
-		// Webhook routes (Phase 2).
-		r.Route("/webhooks", func(r chi.Router) {
-			r.Post("/{webhookID}/{token}", stubHandler("execute_webhook"))
-		})
-
-		// File upload (Phase 2).
-		r.Post("/files/upload", stubHandler("upload_file"))
-
-		// Admin routes (Phase 2).
-		r.Route("/admin", func(r chi.Router) {
-			r.Get("/instance", stubHandler("get_instance"))
-			r.Patch("/instance", stubHandler("update_instance"))
-			r.Get("/federation/peers", stubHandler("get_federation_peers"))
-			r.Post("/federation/peers", stubHandler("add_federation_peer"))
-			r.Delete("/federation/peers/{peerID}", stubHandler("remove_federation_peer"))
-			r.Get("/stats", stubHandler("get_stats"))
-		})
+		// Webhook execution — uses token auth, no Bearer token needed.
+		r.Post("/webhooks/{webhookID}/{token}", stubHandler("execute_webhook"))
 	})
 }
 
@@ -183,13 +195,138 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
-// handleHealthCheck responds with the health status of the server and its database.
-func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	if err := s.DB.HealthCheck(r.Context()); err != nil {
-		WriteError(w, http.StatusServiceUnavailable, "database_unhealthy", "Database health check failed")
+// --- Auth Handlers ---
+
+// handleRegister handles POST /api/v1/auth/register.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req auth.RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	ip := r.RemoteAddr
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		ip = fwd
+	}
+
+	user, session, err := s.AuthService.Register(r.Context(), req, ip, r.UserAgent())
+	if err != nil {
+		if authErr, ok := err.(*auth.AuthError); ok {
+			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
+			return
+		}
+		s.Logger.Error("registration failed", slog.String("error", err.Error()))
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Registration failed")
+		return
+	}
+
+	WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"user":  user,
+		"token": session.ID,
+	})
+}
+
+// handleLogin handles POST /api/v1/auth/login.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req auth.LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	ip := r.RemoteAddr
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		ip = fwd
+	}
+
+	user, session, err := s.AuthService.Login(r.Context(), req, ip, r.UserAgent())
+	if err != nil {
+		if authErr, ok := err.(*auth.AuthError); ok {
+			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
+			return
+		}
+		s.Logger.Error("login failed", slog.String("error", err.Error()))
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Login failed")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"user":  user,
+		"token": session.ID,
+	})
+}
+
+// handleLogout handles POST /api/v1/auth/logout.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	sessionID := auth.SessionIDFromContext(r.Context())
+	if sessionID == "" {
+		WriteError(w, http.StatusUnauthorized, "missing_session", "No session to logout")
+		return
+	}
+
+	if err := s.AuthService.Logout(r.Context(), sessionID); err != nil {
+		s.Logger.Error("logout failed", slog.String("error", err.Error()))
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Logout failed")
+		return
+	}
+
+	WriteNoContent(w)
+}
+
+// handleGetSelf handles GET /api/v1/users/@me.
+func (s *Server) handleGetSelf(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	user, err := s.AuthService.GetUser(r.Context(), userID)
+	if err != nil {
+		if authErr, ok := err.(*auth.AuthError); ok {
+			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
+			return
+		}
+		s.Logger.Error("get self failed", slog.String("error", err.Error()))
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, user)
+}
+
+// handleHealthCheck responds with the health status of the server and its dependencies.
+func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	status := map[string]string{"status": "ok"}
+
+	if err := s.DB.HealthCheck(r.Context()); err != nil {
+		status["status"] = "degraded"
+		status["database"] = "unhealthy"
+	} else {
+		status["database"] = "healthy"
+	}
+
+	if s.EventBus != nil {
+		if err := s.EventBus.HealthCheck(); err != nil {
+			status["status"] = "degraded"
+			status["nats"] = "unhealthy"
+		} else {
+			status["nats"] = "healthy"
+		}
+	}
+
+	if s.Cache != nil {
+		if err := s.Cache.HealthCheck(r.Context()); err != nil {
+			status["status"] = "degraded"
+			status["cache"] = "unhealthy"
+		} else {
+			status["cache"] = "healthy"
+		}
+	}
+
+	httpStatus := http.StatusOK
+	if status["status"] != "ok" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+
+	WriteJSON(w, httpStatus, status)
 }
 
 // stubHandler returns a handler that responds with 501 Not Implemented for

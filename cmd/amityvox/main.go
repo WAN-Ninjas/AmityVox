@@ -1,12 +1,16 @@
 // Package main is the CLI entrypoint for AmityVox. It provides subcommands for
 // running the server (serve), managing database migrations (migrate), and
 // printing version information (version). The serve command loads configuration,
-// connects to PostgreSQL, runs pending migrations, starts the HTTP API server,
-// and handles graceful shutdown on SIGINT/SIGTERM.
+// connects to PostgreSQL, NATS, and DragonflyDB, runs pending migrations, starts
+// the HTTP API server and WebSocket gateway, and handles graceful shutdown on
+// SIGINT/SIGTERM.
 package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,8 +20,13 @@ import (
 	"time"
 
 	"github.com/amityvox/amityvox/internal/api"
+	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/gateway"
+	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/presence"
 )
 
 // Build-time variables set via ldflags.
@@ -73,9 +82,10 @@ func printUsage() {
 	fmt.Println("  Env prefix:   AMITYVOX_ (e.g. AMITYVOX_DATABASE_URL)")
 }
 
-// runServe starts the full AmityVox server: loads config, connects to the
-// database, runs migrations, and starts the HTTP API server with graceful
-// shutdown on SIGINT/SIGTERM.
+// runServe starts the full AmityVox server: loads config, connects to all
+// services (PostgreSQL, NATS, DragonflyDB), runs migrations, bootstraps the
+// local instance, creates the auth service, starts the HTTP API server and
+// WebSocket gateway, and handles graceful shutdown on SIGINT/SIGTERM.
 func runServe() error {
 	logger := setupLogger("info", "json")
 
@@ -95,8 +105,9 @@ func runServe() error {
 	logger = setupLogger(cfg.Logging.Level, cfg.Logging.Format)
 	logger.Info("configuration loaded", slog.String("path", cfgPath))
 
-	// Connect to database.
 	ctx := context.Background()
+
+	// Connect to database.
 	db, err := database.New(ctx, cfg.Database.URL, cfg.Database.MaxConnections, logger)
 	if err != nil {
 		return fmt.Errorf("connecting to database: %w", err)
@@ -108,18 +119,95 @@ func runServe() error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Create and start HTTP server.
-	srv := api.NewServer(db, cfg, logger)
+	// Bootstrap local instance record.
+	instanceID, err := ensureLocalInstance(ctx, db, cfg)
+	if err != nil {
+		return fmt.Errorf("bootstrapping local instance: %w", err)
+	}
+	logger.Info("local instance ready", slog.String("instance_id", instanceID))
+
+	// Connect to NATS event bus.
+	bus, err := events.New(cfg.NATS.URL, logger)
+	if err != nil {
+		return fmt.Errorf("connecting to NATS: %w", err)
+	}
+	defer bus.Close()
+
+	// Ensure JetStream streams exist.
+	if err := bus.EnsureStreams(); err != nil {
+		return fmt.Errorf("ensuring NATS streams: %w", err)
+	}
+
+	// Connect to DragonflyDB/Redis cache.
+	cache, err := presence.New(cfg.Cache.URL, logger)
+	if err != nil {
+		return fmt.Errorf("connecting to cache: %w", err)
+	}
+	defer cache.Close()
+
+	// Parse auth settings.
+	sessionDuration, err := cfg.Auth.SessionDurationParsed()
+	if err != nil {
+		return fmt.Errorf("parsing session duration: %w", err)
+	}
+
+	// Create auth service.
+	authSvc := auth.NewService(auth.Config{
+		Pool:            db.Pool,
+		Cache:           cache,
+		InstanceID:      instanceID,
+		SessionDuration: sessionDuration,
+		RegEnabled:      cfg.Auth.RegistrationEnabled,
+		InviteOnly:      cfg.Auth.InviteOnly,
+		RequireEmail:    cfg.Auth.RequireEmail,
+		Logger:          logger,
+	})
+
+	// Create and start HTTP API server.
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, logger)
+
+	// Parse WebSocket settings.
+	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()
+	if err != nil {
+		return fmt.Errorf("parsing heartbeat interval: %w", err)
+	}
+	heartbeatTimeout, err := cfg.WebSocket.HeartbeatTimeoutParsed()
+	if err != nil {
+		return fmt.Errorf("parsing heartbeat timeout: %w", err)
+	}
+
+	// Create WebSocket gateway server.
+	gw := gateway.NewServer(gateway.ServerConfig{
+		AuthService:       authSvc,
+		EventBus:          bus,
+		Cache:             cache,
+		HeartbeatInterval: heartbeatInterval,
+		HeartbeatTimeout:  heartbeatTimeout,
+		ListenAddr:        cfg.WebSocket.Listen,
+		Logger:            logger,
+	})
 
 	// Graceful shutdown handler.
 	shutdownCh := make(chan os.Signal, 1)
 	signal.Notify(shutdownCh, syscall.SIGINT, syscall.SIGTERM)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+
+	// Start HTTP API server.
 	go func() {
-		errCh <- srv.Start()
+		if err := srv.Start(); err != nil {
+			errCh <- fmt.Errorf("HTTP server: %w", err)
+		}
 	}()
 
+	// Start WebSocket gateway.
+	go func() {
+		if err := gw.Start(); err != nil {
+			errCh <- fmt.Errorf("WebSocket gateway: %w", err)
+		}
+	}()
+
+	// Wait for shutdown signal or server error.
 	select {
 	case err := <-errCh:
 		return err
@@ -131,12 +219,71 @@ func runServe() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// Shut down gateway first (sends RECONNECT to clients).
+	if err := gw.Shutdown(shutdownCtx); err != nil {
+		logger.Error("gateway shutdown error", slog.String("error", err.Error()))
+	}
+
+	// Then shut down HTTP server.
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("server shutdown: %w", err)
+		logger.Error("HTTP server shutdown error", slog.String("error", err.Error()))
 	}
 
 	logger.Info("AmityVox stopped")
 	return nil
+}
+
+// ensureLocalInstance checks if the local instance record exists in the database
+// (matched by domain). If not, it creates one with a generated Ed25519 key pair
+// for federation signing. Returns the instance ID.
+func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Config) (string, error) {
+	var id string
+	err := db.Pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`,
+		cfg.Instance.Domain,
+	).Scan(&id)
+
+	if err == nil {
+		return id, nil
+	}
+
+	// Instance doesn't exist yet — generate an Ed25519 key pair and create it.
+	pubKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return "", fmt.Errorf("generating Ed25519 key pair: %w", err)
+	}
+
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return "", fmt.Errorf("marshaling public key: %w", err)
+	}
+
+	pubKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubKeyBytes,
+	})
+
+	id = models.NewULID().String()
+	_, err = db.Pool.Exec(ctx,
+		`INSERT INTO instances (id, domain, public_key, name, description, software_version, federation_mode, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		 ON CONFLICT (domain) DO NOTHING`,
+		id, cfg.Instance.Domain, string(pubKeyPEM), cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
+	)
+	if err != nil {
+		return "", fmt.Errorf("creating local instance record: %w", err)
+	}
+
+	// Re-read in case of race (ON CONFLICT DO NOTHING).
+	err = db.Pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`,
+		cfg.Instance.Domain,
+	).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("reading instance ID after insert: %w", err)
+	}
+
+	return id, nil
 }
 
 // runMigrate handles the migrate subcommand with up/down/status operations.
