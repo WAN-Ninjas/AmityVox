@@ -1,12 +1,17 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/search"
 )
+
+// validIDPattern matches ULID/alphanumeric IDs to prevent filter injection.
+var validIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{26}$`)
 
 // handleSearchMessages handles GET /api/v1/search/messages.
 // Query params: q (required), channel_id, guild_id, author_id, limit, offset.
@@ -30,16 +35,28 @@ func (s *Server) handleSearchMessages(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset := parsePagination(r)
 
-	// Build filter string for Meilisearch.
+	// Build filter string for Meilisearch with input validation.
 	var filters []string
 	if channelID := r.URL.Query().Get("channel_id"); channelID != "" {
-		filters = append(filters, "channel_id = \""+channelID+"\"")
+		if !validIDPattern.MatchString(channelID) {
+			WriteError(w, http.StatusBadRequest, "invalid_channel_id", "Invalid channel_id format")
+			return
+		}
+		filters = append(filters, fmt.Sprintf("channel_id = %q", channelID))
 	}
 	if guildID := r.URL.Query().Get("guild_id"); guildID != "" {
-		filters = append(filters, "guild_id = \""+guildID+"\"")
+		if !validIDPattern.MatchString(guildID) {
+			WriteError(w, http.StatusBadRequest, "invalid_guild_id", "Invalid guild_id format")
+			return
+		}
+		filters = append(filters, fmt.Sprintf("guild_id = %q", guildID))
 	}
 	if authorID := r.URL.Query().Get("author_id"); authorID != "" {
-		filters = append(filters, "author_id = \""+authorID+"\"")
+		if !validIDPattern.MatchString(authorID) {
+			WriteError(w, http.StatusBadRequest, "invalid_author_id", "Invalid author_id format")
+			return
+		}
+		filters = append(filters, fmt.Sprintf("author_id = %q", authorID))
 	}
 
 	filterStr := ""

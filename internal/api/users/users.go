@@ -64,6 +64,20 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate field lengths.
+	if req.DisplayName != nil && len(*req.DisplayName) > 32 {
+		writeError(w, http.StatusBadRequest, "invalid_display_name", "Display name must be at most 32 characters")
+		return
+	}
+	if req.StatusText != nil && len(*req.StatusText) > 128 {
+		writeError(w, http.StatusBadRequest, "invalid_status", "Status text must be at most 128 characters")
+		return
+	}
+	if req.Bio != nil && len(*req.Bio) > 2000 {
+		writeError(w, http.StatusBadRequest, "invalid_bio", "Bio must be at most 2000 characters")
+		return
+	}
+
 	user, err := h.updateUser(r.Context(), userID, req)
 	if err != nil {
 		h.Logger.Error("failed to update user", slog.String("error", err.Error()))

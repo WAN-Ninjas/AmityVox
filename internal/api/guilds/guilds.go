@@ -1625,8 +1625,8 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if req.Name == "" || req.ChannelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_fields", "Name and channel_id are required")
+	if req.Name == "" || len(req.Name) > 80 || req.ChannelID == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields", "Name (1-80 chars) and channel_id are required")
 		return
 	}
 
