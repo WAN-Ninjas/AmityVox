@@ -1462,6 +1462,53 @@ func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, 
 	return &g, err
 }
 
+// HandleDiscoverGuilds returns a list of public, discoverable guilds.
+// GET /api/v1/guilds/discover
+func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	limit := 50
+
+	baseSQL := `SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
+	            g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
+	            g.preferred_locale, g.max_members,
+	            (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id),
+	            g.created_at
+	     FROM guilds g
+	     WHERE g.discoverable = true`
+
+	var args []interface{}
+	if query != "" {
+		baseSQL += ` AND g.name ILIKE '%' || $1 || '%' ORDER BY (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) DESC LIMIT $2`
+		args = append(args, query, limit)
+	} else {
+		baseSQL += ` ORDER BY (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) DESC LIMIT $1`
+		args = append(args, limit)
+	}
+
+	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to discover guilds")
+		return
+	}
+	defer rows.Close()
+
+	guilds := make([]models.Guild, 0)
+	for rows.Next() {
+		var g models.Guild
+		if err := rows.Scan(
+			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
+			&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
+			&g.PreferredLocale, &g.MaxMembers, &g.MemberCount, &g.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")
+			return
+		}
+		guilds = append(guilds, g)
+	}
+
+	writeJSON(w, http.StatusOK, guilds)
+}
+
 func (h *Handler) isMember(ctx context.Context, guildID, userID string) bool {
 	var exists bool
 	h.Pool.QueryRow(ctx,
