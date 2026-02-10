@@ -28,6 +28,7 @@ import (
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
+	"github.com/amityvox/amityvox/internal/voice"
 )
 
 // Server is the HTTP API server for AmityVox. It holds the chi router, database
@@ -41,6 +42,7 @@ type Server struct {
 	Cache       *presence.Cache
 	Media       *media.Service
 	Search      *search.Service
+	Voice       *voice.Service
 	InstanceID  string
 	Version     string
 	Logger      *slog.Logger
@@ -48,7 +50,7 @@ type Server struct {
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, searchSvc *search.Service, instanceID string, logger *slog.Logger) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, searchSvc *search.Service, voiceSvc *voice.Service, instanceID string, logger *slog.Logger) *Server {
 	s := &Server{
 		Router:      chi.NewRouter(),
 		DB:          db,
@@ -58,6 +60,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 		Cache:       cache,
 		Media:       mediaSvc,
 		Search:      searchSvc,
+		Voice:       voiceSvc,
 		InstanceID:  instanceID,
 		Logger:      logger,
 	}
@@ -246,6 +249,13 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/messages/{messageID}/threads", channelH.HandleCreateThread)
 			r.Get("/{channelID}/threads", channelH.HandleGetThreads)
 			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
+			})
+
+			// Voice routes.
+			r.Route("/voice", func(r chi.Router) {
+				r.Post("/{channelID}/join", s.handleVoiceJoin)
+				r.Post("/{channelID}/leave", s.handleVoiceLeave)
+				r.Get("/{channelID}/states", s.handleGetVoiceStates)
 			})
 
 			// Invite routes.
