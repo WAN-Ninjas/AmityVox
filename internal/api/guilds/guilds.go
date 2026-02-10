@@ -263,6 +263,44 @@ func (h *Handler) HandleDeleteGuild(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleLeaveGuild allows a member to leave a guild.
+// POST /api/v1/guilds/{guildID}/leave
+func (h *Handler) HandleLeaveGuild(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	// Check if user is the owner — owners cannot leave (must transfer or delete).
+	var ownerID string
+	if err := h.Pool.QueryRow(r.Context(), `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		return
+	}
+	if ownerID == userID {
+		writeError(w, http.StatusBadRequest, "owner_cannot_leave", "Guild owner cannot leave. Transfer ownership or delete the guild.")
+		return
+	}
+
+	result, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to leave guild")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	h.Pool.Exec(r.Context(),
+		`DELETE FROM member_roles WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberRemove, "GUILD_MEMBER_REMOVE", map[string]string{
+		"guild_id": guildID, "user_id": userID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // HandleGetGuildChannels lists all channels in a guild.
 // GET /api/v1/guilds/{guildID}/channels
 func (h *Handler) HandleGetGuildChannels(w http.ResponseWriter, r *http.Request) {

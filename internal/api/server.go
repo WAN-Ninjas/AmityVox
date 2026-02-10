@@ -125,6 +125,7 @@ func (s *Server) registerRoutes() {
 			r.Post("/register", s.handleRegister)
 			r.Post("/login", s.handleLogin)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/logout", s.handleLogout)
+			r.With(auth.RequireAuth(s.AuthService)).Post("/password", s.handleChangePassword)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/enable", s.handleTOTPEnable)
 			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/verify", s.handleTOTPVerify)
 			r.With(auth.RequireAuth(s.AuthService)).Delete("/totp", s.handleTOTPDisable)
@@ -160,6 +161,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{guildID}", guildH.HandleGetGuild)
 				r.Patch("/{guildID}", guildH.HandleUpdateGuild)
 				r.Delete("/{guildID}", guildH.HandleDeleteGuild)
+				r.Post("/{guildID}/leave", guildH.HandleLeaveGuild)
 				r.Get("/{guildID}/channels", guildH.HandleGetGuildChannels)
 				r.Post("/{guildID}/channels", guildH.HandleCreateGuildChannel)
 				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
@@ -191,6 +193,7 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{channelID}", channelH.HandleDeleteChannel)
 				r.Get("/{channelID}/messages", channelH.HandleGetMessages)
 				r.With(s.RateLimitMessages).Post("/{channelID}/messages", channelH.HandleCreateMessage)
+				r.Post("/{channelID}/messages/bulk-delete", channelH.HandleBulkDeleteMessages)
 				r.Get("/{channelID}/messages/{messageID}", channelH.HandleGetMessage)
 				r.Patch("/{channelID}/messages/{messageID}", channelH.HandleUpdateMessage)
 				r.Delete("/{channelID}/messages/{messageID}", channelH.HandleDeleteMessage)
@@ -339,6 +342,34 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err := s.AuthService.Logout(r.Context(), sessionID); err != nil {
 		s.Logger.Error("logout failed", slog.String("error", err.Error()))
 		WriteError(w, http.StatusInternalServerError, "internal_error", "Logout failed")
+		return
+	}
+
+	WriteNoContent(w)
+}
+
+// handleChangePassword handles POST /api/v1/auth/password.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var req auth.ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		WriteError(w, http.StatusBadRequest, "missing_fields", "Both current_password and new_password are required")
+		return
+	}
+
+	if err := s.AuthService.ChangePassword(r.Context(), userID, req); err != nil {
+		if authErr, ok := err.(*auth.AuthError); ok {
+			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
+			return
+		}
+		s.Logger.Error("password change failed", slog.String("error", err.Error()))
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to change password")
 		return
 	}
 

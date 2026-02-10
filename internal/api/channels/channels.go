@@ -404,6 +404,51 @@ func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleBulkDeleteMessages deletes multiple messages in a channel at once.
+// POST /api/v1/channels/{channelID}/messages/bulk-delete
+func (h *Handler) HandleBulkDeleteMessages(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	var req struct {
+		MessageIDs []string `json:"message_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if len(req.MessageIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "empty_ids", "At least one message ID is required")
+		return
+	}
+	if len(req.MessageIDs) > 100 {
+		writeError(w, http.StatusBadRequest, "too_many_ids", "Cannot bulk delete more than 100 messages at once")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM messages WHERE channel_id = $1 AND id = ANY($2)`,
+		channelID, req.MessageIDs,
+	)
+	if err != nil {
+		h.Logger.Error("failed to bulk delete messages", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete messages")
+		return
+	}
+
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "no_messages_found", "No matching messages found in this channel")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageDeleteBulk, "MESSAGE_DELETE_BULK", map[string]interface{}{
+		"channel_id":  channelID,
+		"message_ids": req.MessageIDs,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // HandleAddReaction adds an emoji reaction to a message.
 // PUT /api/v1/channels/{channelID}/messages/{messageID}/reactions/{emoji}
 func (h *Handler) HandleAddReaction(w http.ResponseWriter, r *http.Request) {
