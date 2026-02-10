@@ -542,6 +542,55 @@ func (h *Handler) HandleGetGuildMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
+// HandleSearchGuildMembers searches for guild members by username or nickname.
+// GET /api/v1/guilds/{guildID}/members/search?q=<query>
+func (h *Handler) HandleSearchGuildMembers(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+		return
+	}
+	if len(query) > 100 {
+		query = query[:100]
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT gm.guild_id, gm.user_id, gm.nickname, gm.avatar_id, gm.joined_at, gm.timeout_until, gm.deaf, gm.mute
+		 FROM guild_members gm
+		 JOIN users u ON u.id = gm.user_id
+		 WHERE gm.guild_id = $1
+		   AND (u.username ILIKE '%' || $2 || '%' OR gm.nickname ILIKE '%' || $2 || '%')
+		 ORDER BY u.username
+		 LIMIT 25`,
+		guildID, query,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to search members")
+		return
+	}
+	defer rows.Close()
+
+	members := make([]models.GuildMember, 0)
+	for rows.Next() {
+		var m models.GuildMember
+		if err := rows.Scan(&m.GuildID, &m.UserID, &m.Nickname, &m.AvatarID, &m.JoinedAt, &m.TimeoutUntil, &m.Deaf, &m.Mute); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read members")
+			return
+		}
+		members = append(members, m)
+	}
+
+	writeJSON(w, http.StatusOK, members)
+}
+
 // HandleUpdateGuildMember updates a guild member's properties.
 // PATCH /api/v1/guilds/{guildID}/members/{memberID}
 func (h *Handler) HandleUpdateGuildMember(w http.ResponseWriter, r *http.Request) {

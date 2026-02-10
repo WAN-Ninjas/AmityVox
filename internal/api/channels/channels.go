@@ -640,6 +640,15 @@ func (h *Handler) HandlePinMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce pin limit (50 per channel).
+	var pinCount int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM pins WHERE channel_id = $1`, channelID).Scan(&pinCount)
+	if pinCount >= 50 {
+		writeError(w, http.StatusBadRequest, "pin_limit", "Channel has reached the maximum of 50 pinned messages")
+		return
+	}
+
 	_, err := h.Pool.Exec(r.Context(),
 		`INSERT INTO pins (channel_id, message_id, pinned_by, pinned_at)
 		 VALUES ($1, $2, $3, now())
