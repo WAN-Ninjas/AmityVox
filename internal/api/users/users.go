@@ -110,7 +110,9 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 		        g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
-		        g.preferred_locale, g.max_members, g.created_at
+		        g.preferred_locale, g.max_members,
+		        (SELECT COUNT(*) FROM guild_members gm2 WHERE gm2.guild_id = g.id),
+		        g.created_at
 		 FROM guilds g
 		 JOIN guild_members gm ON g.id = gm.guild_id
 		 WHERE gm.user_id = $1
@@ -130,7 +132,7 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 			&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-			&g.PreferredLocale, &g.MaxMembers, &g.CreatedAt,
+			&g.PreferredLocale, &g.MaxMembers, &g.MemberCount, &g.CreatedAt,
 		); err != nil {
 			h.Logger.Error("failed to scan guild", slog.String("error", err.Error()))
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")

@@ -42,6 +42,7 @@ type Server struct {
 	Media       *media.Service
 	Search      *search.Service
 	InstanceID  string
+	Version     string
 	Logger      *slog.Logger
 	server      *http.Server
 }
@@ -382,7 +383,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // handleHealthCheck responds with the health status of the server and its dependencies.
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	status := map[string]string{"status": "ok"}
+	status := map[string]string{"status": "ok", "version": s.Version}
 
 	if err := s.DB.HealthCheck(r.Context()); err != nil {
 		status["status"] = "degraded"

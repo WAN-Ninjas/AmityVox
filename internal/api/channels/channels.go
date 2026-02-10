@@ -38,6 +38,7 @@ type updateChannelRequest struct {
 type createMessageRequest struct {
 	Content         *string  `json:"content"`
 	Nonce           *string  `json:"nonce"`
+	AttachmentIDs   []string `json:"attachment_ids"`
 	ReplyToIDs      []string `json:"reply_to_ids"`
 	MentionUserIDs  []string `json:"mention_user_ids"`
 	MentionRoleIDs  []string `json:"mention_role_ids"`
@@ -239,8 +240,10 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Content == nil || *req.Content == "" {
-		writeError(w, http.StatusBadRequest, "empty_content", "Message content is required")
+	hasContent := req.Content != nil && *req.Content != ""
+	hasAttachments := len(req.AttachmentIDs) > 0
+	if !hasContent && !hasAttachments {
+		writeError(w, http.StatusBadRequest, "empty_content", "Message content or attachments required")
 		return
 	}
 
@@ -278,6 +281,14 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Link attachments to the message.
+	if len(req.AttachmentIDs) > 0 {
+		h.Pool.Exec(r.Context(),
+			`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
+			msgID, req.AttachmentIDs, userID)
+		msg.Attachments = h.loadAttachments(r.Context(), msgID)
+	}
+
 	// Update last_message_id on the channel.
 	h.Pool.Exec(r.Context(),
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
@@ -302,6 +313,8 @@ func (h *Handler) HandleGetMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get message")
 		return
 	}
+
+	msg.Attachments = h.loadAttachments(r.Context(), messageID)
 
 	writeJSON(w, http.StatusOK, msg)
 }
@@ -779,6 +792,33 @@ func (h *Handler) getMessage(ctx context.Context, channelID, messageID string) (
 		&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
 	)
 	return &m, err
+}
+
+func (h *Handler) loadAttachments(ctx context.Context, messageID string) []models.Attachment {
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, created_at
+		 FROM attachments WHERE message_id = $1
+		 ORDER BY created_at`,
+		messageID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var attachments []models.Attachment
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(
+			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.CreatedAt,
+		); err != nil {
+			return nil
+		}
+		attachments = append(attachments, a)
+	}
+	return attachments
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
