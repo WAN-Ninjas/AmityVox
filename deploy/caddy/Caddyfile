@@ -28,6 +28,11 @@
 		reverse_proxy amityvox:8080
 	}
 
+	# Reverse proxy federation inbox endpoint.
+	handle /federation/* {
+		reverse_proxy amityvox:8080
+	}
+
 	# Serve static web client files.
 	# In production, mount the built SvelteKit output to /srv.
 	handle {

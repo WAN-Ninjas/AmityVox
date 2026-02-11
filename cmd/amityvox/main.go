@@ -23,15 +23,19 @@ import (
 
 	"github.com/amityvox/amityvox/internal/api"
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/gateway"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
+	"github.com/amityvox/amityvox/internal/voice"
 	"github.com/amityvox/amityvox/internal/workers"
 )
 
@@ -183,15 +187,17 @@ func runServe() error {
 			maxMB = 100 * 1024 * 1024
 		}
 		svc, err := media.New(media.Config{
-			Endpoint:    cfg.Storage.Endpoint,
-			Bucket:      cfg.Storage.Bucket,
-			AccessKey:   cfg.Storage.AccessKey,
-			SecretKey:   cfg.Storage.SecretKey,
-			Region:      cfg.Storage.Region,
-			UseSSL:      cfg.Storage.UseSSL,
-			MaxUploadMB: maxMB / (1024 * 1024),
-			Pool:        db.Pool,
-			Logger:      logger,
+			Endpoint:       cfg.Storage.Endpoint,
+			Bucket:         cfg.Storage.Bucket,
+			AccessKey:      cfg.Storage.AccessKey,
+			SecretKey:      cfg.Storage.SecretKey,
+			Region:         cfg.Storage.Region,
+			UseSSL:         cfg.Storage.UseSSL,
+			MaxUploadMB:    maxMB / (1024 * 1024),
+			ThumbnailSizes: cfg.Media.ImageThumbnailSizes,
+			StripExif:      cfg.Media.StripExif,
+			Pool:           db.Pool,
+			Logger:         logger,
 		})
 		if err != nil {
 			logger.Warn("media service unavailable, file uploads disabled", slog.String("error", err.Error()))
@@ -232,21 +238,78 @@ func runServe() error {
 		Logger:     logger,
 	})
 
-	// Start background workers.
-	workerMgr := workers.New(workers.Config{
+	// Create AutoMod service.
+	automodSvc := automod.NewService(automod.Config{
 		Pool:   db.Pool,
 		Bus:    bus,
-		Search: searchSvc,
 		Logger: logger,
+	})
+
+	// Create push notification service (optional — only when VAPID keys are configured).
+	var notifSvc *notifications.Service
+	if cfg.Push.VAPIDPublicKey != "" && cfg.Push.VAPIDPrivateKey != "" {
+		notifSvc = notifications.NewService(notifications.Config{
+			Pool:              db.Pool,
+			Logger:            logger,
+			VAPIDPublicKey:    cfg.Push.VAPIDPublicKey,
+			VAPIDPrivateKey:   cfg.Push.VAPIDPrivateKey,
+			VAPIDContactEmail: cfg.Push.VAPIDContactEmail,
+		})
+		logger.Info("push notifications enabled")
+	}
+
+	// Start background workers.
+	workerMgr := workers.New(workers.Config{
+		Pool:          db.Pool,
+		Bus:           bus,
+		Search:        searchSvc,
+		AutoMod:       automodSvc,
+		Notifications: notifSvc,
+		Logger:        logger,
 	})
 	workerMgr.Start(ctx)
 
+	// Create voice service (optional — only when LiveKit is configured).
+	var voiceSvc *voice.Service
+	if cfg.LiveKit.URL != "" && cfg.LiveKit.APIKey != "" && cfg.LiveKit.APISecret != "" {
+		svc, err := voice.New(voice.Config{
+			URL:       cfg.LiveKit.URL,
+			APIKey:    cfg.LiveKit.APIKey,
+			APISecret: cfg.LiveKit.APISecret,
+			Pool:      db.Pool,
+			Logger:    logger,
+		})
+		if err != nil {
+			logger.Warn("voice service unavailable", slog.String("error", err.Error()))
+		} else {
+			voiceSvc = svc
+			logger.Info("voice service ready", slog.String("url", cfg.LiveKit.URL))
+		}
+	}
+
+	// Create MLS encryption delivery service.
+	encryptionSvc := encryption.NewService(encryption.Config{
+		Pool:   db.Pool,
+		Logger: logger,
+	})
+
 	// Create and start HTTP API server.
-	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, instanceID, logger)
+	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)
+	srv.Encryption = encryptionSvc
+	srv.AutoMod = automodSvc
+	srv.Notifications = notifSvc
 	srv.Version = version
 
-	// Mount federation discovery endpoint.
+	// Mount federation endpoints.
 	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
+
+	// Create and start federation sync service (message routing between instances).
+	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
+	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	if cfg.Instance.FederationMode != "closed" {
+		syncSvc.StartRouter(ctx)
+		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))
+	}
 
 	// Parse WebSocket settings.
 	heartbeatInterval, err := cfg.WebSocket.HeartbeatIntervalParsed()

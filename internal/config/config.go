@@ -25,6 +25,7 @@ type Config struct {
 	Search    SearchConfig    `toml:"search"`
 	Auth      AuthConfig      `toml:"auth"`
 	Media     MediaConfig     `toml:"media"`
+	Push      PushConfig      `toml:"push"`
 	HTTP      HTTPConfig      `toml:"http"`
 	WebSocket WebSocketConfig `toml:"websocket"`
 	Logging   LoggingConfig   `toml:"logging"`
@@ -82,10 +83,18 @@ type SearchConfig struct {
 
 // AuthConfig defines authentication and registration settings.
 type AuthConfig struct {
-	SessionDuration     string `toml:"session_duration"`
-	RegistrationEnabled bool   `toml:"registration_enabled"`
-	InviteOnly          bool   `toml:"invite_only"`
-	RequireEmail        bool   `toml:"require_email"`
+	SessionDuration     string         `toml:"session_duration"`
+	RegistrationEnabled bool           `toml:"registration_enabled"`
+	InviteOnly          bool           `toml:"invite_only"`
+	RequireEmail        bool           `toml:"require_email"`
+	WebAuthn            WebAuthnConfig `toml:"webauthn"`
+}
+
+// WebAuthnConfig defines WebAuthn/FIDO2 relying party settings.
+type WebAuthnConfig struct {
+	RPDisplayName string   `toml:"rp_display_name"`
+	RPID          string   `toml:"rp_id"`
+	RPOrigins     []string `toml:"rp_origins"`
 }
 
 // SessionDurationParsed returns the session duration as a time.Duration.
@@ -129,6 +138,13 @@ func (m MediaConfig) MaxUploadSizeBytes() (int64, error) {
 		return 0, fmt.Errorf("parsing max_upload_size %q: %w", m.MaxUploadSize, err)
 	}
 	return n * multiplier, nil
+}
+
+// PushConfig defines WebPush notification settings.
+type PushConfig struct {
+	VAPIDPublicKey    string `toml:"vapid_public_key"`
+	VAPIDPrivateKey   string `toml:"vapid_private_key"`
+	VAPIDContactEmail string `toml:"vapid_contact_email"`
 }
 
 // HTTPConfig defines the REST API HTTP server settings.
@@ -375,6 +391,17 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AMITYVOX_MEDIA_STRIP_EXIF"); v != "" {
 		cfg.Media.StripExif = v == "true" || v == "1"
+	}
+
+	// Push notifications
+	if v := os.Getenv("AMITYVOX_PUSH_VAPID_PUBLIC_KEY"); v != "" {
+		cfg.Push.VAPIDPublicKey = v
+	}
+	if v := os.Getenv("AMITYVOX_PUSH_VAPID_PRIVATE_KEY"); v != "" {
+		cfg.Push.VAPIDPrivateKey = v
+	}
+	if v := os.Getenv("AMITYVOX_PUSH_VAPID_CONTACT_EMAIL"); v != "" {
+		cfg.Push.VAPIDContactEmail = v
 	}
 
 	// HTTP

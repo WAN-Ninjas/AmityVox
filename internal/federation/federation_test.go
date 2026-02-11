@@ -156,3 +156,118 @@ func marshalPublicKeyPEM(t *testing.T, pub ed25519.PublicKey) string {
 	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
 	return string(pem.EncodeToMemory(block))
 }
+
+// --- HLC Tests ---
+
+func TestHLC_Now_Monotonic(t *testing.T) {
+	hlc := NewHLC()
+	prev := hlc.Now()
+	for i := 0; i < 100; i++ {
+		next := hlc.Now()
+		if !prev.Before(next) {
+			t.Errorf("HLC not monotonic: prev=%+v next=%+v", prev, next)
+		}
+		prev = next
+	}
+}
+
+func TestHLC_Update_RemoteAhead(t *testing.T) {
+	hlc := NewHLC()
+	local := hlc.Now()
+
+	// Simulate a remote timestamp 1 second in the future.
+	remote := HLCTimestamp{
+		WallMs:  local.WallMs + 1000,
+		Counter: 5,
+	}
+
+	updated := hlc.Update(remote)
+	if updated.WallMs < remote.WallMs {
+		t.Errorf("after Update, wall should be >= remote: got %d, remote %d", updated.WallMs, remote.WallMs)
+	}
+}
+
+func TestHLC_Update_SameWall(t *testing.T) {
+	hlc := NewHLC()
+	local := hlc.Now()
+
+	remote := HLCTimestamp{
+		WallMs:  local.WallMs,
+		Counter: local.Counter + 5,
+	}
+
+	updated := hlc.Update(remote)
+	if updated.Counter <= remote.Counter {
+		t.Errorf("counter should advance past remote: got %d, remote %d", updated.Counter, remote.Counter)
+	}
+}
+
+func TestHLCTimestamp_Before(t *testing.T) {
+	a := HLCTimestamp{WallMs: 1000, Counter: 0}
+	b := HLCTimestamp{WallMs: 2000, Counter: 0}
+	c := HLCTimestamp{WallMs: 1000, Counter: 1}
+
+	if !a.Before(b) {
+		t.Error("a should be before b (different wall)")
+	}
+	if b.Before(a) {
+		t.Error("b should not be before a")
+	}
+	if !a.Before(c) {
+		t.Error("a should be before c (same wall, different counter)")
+	}
+	if c.Before(a) {
+		t.Error("c should not be before a")
+	}
+}
+
+func TestFederatedMessage_JSON(t *testing.T) {
+	msg := FederatedMessage{
+		Type:      "MESSAGE_CREATE",
+		OriginID:  "origin-123",
+		Timestamp: HLCTimestamp{WallMs: 1700000000000, Counter: 3},
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Data:      map[string]string{"content": "hello"},
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded FederatedMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.Type != "MESSAGE_CREATE" {
+		t.Errorf("Type = %q, want %q", decoded.Type, "MESSAGE_CREATE")
+	}
+	if decoded.Timestamp.WallMs != 1700000000000 {
+		t.Errorf("WallMs = %d, want %d", decoded.Timestamp.WallMs, 1700000000000)
+	}
+	if decoded.Timestamp.Counter != 3 {
+		t.Errorf("Counter = %d, want %d", decoded.Timestamp.Counter, 3)
+	}
+}
+
+func TestEventTypeToSubject(t *testing.T) {
+	tests := []struct {
+		eventType string
+		want      string
+	}{
+		{"MESSAGE_CREATE", "amityvox.message.create"},
+		{"MESSAGE_UPDATE", "amityvox.message.update"},
+		{"GUILD_CREATE", "amityvox.guild.create"},
+		{"CHANNEL_DELETE", "amityvox.channel.delete"},
+		{"UNKNOWN_EVENT", ""},
+	}
+
+	for _, tt := range tests {
+		got := eventTypeToSubject(tt.eventType)
+		if got != tt.want {
+			t.Errorf("eventTypeToSubject(%q) = %q, want %q", tt.eventType, got, tt.want)
+		}
+	}
+}
