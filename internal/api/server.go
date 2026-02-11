@@ -15,6 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/go-webauthn/webauthn/webauthn"
+
 	"github.com/amityvox/amityvox/internal/api/admin"
 	"github.com/amityvox/amityvox/internal/api/channels"
 	"github.com/amityvox/amityvox/internal/api/guilds"
@@ -22,12 +24,16 @@ import (
 	"github.com/amityvox/amityvox/internal/api/users"
 	"github.com/amityvox/amityvox/internal/api/webhooks"
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/config"
 	"github.com/amityvox/amityvox/internal/database"
+	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/media"
+	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
+	"github.com/amityvox/amityvox/internal/voice"
 )
 
 // Server is the HTTP API server for AmityVox. It holds the chi router, database
@@ -41,14 +47,19 @@ type Server struct {
 	Cache       *presence.Cache
 	Media       *media.Service
 	Search      *search.Service
-	InstanceID  string
+	Voice      *voice.Service
+	Encryption *encryption.Service
+	AutoMod       *automod.Service
+	Notifications *notifications.Service
+	WebAuthn      *webauthn.WebAuthn
+	InstanceID string
 	Version     string
 	Logger      *slog.Logger
 	server      *http.Server
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, searchSvc *search.Service, instanceID string, logger *slog.Logger) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *events.Bus, cache *presence.Cache, mediaSvc *media.Service, searchSvc *search.Service, voiceSvc *voice.Service, instanceID string, logger *slog.Logger) *Server {
 	s := &Server{
 		Router:      chi.NewRouter(),
 		DB:          db,
@@ -58,8 +69,28 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 		Cache:       cache,
 		Media:       mediaSvc,
 		Search:      searchSvc,
+		Voice:       voiceSvc,
 		InstanceID:  instanceID,
 		Logger:      logger,
+	}
+
+	// Initialize WebAuthn if configured.
+	if cfg.Auth.WebAuthn.RPID != "" && len(cfg.Auth.WebAuthn.RPOrigins) > 0 {
+		displayName := cfg.Auth.WebAuthn.RPDisplayName
+		if displayName == "" {
+			displayName = cfg.Instance.Name
+		}
+		wa, err := webauthn.New(&webauthn.Config{
+			RPDisplayName: displayName,
+			RPID:          cfg.Auth.WebAuthn.RPID,
+			RPOrigins:     cfg.Auth.WebAuthn.RPOrigins,
+		})
+		if err != nil {
+			logger.Warn("WebAuthn initialization failed", slog.String("error", err.Error()))
+		} else {
+			s.WebAuthn = wa
+			logger.Info("WebAuthn enabled", slog.String("rp_id", cfg.Auth.WebAuthn.RPID))
+		}
 	}
 
 	s.registerMiddleware()
@@ -217,6 +248,18 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
 				r.Get("/{guildID}/vanity-url", guildH.HandleGetGuildVanityURL)
 				r.Patch("/{guildID}/vanity-url", guildH.HandleSetGuildVanityURL)
+
+				// AutoMod rules management.
+				if s.AutoMod != nil {
+					r.Route("/{guildID}/automod", func(r chi.Router) {
+						r.Get("/rules", s.AutoMod.HandleListRules)
+						r.Post("/rules", s.AutoMod.HandleCreateRule)
+						r.Get("/rules/{ruleID}", s.AutoMod.HandleGetRule)
+						r.Patch("/rules/{ruleID}", s.AutoMod.HandleUpdateRule)
+						r.Delete("/rules/{ruleID}", s.AutoMod.HandleDeleteRule)
+						r.Get("/actions", s.AutoMod.HandleGetActions)
+					})
+				}
 			})
 
 			// Channel routes.
@@ -248,6 +291,13 @@ func (s *Server) registerRoutes() {
 			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 			})
 
+			// Voice routes.
+			r.Route("/voice", func(r chi.Router) {
+				r.Post("/{channelID}/join", s.handleVoiceJoin)
+				r.Post("/{channelID}/leave", s.handleVoiceLeave)
+				r.Get("/{channelID}/states", s.handleGetVoiceStates)
+			})
+
 			// Invite routes.
 			r.Route("/invites", func(r chi.Router) {
 				r.Get("/{code}", inviteH.HandleGetInvite)
@@ -260,6 +310,42 @@ func (s *Server) registerRoutes() {
 				r.Post("/files/upload", s.Media.HandleUpload)
 			} else {
 				r.Post("/files/upload", stubHandler("upload_file"))
+			}
+
+			// MLS encryption delivery service routes.
+			if s.Encryption != nil {
+				r.Route("/encryption", func(r chi.Router) {
+					// Key package management.
+					r.Post("/key-packages", s.Encryption.HandleUploadKeyPackage)
+					r.Get("/key-packages/{userID}", s.Encryption.HandleGetKeyPackages)
+					r.Post("/key-packages/{userID}/claim", s.Encryption.HandleClaimKeyPackage)
+					r.Delete("/key-packages/{packageID}", s.Encryption.HandleDeleteKeyPackage)
+
+					// Welcome messages.
+					r.Post("/channels/{channelID}/welcome", s.Encryption.HandleSendWelcome)
+					r.Get("/welcome", s.Encryption.HandleGetWelcomes)
+					r.Delete("/welcome/{welcomeID}", s.Encryption.HandleAckWelcome)
+
+					// Group state.
+					r.Get("/channels/{channelID}/group-state", s.Encryption.HandleGetGroupState)
+					r.Put("/channels/{channelID}/group-state", s.Encryption.HandleUpdateGroupState)
+
+					// Commits.
+					r.Post("/channels/{channelID}/commits", s.Encryption.HandlePublishCommit)
+					r.Get("/channels/{channelID}/commits", s.Encryption.HandleGetCommits)
+				})
+			}
+
+			// Push notification routes.
+			if s.Notifications != nil {
+				r.Route("/notifications", func(r chi.Router) {
+					r.Get("/vapid-key", s.Notifications.HandleGetVAPIDKey)
+					r.Post("/subscriptions", s.Notifications.HandleSubscribe)
+					r.Get("/subscriptions", s.Notifications.HandleListSubscriptions)
+					r.Delete("/subscriptions/{subscriptionID}", s.Notifications.HandleUnsubscribe)
+					r.Get("/preferences", s.Notifications.HandleGetPreferences)
+					r.Patch("/preferences", s.Notifications.HandleUpdatePreferences)
+				})
 			}
 
 			// Search routes (with search-specific rate limit).
