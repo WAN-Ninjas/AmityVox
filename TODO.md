@@ -1,5 +1,29 @@
 # AmityVox TODO
 
+## Phase 1 (v0.1.0) — COMPLETE
+- [x] Go project scaffold + build system (Makefile, Dockerfile, CLI subcommands)
+- [x] PostgreSQL schema + migrations (001–005: users, guilds, channels, messages, roles, permissions, invites, bans, audit log, webhooks, emoji, federation peers, read state, user notes/settings, vanity URLs, edit history, member counts, backup codes)
+- [x] Config loading (amityvox.toml + env var overrides)
+- [x] NATS connection + JetStream stream provisioning
+- [x] DragonflyDB cache/presence connection
+- [x] User registration + login + Argon2id password hashing + session management
+- [x] TOTP 2FA (enable, verify, backup codes)
+- [x] REST API skeleton (/api/v1/*) with chi router
+- [x] Guild CRUD + membership + categories
+- [x] Channel CRUD + permission overrides
+- [x] Message send/receive/edit/delete + reactions + pins + threads
+- [x] WebSocket gateway (identify, heartbeat, resume, event dispatch)
+- [x] Permission bitfield system + role management
+- [x] File upload (S3/Garage integration, thumbnails, blurhash, EXIF strip)
+- [x] Typing indicators + presence tracking
+- [x] DM + group DM channels
+- [x] Invite system (create, accept, delete, vanity URLs)
+- [x] Search (Meilisearch integration)
+- [x] Webhooks (CRUD + execution)
+- [x] Audit log
+- [x] Admin CLI (create-user, suspend, set-admin, list-users)
+- [x] Rate limiting middleware
+
 ## Phase 2 (v0.2.0) — COMPLETE
 - [x] LiveKit voice/video integration (token gen, room management, voice state)
 - [x] Media processing (thumbnails 128/256/512, blurhash, EXIF strip, S3 upload)
@@ -19,11 +43,50 @@
 - [x] SvelteKit frontend scaffold (web/ — full UI with auth, guilds, channels, messages, settings, admin)
 
 ## Phase 4 (v0.4.0) — Next
-- [ ] Full SvelteKit UI polish (animations, notifications panel, search UI, mobile responsive)
-- [ ] Admin dashboard with live stats (connected via REST /admin/stats)
-- [ ] Desktop client (Tauri wrapper)
-- [ ] Forum/stage channel UI
-- [ ] Threads UI
-- [ ] E2E encryption UI (MLS key exchange in client)
-- [ ] Plugin/WASM system
-- [ ] Mobile clients (Capacitor or native)
+
+### Frontend Polish
+- [ ] Transition animations (page transitions, sidebar expand/collapse)
+- [ ] Notification panel (toast notifications for mentions, DMs, system events)
+- [ ] Search UI (global search modal with filters: messages, users, guilds)
+- [ ] Mobile responsive layout (collapsible sidebars, touch gestures, bottom nav)
+- [ ] Markdown rendering in messages (bold, italic, code, links, spoilers)
+- [ ] Emoji picker component
+- [ ] Image lightbox / media gallery viewer
+- [ ] Unread indicators (badge counts on guilds/channels, unread line in messages)
+- [ ] Context menus (right-click on messages, users, channels)
+- [ ] Keyboard shortcuts (Ctrl+K search, Ctrl+/ help, arrow navigation)
+
+### Admin Dashboard
+- [ ] Live stats page (users, guilds, messages, connections — polls /admin/stats)
+- [ ] User management UI (list, search, suspend, unsuspend, set admin)
+- [ ] Instance settings editor (name, description, federation mode, registration)
+- [ ] Federation peer management (list, add, remove peers)
+- [ ] Audit log viewer with filters
+
+### Channel Types
+- [ ] Forum channel UI (thread list, post/reply layout, tags, sorting)
+- [ ] Stage channel UI (speaker queue, hand raise, audience view)
+- [ ] Thread panel (side panel, thread list in parent channel)
+
+### E2E Encryption UI
+- [ ] MLS key exchange flow in client (key package upload, welcome handling)
+- [ ] Encrypted channel indicator + lock icon
+- [ ] Device verification UI
+- [ ] Key backup/recovery flow
+
+### Desktop & Mobile
+- [ ] Tauri desktop wrapper (window management, system tray, native notifications)
+- [ ] Capacitor mobile wrapper (iOS + Android, push notification integration)
+- [ ] Desktop-specific features (global hotkeys, auto-start, update checker)
+
+### Extensibility
+- [ ] Plugin/WASM system (API for third-party plugins, sandboxed execution)
+- [ ] Bot API improvements (slash commands, interactions, message components)
+- [ ] Custom theme support (user-uploadable CSS themes)
+
+### Infrastructure
+- [ ] Prometheus metrics exporter (message rates, connection counts, latency)
+- [ ] install.sh one-liner script for fresh deployments
+- [ ] Multi-arch Docker images (amd64 + arm64 in CI)
+- [ ] Automated backup/restore tooling for PostgreSQL + S3
+- [ ] RPi5 performance profiling + optimization pass
