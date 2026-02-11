@@ -23,9 +23,9 @@ Thumbs.db
 
 # Config files with secrets
 amityvox.toml
-*.env
 .env
 .env.*
+!.env.example
 
 # Dependencies (vendored separately if needed)
 /vendor/
