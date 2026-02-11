@@ -1,4 +1,4 @@
-.PHONY: build test lint vet clean docker run migrate-up migrate-down help
+.PHONY: build test lint vet clean docker run migrate-up migrate-down web-install web-build web-check help
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -13,7 +13,7 @@ all: build
 build:
 	go build -ldflags "$(LDFLAGS)" -o amityvox ./cmd/amityvox
 
-## test: Run all tests
+## test: Run all Go tests
 test:
 	go test -race -count=1 ./...
 
@@ -22,6 +22,10 @@ test-cover:
 	go test -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
+
+## test-integration: Run integration tests (requires Docker)
+test-integration:
+	go test -race -count=1 -v ./internal/integration/
 
 ## vet: Run go vet
 vet:
@@ -35,6 +39,7 @@ lint: vet
 clean:
 	rm -f amityvox coverage.out coverage.html
 	go clean -cache -testcache
+	rm -rf web/build web/.svelte-kit
 
 ## docker: Build Docker image
 docker:
@@ -50,6 +55,14 @@ docker-up:
 ## docker-down: Stop all services
 docker-down:
 	docker compose -f deploy/docker/docker-compose.yml down
+
+## docker-logs: Follow logs from all services
+docker-logs:
+	docker compose -f deploy/docker/docker-compose.yml logs -f
+
+## docker-restart: Rebuild and restart AmityVox (keeps other services)
+docker-restart:
+	docker compose -f deploy/docker/docker-compose.yml up -d --build amityvox
 
 ## run: Build and run the server locally
 run: build
@@ -67,6 +80,35 @@ migrate-down: build
 deps:
 	go mod download
 	go mod tidy
+
+## web-install: Install frontend dependencies
+web-install:
+	cd web && npm install
+
+## web-build: Build the frontend for production
+web-build:
+	cd web && npm run build
+
+## web-check: Type-check the frontend
+web-check:
+	cd web && npm run check
+
+## web-dev: Start frontend dev server
+web-dev:
+	cd web && npm run dev
+
+## check: Run all checks (Go tests + lint + frontend type-check)
+check: test lint web-check
+
+## setup: First-time setup (install all deps, build everything)
+setup: deps web-install build web-build
+	@echo ""
+	@echo "Setup complete! Next steps:"
+	@echo "  1. cp amityvox.example.toml amityvox.toml"
+	@echo "  2. Edit amityvox.toml with your connection details"
+	@echo "  3. make migrate-up"
+	@echo "  4. make run"
+	@echo ""
 
 ## help: Show this help message
 help:
