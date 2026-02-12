@@ -223,7 +223,7 @@ func (s *Service) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
 		query += ` AND guild_id = $2`
 		args = append(args, guildID)
 	} else {
-		query += ` AND guild_id IS NULL`
+		query += ` AND guild_id = '__global__'`
 	}
 
 	err := s.pool.QueryRow(r.Context(), query, args...).Scan(
@@ -281,20 +281,20 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 		suppressRoles = *req.SuppressRoles
 	}
 
-	var guildID *string
+	guildIDVal := "__global__"
 	if req.GuildID != nil && *req.GuildID != "" {
-		guildID = req.GuildID
+		guildIDVal = *req.GuildID
 	}
 
 	_, err := s.pool.Exec(r.Context(),
 		`INSERT INTO notification_preferences (user_id, guild_id, level, suppress_everyone, suppress_roles, muted_until)
 		 VALUES ($1, $2, $3, $4, $5, $6)
-		 ON CONFLICT (user_id, COALESCE(guild_id, '__global__')) DO UPDATE SET
+		 ON CONFLICT (user_id, guild_id) DO UPDATE SET
 		   level = EXCLUDED.level,
 		   suppress_everyone = EXCLUDED.suppress_everyone,
 		   suppress_roles = EXCLUDED.suppress_roles,
 		   muted_until = EXCLUDED.muted_until`,
-		userID, guildID, level, suppressEveryone, suppressRoles, req.MutedUntil,
+		userID, guildIDVal, level, suppressEveryone, suppressRoles, req.MutedUntil,
 	)
 	if err != nil {
 		s.logger.Error("failed to update notification preferences", slog.String("error", err.Error()))
@@ -302,9 +302,9 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	guildIDStr := ""
-	if guildID != nil {
-		guildIDStr = *guildID
+	guildIDStr := guildIDVal
+	if guildIDStr == "__global__" {
+		guildIDStr = ""
 	}
 
 	writeJSON(w, http.StatusOK, NotificationPreferences{
@@ -415,7 +415,7 @@ func (s *Service) ShouldNotify(ctx context.Context, userID, guildID string, isMe
 		err = s.pool.QueryRow(ctx,
 			`SELECT level, suppress_everyone, suppress_roles, muted_until
 			 FROM notification_preferences
-			 WHERE user_id = $1 AND guild_id IS NULL`,
+			 WHERE user_id = $1 AND guild_id = '__global__'`,
 			userID,
 		).Scan(&level, &suppressEveryone, &suppressRoles, &mutedUntil)
 		if err != nil {

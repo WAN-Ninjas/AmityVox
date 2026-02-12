@@ -16,16 +16,16 @@ CREATE TABLE push_subscriptions (
 
 CREATE INDEX idx_push_subs_user ON push_subscriptions(user_id);
 
--- User notification preferences per guild (or global when guild_id is NULL).
+-- User notification preferences per guild (or global when guild_id is '__global__').
 CREATE TABLE notification_preferences (
     user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    guild_id            TEXT REFERENCES guilds(id) ON DELETE CASCADE,
+    guild_id            TEXT NOT NULL DEFAULT '__global__',
     -- Level: all, mentions, none
     level               TEXT NOT NULL DEFAULT 'mentions' CHECK (level IN ('all','mentions','none')),
     suppress_everyone   BOOLEAN DEFAULT false,
     suppress_roles      BOOLEAN DEFAULT false,
     muted_until         TIMESTAMPTZ,
-    PRIMARY KEY (user_id, COALESCE(guild_id, '__global__'))
+    PRIMARY KEY (user_id, guild_id)
 );
 
 CREATE INDEX idx_notif_prefs_user ON notification_preferences(user_id);
