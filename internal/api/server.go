@@ -32,6 +32,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/themes"
 	"github.com/amityvox/amityvox/internal/api/users"
 	"github.com/amityvox/amityvox/internal/api/webhooks"
+	"github.com/amityvox/amityvox/internal/api/widgets"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/config"
@@ -205,9 +206,15 @@ func (s *Server) registerRoutes() {
 		Pool:   s.DB.Pool,
 		Logger: s.Logger,
 	}
+	widgetH := &widgets.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
 
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
+	s.Router.Get("/health/deep", s.handleDeepHealthCheck)
 
 	// Prometheus metrics endpoint.
 	s.Router.Get("/metrics", s.handleMetrics)
@@ -516,6 +523,31 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/members/{userID}/mute", s.handleVoiceServerMute)
 				r.Post("/{channelID}/members/{userID}/deafen", s.handleVoiceServerDeafen)
 				r.Post("/{channelID}/members/{userID}/move", s.handleVoiceMoveUser)
+
+				// Voice preferences (PTT/VAD).
+				r.Get("/preferences", s.handleGetVoicePreferences)
+				r.Patch("/preferences", s.handleUpdateVoicePreferences)
+				r.Post("/{channelID}/input-mode", s.handleSetInputMode)
+				r.Post("/{channelID}/priority-speaker", s.handleSetPrioritySpeaker)
+
+				// Soundboard.
+				r.Get("/{channelID}/soundboard", s.handleGetSoundboardSounds)
+				r.Post("/{channelID}/soundboard", s.handleCreateSoundboardSound)
+				r.Delete("/{channelID}/soundboard/{soundID}", s.handleDeleteSoundboardSound)
+				r.Post("/{channelID}/soundboard/{soundID}/play", s.handlePlaySoundboardSound)
+				r.Get("/{channelID}/soundboard/config", s.handleGetSoundboardConfig)
+				r.Patch("/{channelID}/soundboard/config", s.handleUpdateSoundboardConfig)
+
+				// Voice broadcast.
+				r.Post("/{channelID}/broadcast", s.handleStartBroadcast)
+				r.Delete("/{channelID}/broadcast", s.handleStopBroadcast)
+				r.Get("/{channelID}/broadcast", s.handleGetBroadcast)
+
+				// Screen sharing.
+				r.Post("/{channelID}/screen-share", s.handleStartScreenShare)
+				r.Delete("/{channelID}/screen-share", s.handleStopScreenShare)
+				r.Patch("/{channelID}/screen-share", s.handleUpdateScreenShare)
+				r.Get("/{channelID}/screen-shares", s.handleGetScreenShares)
 			})
 
 			// Public ban lists.
@@ -546,6 +578,33 @@ func (s *Server) registerRoutes() {
 				r.Put("/{themeID}/like", themeH.HandleLikeTheme)
 				r.Delete("/{themeID}/like", themeH.HandleUnlikeTheme)
 				r.Delete("/{themeID}", themeH.HandleDeleteSharedTheme)
+			})
+
+			// Widget and plugin routes.
+			r.Route("/widgets", func(r chi.Router) {
+				r.Get("/guilds/{guildID}", widgetH.HandleGetGuildWidget)
+				r.Patch("/guilds/{guildID}", widgetH.HandleUpdateGuildWidget)
+			})
+			r.Route("/channels/{channelID}/widgets", func(r chi.Router) {
+				r.Get("/", widgetH.HandleGetChannelWidgets)
+				r.Post("/", widgetH.HandleCreateChannelWidget)
+				r.Patch("/{widgetID}", widgetH.HandleUpdateChannelWidget)
+				r.Delete("/{widgetID}", widgetH.HandleDeleteChannelWidget)
+			})
+			r.Route("/plugins", func(r chi.Router) {
+				r.Get("/", widgetH.HandleListPlugins)
+				r.Get("/{pluginID}", widgetH.HandleGetPlugin)
+				r.Post("/{pluginID}/install", widgetH.HandleInstallPlugin)
+				r.Get("/guilds/{guildID}", widgetH.HandleGetGuildPlugins)
+				r.Patch("/guilds/{guildID}/{pluginID}", widgetH.HandleUpdateGuildPlugin)
+				r.Delete("/guilds/{guildID}/{pluginID}", widgetH.HandleUninstallPlugin)
+			})
+			r.Route("/encryption/key-backup", func(r chi.Router) {
+				r.Post("/", widgetH.HandleCreateKeyBackup)
+				r.Get("/", widgetH.HandleGetKeyBackup)
+				r.Get("/download", widgetH.HandleDownloadKeyBackup)
+				r.Delete("/", widgetH.HandleDeleteKeyBackup)
+				r.Post("/recovery-codes", widgetH.HandleGenerateRecoveryCodes)
 			})
 
 			// User channel groups.
@@ -665,8 +724,42 @@ func (s *Server) registerRoutes() {
 				})
 				r.Get("/captcha", adminH.HandleGetCaptchaConfig)
 				r.Patch("/captcha", adminH.HandleUpdateCaptchaConfig)
+
+				// Federation dashboard and management.
+				r.Get("/federation/dashboard", adminH.HandleGetFederationDashboard)
+				r.Patch("/federation/peers/{peerID}/control", adminH.HandleUpdatePeerControl)
+				r.Get("/federation/peer-controls", adminH.HandleGetPeerControls)
+				r.Get("/federation/deliveries", adminH.HandleGetDeliveryReceipts)
+				r.Post("/federation/deliveries/{deliveryID}/retry", adminH.HandleRetryDelivery)
+				r.Get("/federation/search-config", adminH.HandleGetFederatedSearchConfig)
+				r.Patch("/federation/search-config", adminH.HandleUpdateFederatedSearchConfig)
+				r.Get("/federation/protocol", adminH.HandleGetProtocolInfo)
+				r.Patch("/federation/protocol", adminH.HandleUpdateProtocolConfig)
+
+				// Instance blocklist/allowlist.
+				r.Get("/federation/blocklist", adminH.HandleGetInstanceBlocklist)
+				r.Get("/federation/allowlist", adminH.HandleGetInstanceAllowlist)
+				r.Get("/federation/profiles", adminH.HandleGetInstanceProfiles)
+				r.Post("/federation/profiles", adminH.HandleAddInstanceProfile)
+				r.Delete("/federation/profiles/{profileID}", adminH.HandleRemoveInstanceProfile)
+				r.Get("/federation/users/{instanceID}/{userID}", adminH.HandleGetFederatedUserProfile)
+
+				// Bridge management.
+				r.Route("/bridges", func(r chi.Router) {
+					r.Get("/", adminH.HandleGetBridges)
+					r.Post("/", adminH.HandleCreateBridge)
+					r.Patch("/{bridgeID}", adminH.HandleUpdateBridge)
+					r.Delete("/{bridgeID}", adminH.HandleDeleteBridge)
+					r.Get("/{bridgeID}/mappings", adminH.HandleGetBridgeChannelMappings)
+					r.Post("/{bridgeID}/mappings", adminH.HandleCreateBridgeChannelMapping)
+					r.Delete("/{bridgeID}/mappings/{mappingID}", adminH.HandleDeleteBridgeChannelMapping)
+					r.Get("/{bridgeID}/virtual-users", adminH.HandleGetBridgeVirtualUsers)
+				})
 			})
 		})
+
+		// Public guild widget embed (no auth).
+		r.Get("/guilds/{guildID}/widget.json", widgetH.HandleGetGuildWidgetEmbed)
 
 		// File serving — public, no auth required (used by <img> tags).
 		if s.Media != nil {

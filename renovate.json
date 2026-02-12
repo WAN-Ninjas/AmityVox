@@ -1,0 +1,113 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":automergeMinor",
+    ":automergePatch"
+  ],
+  "labels": ["dependencies", "automated"],
+  "timezone": "UTC",
+  "schedule": ["before 7am on Monday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "description": "Go dependencies — group minor and patch updates",
+      "matchManagers": ["gomod"],
+      "groupName": "Go dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "schedule": ["before 7am on Monday"]
+    },
+    {
+      "description": "Go major updates — separate PRs, require review",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "breaking"]
+    },
+    {
+      "description": "npm dependencies — group minor and patch updates",
+      "matchManagers": ["npm"],
+      "groupName": "npm dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "matchFileNames": ["web/package.json"]
+    },
+    {
+      "description": "npm major updates — separate PRs",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "breaking"],
+      "matchFileNames": ["web/package.json"]
+    },
+    {
+      "description": "Docker base images — pin and auto-update patches",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "groupName": "Docker base images"
+    },
+    {
+      "description": "Docker major versions — require review",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "infrastructure"]
+    },
+    {
+      "description": "GitHub Actions — auto-update",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "automerge": true
+    },
+    {
+      "description": "Security-critical packages — immediate update",
+      "matchPackageNames": [
+        "github.com/alexedwards/argon2id",
+        "golang.org/x/crypto",
+        "github.com/go-webauthn/webauthn"
+      ],
+      "automerge": false,
+      "labels": ["security", "dependencies"],
+      "prPriority": 10,
+      "schedule": ["at any time"]
+    },
+    {
+      "description": "SvelteKit ecosystem — group together",
+      "matchPackageNames": [
+        "@sveltejs/kit",
+        "@sveltejs/adapter-static",
+        "@sveltejs/vite-plugin-svelte",
+        "svelte",
+        "svelte-check"
+      ],
+      "groupName": "SvelteKit ecosystem"
+    },
+    {
+      "description": "Testing tools — group together",
+      "matchPackageNames": [
+        "vitest",
+        "@testing-library/svelte",
+        "@testing-library/jest-dom",
+        "@playwright/test"
+      ],
+      "groupName": "Testing tools"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "automerge": true,
+    "schedule": ["at any time"]
+  },
+  "postUpdateOptions": [
+    "gomodTidy",
+    "npmDedupe"
+  ],
+  "ignoreDeps": [],
+  "ignorePaths": ["**/node_modules/**", "**/vendor/**"]
+}

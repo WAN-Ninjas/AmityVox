@@ -1,0 +1,271 @@
+# AmityVox Prometheus Alerting Rules
+# Import this file in your prometheus.yml under rule_files:
+#   rule_files:
+#     - "alerts.yml"
+
+groups:
+  # ============================================================
+  # API Health
+  # ============================================================
+  - name: amityvox.api
+    rules:
+      - alert: HighErrorRate
+        expr: >
+          sum(rate(amityvox_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(amityvox_http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate ({{ $value | humanizePercentage }})"
+          description: >
+            More than 5% of API requests are returning 5xx errors over the last 5 minutes.
+            Current error rate: {{ $value | humanizePercentage }}.
+
+      - alert: HighLatency
+        expr: >
+          histogram_quantile(0.99, sum(rate(amityvox_http_request_duration_seconds_bucket[5m])) by (le))
+          > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API p99 latency ({{ $value | humanizeDuration }})"
+          description: >
+            API p99 latency has exceeded 2 seconds for 5 minutes.
+            Current p99: {{ $value | humanizeDuration }}.
+
+      - alert: HighRequestRate
+        expr: sum(rate(amityvox_http_requests_total[5m])) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusually high request rate ({{ $value | humanize }} req/s)"
+          description: >
+            The API is receiving more than 1000 requests per second sustained for 10 minutes.
+            This may indicate a DDoS attack or misconfigured client.
+
+      - alert: TooManyRateLimitedRequests
+        expr: sum(rate(amityvox_rate_limited_requests_total[5m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many rate-limited requests ({{ $value | humanize }}/s)"
+          description: >
+            More than 50 requests per second are being rate limited.
+            Check for abusive clients or misconfigured rate limits.
+
+  # ============================================================
+  # Database Health
+  # ============================================================
+  - name: amityvox.database
+    rules:
+      - alert: DatabaseDown
+        expr: amityvox_db_health_check_success == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is unreachable"
+          description: >
+            The database health check has failed for more than 1 minute.
+            Check PostgreSQL container and connection pool.
+
+      - alert: DatabasePoolExhausted
+        expr: >
+          amityvox_db_pool_acquired_connections / amityvox_db_pool_total_connections > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database connection pool > 90% utilized"
+          description: >
+            {{ $value | humanizePercentage }} of database connections are in use.
+            Consider increasing max_connections or optimizing query performance.
+
+      - alert: SlowQueries
+        expr: >
+          histogram_quantile(0.95, sum(rate(amityvox_db_query_duration_seconds_bucket[5m])) by (le))
+          > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow database queries (p95 > 1s)"
+          description: >
+            The 95th percentile query duration exceeds 1 second.
+            Check for missing indexes or complex queries.
+
+  # ============================================================
+  # NATS / Events
+  # ============================================================
+  - name: amityvox.nats
+    rules:
+      - alert: NATSDisconnected
+        expr: amityvox_nats_connected == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NATS connection lost"
+          description: >
+            The NATS event bus connection has been down for more than 1 minute.
+            Real-time events (messages, presence, typing) will not be delivered.
+
+      - alert: NATSSlowConsumers
+        expr: rate(amityvox_nats_slow_consumer_count[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NATS slow consumer detected"
+          description: >
+            One or more NATS subscriptions are not keeping up with message volume.
+            Check WebSocket gateway event processing latency.
+
+  # ============================================================
+  # WebSocket Gateway
+  # ============================================================
+  - name: amityvox.websocket
+    rules:
+      - alert: WebSocketConnectionSpike
+        expr: >
+          amityvox_websocket_connections_active
+          > 1.5 * avg_over_time(amityvox_websocket_connections_active[1h])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket connections spiked 50% above hourly average"
+          description: >
+            Active WebSocket connections: {{ $value }}.
+            This may indicate a bot swarm or reconnection storm.
+
+      - alert: HighWebSocketErrorRate
+        expr: rate(amityvox_websocket_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated WebSocket error rate"
+          description: >
+            More than 1 WebSocket error per second over the last 5 minutes.
+
+  # ============================================================
+  # System Resources
+  # ============================================================
+  - name: amityvox.system
+    rules:
+      - alert: HighMemoryUsage
+        expr: go_memstats_alloc_bytes{job="amityvox"} > 200 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage ({{ $value | humanize1024 }})"
+          description: >
+            AmityVox heap allocation exceeds 200MB for 10 minutes.
+            Target for RPi5 is 50-100MB. Check for memory leaks.
+
+      - alert: TooManyGoroutines
+        expr: go_goroutines{job="amityvox"} > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High goroutine count ({{ $value }})"
+          description: >
+            The goroutine count exceeds 5000 for 5 minutes.
+            This may indicate goroutine leaks or excessive concurrency.
+
+      - alert: HighGCPause
+        expr: >
+          rate(go_gc_duration_seconds_sum{job="amityvox"}[5m])
+          / rate(go_gc_duration_seconds_count{job="amityvox"}[5m])
+          > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High average GC pause duration"
+          description: >
+            Average GC pause exceeds 10ms. This affects tail latency.
+
+  # ============================================================
+  # Storage (S3)
+  # ============================================================
+  - name: amityvox.storage
+    rules:
+      - alert: StorageUnhealthy
+        expr: amityvox_storage_health_check_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "S3 storage health check failing"
+          description: >
+            Cannot reach the S3-compatible storage backend (Garage/MinIO).
+            File uploads and downloads will fail.
+
+      - alert: HighUploadFailureRate
+        expr: >
+          rate(amityvox_file_upload_errors_total[5m])
+          / rate(amityvox_file_uploads_total[5m])
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High file upload failure rate ({{ $value | humanizePercentage }})"
+          description: >
+            More than 10% of file uploads are failing.
+
+  # ============================================================
+  # Cache (DragonflyDB)
+  # ============================================================
+  - name: amityvox.cache
+    rules:
+      - alert: CacheDown
+        expr: amityvox_cache_health_check_success == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DragonflyDB cache unreachable"
+          description: >
+            The cache health check has failed for 1 minute.
+            Sessions and presence data may be stale.
+
+      - alert: HighCacheMissRate
+        expr: >
+          rate(amityvox_cache_misses_total[5m])
+          / (rate(amityvox_cache_hits_total[5m]) + rate(amityvox_cache_misses_total[5m]))
+          > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cache miss rate > 50%"
+          description: >
+            More than half of cache lookups are misses.
+            Check if the cache has been flushed or if the working set exceeds memory.
+
+  # ============================================================
+  # Search (Meilisearch)
+  # ============================================================
+  - name: amityvox.search
+    rules:
+      - alert: SearchDown
+        expr: amityvox_search_health_check_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Meilisearch unreachable"
+          description: >
+            The search service health check has failed for 5 minutes.
+            Message and user search will not work.
