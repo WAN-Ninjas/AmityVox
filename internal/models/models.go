@@ -27,9 +27,14 @@ type User struct {
 	Username       string    `json:"username"`
 	DisplayName    *string   `json:"display_name,omitempty"`
 	AvatarID       *string   `json:"avatar_id,omitempty"`
-	StatusText     *string   `json:"status_text,omitempty"`
-	StatusPresence string    `json:"status_presence"`
-	Bio            *string   `json:"bio,omitempty"`
+	StatusText      *string    `json:"status_text,omitempty"`
+	StatusEmoji     *string    `json:"status_emoji,omitempty"`
+	StatusPresence  string     `json:"status_presence"`
+	StatusExpiresAt *time.Time `json:"status_expires_at,omitempty"`
+	Bio             *string    `json:"bio,omitempty"`
+	BannerID        *string    `json:"banner_id,omitempty"`
+	AccentColor     *string    `json:"accent_color,omitempty"`
+	Pronouns        *string    `json:"pronouns,omitempty"`
 	BotOwnerID     *string   `json:"bot_owner_id,omitempty"`
 	PasswordHash   *string   `json:"-"`
 	TOTPSecret     *string   `json:"-"`
@@ -102,6 +107,18 @@ const (
 	RelationshipPendingIncoming = "pending_incoming"
 )
 
+// UserBlock represents an entry in the user_blocks table, providing richer
+// metadata than the user_relationships blocked status. Includes an optional
+// reason and the blocked user's profile for list responses.
+type UserBlock struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	TargetID  string    `json:"target_id"`
+	Reason    *string   `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	User      *User     `json:"user,omitempty"` // Populated on list (the blocked user's profile)
+}
+
 // WebAuthnCredential represents a WebAuthn/FIDO2 credential registered by a user
 // for passwordless authentication. Corresponds to the webauthn_credentials table.
 type WebAuthnCredential struct {
@@ -136,6 +153,10 @@ type Guild struct {
 	PreferredLocale      string    `json:"preferred_locale"`
 	MaxMembers           int       `json:"max_members"`
 	VanityURL            *string   `json:"vanity_url,omitempty"`
+	VerificationLevel    int       `json:"verification_level"`
+	AFKChannelID         *string   `json:"afk_channel_id,omitempty"`
+	AFKTimeout           int       `json:"afk_timeout"`
+	Tags                 []string  `json:"tags,omitempty"`
 	MemberCount          int       `json:"member_count,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }
@@ -166,8 +187,14 @@ type Channel struct {
 	Encrypted          bool      `json:"encrypted"`
 	LastMessageID      *string   `json:"last_message_id,omitempty"`
 	OwnerID            *string   `json:"owner_id,omitempty"`
-	DefaultPermissions *int64    `json:"default_permissions,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	DefaultPermissions *int64     `json:"default_permissions,omitempty"`
+	UserLimit          int        `json:"user_limit"`
+	Bitrate            int        `json:"bitrate"`
+	Locked             bool       `json:"locked"`
+	LockedBy           *string    `json:"locked_by,omitempty"`
+	LockedAt           *time.Time `json:"locked_at,omitempty"`
+	Archived           bool       `json:"archived"`
+	CreatedAt          time.Time  `json:"created_at"`
 }
 
 // ChannelType constants for channels.channel_type.
@@ -284,6 +311,10 @@ const (
 	MessageTypeSystemPin     = "system_pin"
 	MessageTypeReply         = "reply"
 	MessageTypeThreadCreated = "thread_created"
+	MessageTypeVoice         = "voice"
+	MessageTypePoll          = "poll"
+	MessageTypeForward       = "forward"
+	MessageTypeScheduled     = "scheduled"
 )
 
 // MessageFlag constants for messages.flags bitfield.
@@ -291,7 +322,23 @@ const (
 	MessageFlagCrosspost = 1 << 0
 	MessageFlagPinned    = 1 << 1
 	MessageFlagUrgent    = 1 << 2
+	MessageFlagSilent    = 1 << 3
 )
+
+// IsSilent reports whether the message has the silent flag set (no notifications).
+func (m Message) IsSilent() bool { return m.Flags&MessageFlagSilent != 0 }
+
+// ScheduledMessage represents a message scheduled for future delivery.
+// Corresponds to the scheduled_messages table.
+type ScheduledMessage struct {
+	ID            string    `json:"id"`
+	ChannelID     string    `json:"channel_id"`
+	AuthorID      string    `json:"author_id"`
+	Content       *string   `json:"content,omitempty"`
+	AttachmentIDs []string  `json:"attachment_ids,omitempty"`
+	ScheduledFor  time.Time `json:"scheduled_for"`
+	CreatedAt     time.Time `json:"created_at"`
+}
 
 // Attachment represents a file attached to a message, stored in S3-compatible
 // object storage. Corresponds to the attachments table.
@@ -490,3 +537,134 @@ type ReadState struct {
 	LastReadID   *string `json:"last_read_id,omitempty"`
 	MentionCount int     `json:"mention_count"`
 }
+
+// Poll represents a poll attached to a message in a channel. Corresponds to the polls table.
+type Poll struct {
+	ID              string       `json:"id"`
+	ChannelID       string       `json:"channel_id"`
+	MessageID       *string      `json:"message_id,omitempty"`
+	AuthorID        string       `json:"author_id"`
+	Question        string       `json:"question"`
+	MultiVote       bool         `json:"multi_vote"`
+	Anonymous       bool         `json:"anonymous"`
+	ExpiresAt       *time.Time   `json:"expires_at,omitempty"`
+	Closed          bool         `json:"closed"`
+	CreatedAt       time.Time    `json:"created_at"`
+	Options         []PollOption `json:"options,omitempty"`
+	TotalVotes      int          `json:"total_votes"`
+	UserVotes       []string     `json:"user_votes,omitempty"` // option IDs the requesting user voted for
+}
+
+// PollOption represents a single option within a poll.
+type PollOption struct {
+	ID        string `json:"id"`
+	PollID    string `json:"poll_id"`
+	Text      string `json:"text"`
+	Position  int    `json:"position"`
+	VoteCount int    `json:"vote_count"`
+}
+
+// MessageBookmark represents a user's bookmark on a message. Corresponds to the message_bookmarks table.
+type MessageBookmark struct {
+	UserID    string    `json:"user_id"`
+	MessageID string    `json:"message_id"`
+	Note      *string   `json:"note,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	Message   *Message  `json:"message,omitempty"` // Populated on list
+}
+
+// GuildEvent represents a scheduled event in a guild. Corresponds to the guild_events table.
+type GuildEvent struct {
+	ID               string     `json:"id"`
+	GuildID          string     `json:"guild_id"`
+	CreatorID        string     `json:"creator_id"`
+	Name             string     `json:"name"`
+	Description      *string    `json:"description,omitempty"`
+	Location         *string    `json:"location,omitempty"`
+	ChannelID        *string    `json:"channel_id,omitempty"`
+	ImageID          *string    `json:"image_id,omitempty"`
+	ScheduledStart   time.Time  `json:"scheduled_start"`
+	ScheduledEnd     *time.Time `json:"scheduled_end,omitempty"`
+	Status           string     `json:"status"`
+	InterestedCount  int        `json:"interested_count"`
+	CreatedAt        time.Time  `json:"created_at"`
+	Creator          *User      `json:"creator,omitempty"`
+	UserRSVP         *string    `json:"user_rsvp,omitempty"` // Requesting user's RSVP status
+}
+
+// GuildEventStatus constants.
+const (
+	EventStatusScheduled = "scheduled"
+	EventStatusActive    = "active"
+	EventStatusCompleted = "completed"
+	EventStatusCancelled = "cancelled"
+)
+
+// EventRSVP represents a user's RSVP to a guild event.
+type EventRSVP struct {
+	EventID   string    `json:"event_id"`
+	UserID    string    `json:"user_id"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	User      *User     `json:"user,omitempty"`
+}
+
+// MemberWarning represents a moderation warning issued to a guild member.
+type MemberWarning struct {
+	ID          string    `json:"id"`
+	GuildID     string    `json:"guild_id"`
+	UserID      string    `json:"user_id"`
+	ModeratorID string    `json:"moderator_id"`
+	Reason      string    `json:"reason"`
+	CreatedAt   time.Time `json:"created_at"`
+	User        *User     `json:"user,omitempty"`
+	Moderator   *User     `json:"moderator,omitempty"`
+}
+
+// MessageReport represents a user report on a message.
+type MessageReport struct {
+	ID         string     `json:"id"`
+	GuildID    *string    `json:"guild_id,omitempty"`
+	ChannelID  string     `json:"channel_id"`
+	MessageID  string     `json:"message_id"`
+	ReporterID string     `json:"reporter_id"`
+	Reason     string     `json:"reason"`
+	Status     string     `json:"status"`
+	ResolvedBy *string    `json:"resolved_by,omitempty"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	Reporter   *User      `json:"reporter,omitempty"`
+	Message    *Message   `json:"message,omitempty"`
+}
+
+// GuildRaidConfig stores raid protection settings for a guild.
+type GuildRaidConfig struct {
+	GuildID           string     `json:"guild_id"`
+	Enabled           bool       `json:"enabled"`
+	JoinRateLimit     int        `json:"join_rate_limit"`
+	JoinRateWindow    int        `json:"join_rate_window"`
+	MinAccountAge     int        `json:"min_account_age"`
+	LockdownActive    bool       `json:"lockdown_active"`
+	LockdownStartedAt *time.Time `json:"lockdown_started_at,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+// ChannelFollower represents a subscription that forwards messages from an
+// announcement channel to a target channel via a webhook. Corresponds to the
+// channel_followers table.
+type ChannelFollower struct {
+	ID        string    `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	WebhookID string    `json:"webhook_id"`
+	GuildID   string    `json:"guild_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Verification level constants for guilds.
+const (
+	VerificationNone    = 0
+	VerificationLow     = 1 // Verified email
+	VerificationMedium  = 2 // Registered 5+ minutes
+	VerificationHigh    = 3 // Member 10+ minutes
+	VerificationHighest = 4 // Admin bypass only
+)

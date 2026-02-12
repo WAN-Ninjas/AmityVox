@@ -18,7 +18,7 @@ const unreadState = writable<Map<string, UnreadEntry>>(new Map());
 // For simplicity, we track an explicit unread count.
 const unreadCounts = writable<Map<string, number>>(new Map());
 
-export { unreadCounts };
+export { unreadCounts, unreadState };
 
 // Get unread count for a specific channel.
 export function getUnreadCount(channelId: string) {
@@ -28,6 +28,22 @@ export function getUnreadCount(channelId: string) {
 // Get mention count for a specific channel.
 export function getMentionCount(channelId: string) {
 	return derived(unreadState, ($state) => $state.get(channelId)?.mentionCount ?? 0);
+}
+
+// Mention counts map derived from unreadState (channel_id -> mentionCount).
+export const mentionCounts = derived(unreadState, ($state) => {
+	const map = new Map<string, number>();
+	for (const [channelId, entry] of $state) {
+		if (entry.mentionCount > 0) {
+			map.set(channelId, entry.mentionCount);
+		}
+	}
+	return map;
+});
+
+// Get the last read message ID for a channel.
+export function getLastReadId(channelId: string) {
+	return derived(unreadState, ($state) => $state.get(channelId)?.lastReadId ?? null);
 }
 
 // Check if any channel in a guild has unreads.
@@ -115,4 +131,29 @@ export function clearChannelUnreads(channelId: string) {
 		}
 		return map;
 	});
+}
+
+// Mark all channels as read.
+export async function markAllRead() {
+	const counts = get(unreadCounts);
+	const channelIds = [...counts.keys()].filter((id) => (counts.get(id) ?? 0) > 0);
+
+	// Clear all locally first.
+	unreadCounts.set(new Map());
+	unreadState.update((map) => {
+		for (const id of channelIds) {
+			const entry = map.get(id);
+			if (entry) map.set(id, { ...entry, mentionCount: 0 });
+		}
+		return new Map(map);
+	});
+
+	// Ack each channel on the server (best-effort).
+	for (const id of channelIds) {
+		try {
+			await api.ackChannel(id);
+		} catch {
+			// Best-effort.
+		}
+	}
 }

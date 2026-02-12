@@ -365,7 +365,9 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		rows, err = h.Pool.Query(r.Context(),
 			`SELECT id, instance_id, username, display_name, avatar_id, status_text,
-			        status_presence, bio, bot_owner_id, email, flags, created_at
+			        status_emoji, status_presence, status_expires_at, bio,
+			        banner_id, accent_color, pronouns,
+			        bot_owner_id, email, flags, created_at
 			 FROM users
 			 WHERE username ILIKE '%' || $1 || '%' OR display_name ILIKE '%' || $1 || '%'
 			 ORDER BY created_at DESC
@@ -373,7 +375,9 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rows, err = h.Pool.Query(r.Context(),
 			`SELECT id, instance_id, username, display_name, avatar_id, status_text,
-			        status_presence, bio, bot_owner_id, email, flags, created_at
+			        status_emoji, status_presence, status_expires_at, bio,
+			        banner_id, accent_color, pronouns,
+			        bot_owner_id, email, flags, created_at
 			 FROM users
 			 ORDER BY created_at DESC
 			 LIMIT $1 OFFSET $2`, limit, offset)
@@ -389,8 +393,9 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 		var u models.User
 		if err := rows.Scan(
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
-			&u.StatusText, &u.StatusPresence, &u.Bio, &u.BotOwnerID,
-			&u.Email, &u.Flags, &u.CreatedAt,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
+			&u.BotOwnerID, &u.Email, &u.Flags, &u.CreatedAt,
 		); err != nil {
 			continue
 		}
@@ -466,6 +471,511 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"admin": req.Admin})
+}
+
+// HandleInstanceBanUser bans a user at the instance level (suspends + records reason).
+// POST /api/v1/admin/users/{userID}/instance-ban
+func (h *Handler) HandleInstanceBanUser(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	targetID := chi.URLParam(r, "userID")
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	// Suspend the user.
+	_, err := h.Pool.Exec(r.Context(),
+		`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagSuspended, targetID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to ban user")
+		return
+	}
+
+	// Record the ban in instance_bans table.
+	adminID := auth.UserIDFromContext(r.Context())
+	h.Pool.Exec(r.Context(),
+		`INSERT INTO instance_bans (user_id, admin_id, reason, created_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (user_id) DO UPDATE SET reason = $3, admin_id = $2, created_at = now()`,
+		targetID, adminID, req.Reason)
+
+	// Invalidate all sessions for the banned user.
+	h.Pool.Exec(r.Context(), `DELETE FROM user_sessions WHERE user_id = $1`, targetID)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "banned"})
+}
+
+// HandleInstanceUnbanUser unbans a user at the instance level.
+// POST /api/v1/admin/users/{userID}/instance-unban
+func (h *Handler) HandleInstanceUnbanUser(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	targetID := chi.URLParam(r, "userID")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagSuspended, targetID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unban user")
+		return
+	}
+
+	h.Pool.Exec(r.Context(), `DELETE FROM instance_bans WHERE user_id = $1`, targetID)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unbanned"})
+}
+
+// HandleGetInstanceBans lists all instance-level banned users.
+// GET /api/v1/admin/instance-bans
+func (h *Handler) HandleGetInstanceBans(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT ib.user_id, ib.admin_id, ib.reason, ib.created_at,
+		        u.username, u.display_name, u.avatar_id
+		 FROM instance_bans ib
+		 JOIN users u ON u.id = ib.user_id
+		 ORDER BY ib.created_at DESC`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get bans")
+		return
+	}
+	defer rows.Close()
+
+	type instanceBan struct {
+		UserID      string  `json:"user_id"`
+		AdminID     string  `json:"admin_id"`
+		Reason      *string `json:"reason"`
+		CreatedAt   string  `json:"created_at"`
+		Username    string  `json:"username"`
+		DisplayName *string `json:"display_name"`
+		AvatarID    *string `json:"avatar_id"`
+	}
+
+	bans := make([]instanceBan, 0)
+	for rows.Next() {
+		var b instanceBan
+		var createdAt time.Time
+		if err := rows.Scan(&b.UserID, &b.AdminID, &b.Reason, &createdAt,
+			&b.Username, &b.DisplayName, &b.AvatarID); err != nil {
+			continue
+		}
+		b.CreatedAt = createdAt.Format(time.RFC3339)
+		bans = append(bans, b)
+	}
+
+	writeJSON(w, http.StatusOK, bans)
+}
+
+// HandleGetRegistrationConfig returns the instance registration settings.
+// GET /api/v1/admin/registration
+func (h *Handler) HandleGetRegistrationConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var mode, message string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(
+			(SELECT value FROM instance_settings WHERE key = 'registration_mode'), 'open'
+		)`).Scan(&mode)
+	if err != nil {
+		mode = "open"
+	}
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(
+			(SELECT value FROM instance_settings WHERE key = 'registration_message'), ''
+		)`).Scan(&message)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"mode":    mode,
+		"message": message,
+	})
+}
+
+// HandleUpdateRegistrationConfig updates registration settings.
+// PATCH /api/v1/admin/registration
+func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		Mode    *string `json:"mode"`
+		Message *string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Mode != nil {
+		switch *req.Mode {
+		case "open", "invite_only", "closed":
+			h.Pool.Exec(r.Context(),
+				`INSERT INTO instance_settings (key, value) VALUES ('registration_mode', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = $1`, *req.Mode)
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_mode", "Mode must be 'open', 'invite_only', or 'closed'")
+			return
+		}
+	}
+	if req.Message != nil {
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO instance_settings (key, value) VALUES ('registration_message', $1)
+			 ON CONFLICT (key) DO UPDATE SET value = $1`, *req.Message)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// --- Registration Token Handlers ---
+
+// HandleCreateRegistrationToken creates a new registration token for invite-only mode.
+// POST /api/v1/admin/registration/tokens
+func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		MaxUses   int     `json:"max_uses"`
+		Note      *string `json:"note"`
+		ExpiresIn *int    `json:"expires_in_hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.MaxUses <= 0 {
+		req.MaxUses = 1
+	}
+
+	adminID := auth.UserIDFromContext(r.Context())
+	tokenID := models.NewULID().String()
+
+	var expiresAt *time.Time
+	if req.ExpiresIn != nil && *req.ExpiresIn > 0 {
+		t := time.Now().Add(time.Duration(*req.ExpiresIn) * time.Hour)
+		expiresAt = &t
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO registration_tokens (id, created_by, max_uses, note, expires_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		tokenID, adminID, req.MaxUses, req.Note, expiresAt)
+	if err != nil {
+		h.Logger.Error("failed to create registration token", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":         tokenID,
+		"max_uses":   req.MaxUses,
+		"uses":       0,
+		"note":       req.Note,
+		"expires_at": expiresAt,
+		"created_by": adminID,
+	})
+}
+
+// HandleListRegistrationTokens lists all registration tokens.
+// GET /api/v1/admin/registration/tokens
+func (h *Handler) HandleListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT rt.id, rt.created_by, rt.max_uses, rt.uses, rt.note, rt.expires_at, rt.created_at,
+		        u.username
+		 FROM registration_tokens rt
+		 JOIN users u ON u.id = rt.created_by
+		 ORDER BY rt.created_at DESC`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list tokens")
+		return
+	}
+	defer rows.Close()
+
+	type tokenEntry struct {
+		ID            string     `json:"id"`
+		CreatedBy     string     `json:"created_by"`
+		CreatorName   string     `json:"creator_name"`
+		MaxUses       int        `json:"max_uses"`
+		Uses          int        `json:"uses"`
+		Note          *string    `json:"note"`
+		ExpiresAt     *time.Time `json:"expires_at"`
+		CreatedAt     time.Time  `json:"created_at"`
+		Expired       bool       `json:"expired"`
+		Exhausted     bool       `json:"exhausted"`
+	}
+
+	tokens := make([]tokenEntry, 0)
+	for rows.Next() {
+		var t tokenEntry
+		if err := rows.Scan(&t.ID, &t.CreatedBy, &t.MaxUses, &t.Uses, &t.Note,
+			&t.ExpiresAt, &t.CreatedAt, &t.CreatorName); err != nil {
+			continue
+		}
+		t.Expired = t.ExpiresAt != nil && t.ExpiresAt.Before(time.Now())
+		t.Exhausted = t.Uses >= t.MaxUses
+		tokens = append(tokens, t)
+	}
+
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+// HandleDeleteRegistrationToken deletes a registration token.
+// DELETE /api/v1/admin/registration/tokens/{tokenID}
+func (h *Handler) HandleDeleteRegistrationToken(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	tokenID := chi.URLParam(r, "tokenID")
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM registration_tokens WHERE id = $1`, tokenID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete token")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Token not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Instance Announcement Handlers ---
+
+// HandleCreateAnnouncement creates a new instance-wide announcement.
+// POST /api/v1/admin/announcements
+func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		Title     string `json:"title"`
+		Content   string `json:"content"`
+		Severity  string `json:"severity"`
+		ExpiresIn *int   `json:"expires_in_hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Title == "" || req.Content == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields", "Title and content are required")
+		return
+	}
+
+	switch req.Severity {
+	case "info", "warning", "critical":
+		// valid
+	case "":
+		req.Severity = "info"
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_severity", "Severity must be info, warning, or critical")
+		return
+	}
+
+	adminID := auth.UserIDFromContext(r.Context())
+	announcementID := models.NewULID().String()
+
+	var expiresAt *time.Time
+	if req.ExpiresIn != nil && *req.ExpiresIn > 0 {
+		t := time.Now().Add(time.Duration(*req.ExpiresIn) * time.Hour)
+		expiresAt = &t
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO instance_announcements (id, admin_id, title, content, severity, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		announcementID, adminID, req.Title, req.Content, req.Severity, expiresAt)
+	if err != nil {
+		h.Logger.Error("failed to create announcement", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create announcement")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":         announcementID,
+		"title":      req.Title,
+		"content":    req.Content,
+		"severity":   req.Severity,
+		"active":     true,
+		"expires_at": expiresAt,
+	})
+}
+
+// HandleGetAnnouncements returns active instance announcements.
+// GET /api/v1/announcements (public for logged-in users)
+func (h *Handler) HandleGetAnnouncements(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT ia.id, ia.admin_id, ia.title, ia.content, ia.severity, ia.active,
+		        ia.created_at, ia.expires_at, u.username
+		 FROM instance_announcements ia
+		 JOIN users u ON u.id = ia.admin_id
+		 WHERE ia.active = true AND (ia.expires_at IS NULL OR ia.expires_at > now())
+		 ORDER BY ia.created_at DESC
+		 LIMIT 10`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get announcements")
+		return
+	}
+	defer rows.Close()
+
+	type announcement struct {
+		ID        string     `json:"id"`
+		AdminID   string     `json:"admin_id"`
+		AdminName string     `json:"admin_name"`
+		Title     string     `json:"title"`
+		Content   string     `json:"content"`
+		Severity  string     `json:"severity"`
+		Active    bool       `json:"active"`
+		CreatedAt time.Time  `json:"created_at"`
+		ExpiresAt *time.Time `json:"expires_at"`
+	}
+
+	announcements := make([]announcement, 0)
+	for rows.Next() {
+		var a announcement
+		if err := rows.Scan(&a.ID, &a.AdminID, &a.Title, &a.Content, &a.Severity,
+			&a.Active, &a.CreatedAt, &a.ExpiresAt, &a.AdminName); err != nil {
+			continue
+		}
+		announcements = append(announcements, a)
+	}
+
+	writeJSON(w, http.StatusOK, announcements)
+}
+
+// HandleListAllAnnouncements returns all announcements (admin only, including inactive).
+// GET /api/v1/admin/announcements
+func (h *Handler) HandleListAllAnnouncements(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT ia.id, ia.admin_id, ia.title, ia.content, ia.severity, ia.active,
+		        ia.created_at, ia.expires_at, u.username
+		 FROM instance_announcements ia
+		 JOIN users u ON u.id = ia.admin_id
+		 ORDER BY ia.created_at DESC
+		 LIMIT 50`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get announcements")
+		return
+	}
+	defer rows.Close()
+
+	type announcement struct {
+		ID        string     `json:"id"`
+		AdminID   string     `json:"admin_id"`
+		AdminName string     `json:"admin_name"`
+		Title     string     `json:"title"`
+		Content   string     `json:"content"`
+		Severity  string     `json:"severity"`
+		Active    bool       `json:"active"`
+		CreatedAt time.Time  `json:"created_at"`
+		ExpiresAt *time.Time `json:"expires_at"`
+	}
+
+	announcements := make([]announcement, 0)
+	for rows.Next() {
+		var a announcement
+		if err := rows.Scan(&a.ID, &a.AdminID, &a.Title, &a.Content, &a.Severity,
+			&a.Active, &a.CreatedAt, &a.ExpiresAt, &a.AdminName); err != nil {
+			continue
+		}
+		announcements = append(announcements, a)
+	}
+
+	writeJSON(w, http.StatusOK, announcements)
+}
+
+// HandleUpdateAnnouncement deactivates an announcement or updates it.
+// PATCH /api/v1/admin/announcements/{announcementID}
+func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	announcementID := chi.URLParam(r, "announcementID")
+
+	var req struct {
+		Active  *bool   `json:"active"`
+		Title   *string `json:"title"`
+		Content *string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE instance_announcements
+		 SET active = COALESCE($1, active),
+		     title = COALESCE($2, title),
+		     content = COALESCE($3, content)
+		 WHERE id = $4`,
+		req.Active, req.Title, req.Content, announcementID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update announcement")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Announcement not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// HandleDeleteAnnouncement removes an announcement permanently.
+// DELETE /api/v1/admin/announcements/{announcementID}
+func (h *Handler) HandleDeleteAnnouncement(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	announcementID := chi.URLParam(r, "announcementID")
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM instance_announcements WHERE id = $1`, announcementID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete announcement")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Announcement not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func parseInt(s string) (int, error) {

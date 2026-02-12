@@ -5,31 +5,31 @@ export default {
 	theme: {
 		extend: {
 			colors: {
-				// AmityVox brand palette — dark theme by default (like Discord).
+				// Theme-aware colors using CSS custom properties.
 				brand: {
-					50: '#e8eaf6',
-					100: '#c5cae9',
-					200: '#9fa8da',
-					300: '#7986cb',
-					400: '#5c6bc0',
-					500: '#3f51b5',
-					600: '#3949ab',
-					700: '#303f9f',
-					800: '#283593',
-					900: '#1a237e'
+					50: 'var(--brand-50)',
+					100: 'var(--brand-100)',
+					200: 'var(--brand-200)',
+					300: 'var(--brand-300)',
+					400: 'var(--brand-400)',
+					500: 'var(--brand-500)',
+					600: 'var(--brand-600)',
+					700: 'var(--brand-700)',
+					800: 'var(--brand-800)',
+					900: 'var(--brand-900)'
 				},
 				bg: {
-					primary: '#1e1f22',
-					secondary: '#2b2d31',
-					tertiary: '#313338',
-					modifier: '#383a40',
-					floating: '#111214'
+					primary: 'var(--bg-primary)',
+					secondary: 'var(--bg-secondary)',
+					tertiary: 'var(--bg-tertiary)',
+					modifier: 'var(--bg-modifier)',
+					floating: 'var(--bg-floating)'
 				},
 				text: {
-					primary: '#f2f3f5',
-					secondary: '#b5bac1',
-					muted: '#949ba4',
-					link: '#00a8fc'
+					primary: 'var(--text-primary)',
+					secondary: 'var(--text-secondary)',
+					muted: 'var(--text-muted)',
+					link: 'var(--text-link)'
 				},
 				status: {
 					online: '#23a55a',

@@ -1,15 +1,57 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, currentChannelId, setChannel } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore } from '$lib/stores/channels';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import { presenceMap } from '$lib/stores/presence';
 	import { dmList } from '$lib/stores/dms';
-	import { unreadCounts } from '$lib/stores/unreads';
+	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import InviteModal from '$components/guild/InviteModal.svelte';
+	import type { Channel, GuildEvent } from '$lib/types';
+
+	let upcomingEvents = $state<GuildEvent[]>([]);
+
+	// Archived channels
+	let showArchived = $state(false);
+
+	const activeTextChannels = $derived($textChannels.filter(c => !c.archived));
+	const activeVoiceChannels = $derived($voiceChannels.filter(c => !c.archived));
+	const archivedChannels = $derived([...$textChannels, ...$voiceChannels].filter(c => c.archived));
+
+	async function handleArchiveChannel(channelId: string, archive: boolean) {
+		try {
+			const updated = await api.updateChannel(channelId, { archived: archive });
+			updateChannelStore(updated);
+		} catch (err: any) {
+			alert(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} channel`);
+		}
+	}
+
+	$effect(() => {
+		const gid = $currentGuildId;
+		if (gid) {
+			api.getGuildEvents(gid, { status: 'scheduled', limit: 3 })
+				.then((events) => { upcomingEvents = events; })
+				.catch(() => { upcomingEvents = []; });
+		} else {
+			upcomingEvents = [];
+		}
+	});
+
+	function formatEventDate(dateStr: string): string {
+		const d = new Date(dateStr);
+		const now = new Date();
+		const diffMs = d.getTime() - now.getTime();
+		const diffH = Math.floor(diffMs / 3600000);
+		if (diffH < 1) return 'Starting soon';
+		if (diffH < 24) return `In ${diffH}h`;
+		const diffD = Math.floor(diffH / 24);
+		if (diffD === 1) return 'Tomorrow';
+		return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+	}
 
 	// Create channel modal
 	let showCreateChannel = $state(false);
@@ -23,13 +65,20 @@
 	let editChannelId = $state('');
 	let editChannelName = $state('');
 	let editChannelTopic = $state('');
+	let editChannelNsfw = $state(false);
+	let editChannelType = $state<'text' | 'voice'>('text');
+	let editChannelUserLimit = $state(0);
+	let editChannelBitrate = $state(64000);
 	let editingChannel = $state(false);
+
+	const userLimitOptions = [0, 5, 10, 15, 20, 25, 50, 99];
+	const bitrateOptions = [32000, 64000, 96000, 128000, 192000, 256000, 384000];
 
 	// Invite modal
 	let showInvite = $state(false);
 
 	// Context menu
-	let contextMenu = $state<{ x: number; y: number; channelId: string; channelName: string } | null>(null);
+	let contextMenu = $state<{ x: number; y: number; channelId: string; channelName: string; archived: boolean } | null>(null);
 
 	function handleChannelClick(channelId: string) {
 		const guildId = $currentGuildId;
@@ -60,10 +109,16 @@
 		editingChannel = true;
 		channelError = '';
 		try {
-			await api.updateChannel(editChannelId, {
+			const updateData: Record<string, unknown> = {
 				name: editChannelName.trim(),
-				topic: editChannelTopic || undefined
-			} as any);
+				topic: editChannelTopic || undefined,
+				nsfw: editChannelNsfw
+			};
+			if (editChannelType === 'voice') {
+				updateData.user_limit = editChannelUserLimit;
+				updateData.bitrate = editChannelBitrate;
+			}
+			await api.updateChannel(editChannelId, updateData as any);
 			showEditChannel = false;
 		} catch (err: any) {
 			channelError = err.message || 'Failed to update channel';
@@ -81,9 +136,9 @@
 		}
 	}
 
-	function openContextMenu(e: MouseEvent, channelId: string, channelName: string) {
+	function openContextMenu(e: MouseEvent, channel: Channel) {
 		e.preventDefault();
-		contextMenu = { x: e.clientX, y: e.clientY, channelId, channelName };
+		contextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived };
 	}
 
 	function closeContextMenu() {
@@ -95,6 +150,14 @@
 		editChannelName = channelName;
 		editChannelTopic = '';
 		channelError = '';
+		// Look up current channel data to pre-populate fields
+		const allChannels = [...$textChannels, ...$voiceChannels];
+		const ch = allChannels.find(c => c.id === channelId);
+		editChannelNsfw = ch?.nsfw ?? false;
+		editChannelType = (ch?.channel_type === 'voice' ? 'voice' : 'text');
+		editChannelUserLimit = ch?.user_limit ?? 0;
+		editChannelBitrate = ch?.bitrate ?? 64000;
+		if (ch?.topic) editChannelTopic = ch.topic;
 		showEditChannel = true;
 		closeContextMenu();
 	}
@@ -108,12 +171,23 @@
 
 <svelte:window onclick={closeContextMenu} />
 
-<aside class="flex h-full w-60 shrink-0 flex-col bg-bg-secondary">
+<aside class="flex h-full w-60 shrink-0 flex-col bg-bg-secondary" aria-label="Channel list">
 	<!-- Guild header -->
 	{#if $currentGuild}
 		<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
 			<h2 class="truncate text-sm font-semibold text-text-primary">{$currentGuild.name}</h2>
 			<div class="flex items-center gap-1">
+				{#if $totalUnreads > 0}
+					<button
+						class="text-text-muted hover:text-text-primary"
+						onclick={() => markAllRead()}
+						title="Mark All as Read"
+					>
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+						</svg>
+					</button>
+				{/if}
 				<button
 					class="text-text-muted hover:text-text-primary"
 					onclick={() => (showInvite = true)}
@@ -144,7 +218,7 @@
 	<div class="flex-1 overflow-y-auto px-2 py-2">
 		{#if $currentGuild}
 			<!-- Text Channels -->
-			{#if $textChannels.length > 0 || $currentGuild}
+			{#if activeTextChannels.length > 0 || $currentGuild}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4 first:pt-0">
 					<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Text Channels</h3>
 					<button
@@ -157,17 +231,22 @@
 						</svg>
 					</button>
 				</div>
-				{#each $textChannels as channel (channel.id)}
+				{#each activeTextChannels as channel (channel.id)}
 					{@const unread = $unreadCounts.get(channel.id) ?? 0}
+					{@const mentions = $mentionCounts.get(channel.id) ?? 0}
 					<button
 						class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 						onclick={() => handleChannelClick(channel.id)}
-						oncontextmenu={(e) => openContextMenu(e, channel.id, channel.name ?? '')}
+						oncontextmenu={(e) => openContextMenu(e, channel)}
 					>
 						<span class="text-lg leading-none">#</span>
 						<span class="flex-1 truncate">{channel.name}</span>
-						{#if unread > 0 && $currentChannelId !== channel.id}
-							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+						{#if mentions > 0 && $currentChannelId !== channel.id}
+							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{mentions} mention{mentions !== 1 ? 's' : ''}">
+								@{mentions > 99 ? '99+' : mentions}
+							</span>
+						{:else if unread > 0 && $currentChannelId !== channel.id}
+							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
 								{unread > 99 ? '99+' : unread}
 							</span>
 						{/if}
@@ -176,7 +255,7 @@
 			{/if}
 
 			<!-- Voice Channels -->
-			{#if $voiceChannels.length > 0 || $currentGuild}
+			{#if activeVoiceChannels.length > 0 || $currentGuild}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4">
 					<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Voice Channels</h3>
 					<button
@@ -189,16 +268,46 @@
 						</svg>
 					</button>
 				</div>
-				{#each $voiceChannels as channel (channel.id)}
+				{#each activeVoiceChannels as channel (channel.id)}
 					<button
 						class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
 						onclick={() => handleChannelClick(channel.id)}
-						oncontextmenu={(e) => openContextMenu(e, channel.id, channel.name ?? '')}
+						oncontextmenu={(e) => openContextMenu(e, channel)}
 					>
 						<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
 							<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
 						</svg>
 						<span class="truncate">{channel.name}</span>
+					</button>
+				{/each}
+			{/if}
+
+			<!-- Upcoming Events -->
+			{#if upcomingEvents.length > 0}
+				<div class="mb-1 flex items-center justify-between px-1 pt-4">
+					<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Upcoming Events</h3>
+					<button
+						class="text-text-muted hover:text-text-primary"
+						onclick={() => goto(`/app/guilds/${$currentGuildId}/events`)}
+						title="View All Events"
+					>
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+						</svg>
+					</button>
+				</div>
+				{#each upcomingEvents as event (event.id)}
+					<button
+						class="mb-0.5 flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+						onclick={() => goto(`/app/guilds/${$currentGuildId}/events`)}
+					>
+						<svg class="mt-0.5 h-4 w-4 shrink-0 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+						</svg>
+						<div class="min-w-0 flex-1">
+							<span class="block truncate text-xs font-medium text-text-primary">{event.name}</span>
+							<span class="text-2xs text-text-muted">{formatEventDate(event.scheduled_start)}</span>
+						</div>
 					</button>
 				{/each}
 			{/if}
@@ -225,6 +334,7 @@
 			{:else}
 				{#each $dmList as dm (dm.id)}
 					{@const dmUnread = $unreadCounts.get(dm.id) ?? 0}
+					{@const dmMentions = $mentionCounts.get(dm.id) ?? 0}
 					{@const dmName = dm.name ?? 'Direct Message'}
 					<button
 						class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
@@ -232,8 +342,12 @@
 					>
 						<Avatar name={dmName} size="sm" status={dm.owner_id ? ($presenceMap.get(dm.owner_id) ?? undefined) : undefined} />
 						<span class="flex-1 truncate">{dmName}</span>
-						{#if dmUnread > 0}
-							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+						{#if dmMentions > 0}
+							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{dmMentions} mention{dmMentions !== 1 ? 's' : ''}">
+								@{dmMentions > 99 ? '99+' : dmMentions}
+							</span>
+						{:else if dmUnread > 0}
+							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
 								{dmUnread > 99 ? '99+' : dmUnread}
 							</span>
 						{/if}
@@ -379,6 +493,65 @@
 			maxlength="1024"
 		/>
 	</div>
+
+	<div class="mb-4">
+		<label class="flex items-center gap-3 cursor-pointer">
+			<button
+				type="button"
+				role="switch"
+				aria-checked={editChannelNsfw}
+				class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors {editChannelNsfw ? 'bg-red-500' : 'bg-bg-modifier'}"
+				onclick={() => (editChannelNsfw = !editChannelNsfw)}
+			>
+				<span
+					class="pointer-events-none inline-block h-5 w-5 translate-y-0.5 rounded-full bg-white shadow transition-transform {editChannelNsfw ? 'translate-x-5' : 'translate-x-0.5'}"
+				></span>
+			</button>
+			<div>
+				<span class="text-sm font-medium text-text-primary">NSFW Channel</span>
+				<p class="text-xs text-text-muted">Mark this channel as age-restricted. Users will see a warning before viewing.</p>
+			</div>
+		</label>
+	</div>
+
+	{#if editChannelType === 'voice'}
+		<!-- Voice channel configuration -->
+		<div class="mb-4">
+			<label for="editUserLimit" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+				User Limit
+			</label>
+			<select
+				id="editUserLimit"
+				class="input w-full"
+				bind:value={editChannelUserLimit}
+			>
+				{#each userLimitOptions as limit}
+					<option value={limit}>
+						{limit === 0 ? 'No limit' : `${limit} users`}
+					</option>
+				{/each}
+			</select>
+			<p class="mt-1 text-xs text-text-muted">Maximum number of users that can join this voice channel. Set to "No limit" for unlimited.</p>
+		</div>
+
+		<div class="mb-4">
+			<label for="editBitrate" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+				Bitrate
+			</label>
+			<select
+				id="editBitrate"
+				class="input w-full"
+				bind:value={editChannelBitrate}
+			>
+				{#each bitrateOptions as rate}
+					<option value={rate}>
+						{Math.floor(rate / 1000)}kbps
+					</option>
+				{/each}
+			</select>
+			<p class="mt-1 text-xs text-text-muted">Higher bitrate means better audio quality but uses more bandwidth.</p>
+		</div>
+	{/if}
 
 	<div class="flex justify-end gap-2">
 		<button class="btn-secondary" onclick={() => (showEditChannel = false)}>Cancel</button>

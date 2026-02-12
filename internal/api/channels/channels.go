@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -36,6 +37,9 @@ type updateChannelRequest struct {
 	Position        *int    `json:"position"`
 	NSFW            *bool   `json:"nsfw"`
 	SlowmodeSeconds *int    `json:"slowmode_seconds"`
+	UserLimit       *int    `json:"user_limit"`
+	Bitrate         *int    `json:"bitrate"`
+	Archived        *bool   `json:"archived"`
 }
 
 type createMessageRequest struct {
@@ -46,6 +50,13 @@ type createMessageRequest struct {
 	MentionUserIDs  []string `json:"mention_user_ids"`
 	MentionRoleIDs  []string `json:"mention_role_ids"`
 	MentionEveryone bool     `json:"mention_everyone"`
+	Silent          bool     `json:"silent"`
+}
+
+type scheduleMessageRequest struct {
+	Content       *string  `json:"content"`
+	AttachmentIDs []string `json:"attachment_ids"`
+	ScheduledFor  string   `json:"scheduled_for"`
 }
 
 type updateMessageRequest struct {
@@ -107,16 +118,22 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 			topic = COALESCE($3, topic),
 			position = COALESCE($4, position),
 			nsfw = COALESCE($5, nsfw),
-			slowmode_seconds = COALESCE($6, slowmode_seconds)
+			slowmode_seconds = COALESCE($6, slowmode_seconds),
+			user_limit = COALESCE($7, user_limit),
+			bitrate = COALESCE($8, bitrate),
+			archived = COALESCE($9, archived)
 		 WHERE id = $1
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, created_at`,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
 		channelID, req.Name, req.Topic, req.Position, req.NSFW, req.SlowmodeSeconds,
+		req.UserLimit, req.Bitrate, req.Archived,
 	).Scan(
 		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
 		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
-		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions, &channel.CreatedAt,
+		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
+		&channel.UserLimit, &channel.Bitrate,
+		&channel.Locked, &channel.LockedBy, &channel.LockedAt, &channel.Archived, &channel.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -273,6 +290,18 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if channel is locked or archived.
+	var channelLocked, channelArchived bool
+	h.Pool.QueryRow(r.Context(), `SELECT locked, archived FROM channels WHERE id = $1`, channelID).Scan(&channelLocked, &channelArchived)
+	if channelArchived {
+		writeError(w, http.StatusForbidden, "channel_archived", "This channel is archived and read-only")
+		return
+	}
+	if channelLocked {
+		writeError(w, http.StatusForbidden, "channel_locked", "This channel is locked")
+		return
+	}
+
 	var req createMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
@@ -292,10 +321,12 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enforce slowmode: check if the user posted too recently in this channel.
+	// Users with ManageMessages or ManageChannels bypass slowmode.
 	var slowmodeSec int
 	h.Pool.QueryRow(r.Context(),
 		`SELECT COALESCE(slowmode_seconds, 0) FROM channels WHERE id = $1`, channelID).Scan(&slowmodeSec)
-	if slowmodeSec > 0 {
+	if slowmodeSec > 0 && !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) &&
+		!h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
 		var lastSent *time.Time
 		h.Pool.QueryRow(r.Context(),
 			`SELECT MAX(created_at) FROM messages WHERE channel_id = $1 AND author_id = $2`,
@@ -325,6 +356,17 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Handle silent messages: check for "@silent " prefix or silent field.
+	var flags int
+	if req.Silent {
+		flags |= models.MessageFlagSilent
+	}
+	if req.Content != nil && strings.HasPrefix(*req.Content, "@silent ") {
+		flags |= models.MessageFlagSilent
+		trimmed := strings.TrimPrefix(*req.Content, "@silent ")
+		req.Content = &trimmed
+	}
+
 	msgID := models.NewULID().String()
 	msgType := models.MessageTypeDefault
 	if len(req.ReplyToIDs) > 0 {
@@ -333,14 +375,14 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 
 	var msg models.Message
 	err := h.Pool.QueryRow(r.Context(),
-		`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type,
+		`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags,
 		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		           encrypted, encryption_session_id, created_at`,
-		msgID, channelID, userID, req.Content, req.Nonce, msgType,
+		msgID, channelID, userID, req.Content, req.Nonce, msgType, flags,
 		req.ReplyToIDs, req.MentionUserIDs, req.MentionRoleIDs, req.MentionEveryone,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
@@ -1092,12 +1134,14 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, now())
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, created_at`,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
 		threadID, guildID, req.Name, userID,
 	).Scan(
 		&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
 		&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,
-		&thread.LastMessageID, &thread.OwnerID, &thread.DefaultPermissions, &thread.CreatedAt,
+		&thread.LastMessageID, &thread.OwnerID, &thread.DefaultPermissions,
+		&thread.UserLimit, &thread.Bitrate,
+		&thread.Locked, &thread.LockedBy, &thread.LockedAt, &thread.Archived, &thread.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create thread channel", slog.String("error", err.Error()))
@@ -1183,6 +1227,137 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, threads)
 }
 
+// --- Scheduled Messages ---
+
+// HandleScheduleMessage creates a scheduled message for future delivery.
+// POST /api/v1/channels/{channelID}/scheduled-messages
+func (h *Handler) HandleScheduleMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: SendMessages.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.SendMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need SEND_MESSAGES permission")
+		return
+	}
+
+	var req scheduleMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	hasContent := req.Content != nil && *req.Content != ""
+	hasAttachments := len(req.AttachmentIDs) > 0
+	if !hasContent && !hasAttachments {
+		writeError(w, http.StatusBadRequest, "empty_content", "Scheduled message content or attachments required")
+		return
+	}
+
+	if hasContent && len(*req.Content) > 4000 {
+		writeError(w, http.StatusBadRequest, "content_too_long", "Message content must be at most 4000 characters")
+		return
+	}
+
+	scheduledFor, err := time.Parse(time.RFC3339, req.ScheduledFor)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_time", "scheduled_for must be a valid RFC3339 timestamp")
+		return
+	}
+
+	if scheduledFor.Before(time.Now().Add(1 * time.Minute)) {
+		writeError(w, http.StatusBadRequest, "invalid_time", "Scheduled time must be at least 1 minute in the future")
+		return
+	}
+
+	msgID := models.NewULID().String()
+	var scheduled models.ScheduledMessage
+	err = h.Pool.QueryRow(r.Context(),
+		`INSERT INTO scheduled_messages (id, channel_id, author_id, content, attachment_ids, scheduled_for, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, now())
+		 RETURNING id, channel_id, author_id, content, attachment_ids, scheduled_for, created_at`,
+		msgID, channelID, userID, req.Content, req.AttachmentIDs, scheduledFor,
+	).Scan(
+		&scheduled.ID, &scheduled.ChannelID, &scheduled.AuthorID, &scheduled.Content,
+		&scheduled.AttachmentIDs, &scheduled.ScheduledFor, &scheduled.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create scheduled message", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to schedule message")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, scheduled)
+}
+
+// HandleGetScheduledMessages lists a user's scheduled messages for a channel.
+// GET /api/v1/channels/{channelID}/scheduled-messages
+func (h *Handler) HandleGetScheduledMessages(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ViewChannel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, channel_id, author_id, content, attachment_ids, scheduled_for, created_at
+		 FROM scheduled_messages
+		 WHERE channel_id = $1 AND author_id = $2 AND scheduled_for > now()
+		 ORDER BY scheduled_for ASC`,
+		channelID, userID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to get scheduled messages", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get scheduled messages")
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]models.ScheduledMessage, 0)
+	for rows.Next() {
+		var m models.ScheduledMessage
+		if err := rows.Scan(
+			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content,
+			&m.AttachmentIDs, &m.ScheduledFor, &m.CreatedAt,
+		); err != nil {
+			h.Logger.Error("failed to scan scheduled message", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read scheduled messages")
+			return
+		}
+		messages = append(messages, m)
+	}
+
+	writeJSON(w, http.StatusOK, messages)
+}
+
+// HandleDeleteScheduledMessage cancels a scheduled message.
+// DELETE /api/v1/channels/{channelID}/scheduled-messages/{messageID}
+func (h *Handler) HandleDeleteScheduledMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	// Only the author can delete their own scheduled messages.
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM scheduled_messages WHERE id = $1 AND channel_id = $2 AND author_id = $3`,
+		messageID, channelID, userID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to delete scheduled message", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to cancel scheduled message")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Scheduled message not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Internal helpers ---
 
 // HandleGetChannelWebhooks lists all webhooks for a channel.
@@ -1231,13 +1406,14 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		        default_permissions, created_at
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
 		 FROM channels WHERE id = $1`,
 		channelID,
 	).Scan(
 		&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 		&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
-		&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+		&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
+		&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
 	)
 	return &c, err
 }
@@ -1336,7 +1512,8 @@ func (h *Handler) enrichMessagesWithAuthors(ctx context.Context, messages []mode
 
 	rows, err := h.Pool.Query(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id,
-		        status_text, status_presence, bio, flags, created_at
+		        status_text, status_emoji, status_presence, status_expires_at,
+		        bio, banner_id, accent_color, pronouns, flags, created_at
 		 FROM users WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return
@@ -1348,7 +1525,8 @@ func (h *Handler) enrichMessagesWithAuthors(ctx context.Context, messages []mode
 		var u models.User
 		if err := rows.Scan(
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
-			&u.StatusText, &u.StatusPresence, &u.Bio, &u.Flags, &u.CreatedAt,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
 		); err != nil {
 			continue
 		}
@@ -1453,10 +1631,12 @@ func (h *Handler) enrichMessageWithAuthor(ctx context.Context, msg *models.Messa
 	var u models.User
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id,
-		        status_text, status_presence, bio, flags, created_at
+		        status_text, status_emoji, status_presence, status_expires_at,
+		        bio, banner_id, accent_color, pronouns, flags, created_at
 		 FROM users WHERE id = $1`, msg.AuthorID).Scan(
 		&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
-		&u.StatusText, &u.StatusPresence, &u.Bio, &u.Flags, &u.CreatedAt,
+		&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+		&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
 	)
 	if err == nil {
 		msg.Author = &u
@@ -1530,6 +1710,285 @@ func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request)
 	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
 
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+// --- Announcement Channel Handlers ---
+
+// HandleFollowChannel subscribes a webhook to an announcement channel so that
+// new messages are automatically forwarded to the webhook's target channel.
+// POST /api/v1/channels/{channelID}/followers
+func (h *Handler) HandleFollowChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ManageWebhooks in the source channel's guild.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	// Verify the source channel is an announcement channel.
+	var channelType string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelType)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if channelType != models.ChannelTypeAnnouncement {
+		writeError(w, http.StatusBadRequest, "not_announcement", "Only announcement channels can be followed")
+		return
+	}
+
+	var req struct {
+		WebhookID string `json:"webhook_id"`
+		GuildID   string `json:"guild_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.WebhookID == "" || req.GuildID == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields", "webhook_id and guild_id are required")
+		return
+	}
+
+	// Verify the webhook exists and belongs to the specified guild.
+	var webhookExists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM webhooks WHERE id = $1 AND guild_id = $2)`,
+		req.WebhookID, req.GuildID,
+	).Scan(&webhookExists)
+	if !webhookExists {
+		writeError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found in the specified guild")
+		return
+	}
+
+	followerID := models.NewULID().String()
+	var follower models.ChannelFollower
+	err = h.Pool.QueryRow(r.Context(),
+		`INSERT INTO channel_followers (id, channel_id, webhook_id, guild_id, created_at)
+		 VALUES ($1, $2, $3, $4, now())
+		 RETURNING id, channel_id, webhook_id, guild_id, created_at`,
+		followerID, channelID, req.WebhookID, req.GuildID,
+	).Scan(&follower.ID, &follower.ChannelID, &follower.WebhookID, &follower.GuildID, &follower.CreatedAt)
+	if err != nil {
+		h.Logger.Error("failed to create channel follower", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to follow channel")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, follower)
+}
+
+// HandleGetChannelFollowers returns the list of followers for an announcement channel.
+// GET /api/v1/channels/{channelID}/followers
+func (h *Handler) HandleGetChannelFollowers(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	// Permission check: ManageWebhooks in the source channel's guild.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	// Verify the channel is an announcement channel.
+	var channelType string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelType)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if channelType != models.ChannelTypeAnnouncement {
+		writeError(w, http.StatusBadRequest, "not_announcement", "Only announcement channels have followers")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, channel_id, webhook_id, guild_id, created_at
+		 FROM channel_followers WHERE channel_id = $1
+		 ORDER BY created_at DESC`,
+		channelID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to get channel followers", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get followers")
+		return
+	}
+	defer rows.Close()
+
+	followers := make([]models.ChannelFollower, 0)
+	for rows.Next() {
+		var f models.ChannelFollower
+		if err := rows.Scan(&f.ID, &f.ChannelID, &f.WebhookID, &f.GuildID, &f.CreatedAt); err != nil {
+			h.Logger.Error("failed to scan channel follower", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read followers")
+			return
+		}
+		followers = append(followers, f)
+	}
+
+	writeJSON(w, http.StatusOK, followers)
+}
+
+// HandleUnfollowChannel removes a follower subscription from an announcement channel.
+// DELETE /api/v1/channels/{channelID}/followers/{followerID}
+func (h *Handler) HandleUnfollowChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	followerID := chi.URLParam(r, "followerID")
+
+	// Permission check: ManageWebhooks in the source channel's guild.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageWebhooks) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_WEBHOOKS permission")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM channel_followers WHERE id = $1 AND channel_id = $2`,
+		followerID, channelID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to delete channel follower", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unfollow channel")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "follower_not_found", "Follower not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandlePublishMessage publishes a message from an announcement channel to all
+// followers by creating crosspost messages via each follower's webhook.
+// POST /api/v1/channels/{channelID}/messages/{messageID}/crosspost
+func (h *Handler) HandlePublishMessage(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+
+	// Permission check: SendMessages in the announcement channel.
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.SendMessages) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need SEND_MESSAGES permission")
+		return
+	}
+
+	// Verify the source channel is an announcement channel.
+	var channelType string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelType)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if channelType != models.ChannelTypeAnnouncement {
+		writeError(w, http.StatusBadRequest, "not_announcement", "Only messages in announcement channels can be published")
+		return
+	}
+
+	// Fetch the source message.
+	var content *string
+	var authorID string
+	var flags int
+	err = h.Pool.QueryRow(r.Context(),
+		`SELECT author_id, content, flags FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, channelID,
+	).Scan(&authorID, &content, &flags)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		return
+	}
+
+	// Check if message is already published (crosspost flag set).
+	if flags&models.MessageFlagCrosspost != 0 {
+		writeError(w, http.StatusBadRequest, "already_published", "This message has already been published")
+		return
+	}
+
+	// Get all followers for this announcement channel.
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT cf.id, cf.webhook_id, cf.guild_id, w.channel_id, w.name, w.avatar_id
+		 FROM channel_followers cf
+		 JOIN webhooks w ON cf.webhook_id = w.id
+		 WHERE cf.channel_id = $1`,
+		channelID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to get followers for publish", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get followers")
+		return
+	}
+	defer rows.Close()
+
+	type followerInfo struct {
+		FollowerID       string
+		WebhookID        string
+		GuildID          string
+		TargetChannelID  string
+		WebhookName      string
+		WebhookAvatarID  *string
+	}
+
+	var followers []followerInfo
+	for rows.Next() {
+		var fi followerInfo
+		if err := rows.Scan(&fi.FollowerID, &fi.WebhookID, &fi.GuildID, &fi.TargetChannelID, &fi.WebhookName, &fi.WebhookAvatarID); err != nil {
+			h.Logger.Error("failed to scan follower info", slog.String("error", err.Error()))
+			continue
+		}
+		followers = append(followers, fi)
+	}
+
+	// Create a crosspost message in each follower's target channel.
+	for _, fi := range followers {
+		newMsgID := models.NewULID().String()
+		_, err := h.Pool.Exec(r.Context(),
+			`INSERT INTO messages (id, channel_id, author_id, content, message_type, flags, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, now())`,
+			newMsgID, fi.TargetChannelID, authorID, content,
+			models.MessageTypeDefault, models.MessageFlagCrosspost,
+		)
+		if err != nil {
+			h.Logger.Error("failed to crosspost to follower",
+				slog.String("follower_id", fi.FollowerID),
+				slog.String("target_channel_id", fi.TargetChannelID),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+
+		// Update last_message_id on the target channel.
+		h.Pool.Exec(r.Context(),
+			`UPDATE channels SET last_message_id = $1 WHERE id = $2`,
+			newMsgID, fi.TargetChannelID)
+
+		// Publish a message create event for each crossposted message.
+		h.EventBus.PublishJSON(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE", map[string]interface{}{
+			"id":         newMsgID,
+			"channel_id": fi.TargetChannelID,
+			"author_id":  authorID,
+			"content":    content,
+			"flags":      models.MessageFlagCrosspost,
+		})
+	}
+
+	// Mark the original message as published by setting the crosspost flag.
+	h.Pool.Exec(r.Context(),
+		`UPDATE messages SET flags = flags | $1 WHERE id = $2 AND channel_id = $3`,
+		models.MessageFlagCrosspost, messageID, channelID)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message_id":      messageID,
+		"channel_id":      channelID,
+		"followers_count": len(followers),
+	})
 }
 
 // hasChannelPermission checks if a user has a specific permission in the guild

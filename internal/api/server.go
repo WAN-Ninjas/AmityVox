@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,9 +19,14 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/amityvox/amityvox/internal/api/admin"
+	"github.com/amityvox/amityvox/internal/api/bookmarks"
 	"github.com/amityvox/amityvox/internal/api/channels"
+	"github.com/amityvox/amityvox/internal/api/guildevents"
 	"github.com/amityvox/amityvox/internal/api/guilds"
 	"github.com/amityvox/amityvox/internal/api/invites"
+	"github.com/amityvox/amityvox/internal/api/moderation"
+	"github.com/amityvox/amityvox/internal/api/polls"
+	"github.com/amityvox/amityvox/internal/api/stickers"
 	"github.com/amityvox/amityvox/internal/api/users"
 	"github.com/amityvox/amityvox/internal/api/webhooks"
 	"github.com/amityvox/amityvox/internal/auth"
@@ -147,6 +153,30 @@ func (s *Server) registerRoutes() {
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
 	}
+	pollH := &polls.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	bookmarkH := &bookmarks.Handler{
+		Pool:   s.DB.Pool,
+		Logger: s.Logger,
+	}
+	guildEventH := &guildevents.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	modH := &moderation.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	stickerH := &stickers.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
 
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
@@ -190,6 +220,8 @@ func (s *Server) registerRoutes() {
 				r.Delete("/@me/sessions/{sessionID}", userH.HandleDeleteSelfSession)
 				r.Get("/@me/settings", userH.HandleGetUserSettings)
 				r.Patch("/@me/settings", userH.HandleUpdateUserSettings)
+				r.Get("/@me/blocked", userH.HandleGetBlockedUsers)
+				r.Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
 				r.Get("/{userID}", userH.HandleGetUser)
 				r.Get("/{userID}/note", userH.HandleGetUserNote)
 				r.Put("/{userID}/note", userH.HandleSetUserNote)
@@ -200,6 +232,7 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{userID}/block", userH.HandleUnblockUser)
 				r.Get("/{userID}/mutual-friends", userH.HandleGetMutualFriends)
 				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)
+				r.Get("/{userID}/badges", userH.HandleGetUserBadges)
 			})
 
 			// Guild routes.
@@ -208,6 +241,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/discover", guildH.HandleDiscoverGuilds)
 				r.Get("/vanity/{code}", guildH.HandleResolveVanityURL)
 				r.Get("/{guildID}/preview", guildH.HandleGetGuildPreview)
+				r.Post("/{guildID}/join", guildH.HandleJoinDiscoverableGuild)
 				r.Get("/{guildID}", guildH.HandleGetGuild)
 				r.Patch("/{guildID}", guildH.HandleUpdateGuild)
 				r.Delete("/{guildID}", guildH.HandleDeleteGuild)
@@ -221,6 +255,8 @@ func (s *Server) registerRoutes() {
 				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)
 				r.Patch("/{guildID}/members/{memberID}", guildH.HandleUpdateGuildMember)
 				r.Delete("/{guildID}/members/{memberID}", guildH.HandleRemoveGuildMember)
+				r.Post("/{guildID}/members/{memberID}/warn", modH.HandleWarnMember)
+				r.Get("/{guildID}/members/{memberID}/warnings", modH.HandleGetWarnings)
 				r.Get("/{guildID}/members/{memberID}/roles", guildH.HandleGetMemberRoles)
 				r.Put("/{guildID}/members/{memberID}/roles/{roleID}", guildH.HandleAddMemberRole)
 				r.Delete("/{guildID}/members/{memberID}/roles/{roleID}", guildH.HandleRemoveMemberRole)
@@ -251,6 +287,48 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
 				r.Get("/{guildID}/vanity-url", guildH.HandleGetGuildVanityURL)
 				r.Patch("/{guildID}/vanity-url", guildH.HandleSetGuildVanityURL)
+				r.Delete("/{guildID}/warnings/{warningID}", modH.HandleDeleteWarning)
+				r.Get("/{guildID}/reports", modH.HandleGetReports)
+				r.Patch("/{guildID}/reports/{reportID}", modH.HandleResolveReport)
+				r.Get("/{guildID}/raid-config", modH.HandleGetRaidConfig)
+				r.Patch("/{guildID}/raid-config", modH.HandleUpdateRaidConfig)
+
+				// Ban list routes.
+				r.Route("/{guildID}/ban-lists", func(r chi.Router) {
+					r.Post("/", modH.HandleCreateBanList)
+					r.Get("/", modH.HandleGetBanLists)
+					r.Delete("/{listID}", modH.HandleDeleteBanList)
+					r.Get("/{listID}/entries", modH.HandleGetBanListEntries)
+					r.Post("/{listID}/entries", modH.HandleAddBanListEntry)
+					r.Delete("/{listID}/entries/{entryID}", modH.HandleRemoveBanListEntry)
+					r.Get("/{listID}/export", modH.HandleExportBanList)
+					r.Post("/{listID}/import", modH.HandleImportBanList)
+				})
+				r.Get("/{guildID}/ban-list-subscriptions", modH.HandleGetBanListSubscriptions)
+				r.Post("/{guildID}/ban-list-subscriptions", modH.HandleSubscribeBanList)
+				r.Delete("/{guildID}/ban-list-subscriptions/{subID}", modH.HandleUnsubscribeBanList)
+
+				// Guild sticker pack routes.
+				r.Route("/{guildID}/sticker-packs", func(r chi.Router) {
+					r.Post("/", stickerH.HandleCreateGuildPack)
+					r.Get("/", stickerH.HandleGetGuildPacks)
+					r.Delete("/{packID}", stickerH.HandleDeletePack)
+					r.Get("/{packID}/stickers", stickerH.HandleGetPackStickers)
+					r.Post("/{packID}/stickers", stickerH.HandleAddSticker)
+					r.Delete("/{packID}/stickers/{stickerID}", stickerH.HandleDeleteSticker)
+				})
+
+				// Guild event routes.
+				r.Route("/{guildID}/events", func(r chi.Router) {
+					r.Post("/", guildEventH.HandleCreateEvent)
+					r.Get("/", guildEventH.HandleListEvents)
+					r.Get("/{eventID}", guildEventH.HandleGetEvent)
+					r.Patch("/{eventID}", guildEventH.HandleUpdateEvent)
+					r.Delete("/{eventID}", guildEventH.HandleDeleteEvent)
+					r.Post("/{eventID}/rsvp", guildEventH.HandleRSVP)
+					r.Delete("/{eventID}/rsvp", guildEventH.HandleDeleteRSVP)
+					r.Get("/{eventID}/rsvps", guildEventH.HandleListRSVPs)
+				})
 
 				// AutoMod rules management.
 				if s.AutoMod != nil {
@@ -290,8 +368,36 @@ func (s *Server) registerRoutes() {
 				r.Put("/{channelID}/permissions/{overrideID}", channelH.HandleSetChannelPermission)
 				r.Delete("/{channelID}/permissions/{overrideID}", channelH.HandleDeleteChannelPermission)
 				r.Post("/{channelID}/messages/{messageID}/threads", channelH.HandleCreateThread)
+				r.Post("/{channelID}/messages/{messageID}/report", modH.HandleReportMessage)
+				r.Post("/{channelID}/messages/{messageID}/report-admin", modH.HandleReportToAdmin)
 			r.Get("/{channelID}/threads", channelH.HandleGetThreads)
+				r.Post("/{channelID}/lock", modH.HandleLockChannel)
+				r.Post("/{channelID}/unlock", modH.HandleUnlockChannel)
 			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
+
+				// Announcement channel follower routes.
+				r.Post("/{channelID}/followers", channelH.HandleFollowChannel)
+				r.Get("/{channelID}/followers", channelH.HandleGetChannelFollowers)
+				r.Delete("/{channelID}/followers/{followerID}", channelH.HandleUnfollowChannel)
+				r.Post("/{channelID}/messages/{messageID}/publish", channelH.HandlePublishMessage)
+
+				// Scheduled message routes.
+				r.Post("/{channelID}/scheduled-messages", channelH.HandleScheduleMessage)
+				r.Get("/{channelID}/scheduled-messages", channelH.HandleGetScheduledMessages)
+				r.Delete("/{channelID}/scheduled-messages/{messageID}", channelH.HandleDeleteScheduledMessage)
+
+				// Poll routes.
+				r.Post("/{channelID}/polls", pollH.HandleCreatePoll)
+				r.Get("/{channelID}/polls/{pollID}", pollH.HandleGetPoll)
+				r.Post("/{channelID}/polls/{pollID}/votes", pollH.HandleVotePoll)
+				r.Post("/{channelID}/polls/{pollID}/close", pollH.HandleClosePoll)
+				r.Delete("/{channelID}/polls/{pollID}", pollH.HandleDeletePoll)
+			})
+
+			// Message bookmark routes (top-level, not channel-scoped).
+			r.Route("/messages", func(r chi.Router) {
+				r.Put("/{messageID}/bookmark", bookmarkH.HandleCreateBookmark)
+				r.Delete("/{messageID}/bookmark", bookmarkH.HandleDeleteBookmark)
 			})
 
 			// Voice routes.
@@ -299,6 +405,18 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/join", s.handleVoiceJoin)
 				r.Post("/{channelID}/leave", s.handleVoiceLeave)
 				r.Get("/{channelID}/states", s.handleGetVoiceStates)
+				r.Post("/{channelID}/members/{userID}/mute", s.handleVoiceServerMute)
+				r.Post("/{channelID}/members/{userID}/deafen", s.handleVoiceServerDeafen)
+				r.Post("/{channelID}/members/{userID}/move", s.handleVoiceMoveUser)
+			})
+
+			// Public ban lists.
+			r.Get("/ban-lists/public", modH.HandleGetPublicBanLists)
+
+			// User sticker packs.
+			r.Route("/stickers", func(r chi.Router) {
+				r.Get("/my-packs", stickerH.HandleGetUserPacks)
+				r.Post("/my-packs", stickerH.HandleCreateUserPack)
 			})
 
 			// Invite routes.
@@ -367,6 +485,9 @@ func (s *Server) registerRoutes() {
 				})
 			}
 
+			// Instance announcements (visible to all logged-in users).
+			r.Get("/announcements", adminH.HandleGetAnnouncements)
+
 			// Admin routes.
 			r.Route("/admin", func(r chi.Router) {
 				r.Get("/instance", adminH.HandleGetInstance)
@@ -379,6 +500,19 @@ func (s *Server) registerRoutes() {
 				r.Post("/users/{userID}/suspend", adminH.HandleSuspendUser)
 				r.Post("/users/{userID}/unsuspend", adminH.HandleUnsuspendUser)
 				r.Post("/users/{userID}/set-admin", adminH.HandleSetAdmin)
+				r.Post("/users/{userID}/instance-ban", adminH.HandleInstanceBanUser)
+				r.Post("/users/{userID}/instance-unban", adminH.HandleInstanceUnbanUser)
+				r.Get("/instance-bans", adminH.HandleGetInstanceBans)
+				r.Get("/registration", adminH.HandleGetRegistrationConfig)
+				r.Patch("/registration", adminH.HandleUpdateRegistrationConfig)
+				r.Post("/registration/tokens", adminH.HandleCreateRegistrationToken)
+				r.Get("/registration/tokens", adminH.HandleListRegistrationTokens)
+				r.Delete("/registration/tokens/{tokenID}", adminH.HandleDeleteRegistrationToken)
+				r.Post("/announcements", adminH.HandleCreateAnnouncement)
+				r.Get("/announcements", adminH.HandleListAllAnnouncements)
+				r.Patch("/announcements/{announcementID}", adminH.HandleUpdateAnnouncement)
+				r.Delete("/announcements/{announcementID}", adminH.HandleDeleteAnnouncement)
+				r.Get("/reports", modH.HandleGetAdminReports)
 			})
 		})
 
@@ -419,10 +553,52 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // handleRegister handles POST /api/v1/auth/register.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	// Check registration mode.
+	var regMode string
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(
+			(SELECT value FROM instance_settings WHERE key = 'registration_mode'), 'open'
+		)`).Scan(&regMode)
+	if regMode == "closed" {
+		WriteError(w, http.StatusForbidden, "registration_closed", "Registration is currently closed on this instance")
+		return
+	}
+
 	var req auth.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
+	}
+
+	// In invite_only mode, require a valid registration token.
+	var token string
+	if regMode == "invite_only" {
+		token = r.URL.Query().Get("token")
+		if token == "" {
+			// Also check request body for token field.
+			token = req.Token
+		}
+		if token == "" {
+			WriteError(w, http.StatusForbidden, "token_required", "A registration token is required to create an account on this instance")
+			return
+		}
+		// Validate the token.
+		var uses, maxUses int
+		var expiresAt *time.Time
+		err := s.DB.Pool.QueryRow(r.Context(),
+			`SELECT uses, max_uses, expires_at FROM registration_tokens WHERE id = $1`, token).Scan(&uses, &maxUses, &expiresAt)
+		if err != nil {
+			WriteError(w, http.StatusForbidden, "invalid_token", "Invalid registration token")
+			return
+		}
+		if uses >= maxUses {
+			WriteError(w, http.StatusForbidden, "token_exhausted", "This registration token has been fully used")
+			return
+		}
+		if expiresAt != nil && expiresAt.Before(time.Now()) {
+			WriteError(w, http.StatusForbidden, "token_expired", "This registration token has expired")
+			return
+		}
 	}
 
 	ip := r.RemoteAddr
@@ -439,6 +615,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.Logger.Error("registration failed", slog.String("error", err.Error()))
 		WriteError(w, http.StatusInternalServerError, "internal_error", "Registration failed")
 		return
+	}
+
+	// Increment token usage only after successful registration.
+	if token != "" {
+		s.DB.Pool.Exec(r.Context(),
+			`UPDATE registration_tokens SET uses = uses + 1 WHERE id = $1`, token)
 	}
 
 	WriteJSON(w, http.StatusCreated, map[string]interface{}{
@@ -673,10 +855,12 @@ func slogMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // maxBodySize limits the request body to the given number of bytes.
+// Skips multipart/form-data requests (file uploads set their own limit).
 func maxBodySize(n int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Body != nil {
+			ct := r.Header.Get("Content-Type")
+			if r.Body != nil && !strings.HasPrefix(ct, "multipart/form-data") {
 				r.Body = http.MaxBytesReader(w, r.Body, n)
 			}
 			next.ServeHTTP(w, r)

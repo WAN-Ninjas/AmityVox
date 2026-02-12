@@ -28,10 +28,16 @@ type Handler struct {
 
 // updateSelfRequest is the JSON body for PATCH /users/@me.
 type updateSelfRequest struct {
-	DisplayName *string `json:"display_name"`
-	AvatarID    *string `json:"avatar_id"`
-	StatusText  *string `json:"status_text"`
-	Bio         *string `json:"bio"`
+	DisplayName     *string `json:"display_name"`
+	AvatarID        *string `json:"avatar_id"`
+	StatusText      *string `json:"status_text"`
+	StatusEmoji     *string `json:"status_emoji"`
+	StatusPresence  *string `json:"status_presence"`
+	StatusExpiresAt *string `json:"status_expires_at"` // RFC3339 or empty to clear
+	Bio             *string `json:"bio"`
+	BannerID        *string `json:"banner_id"`
+	AccentColor     *string `json:"accent_color"`
+	Pronouns        *string `json:"pronouns"`
 }
 
 // HandleGetSelf returns the authenticated user's profile.
@@ -77,8 +83,39 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_bio", "Bio must be at most 2000 characters")
 		return
 	}
+	if req.StatusPresence != nil {
+		valid := map[string]bool{"online": true, "idle": true, "focus": true, "busy": true, "dnd": true, "invisible": true, "offline": true}
+		if !valid[*req.StatusPresence] {
+			writeError(w, http.StatusBadRequest, "invalid_presence", "Invalid status presence value")
+			return
+		}
+	}
+	if req.Pronouns != nil && len(*req.Pronouns) > 40 {
+		writeError(w, http.StatusBadRequest, "invalid_pronouns", "Pronouns must be at most 40 characters")
+		return
+	}
+	if req.AccentColor != nil && len(*req.AccentColor) > 7 {
+		writeError(w, http.StatusBadRequest, "invalid_accent_color", "Accent color must be a hex color (e.g. #FF5500)")
+		return
+	}
 
-	user, err := h.updateUser(r.Context(), userID, req)
+	// Parse status expiry if provided.
+	var statusExpiresAt *time.Time
+	if req.StatusExpiresAt != nil {
+		if *req.StatusExpiresAt == "" {
+			// Clear expiry.
+			statusExpiresAt = nil
+		} else {
+			t, err := time.Parse(time.RFC3339, *req.StatusExpiresAt)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_status_expires", "status_expires_at must be RFC3339 format")
+				return
+			}
+			statusExpiresAt = &t
+		}
+	}
+
+	user, err := h.updateUser(r.Context(), userID, req, statusExpiresAt)
 	if err != nil {
 		h.Logger.Error("failed to update user", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update user")
@@ -125,7 +162,8 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 		        g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
 		        g.preferred_locale, g.max_members, g.vanity_url,
-		        g.member_count, g.created_at
+		        g.verification_level, g.afk_channel_id, g.afk_timeout,
+		        g.tags, g.member_count, g.created_at
 		 FROM guilds g
 		 JOIN guild_members gm ON g.id = gm.guild_id
 		 WHERE gm.user_id = $1
@@ -145,7 +183,9 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 			&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.MemberCount, &g.CreatedAt,
+			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL,
+			&g.VerificationLevel, &g.AFKChannelID, &g.AFKTimeout,
+			&g.Tags, &g.MemberCount, &g.CreatedAt,
 		); err != nil {
 			h.Logger.Error("failed to scan guild", slog.String("error", err.Error()))
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")
@@ -166,7 +206,8 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT c.id, c.guild_id, c.category_id, c.channel_type, c.name, c.topic,
 		        c.position, c.slowmode_seconds, c.nsfw, c.encrypted, c.last_message_id,
-		        c.owner_id, c.default_permissions, c.created_at
+		        c.owner_id, c.default_permissions, c.user_limit, c.bitrate,
+		        c.locked, c.locked_by, c.locked_at, c.archived, c.created_at
 		 FROM channels c
 		 JOIN channel_recipients cr ON c.id = cr.channel_id
 		 WHERE cr.user_id = $1 AND c.channel_type IN ('dm', 'group')
@@ -186,7 +227,8 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
-			&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+			&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
+			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
 		); err != nil {
 			h.Logger.Error("failed to scan channel", slog.String("error", err.Error()))
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read DMs")
@@ -416,43 +458,136 @@ func (h *Handler) HandleRemoveFriend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// HandleBlockUser blocks another user.
+// blockUserRequest is the optional JSON body for PUT /api/v1/users/{userID}/block.
+type blockUserRequest struct {
+	Reason *string `json:"reason"`
+}
+
+// HandleBlockUser blocks another user. This removes any existing friendship or
+// pending friend request, inserts into both user_relationships (for fast
+// relationship checks) and user_blocks (for richer metadata), and emits a
+// RELATIONSHIP_UPDATE event.
 // PUT /api/v1/users/{userID}/block
 func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	targetID := chi.URLParam(r, "userID")
 
 	if targetID == "" || targetID == userID {
-		writeError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
+		writeError(w, http.StatusBadRequest, "invalid_target", "Cannot block yourself")
 		return
 	}
 
+	// Validate that the target user exists.
+	var exists bool
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, targetID,
+	).Scan(&exists); err != nil || !exists {
+		writeError(w, http.StatusNotFound, "user_not_found", "Target user not found")
+		return
+	}
+
+	// Check if already blocked.
+	var alreadyBlocked bool
+	_ = h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM user_blocks WHERE user_id = $1 AND target_id = $2)`,
+		userID, targetID,
+	).Scan(&alreadyBlocked)
+	if alreadyBlocked {
+		writeError(w, http.StatusConflict, "already_blocked", "User is already blocked")
+		return
+	}
+
+	// Parse optional reason from request body.
+	var req blockUserRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+			return
+		}
+		if req.Reason != nil && len(*req.Reason) > 256 {
+			writeError(w, http.StatusBadRequest, "reason_too_long", "Block reason must be at most 256 characters")
+			return
+		}
+	}
+
+	blockID := models.NewULID().String()
+	now := time.Now()
+
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
+		h.Logger.Error("failed to begin tx for block", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
 		return
 	}
 	defer tx.Rollback(r.Context())
 
-	// Remove any existing relationship from both sides.
-	tx.Exec(r.Context(), `DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`, userID, targetID)
-	tx.Exec(r.Context(), `DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`, targetID, userID)
-
-	// Create block.
-	tx.Exec(r.Context(),
-		`INSERT INTO user_relationships (user_id, target_id, status, created_at) VALUES ($1, $2, 'blocked', now())`,
+	// Remove any existing relationships from both sides (friend requests, friendships).
+	_, err = tx.Exec(r.Context(),
+		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`,
 		userID, targetID)
+	if err != nil {
+		h.Logger.Error("failed to clear relationship (self)", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
+		return
+	}
+	_, err = tx.Exec(r.Context(),
+		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`,
+		targetID, userID)
+	if err != nil {
+		h.Logger.Error("failed to clear relationship (target)", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
+		return
+	}
 
-	tx.Commit(r.Context())
+	// Insert blocked status into user_relationships for fast relationship checks.
+	_, err = tx.Exec(r.Context(),
+		`INSERT INTO user_relationships (user_id, target_id, status, created_at)
+		 VALUES ($1, $2, 'blocked', $3)`,
+		userID, targetID, now)
+	if err != nil {
+		h.Logger.Error("failed to insert relationship block", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
+		return
+	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	// Insert into user_blocks for richer metadata.
+	_, err = tx.Exec(r.Context(),
+		`INSERT INTO user_blocks (id, user_id, target_id, reason, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		blockID, userID, targetID, req.Reason, now)
+	if err != nil {
+		h.Logger.Error("failed to insert user_block", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		h.Logger.Error("failed to commit block tx", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
+		return
+	}
+
+	result := map[string]interface{}{
+		"id":        blockID,
+		"user_id":   userID,
+		"target_id": targetID,
+		"status":    models.RelationshipBlocked,
+	}
+	if req.Reason != nil {
+		result["reason"] = *req.Reason
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectRelationshipUpdate, "RELATIONSHIP_UPDATE", map[string]string{
 		"user_id":   userID,
 		"target_id": targetID,
 		"status":    models.RelationshipBlocked,
 	})
+
+	writeJSON(w, http.StatusOK, result)
 }
 
-// HandleUnblockUser removes a block on another user.
+// HandleUnblockUser removes a block on another user. Cleans up both
+// user_relationships and user_blocks, and emits a RELATIONSHIP_UPDATE event.
 // DELETE /api/v1/users/{userID}/block
 func (h *Handler) HandleUnblockUser(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
@@ -463,15 +598,98 @@ func (h *Handler) HandleUnblockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.Pool.Exec(r.Context(),
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		h.Logger.Error("failed to begin tx for unblock", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Remove from user_relationships.
+	result, err := tx.Exec(r.Context(),
 		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status = 'blocked'`,
 		userID, targetID)
 	if err != nil {
+		h.Logger.Error("failed to delete relationship block", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_blocked", "User is not blocked")
+		return
+	}
+
+	// Remove from user_blocks.
+	_, err = tx.Exec(r.Context(),
+		`DELETE FROM user_blocks WHERE user_id = $1 AND target_id = $2`,
+		userID, targetID)
+	if err != nil {
+		h.Logger.Error("failed to delete user_block", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
 		return
 	}
 
+	if err := tx.Commit(r.Context()); err != nil {
+		h.Logger.Error("failed to commit unblock tx", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectRelationshipUpdate, "RELATIONSHIP_UPDATE", map[string]string{
+		"user_id":   userID,
+		"target_id": targetID,
+		"status":    "none",
+	})
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetBlockedUsers returns the list of users blocked by the authenticated
+// user, including their profiles and the block reason/timestamp.
+// GET /api/v1/users/@me/blocked
+func (h *Handler) HandleGetBlockedUsers(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT ub.id, ub.user_id, ub.target_id, ub.reason, ub.created_at,
+		        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns,
+		        u.bot_owner_id, u.flags, u.created_at
+		 FROM user_blocks ub
+		 JOIN users u ON u.id = ub.target_id
+		 WHERE ub.user_id = $1
+		 ORDER BY ub.created_at DESC`,
+		userID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to get blocked users", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get blocked users")
+		return
+	}
+	defer rows.Close()
+
+	blocks := make([]models.UserBlock, 0)
+	for rows.Next() {
+		var b models.UserBlock
+		var u models.User
+		if err := rows.Scan(
+			&b.ID, &b.UserID, &b.TargetID, &b.Reason, &b.CreatedAt,
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
+			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			h.Logger.Error("failed to scan blocked user", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read blocked users")
+			return
+		}
+		b.User = &u
+		blocks = append(blocks, b)
+	}
+
+	writeJSON(w, http.StatusOK, blocks)
 }
 
 // HandleGetSelfSessions lists all active sessions for the authenticated user.
@@ -632,8 +850,9 @@ func (h *Handler) HandleDeleteSelf(w http.ResponseWriter, r *http.Request) {
 	tx.Exec(r.Context(), `DELETE FROM guild_members WHERE user_id = $1`, userID)
 	tx.Exec(r.Context(), `DELETE FROM member_roles WHERE user_id = $1`, userID)
 
-	// Remove all relationships.
+	// Remove all relationships and blocks.
 	tx.Exec(r.Context(), `DELETE FROM user_relationships WHERE user_id = $1 OR target_id = $1`, userID)
+	tx.Exec(r.Context(), `DELETE FROM user_blocks WHERE user_id = $1 OR target_id = $1`, userID)
 
 	// Invalidate all sessions.
 	tx.Exec(r.Context(), `DELETE FROM user_sessions WHERE user_id = $1`, userID)
@@ -779,7 +998,9 @@ func (h *Handler) HandleGetMutualFriends(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
-		        u.status_text, u.status_presence, u.bio, u.bot_owner_id, u.flags, u.created_at
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns,
+		        u.bot_owner_id, u.flags, u.created_at
 		 FROM users u
 		 WHERE u.id IN (
 			SELECT r1.target_id FROM user_relationships r1
@@ -801,7 +1022,9 @@ func (h *Handler) HandleGetMutualFriends(w http.ResponseWriter, r *http.Request)
 		var u models.User
 		if err := rows.Scan(
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
-			&u.StatusText, &u.StatusPresence, &u.Bio, &u.BotOwnerID, &u.Flags, &u.CreatedAt,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
+			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read mutual friends")
 			return
@@ -862,33 +1085,47 @@ func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, err
 	var user models.User
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id, status_text,
-		        status_presence, bio, bot_owner_id, email, flags, created_at
+		        status_emoji, status_presence, status_expires_at, bio,
+		        banner_id, accent_color, pronouns,
+		        bot_owner_id, email, flags, created_at
 		 FROM users WHERE id = $1`,
 		userID,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
-		&user.AvatarID, &user.StatusText, &user.StatusPresence, &user.Bio,
-		&user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
+		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
+		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
 	)
 	return &user, err
 }
 
-func (h *Handler) updateUser(ctx context.Context, userID string, req updateSelfRequest) (*models.User, error) {
+func (h *Handler) updateUser(ctx context.Context, userID string, req updateSelfRequest, statusExpiresAt *time.Time) (*models.User, error) {
 	var user models.User
 	err := h.Pool.QueryRow(ctx,
 		`UPDATE users SET
 			display_name = COALESCE($2, display_name),
 			avatar_id = COALESCE($3, avatar_id),
 			status_text = COALESCE($4, status_text),
-			bio = COALESCE($5, bio)
+			bio = COALESCE($5, bio),
+			status_emoji = COALESCE($6, status_emoji),
+			status_presence = COALESCE($7, status_presence),
+			status_expires_at = COALESCE($8, status_expires_at),
+			banner_id = COALESCE($9, banner_id),
+			accent_color = COALESCE($10, accent_color),
+			pronouns = COALESCE($11, pronouns)
 		 WHERE id = $1
 		 RETURNING id, instance_id, username, display_name, avatar_id, status_text,
-		           status_presence, bio, bot_owner_id, email, flags, created_at`,
+		           status_emoji, status_presence, status_expires_at, bio,
+		           banner_id, accent_color, pronouns,
+		           bot_owner_id, email, flags, created_at`,
 		userID, req.DisplayName, req.AvatarID, req.StatusText, req.Bio,
+		req.StatusEmoji, req.StatusPresence, statusExpiresAt,
+		req.BannerID, req.AccentColor, req.Pronouns,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
-		&user.AvatarID, &user.StatusText, &user.StatusPresence, &user.Bio,
-		&user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
+		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
+		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
 	)
 	return &user, err
 }
@@ -898,13 +1135,14 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		        default_permissions, created_at
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
 		 FROM channels WHERE id = $1`,
 		channelID,
 	).Scan(
 		&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 		&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
-		&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+		&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
+		&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
 	)
 	return &c, err
 }

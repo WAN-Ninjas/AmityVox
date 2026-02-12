@@ -8,10 +8,15 @@ export interface User {
 	display_name: string | null;
 	avatar_id: string | null;
 	status_text: string | null;
+	status_emoji: string | null;
 	status_presence: 'online' | 'idle' | 'dnd' | 'invisible' | 'offline';
+	status_expires_at: string | null;
 	bio: string | null;
 	bot_owner_id: string | null;
 	email: string | null;
+	banner_id: string | null;
+	accent_color: string | null;
+	pronouns: string | null;
 	flags: number;
 	created_at: string;
 }
@@ -31,6 +36,8 @@ export interface Guild {
 	preferred_locale: string;
 	max_members: number;
 	vanity_url: string | null;
+	verification_level: number;
+	tags: string[];
 	member_count: number;
 	created_at: string;
 }
@@ -48,6 +55,12 @@ export interface Channel {
 	encrypted: boolean;
 	last_message_id: string | null;
 	owner_id: string | null;
+	user_limit: number;
+	bitrate: number;
+	locked: boolean;
+	locked_by: string | null;
+	locked_at: string | null;
+	archived: boolean;
 	created_at: string;
 }
 
@@ -88,6 +101,16 @@ export type MessageType =
 	| 'system_pin'
 	| 'reply'
 	| 'thread_created';
+
+export interface ScheduledMessage {
+	id: string;
+	channel_id: string;
+	author_id: string;
+	content: string | null;
+	attachment_ids: string[];
+	scheduled_for: string;
+	created_at: string;
+}
 
 export interface Reaction {
 	emoji: string;
@@ -204,6 +227,7 @@ export interface ReadyEvent {
 	user: User;
 	guild_ids: string[];
 	session_id: string;
+	presences?: Record<string, string>;
 }
 
 export interface TypingEvent {
@@ -317,6 +341,193 @@ export interface Relationship {
 	user?: User;
 }
 
+// --- Polls ---
+
+export interface Poll {
+	id: string;
+	channel_id: string;
+	message_id: string | null;
+	author_id: string;
+	question: string;
+	multi_vote: boolean;
+	anonymous: boolean;
+	expires_at: string | null;
+	closed: boolean;
+	created_at: string;
+	options: PollOption[];
+	total_votes: number;
+	user_votes: string[];
+}
+
+export interface PollOption {
+	id: string;
+	poll_id: string;
+	text: string;
+	position: number;
+	vote_count: number;
+}
+
+// --- Bookmarks ---
+
+export interface MessageBookmark {
+	user_id: string;
+	message_id: string;
+	note: string | null;
+	created_at: string;
+	message?: Message;
+}
+
+// --- Guild Events ---
+
+export interface GuildEvent {
+	id: string;
+	guild_id: string;
+	creator_id: string;
+	name: string;
+	description: string | null;
+	location: string | null;
+	channel_id: string | null;
+	image_id: string | null;
+	scheduled_start: string;
+	scheduled_end: string | null;
+	status: 'scheduled' | 'active' | 'completed' | 'cancelled';
+	interested_count: number;
+	created_at: string;
+	creator?: { id: string; username: string; display_name?: string | null; avatar_id?: string | null };
+	user_rsvp: string | null;
+}
+
+export interface EventRSVP {
+	event_id: string;
+	user_id: string;
+	status: 'interested' | 'going';
+	created_at: string;
+	user?: { id: string; username: string; display_name?: string | null; avatar_id?: string | null };
+}
+
+// --- Moderation ---
+
+export interface MemberWarning {
+	id: string;
+	guild_id: string;
+	user_id: string;
+	moderator_id: string;
+	reason: string;
+	created_at: string;
+	user?: User;
+	moderator?: User;
+}
+
+export interface MessageReport {
+	id: string;
+	guild_id: string | null;
+	channel_id: string;
+	message_id: string;
+	reporter_id: string;
+	reason: string;
+	status: 'open' | 'resolved' | 'dismissed';
+	resolved_by: string | null;
+	resolved_at: string | null;
+	created_at: string;
+	reporter?: User;
+	message?: Message;
+}
+
+export interface RaidConfig {
+	guild_id: string;
+	enabled: boolean;
+	join_rate_limit: number;
+	join_rate_window: number;
+	min_account_age: number;
+	lockdown_active: boolean;
+	lockdown_started_at: string | null;
+	updated_at: string;
+}
+
+// --- AutoMod ---
+
+export interface AutoModRule {
+	id: string;
+	guild_id: string;
+	name: string;
+	enabled: boolean;
+	rule_type: 'word_filter' | 'regex_filter' | 'invite_filter' | 'mention_spam' | 'caps_filter' | 'spam_filter' | 'link_filter';
+	action: 'delete' | 'warn' | 'timeout' | 'log';
+	config: Record<string, unknown>;
+	exempt_roles: string[];
+	exempt_channels: string[];
+	timeout_duration: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AutoModAction {
+	id: string;
+	rule_id: string;
+	guild_id: string;
+	channel_id: string;
+	user_id: string;
+	message_id: string | null;
+	action_taken: string;
+	rule_name: string;
+	matched_content: string | null;
+	created_at: string;
+}
+
+// --- User Badges ---
+
+export interface UserBadge {
+	id: string;
+	name: string;
+	icon: string;
+}
+
+// --- Instance Bans ---
+
+export interface InstanceBan {
+	user_id: string;
+	admin_id: string;
+	reason: string | null;
+	created_at: string;
+	username: string;
+	display_name: string | null;
+	avatar_id: string | null;
+}
+
+// --- Registration ---
+
+export interface RegistrationSettings {
+	mode: 'open' | 'invite_only' | 'closed';
+	message: string | null;
+}
+
+export interface RegistrationToken {
+	id: string;
+	token: string;
+	max_uses: number;
+	uses: number;
+	note: string | null;
+	expires_at: string | null;
+	created_by: string;
+	created_at: string;
+}
+
+// --- Announcements ---
+
+export type AnnouncementSeverity = 'info' | 'warning' | 'critical';
+
+export interface Announcement {
+	id: string;
+	title: string;
+	content: string;
+	severity: AnnouncementSeverity;
+	active: boolean;
+	expires_at: string | null;
+	created_by: string;
+	created_at: string;
+	updated_at: string;
+}
+
 // --- API Response Types ---
 
 export interface ApiResponse<T> {
@@ -373,6 +584,19 @@ export interface UserSettings {
 	notification_sounds: boolean;
 	dm_privacy: 'everyone' | 'friends' | 'nobody';
 	friend_request_privacy: 'everyone' | 'mutual_guilds' | 'nobody';
+	dnd_schedule?: {
+		enabled: boolean;
+		startHour: number;
+		startMinute: number;
+		endHour: number;
+		endMinute: number;
+	};
+	custom_themes?: Array<{
+		name: string;
+		colors: Record<string, string>;
+		createdAt: string;
+	}>;
+	active_custom_theme?: string | null;
 	[key: string]: unknown;
 }
 

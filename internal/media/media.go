@@ -118,10 +118,15 @@ func (s *Service) EnsureBucket(ctx context.Context) error {
 func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
-	// Limit request body to max upload size + overhead for multipart headers.
-	r.Body = http.MaxBytesReader(w, r.Body, s.maxUpload+4096)
+	// Limit request body to max upload size + 1MB overhead for multipart headers/boundaries.
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxUpload+1024*1024)
 
 	if err := r.ParseMultipartForm(s.maxUpload); err != nil {
+		s.logger.Warn("multipart parse failed",
+			slog.String("error", err.Error()),
+			slog.String("user_id", userID),
+			slog.Int64("max_upload_bytes", s.maxUpload),
+			slog.String("content_length", r.Header.Get("Content-Length")))
 		writeError(w, http.StatusBadRequest, "file_too_large",
 			fmt.Sprintf("File exceeds maximum upload size (%dMB)", s.maxUpload/(1024*1024)))
 		return
