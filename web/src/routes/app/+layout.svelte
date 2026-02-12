@@ -6,6 +6,7 @@
 	import { initAuth, currentUser, isLoading } from '$lib/stores/auth';
 	import { connectGateway, disconnectGateway } from '$lib/stores/gateway';
 	import { loadSettings, startDndChecker, stopDndChecker, loadSettingsFromApi } from '$lib/stores/settings';
+	import { loadBlockedUsers } from '$lib/stores/blocked';
 	import GuildSidebar from '$components/layout/GuildSidebar.svelte';
 	import ChannelSidebar from '$components/layout/ChannelSidebar.svelte';
 	import ToastContainer from '$components/common/ToastContainer.svelte';
@@ -37,6 +38,8 @@
 			connectGateway(token);
 			// Also try to sync settings from server.
 			loadSettingsFromApi();
+			// Load the user's blocked list for message filtering.
+			loadBlockedUsers();
 		});
 
 		return () => {

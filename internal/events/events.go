@@ -73,6 +73,9 @@ const (
 	SubjectGuildEventUpdate = "amityvox.guild.event_update"
 	SubjectGuildEventDelete = "amityvox.guild.event_delete"
 
+	// Moderation events.
+	SubjectRaidLockdown = "amityvox.guild.raid_lockdown"
+
 	// Federation events.
 	SubjectFederationRetry = "amityvox.federation.retry"
 )

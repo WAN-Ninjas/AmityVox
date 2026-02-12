@@ -19,6 +19,40 @@
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
 
+	// --- File attachment state ---
+	let pendingFiles = $state<File[]>([]);
+	let uploading = $state(false);
+
+	// Default max upload size in bytes (25 MB). This could be overridden by instance config.
+	const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+
+	/**
+	 * Format a byte count into a human-readable string (KB, MB, GB).
+	 */
+	function formatFileSize(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+		return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+	}
+
+	/**
+	 * Check whether a file exceeds the upload size limit.
+	 */
+	function isFileOverLimit(file: File): boolean {
+		return file.size > MAX_FILE_SIZE_BYTES;
+	}
+
+	const hasOversizedFiles = $derived(pendingFiles.some(isFileOverLimit));
+
+	function removePendingFile(index: number) {
+		pendingFiles = pendingFiles.filter((_, i) => i !== index);
+	}
+
+	function clearPendingFiles() {
+		pendingFiles = [];
+	}
+
 	// When entering edit mode, populate the input with the message content.
 	$effect(() => {
 		if ($editingMessage) {
@@ -196,10 +230,58 @@
 		}
 	}
 
+	function handleFileSelect(e: Event) {
+		const target = e.target as HTMLInputElement;
+		const files = target.files;
+		if (!files || files.length === 0) return;
+
+		for (const file of files) {
+			pendingFiles = [...pendingFiles, file];
+		}
+		target.value = '';
+	}
+
+	async function uploadPendingFiles() {
+		const channelId = $currentChannelId;
+		if (!channelId || pendingFiles.length === 0) return;
+
+		// Check for oversized files.
+		const oversized = pendingFiles.filter(isFileOverLimit);
+		if (oversized.length > 0) {
+			addToast(`${oversized.length} file(s) exceed the ${formatFileSize(MAX_FILE_SIZE_BYTES)} limit`, 'error');
+			return;
+		}
+
+		uploading = true;
+		try {
+			const ids: string[] = [];
+			for (const file of pendingFiles) {
+				const uploaded = await api.uploadFile(file);
+				ids.push(uploaded.id);
+			}
+			const msg = content.trim();
+			const sent = await api.sendMessage(channelId, msg, { attachment_ids: ids });
+			appendMessage(sent);
+			content = '';
+			if (inputEl) inputEl.style.height = 'auto';
+			pendingFiles = [];
+		} catch (err) {
+			addToast('Upload failed', 'error');
+		} finally {
+			uploading = false;
+		}
+	}
+
 	async function handleFileUpload(e: Event) {
 		const target = e.target as HTMLInputElement;
 		const file = target.files?.[0];
 		if (!file || !$currentChannelId) return;
+
+		if (isFileOverLimit(file)) {
+			addToast(`File exceeds the ${formatFileSize(MAX_FILE_SIZE_BYTES)} limit`, 'error');
+			target.value = '';
+			return;
+		}
 
 		try {
 			const uploaded = await api.uploadFile(file);
@@ -329,6 +411,64 @@
 			</div>
 		{/if}
 
+		<!-- Pending files preview -->
+		{#if pendingFiles.length > 0}
+			<div class="mb-2 rounded-lg bg-bg-secondary p-3">
+				<div class="mb-2 flex items-center justify-between">
+					<span class="text-xs font-semibold text-text-muted">
+						{pendingFiles.length} file{pendingFiles.length > 1 ? 's' : ''} attached
+						<span class="ml-1 font-normal text-text-muted">
+							(max {formatFileSize(MAX_FILE_SIZE_BYTES)})
+						</span>
+					</span>
+					<div class="flex items-center gap-2">
+						<button
+							class="text-xs text-text-muted hover:text-text-primary"
+							onclick={clearPendingFiles}
+						>
+							Clear all
+						</button>
+						<button
+							class="btn-primary text-xs px-3 py-1"
+							onclick={uploadPendingFiles}
+							disabled={uploading || hasOversizedFiles}
+						>
+							{uploading ? 'Uploading...' : 'Send'}
+						</button>
+					</div>
+				</div>
+				<div class="space-y-1.5">
+					{#each pendingFiles as file, i (file.name + i)}
+						{@const overLimit = isFileOverLimit(file)}
+						<div class="flex items-center gap-2 rounded px-2 py-1.5 {overLimit ? 'bg-red-500/10' : 'bg-bg-primary'}">
+							<svg class="h-4 w-4 shrink-0 {overLimit ? 'text-red-400' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+								<polyline points="14 2 14 8 20 8" />
+							</svg>
+							<span class="flex-1 truncate text-xs {overLimit ? 'text-red-400' : 'text-text-primary'}">
+								{file.name}
+							</span>
+							<span class="shrink-0 text-2xs {overLimit ? 'font-semibold text-red-400' : 'text-text-muted'}">
+								{formatFileSize(file.size)}
+								{#if overLimit}
+									-- exceeds limit
+								{/if}
+							</span>
+							<button
+								class="shrink-0 text-text-muted hover:text-text-primary"
+								onclick={() => removePendingFile(i)}
+								title="Remove file"
+							>
+								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M6 18L18 6M6 6l12 12" />
+								</svg>
+							</button>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+
 		<div
 			class="flex items-end gap-2 rounded-lg px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
 		>
@@ -338,7 +478,7 @@
 					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 						<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
 					</svg>
-					<input type="file" class="hidden" onchange={handleFileUpload} />
+					<input type="file" class="hidden" onchange={handleFileSelect} multiple />
 				</label>
 			{/if}
 

@@ -352,6 +352,7 @@ func (s *Server) registerRoutes() {
 					r.Route("/{guildID}/automod", func(r chi.Router) {
 						r.Get("/rules", s.AutoMod.HandleListRules)
 						r.Post("/rules", s.AutoMod.HandleCreateRule)
+						r.Post("/rules/test", s.AutoMod.HandleTestRule)
 						r.Get("/rules/{ruleID}", s.AutoMod.HandleGetRule)
 						r.Patch("/rules/{ruleID}", s.AutoMod.HandleUpdateRule)
 						r.Delete("/rules/{ruleID}", s.AutoMod.HandleDeleteRule)

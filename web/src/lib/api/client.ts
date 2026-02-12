@@ -42,7 +42,11 @@ import type {
 	RegistrationToken,
 	Announcement,
 	OnboardingConfig,
-	OnboardingPrompt
+	OnboardingPrompt,
+	BanList,
+	BanListEntry,
+	BanListSubscription,
+	ChannelFollower
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -294,6 +298,10 @@ class ApiClient {
 
 	unblockUser(userId: string): Promise<void> {
 		return this.del(`/users/${userId}/block`);
+	}
+
+	getBlockedUsers(): Promise<{ id: string; user_id: string; target_id: string; reason: string | null; created_at: string; user?: User }[]> {
+		return this.get('/users/@me/blocked');
 	}
 
 	// --- Reactions ---
@@ -941,6 +949,10 @@ class ApiClient {
 		return this.get(`/guilds/${guildId}/automod/actions`);
 	}
 
+	testAutoModRule(guildId: string, data: { rule_type: string; config: Record<string, unknown>; sample_text: string }): Promise<{ matched: boolean; matched_content: string | null }> {
+		return this.post(`/guilds/${guildId}/automod/rules/test`, data);
+	}
+
 	// --- Role Updates ---
 
 	updateRole(guildId: string, roleId: string, data: Partial<Role>): Promise<Role> {
@@ -987,6 +999,70 @@ class ApiClient {
 
 	getOnboardingStatus(guildId: string): Promise<{ completed: boolean }> {
 		return this.get(`/guilds/${guildId}/onboarding/status`);
+	}
+
+	// --- Ban Lists ---
+
+	getBanLists(guildId: string): Promise<BanList[]> {
+		return this.get(`/guilds/${guildId}/ban-lists`);
+	}
+
+	createBanList(guildId: string, data: { name: string; description?: string; public?: boolean }): Promise<BanList> {
+		return this.post(`/guilds/${guildId}/ban-lists`, data);
+	}
+
+	deleteBanList(guildId: string, listId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/ban-lists/${listId}`);
+	}
+
+	getBanListEntries(guildId: string, listId: string): Promise<BanListEntry[]> {
+		return this.get(`/guilds/${guildId}/ban-lists/${listId}/entries`);
+	}
+
+	addBanListEntry(guildId: string, listId: string, data: { user_id: string; reason?: string }): Promise<BanListEntry> {
+		return this.post(`/guilds/${guildId}/ban-lists/${listId}/entries`, data);
+	}
+
+	removeBanListEntry(guildId: string, listId: string, entryId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/ban-lists/${listId}/entries/${entryId}`);
+	}
+
+	exportBanList(guildId: string, listId: string): Promise<any> {
+		return this.get(`/guilds/${guildId}/ban-lists/${listId}/export`);
+	}
+
+	importBanList(guildId: string, listId: string, data: any): Promise<void> {
+		return this.post(`/guilds/${guildId}/ban-lists/${listId}/import`, data);
+	}
+
+	getBanListSubscriptions(guildId: string): Promise<BanListSubscription[]> {
+		return this.get(`/guilds/${guildId}/ban-list-subscriptions`);
+	}
+
+	subscribeBanList(guildId: string, data: { list_id: string; auto_ban?: boolean }): Promise<BanListSubscription> {
+		return this.post(`/guilds/${guildId}/ban-list-subscriptions`, data);
+	}
+
+	unsubscribeBanList(guildId: string, subId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/ban-list-subscriptions/${subId}`);
+	}
+
+	getPublicBanLists(): Promise<BanList[]> {
+		return this.get('/ban-lists/public');
+	}
+
+	// --- Channel Followers ---
+
+	followChannel(channelId: string, webhookData: { target_channel_id: string }): Promise<ChannelFollower> {
+		return this.post(`/channels/${channelId}/followers`, webhookData);
+	}
+
+	getChannelFollowers(channelId: string): Promise<ChannelFollower[]> {
+		return this.get(`/channels/${channelId}/followers`);
+	}
+
+	unfollowChannel(channelId: string, followerId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/followers/${followerId}`);
 	}
 }
 

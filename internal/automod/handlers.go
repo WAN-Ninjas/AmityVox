@@ -353,6 +353,70 @@ func (s *Service) HandleGetRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rule)
 }
 
+// HandleTestRule handles POST /api/v1/guilds/{guildID}/automod/rules/test.
+// It evaluates sample text against a rule configuration without taking any action,
+// allowing admins to preview what messages would match before enabling a rule.
+func (s *Service) HandleTestRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RuleType   string     `json:"rule_type"`
+		Config     RuleConfig `json:"config"`
+		SampleText string     `json:"sample_text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.SampleText == "" {
+		writeError(w, http.StatusBadRequest, "missing_sample", "sample_text is required")
+		return
+	}
+
+	if req.RuleType == "" {
+		writeError(w, http.StatusBadRequest, "missing_type", "rule_type is required")
+		return
+	}
+
+	// Validate rule type.
+	validTypes := map[string]bool{
+		RuleWordFilter: true, RuleRegexFilter: true, RuleInviteFilter: true,
+		RuleMentionSpam: true, RuleCapsFilter: true, RuleLinkFilter: true,
+	}
+	if !validTypes[req.RuleType] {
+		// spam_filter requires stateful tracking and cannot be meaningfully tested
+		// against a single sample message.
+		if req.RuleType == RuleSpamFilter {
+			writeError(w, http.StatusBadRequest, "unsupported_type",
+				"Spam filter cannot be tested with a single message (it requires message history)")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_type", "Invalid rule_type for testing")
+		return
+	}
+
+	// Build a temporary rule and evaluate it.
+	rule := &Rule{
+		RuleType: req.RuleType,
+		Config:   req.Config,
+	}
+
+	matched, reason := s.checkRule(rule, MessageContext{
+		Content: req.SampleText,
+	})
+
+	type testResult struct {
+		Matched        bool    `json:"matched"`
+		MatchedContent *string `json:"matched_content"`
+	}
+
+	result := testResult{Matched: matched}
+	if matched && reason != "" {
+		result.MatchedContent = &reason
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

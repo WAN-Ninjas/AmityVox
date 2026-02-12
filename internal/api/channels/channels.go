@@ -6,12 +6,15 @@ package channels
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +32,98 @@ type Handler struct {
 	Pool     *pgxpool.Pool
 	EventBus *events.Bus
 	Logger   *slog.Logger
+}
+
+// --- DM Spam Detection ---
+
+// dmSpamTracker tracks recent DM sends per user to detect spam patterns.
+// A user is flagged when they send the same content to 5+ different DM
+// recipients within a 10-minute sliding window.
+var dmSpamTracker = &dmTracker{
+	sends: make(map[string][]dmSendEntry),
+}
+
+const (
+	dmSpamRecipientThreshold = 5           // same content to this many different recipients = flagged
+	dmSpamWindow             = 10 * time.Minute
+)
+
+type dmTracker struct {
+	mu    sync.Mutex
+	sends map[string][]dmSendEntry // key: "userID:contentHash"
+}
+
+type dmSendEntry struct {
+	recipientID string
+	ts          time.Time
+}
+
+// contentHash returns a hex-encoded SHA-256 hash of the content for compact storage.
+func contentHash(content string) string {
+	h := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(content))))
+	return hex.EncodeToString(h[:])
+}
+
+// trackDMSend records a DM send and returns true if the user is flagged as a spammer.
+func (dt *dmTracker) trackDMSend(userID, recipientID, content string) bool {
+	hash := contentHash(content)
+	key := userID + ":" + hash
+	now := time.Now()
+	cutoff := now.Add(-dmSpamWindow)
+
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	// Prune old entries.
+	entries := dt.sends[key]
+	pruned := entries[:0]
+	for _, e := range entries {
+		if e.ts.After(cutoff) {
+			pruned = append(pruned, e)
+		}
+	}
+
+	// Add the current send.
+	pruned = append(pruned, dmSendEntry{recipientID: recipientID, ts: now})
+	dt.sends[key] = pruned
+
+	// Count unique recipients.
+	uniqueRecipients := make(map[string]struct{})
+	for _, e := range pruned {
+		uniqueRecipients[e.recipientID] = struct{}{}
+	}
+
+	return len(uniqueRecipients) >= dmSpamRecipientThreshold
+}
+
+// cleanup removes stale entries older than the window.
+func (dt *dmTracker) cleanup() {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	cutoff := time.Now().Add(-dmSpamWindow)
+	for key, entries := range dt.sends {
+		pruned := entries[:0]
+		for _, e := range entries {
+			if e.ts.After(cutoff) {
+				pruned = append(pruned, e)
+			}
+		}
+		if len(pruned) == 0 {
+			delete(dt.sends, key)
+		} else {
+			dt.sends[key] = pruned
+		}
+	}
+}
+
+func init() {
+	// Periodically clean up the DM spam tracker in the background.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			dmSpamTracker.cleanup()
+		}
+	}()
 }
 
 type updateChannelRequest struct {
@@ -353,6 +448,29 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		if timeoutUntil != nil && timeoutUntil.After(time.Now()) {
 			writeError(w, http.StatusForbidden, "timed_out", "You are timed out and cannot send messages")
 			return
+		}
+	}
+
+	// DM spam detection: if this is a DM channel and the message has content,
+	// track the send and rate-limit if the user is sending identical messages
+	// to many different recipients (spam pattern).
+	if guildID == nil && hasContent {
+		// Look up the other recipient in this DM channel.
+		var recipientID string
+		err := h.Pool.QueryRow(r.Context(),
+			`SELECT user_id FROM channel_recipients WHERE channel_id = $1 AND user_id != $2 LIMIT 1`,
+			channelID, userID,
+		).Scan(&recipientID)
+		if err == nil && recipientID != "" {
+			if dmSpamTracker.trackDMSend(userID, recipientID, *req.Content) {
+				h.Logger.Warn("DM spam detected: user sending identical content to multiple recipients",
+					slog.String("user_id", userID),
+					slog.String("channel_id", channelID),
+				)
+				writeError(w, http.StatusTooManyRequests, "dm_spam_detected",
+					"You are sending similar messages to too many users. Please slow down.")
+				return
+			}
 		}
 	}
 
