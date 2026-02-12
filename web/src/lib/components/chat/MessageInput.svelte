@@ -9,6 +9,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import EmojiPicker from '$components/common/EmojiPicker.svelte';
 	import GiphyPicker from '$components/common/GiphyPicker.svelte';
+	import VoiceMessageRecorder from '$components/chat/VoiceMessageRecorder.svelte';
 
 	let content = $state('');
 	let inputEl: HTMLTextAreaElement;
@@ -18,6 +19,7 @@
 	let silentMode = $state(false);
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
+	let showVoiceRecorder = $state(false);
 
 	// --- File attachment state ---
 	let pendingFiles = $state<File[]>([]);
@@ -344,6 +346,27 @@
 			addToast('Failed to send GIF', 'error');
 		}
 	}
+
+	async function sendVoiceMessage(audioBlob: Blob, waveform: number[], durationMs: number) {
+		const channelId = $currentChannelId;
+		if (!channelId) return;
+
+		showVoiceRecorder = false;
+
+		try {
+			const ext = audioBlob.type.includes('webm') ? 'webm' : audioBlob.type.includes('ogg') ? 'ogg' : 'mp4';
+			const file = new File([audioBlob], `voice-message.${ext}`, { type: audioBlob.type });
+			const uploaded = await api.uploadFile(file);
+			const sent = await api.sendMessage(channelId, '', {
+				attachment_ids: [uploaded.id],
+				voice_duration_ms: durationMs,
+				voice_waveform: waveform
+			});
+			appendMessage(sent);
+		} catch (err) {
+			addToast('Failed to send voice message', 'error');
+		}
+	}
 </script>
 
 {#if $currentChannelId}
@@ -469,144 +492,171 @@
 			</div>
 		{/if}
 
-		<div
-			class="flex items-end gap-2 rounded-lg px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
-		>
-			<!-- File upload -->
-			{#if !isEditing}
-				<label class="cursor-pointer self-center text-text-muted hover:text-text-primary">
-					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-					</svg>
-					<input type="file" class="hidden" onchange={handleFileSelect} multiple />
-				</label>
-			{/if}
-
-			<!-- Text input -->
-			<textarea
-				bind:this={inputEl}
-				bind:value={content}
-				onkeydown={handleKeydown}
-				oninput={handleInput}
-				onpaste={handlePaste}
-				placeholder={isEditing ? 'Edit your message...' : isReplying ? 'Reply...' : silentMode ? `Message #${channelName} (silent)` : `Message #${channelName}`}
-				class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
-				rows="1"
-			></textarea>
-
-			<!-- Silent mode toggle button -->
-			{#if !isEditing}
-				<button
-					class="self-center transition-colors {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
-					title={silentMode ? 'Silent mode on (click to disable)' : 'Send silently (no notifications)'}
-					onclick={() => {
-						silentMode = !silentMode;
-						showSchedulePicker = false;
-					}}
-				>
-					{#if silentMode}
-						<!-- Bell with slash (silent active) -->
+		<!-- Voice recorder (replaces the input bar when active) -->
+		{#if showVoiceRecorder}
+			<VoiceMessageRecorder
+				onsend={sendVoiceMessage}
+				oncancel={() => (showVoiceRecorder = false)}
+			/>
+		{:else}
+			<div
+				class="flex items-end gap-2 rounded-lg px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
+			>
+				<!-- File upload -->
+				{#if !isEditing}
+					<label class="cursor-pointer self-center text-text-muted hover:text-text-primary">
 						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-							<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+							<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
 						</svg>
-					{:else}
-						<!-- Bell (silent inactive) -->
-						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-						</svg>
-					{/if}
-				</button>
-			{/if}
+						<input type="file" class="hidden" onchange={handleFileSelect} multiple />
+					</label>
+				{/if}
 
-			<!-- Schedule message button -->
-			{#if !isEditing}
-				<div class="relative self-center">
+				<!-- Text input -->
+				<textarea
+					bind:this={inputEl}
+					bind:value={content}
+					onkeydown={handleKeydown}
+					oninput={handleInput}
+					onpaste={handlePaste}
+					placeholder={isEditing ? 'Edit your message...' : isReplying ? 'Reply...' : silentMode ? `Message #${channelName} (silent)` : `Message #${channelName}`}
+					class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
+					rows="1"
+				></textarea>
+
+				<!-- Silent mode toggle button -->
+				{#if !isEditing}
 					<button
-						class="text-text-muted hover:text-text-primary"
-						title="Schedule message"
+						class="self-center transition-colors {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
+						title={silentMode ? 'Silent mode on (click to disable)' : 'Send silently (no notifications)'}
 						onclick={() => {
-							showSchedulePicker = !showSchedulePicker;
-							showEmojiPicker = false;
-							showGiphyPicker = false;
+							silentMode = !silentMode;
+							showSchedulePicker = false;
 						}}
 					>
-						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-						</svg>
+						{#if silentMode}
+							<!-- Bell with slash (silent active) -->
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+								<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+							</svg>
+						{:else}
+							<!-- Bell (silent inactive) -->
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+							</svg>
+						{/if}
 					</button>
-					{#if showSchedulePicker}
-						<div class="absolute bottom-10 right-0 z-50 w-64 rounded-lg border border-bg-floating bg-bg-primary p-3 shadow-lg">
-							<div class="mb-2 text-xs font-semibold uppercase text-text-muted">Schedule Message</div>
-							<div class="flex flex-col gap-1">
-								{#each getSchedulePresets() as preset}
-									<button
-										class="rounded px-3 py-1.5 text-left text-sm text-text-primary hover:bg-bg-modifier"
-										onclick={() => handleSchedule(preset.getTime())}
-									>
-										{preset.label}
-									</button>
-								{/each}
+				{/if}
+
+				<!-- Schedule message button -->
+				{#if !isEditing}
+					<div class="relative self-center">
+						<button
+							class="text-text-muted hover:text-text-primary"
+							title="Schedule message"
+							onclick={() => {
+								showSchedulePicker = !showSchedulePicker;
+								showEmojiPicker = false;
+								showGiphyPicker = false;
+							}}
+						>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+							</svg>
+						</button>
+						{#if showSchedulePicker}
+							<div class="absolute bottom-10 right-0 z-50 w-64 rounded-lg border border-bg-floating bg-bg-primary p-3 shadow-lg">
+								<div class="mb-2 text-xs font-semibold uppercase text-text-muted">Schedule Message</div>
+								<div class="flex flex-col gap-1">
+									{#each getSchedulePresets() as preset}
+										<button
+											class="rounded px-3 py-1.5 text-left text-sm text-text-primary hover:bg-bg-modifier"
+											onclick={() => handleSchedule(preset.getTime())}
+										>
+											{preset.label}
+										</button>
+									{/each}
+								</div>
+								<div class="my-2 border-t border-bg-floating"></div>
+								<div class="text-xs font-semibold uppercase text-text-muted mb-1.5">Custom</div>
+								<input
+									type="datetime-local"
+									bind:value={customDatetime}
+									class="mb-2 w-full rounded border border-bg-floating bg-bg-secondary px-2 py-1 text-sm text-text-primary outline-none focus:border-text-link"
+								/>
+								<button
+									class="w-full rounded bg-text-link px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+									disabled={!customDatetime}
+									onclick={handleCustomSchedule}
+								>
+									Schedule
+								</button>
 							</div>
-							<div class="my-2 border-t border-bg-floating"></div>
-							<div class="text-xs font-semibold uppercase text-text-muted mb-1.5">Custom</div>
-							<input
-								type="datetime-local"
-								bind:value={customDatetime}
-								class="mb-2 w-full rounded border border-bg-floating bg-bg-secondary px-2 py-1 text-sm text-text-primary outline-none focus:border-text-link"
-							/>
-							<button
-								class="w-full rounded bg-text-link px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-								disabled={!customDatetime}
-								onclick={handleCustomSchedule}
-							>
-								Schedule
-							</button>
-						</div>
-					{/if}
-				</div>
-			{/if}
+						{/if}
+					</div>
+				{/if}
 
-			<!-- GIF picker button -->
-			{#if !isEditing}
-				<div class="relative self-center">
+				<!-- GIF picker button -->
+				{#if !isEditing}
+					<div class="relative self-center">
+						<button
+							class="text-text-muted hover:text-text-primary"
+							title="GIF"
+							onclick={() => { showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showSchedulePicker = false; }}
+						>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+							</svg>
+						</button>
+						{#if showGiphyPicker}
+							<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Emoji picker button -->
+				{#if !isEditing}
+					<div class="relative self-center">
+						<button
+							class="text-text-muted hover:text-text-primary"
+							title="Emoji"
+							onclick={() => { showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showSchedulePicker = false; }}
+						>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+							</svg>
+						</button>
+						{#if showEmojiPicker}
+							<EmojiPicker onselect={insertEmoji} onclose={() => (showEmojiPicker = false)} />
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Voice message button -->
+				{#if !isEditing}
 					<button
-						class="text-text-muted hover:text-text-primary"
-						title="GIF"
-						onclick={() => { showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showSchedulePicker = false; }}
+						class="self-center text-text-muted hover:text-text-primary"
+						title="Record voice message"
+						onclick={() => {
+							showVoiceRecorder = true;
+							showEmojiPicker = false;
+							showGiphyPicker = false;
+							showSchedulePicker = false;
+						}}
 					>
-						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+						<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+							<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+							<path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 						</svg>
 					</button>
-					{#if showGiphyPicker}
-						<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
-					{/if}
-				</div>
-			{/if}
+				{/if}
 
-			<!-- Emoji picker button -->
-			{#if !isEditing}
-				<div class="relative self-center">
-					<button
-						class="text-text-muted hover:text-text-primary"
-						title="Emoji"
-						onclick={() => { showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showSchedulePicker = false; }}
-					>
-						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-						</svg>
-					</button>
-					{#if showEmojiPicker}
-						<EmojiPicker onselect={insertEmoji} onclose={() => (showEmojiPicker = false)} />
-					{/if}
-				</div>
-			{/if}
-
-			<!-- Submit hint -->
-			{#if isEditing}
-				<span class="self-center text-2xs text-text-muted">Esc cancel · Enter save</span>
-			{/if}
-		</div>
+				<!-- Submit hint -->
+				{#if isEditing}
+					<span class="self-center text-2xs text-text-muted">Esc cancel · Enter save</span>
+				{/if}
+			</div>
+		{/if}
 	</div>
 {/if}

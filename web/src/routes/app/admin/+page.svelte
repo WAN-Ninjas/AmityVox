@@ -10,7 +10,7 @@
 		Announcement, AnnouncementSeverity
 	} from '$lib/types';
 
-	type Tab = 'dashboard' | 'users' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation';
+	type Tab = 'dashboard' | 'users' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation';
 	let currentTab = $state<Tab>('dashboard');
 
 	// --- Dashboard ---
@@ -61,6 +61,10 @@
 	let newTokenExpiryHours = $state(0);
 	let creatingToken = $state(false);
 
+	// --- Bots ---
+	let allBots = $state<User[]>([]);
+	let loadingAllBots = $state(false);
+
 	// --- Announcements ---
 	let announcements = $state<Announcement[]>([]);
 	let loadingAnnouncements = $state(false);
@@ -85,6 +89,7 @@
 
 	$effect(() => {
 		if (currentTab === 'users' && users.length === 0) loadUsers();
+		if (currentTab === 'bots' && allBots.length === 0) loadAllBots();
 		if (currentTab === 'bans' && instanceBans.length === 0) loadInstanceBans();
 		if (currentTab === 'instance' && !instance) loadInstance();
 		if (currentTab === 'federation' && peers.length === 0) loadPeers();
@@ -112,6 +117,16 @@
 			users = await api.getAdminUsers({ limit: 50, query });
 		} catch { users = []; }
 		finally { loadingUsers = false; }
+	}
+
+	async function loadAllBots() {
+		loadingAllBots = true;
+		try {
+			// Load all users with bot flag (flags & 8 != 0) using admin user list with a filter.
+			const allUsers = await api.getAdminUsers({ limit: 200, query: '' });
+			allBots = allUsers.filter(u => (u.flags & 8) !== 0);
+		} catch { allBots = []; }
+		finally { loadingAllBots = false; }
 	}
 
 	function handleUserSearch() {
@@ -399,6 +414,7 @@
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'dashboard', label: 'Dashboard' },
 		{ id: 'users', label: 'Users' },
+		{ id: 'bots', label: 'Bots' },
 		{ id: 'bans', label: 'Instance Bans' },
 		{ id: 'registration', label: 'Registration' },
 		{ id: 'announcements', label: 'Announcements' },
@@ -721,6 +737,67 @@
 							</div>
 						{/each}
 					</div>
+				{/if}
+
+			<!-- ==================== BOTS ==================== -->
+			{:else if currentTab === 'bots'}
+				<h1 class="mb-6 text-2xl font-bold text-text-primary">Bot Accounts</h1>
+				<p class="mb-4 text-sm text-text-muted">All bot accounts on this instance.</p>
+
+				{#if loadingAllBots}
+					<p class="text-sm text-text-muted">Loading bots...</p>
+				{:else if allBots.length === 0}
+					<div class="rounded-lg bg-bg-secondary p-6 text-center">
+						<p class="text-sm text-text-muted">No bot accounts on this instance.</p>
+					</div>
+				{:else}
+					<div class="overflow-hidden rounded-lg border border-bg-modifier">
+						<table class="w-full text-left text-sm">
+							<thead class="bg-bg-secondary">
+								<tr>
+									<th class="px-4 py-3 text-xs font-bold uppercase tracking-wide text-text-muted">Bot</th>
+									<th class="px-4 py-3 text-xs font-bold uppercase tracking-wide text-text-muted">Owner</th>
+									<th class="px-4 py-3 text-xs font-bold uppercase tracking-wide text-text-muted">Created</th>
+									<th class="px-4 py-3 text-xs font-bold uppercase tracking-wide text-text-muted">Status</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-bg-modifier">
+								{#each allBots as bot (bot.id)}
+									{@const isSuspended = (bot.flags & 1) !== 0}
+									<tr class="hover:bg-bg-secondary/50">
+										<td class="px-4 py-3">
+											<div class="flex items-center gap-2">
+												<div class="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500/20 text-brand-400">
+													<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+														<path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+													</svg>
+												</div>
+												<div>
+													<span class="font-medium text-text-primary">{bot.username}</span>
+													{#if bot.display_name}
+														<p class="text-xs text-text-muted">{bot.display_name}</p>
+													{/if}
+													<p class="text-2xs text-text-muted font-mono">{bot.id.slice(0, 12)}...</p>
+												</div>
+											</div>
+										</td>
+										<td class="px-4 py-3 text-text-muted text-xs">
+											{bot.bot_owner_id ? bot.bot_owner_id.slice(0, 12) + '...' : 'N/A'}
+										</td>
+										<td class="px-4 py-3 text-text-muted">{new Date(bot.created_at).toLocaleDateString()}</td>
+										<td class="px-4 py-3">
+											{#if isSuspended}
+												<span class="rounded bg-red-500/20 px-1.5 py-0.5 text-2xs font-bold text-red-400">Suspended</span>
+											{:else}
+												<span class="rounded bg-green-500/20 px-1.5 py-0.5 text-2xs font-bold text-green-400">Active</span>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<p class="mt-2 text-xs text-text-muted">{allBots.length} bot{allBots.length !== 1 ? 's' : ''} total</p>
 				{/if}
 
 			<!-- ==================== INSTANCE BANS ==================== -->

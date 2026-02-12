@@ -84,6 +84,8 @@ export interface Message {
 	masquerade_avatar: string | null;
 	masquerade_color: string | null;
 	encrypted: boolean;
+	voice_duration_ms?: number | null;
+	voice_waveform?: number[] | null;
 	attachments: Attachment[];
 	embeds: Embed[];
 	reactions: Reaction[];
@@ -101,6 +103,8 @@ export type MessageType =
 	| 'system_pin'
 	| 'reply'
 	| 'thread_created'
+	| 'voice'
+	| 'poll'
 	| 'system_lockdown';
 
 export interface ScheduledMessage {
@@ -525,6 +529,28 @@ export interface Announcement {
 	active: boolean;
 	expires_at: string | null;
 	created_by: string;
+	created_at: string;
+	updated_at: string;
+}
+
+// --- Bots ---
+
+export interface BotToken {
+	id: string;
+	bot_id: string;
+	name: string;
+	token?: string; // Only present when first created
+	created_at: string;
+	last_used_at: string | null;
+}
+
+export interface SlashCommand {
+	id: string;
+	bot_id: string;
+	guild_id: string | null;
+	name: string;
+	description: string;
+	options: unknown[];
 	created_at: string;
 	updated_at: string;
 }
