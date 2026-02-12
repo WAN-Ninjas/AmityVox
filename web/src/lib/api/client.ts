@@ -428,6 +428,42 @@ class ApiClient {
 		return this.get(`/search/messages?${params}`);
 	}
 
+	// --- Threads ---
+
+	createThread(channelId: string, messageId: string, name: string): Promise<Channel> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/threads`, { name });
+	}
+
+	getThreads(channelId: string): Promise<Channel[]> {
+		return this.get(`/channels/${channelId}/threads`);
+	}
+
+	// --- Message Edit History ---
+
+	getMessageEdits(channelId: string, messageId: string): Promise<{ content: string; edited_at: string }[]> {
+		return this.get(`/channels/${channelId}/messages/${messageId}/edits`);
+	}
+
+	// --- User Notes ---
+
+	getUserNote(userId: string): Promise<{ target_id: string; note: string }> {
+		return this.get(`/users/${userId}/note`);
+	}
+
+	setUserNote(userId: string, note: string): Promise<{ target_id: string; note: string }> {
+		return this.put(`/users/${userId}/note`, { note });
+	}
+
+	// --- Giphy ---
+
+	searchGiphy(query: string, limit = 25, offset = 0): Promise<any> {
+		return this.get(`/giphy/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
+	}
+
+	getTrendingGiphy(limit = 25, offset = 0): Promise<any> {
+		return this.get(`/giphy/trending?limit=${limit}&offset=${offset}`);
+	}
+
 	// --- Admin ---
 
 	getAdminStats(): Promise<AdminStats> {

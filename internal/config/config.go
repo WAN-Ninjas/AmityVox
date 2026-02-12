@@ -26,10 +26,17 @@ type Config struct {
 	Auth      AuthConfig      `toml:"auth"`
 	Media     MediaConfig     `toml:"media"`
 	Push      PushConfig      `toml:"push"`
+	Giphy     GiphyConfig     `toml:"giphy"`
 	HTTP      HTTPConfig      `toml:"http"`
 	WebSocket WebSocketConfig `toml:"websocket"`
 	Logging   LoggingConfig   `toml:"logging"`
 	Metrics   MetricsConfig   `toml:"metrics"`
+}
+
+// GiphyConfig defines Giphy API integration settings.
+type GiphyConfig struct {
+	Enabled bool   `toml:"enabled"`
+	APIKey  string `toml:"api_key"`
 }
 
 // InstanceConfig defines the identity of this AmityVox instance.
@@ -439,6 +446,14 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AMITYVOX_LOGGING_FORMAT"); v != "" {
 		cfg.Logging.Format = v
+	}
+
+	// Giphy
+	if v := os.Getenv("AMITYVOX_GIPHY_ENABLED"); v != "" {
+		cfg.Giphy.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("AMITYVOX_GIPHY_API_KEY"); v != "" {
+		cfg.Giphy.APIKey = v
 	}
 
 	// Metrics

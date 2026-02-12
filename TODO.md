@@ -132,25 +132,25 @@
 ### Sprint 5: Advanced Features
 > Goal: Power-user features that make AmityVox competitive.
 
-- [ ] **Threads** — "Create Thread" in message context menu. Thread panel slides in from right. Separate message stream. Thread indicator on parent message with reply count. POST `/api/v1/channels/{id}/messages/{id}/threads`.
-- [ ] **Message search** — Ctrl+K opens search modal. Full-text via Meilisearch. Filters: from user, in channel, has attachment, date range. Results with highlighted matches and surrounding context. Click to jump to message in channel.
-- [ ] **Message edit history** — Click "(edited)" badge to see previous versions. Modal with diff view showing what changed. GET `/api/v1/channels/{id}/messages/{id}/history`.
-- [ ] **User notes** — In user popover: "Note" textarea. Private to you. Auto-saves on blur. PUT `/api/v1/users/{id}/notes`.
-- [ ] **Enhanced markdown** — Code blocks with syntax highlighting (highlight.js or Shiki). Spoiler tags (`||text||`). Block quotes (`> text`). Ordered/unordered lists. Tables.
+- [x] **Threads** — "Create Thread" in message context menu. Thread panel slides in from right. Separate message stream. Thread indicator on parent message with reply count. POST `/api/v1/channels/{id}/messages/{id}/threads`.
+- [x] **Message search** — Ctrl+K opens search modal. Full-text via Meilisearch. Filters: from user, in channel, has attachment, date range. Results with highlighted matches and surrounding context. Click to jump to message in channel.
+- [x] **Message edit history** — Click "(edited)" badge to see previous versions. Modal with diff view showing what changed. GET `/api/v1/channels/{id}/messages/{id}/history`.
+- [x] **User notes** — In user popover: "Note" textarea. Private to you. Auto-saves on blur. PUT `/api/v1/users/{id}/notes`.
+- [x] **Enhanced markdown** — Code blocks with syntax highlighting (highlight.js or Shiki). Spoiler tags (`||text||`). Block quotes (`> text`). Ordered/unordered lists. Tables.
 - [ ] **Message forwarding** — "Forward" in context menu. Channel/DM picker dialog. Forwarded message shows attribution and original timestamp.
-- [ ] **Keyboard shortcuts** — Ctrl+K: search. Escape: close any panel/modal. Up: edit last message. Ctrl+Shift+M: mute current channel. Alt+Up/Down: navigate channels. ?: show shortcuts help.
-- [ ] **Notification toasts** — In-app toast component (bottom-right, auto-dismiss 5s). Desktop notification API for mentions/DMs when tab not focused. Notification permission request on first use.
-- [ ] **Transition animations** — Page transitions (fade/slide), sidebar expand/collapse, modal open/close, message appear. Svelte `transition:` and `animate:` directives.
-- [ ] **Image lightbox / media gallery** — Click image to open full-size overlay. Arrow keys to navigate between images in channel. Zoom support. Download button.
-- [ ] **Mobile responsive layout** — Collapsible sidebars (swipe/hamburger), touch-friendly hit targets, bottom navigation bar on small screens, no horizontal scroll.
-- [ ] **Emoji picker** — Grid of unicode + custom emoji. Category tabs. Search/filter. Skin tone selector. Recently used. Insert into message input at cursor.
-- [ ] **Giphy integration** — GIF button in message input opens Giphy search panel. Search, trending, preview. Click to insert GIF URL as message. Backend proxy endpoint to avoid exposing API key to client. Requires GIPHY_API_KEY in config. See `docs/giphy-setup.md` for setup instructions.
+- [x] **Keyboard shortcuts** — Ctrl+K: search. Escape: close any panel/modal. Up: edit last message. Ctrl+Shift+M: mute current channel. Alt+Up/Down: navigate channels. ?: show shortcuts help.
+- [x] **Notification toasts** — In-app toast component (bottom-right, auto-dismiss 5s). Desktop notification API for mentions/DMs when tab not focused. Notification permission request on first use.
+- [x] **Transition animations** — Page transitions (fade/slide), sidebar expand/collapse, modal open/close, message appear. Svelte `transition:` and `animate:` directives.
+- [x] **Image lightbox / media gallery** — Click image to open full-size overlay. Arrow keys to navigate between images in channel. Zoom support. Download button.
+- [x] **Mobile responsive layout** — Collapsible sidebars (swipe/hamburger), touch-friendly hit targets, bottom navigation bar on small screens, no horizontal scroll.
+- [x] **Emoji picker** — Grid of unicode + custom emoji. Category tabs. Search/filter. Skin tone selector. Recently used. Insert into message input at cursor.
+- [x] **Giphy integration** — GIF button in message input opens Giphy search panel. Search, trending, preview. Click to insert GIF URL as message. Backend proxy endpoint to avoid exposing API key to client. Requires GIPHY_API_KEY in config. See `docs/giphy-setup.md` for setup instructions.
 
 **Sprint 5 Tests:**
 - [ ] ThreadPanel unit test: create, render, reply
 - [ ] SearchPanel unit test: query, results, jump
 - [ ] Markdown renderer unit test: each syntax element
-- [ ] Toast system unit test: show, dismiss, stack
+- [x] Toast system unit test: show, dismiss, stack
 - [ ] E2E: search message, create thread, forward message
 
 ---

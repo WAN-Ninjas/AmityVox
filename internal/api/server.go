@@ -356,6 +356,14 @@ func (s *Server) registerRoutes() {
 				r.Get("/guilds", s.handleSearchGuilds)
 			})
 
+			// Giphy proxy routes (only if enabled).
+			if s.Config.Giphy.Enabled && s.Config.Giphy.APIKey != "" {
+				r.Route("/giphy", func(r chi.Router) {
+					r.Get("/search", s.handleGiphySearch)
+					r.Get("/trending", s.handleGiphyTrending)
+				})
+			}
+
 			// Admin routes.
 			r.Route("/admin", func(r chi.Router) {
 				r.Get("/instance", adminH.HandleGetInstance)

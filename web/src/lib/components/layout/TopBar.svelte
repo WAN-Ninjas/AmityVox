@@ -12,7 +12,16 @@
 	let { onToggleMembers, onTogglePins, showPins = false }: Props = $props();
 	let showSearch = $state(false);
 	let topicExpanded = $state(false);
+
+	function handleKeydown(e: KeyboardEvent) {
+		if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+			e.preventDefault();
+			showSearch = !showSearch;
+		}
+	}
 </script>
+
+<svelte:document onkeydown={handleKeydown} />
 
 <header class="flex h-12 items-center border-b border-bg-floating bg-bg-tertiary px-4">
 	{#if $currentChannel}
@@ -69,7 +78,7 @@
 		<!-- Search -->
 		<button
 			class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
-			title="Search"
+			title="Search (Ctrl+K)"
 			onclick={() => (showSearch = true)}
 		>
 			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
