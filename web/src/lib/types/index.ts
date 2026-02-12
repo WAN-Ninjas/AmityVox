@@ -73,6 +73,8 @@ export interface Message {
 	encrypted: boolean;
 	attachments: Attachment[];
 	embeds: Embed[];
+	reactions: Reaction[];
+	pinned: boolean;
 	created_at: string;
 	author?: User;
 }
@@ -86,6 +88,12 @@ export type MessageType =
 	| 'system_pin'
 	| 'reply'
 	| 'thread_created';
+
+export interface Reaction {
+	emoji: string;
+	count: number;
+	me: boolean;
+}
 
 export interface Attachment {
 	id: string;

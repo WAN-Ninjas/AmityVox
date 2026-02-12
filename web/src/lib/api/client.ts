@@ -204,6 +204,16 @@ class ApiClient {
 		return this.del(`/channels/${channelId}/messages/${messageId}`);
 	}
 
+	// --- Pins ---
+
+	pinMessage(channelId: string, messageId: string): Promise<void> {
+		return this.put(`/channels/${channelId}/pins/${messageId}`);
+	}
+
+	unpinMessage(channelId: string, messageId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/pins/${messageId}`);
+	}
+
 	// --- Reactions ---
 
 	addReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
