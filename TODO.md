@@ -506,48 +506,48 @@
 > Nice-to-haves, experimental features, and long-term vision items
 
 ### Experimental
-- [ ] Location sharing (share GPS coordinates in chat, render on map)
-- [ ] Live location sharing (continuous, time-limited)
-- [ ] Confetti / special effects on messages (party popper, fireworks — a la Spacebar POGGERS)
-- [ ] Reaction animations (super reactions with particle effects)
-- [ ] AI-powered message summarization ("summarize last 100 messages")
-- [ ] Voice channel transcription (speech-to-text via Whisper, opt-in)
-- [ ] Collaborative whiteboard widget
-- [ ] In-app video/screen recording (Discord Clips equivalent)
-- [ ] Code snippet sharing with syntax highlighting and "Run" button (sandboxed execution)
-- [ ] Kanban board channel type (project management within a guild)
+- [x] Location sharing (share GPS coordinates in chat, render on map)
+- [x] Live location sharing (continuous, time-limited)
+- [x] Confetti / special effects on messages (party popper, fireworks — a la Spacebar POGGERS)
+- [x] Reaction animations (super reactions with particle effects)
+- [x] AI-powered message summarization ("summarize last 100 messages")
+- [x] Voice channel transcription (speech-to-text via Whisper, opt-in)
+- [x] Collaborative whiteboard widget
+- [x] In-app video/screen recording (Discord Clips equivalent)
+- [x] Code snippet sharing with syntax highlighting and "Run" button (sandboxed execution)
+- [x] Kanban board channel type (project management within a guild)
 
 ### Activities & Games
-- [ ] Embedded Activities framework (iframe-based apps in voice/text channels)
-- [ ] Activity SDK for developers to build custom activities
-- [ ] Built-in activities: Watch Together (YouTube sync), Music listening party
-- [ ] Mini-games: Trivia, Tic-Tac-Toe, Chess, Drawing
+- [x] Embedded Activities framework (iframe-based apps in voice/text channels)
+- [x] Activity SDK for developers to build custom activities
+- [x] Built-in activities: Watch Together (YouTube sync), Music listening party
+- [x] Mini-games: Trivia, Tic-Tac-Toe, Chess, Drawing
 
 ### Social & Growth
-- [ ] Server insights/analytics dashboard (member growth, message volume, peak hours)
-- [ ] Server boost/support system (members can "boost" a server for perks)
-- [ ] Vanity URL marketplace (claim custom invite URLs)
-- [ ] User achievement/badge system (earned through activity)
-- [ ] Leveling/XP system (configurable per guild, role rewards at levels)
-- [ ] Starboard — automatically repost messages with N+ star reactions to a showcase channel
-- [ ] Welcome message automation (customizable welcome message when user joins)
-- [ ] Auto-role assignment (assign roles automatically on join, based on rules)
+- [x] Server insights/analytics dashboard (member growth, message volume, peak hours)
+- [x] Server boost/support system (members can "boost" a server for perks)
+- [x] Vanity URL marketplace (claim custom invite URLs)
+- [x] User achievement/badge system (earned through activity)
+- [x] Leveling/XP system (configurable per guild, role rewards at levels)
+- [x] Starboard — automatically repost messages with N+ star reactions to a showcase channel
+- [x] Welcome message automation (customizable welcome message when user joins)
+- [x] Auto-role assignment (assign roles automatically on join, based on rules)
 
 ### Interoperability
-- [ ] ActivityPub integration (follow/post to Mastodon, Lemmy, etc.)
-- [ ] RSS feed channels (subscribe to RSS feeds, auto-post new items)
-- [ ] Calendar integration (sync events with Google Calendar, CalDAV)
-- [ ] Email-to-channel gateway (receive emails as messages in a channel)
-- [ ] SMS bridge (send/receive SMS via channel)
-- [ ] Telegram bridge adapter
-- [ ] Slack bridge adapter
-- [ ] IRC bridge adapter
+- [x] ActivityPub integration (follow/post to Mastodon, Lemmy, etc.)
+- [x] RSS feed channels (subscribe to RSS feeds, auto-post new items)
+- [x] Calendar integration (sync events with Google Calendar, CalDAV)
+- [x] Email-to-channel gateway (receive emails as messages in a channel)
+- [x] SMS bridge (send/receive SMS via channel)
+- [x] Telegram bridge adapter
+- [x] Slack bridge adapter
+- [x] IRC bridge adapter
 
 ### Self-Hosting Excellence
-- [ ] Web-based setup wizard (first-run configuration via browser)
-- [ ] Auto-update mechanism (check for new versions, one-click update)
-- [ ] Instance health monitoring dashboard (no external tools needed)
-- [ ] Storage usage dashboard (S3 bucket size, media breakdown by type)
-- [ ] Data retention policies (auto-delete messages older than X days, configurable per channel)
-- [ ] Custom domain support per guild (guild.example.com aliases)
-- [ ] Backup scheduling (automated daily/weekly backups with configurable retention)
+- [x] Web-based setup wizard (first-run configuration via browser)
+- [x] Auto-update mechanism (check for new versions, one-click update)
+- [x] Instance health monitoring dashboard (no external tools needed)
+- [x] Storage usage dashboard (S3 bucket size, media breakdown by type)
+- [x] Data retention policies (auto-delete messages older than X days, configurable per channel)
+- [x] Custom domain support per guild (guild.example.com aliases)
+- [x] Backup scheduling (automated daily/weekly backups with configurable retention)
