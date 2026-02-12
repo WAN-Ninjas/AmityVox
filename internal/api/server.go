@@ -237,6 +237,14 @@ func (s *Server) registerRoutes() {
 				r.Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
 				r.Get("/@me/bots", botH.HandleListMyBots)
 				r.Post("/@me/bots", botH.HandleCreateBot)
+				r.Get("/@me/export", userH.HandleExportUserData)
+				r.Get("/@me/export-account", userH.HandleExportAccount)
+				r.Post("/@me/import-account", userH.HandleImportAccount)
+				r.Put("/@me/activity", userH.HandleUpdateActivity)
+				r.Get("/@me/activity", userH.HandleGetActivity)
+				r.Get("/@me/emoji", userH.HandleGetUserEmoji)
+				r.Post("/@me/emoji", userH.HandleCreateUserEmoji)
+				r.Delete("/@me/emoji/{emojiID}", userH.HandleDeleteUserEmoji)
 				r.Get("/{userID}", userH.HandleGetUser)
 				r.Get("/{userID}/note", userH.HandleGetUserNote)
 				r.Put("/{userID}/note", userH.HandleSetUserNote)
@@ -284,6 +292,17 @@ func (s *Server) registerRoutes() {
 				r.Patch("/{guildID}/channels", guildH.HandleReorderGuildChannels)
 				r.Post("/{guildID}/channels", guildH.HandleCreateGuildChannel)
 				r.Post("/{guildID}/channels/{channelID}/clone", guildH.HandleCloneChannel)
+				r.Get("/{guildID}/guide", guildH.HandleGetServerGuide)
+				r.Put("/{guildID}/guide", guildH.HandleUpdateServerGuide)
+				r.Get("/{guildID}/bump", guildH.HandleGetBumpStatus)
+				r.Post("/{guildID}/bump", guildH.HandleBumpGuild)
+				r.Route("/{guildID}/templates", func(r chi.Router) {
+					r.Post("/", guildH.HandleCreateGuildTemplate)
+					r.Get("/", guildH.HandleGetGuildTemplates)
+					r.Get("/{templateID}", guildH.HandleGetGuildTemplate)
+					r.Delete("/{templateID}", guildH.HandleDeleteGuildTemplate)
+					r.Post("/{templateID}/apply", guildH.HandleApplyGuildTemplate)
+				})
 				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
 				r.Get("/{guildID}/members/search", guildH.HandleSearchGuildMembers)
 				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)
@@ -319,6 +338,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/{guildID}/webhooks", guildH.HandleCreateGuildWebhook)
 				r.Patch("/{guildID}/webhooks/{webhookID}", guildH.HandleUpdateGuildWebhook)
 				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
+				r.Get("/{guildID}/webhooks/{webhookID}/logs", webhookH.HandleGetWebhookLogs)
 				r.Get("/{guildID}/vanity-url", guildH.HandleGetGuildVanityURL)
 				r.Patch("/{guildID}/vanity-url", guildH.HandleSetGuildVanityURL)
 				r.Delete("/{guildID}/warnings/{warningID}", modH.HandleDeleteWarning)
@@ -420,6 +440,15 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/lock", modH.HandleLockChannel)
 				r.Post("/{channelID}/unlock", modH.HandleUnlockChannel)
 			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
+				r.Get("/{channelID}/export", userH.HandleExportChannelMessages)
+
+				// Channel template routes.
+				r.Route("/{channelID}/templates", func(r chi.Router) {
+					r.Post("/", channelH.HandleCreateChannelTemplate)
+					r.Get("/", channelH.HandleGetChannelTemplates)
+					r.Delete("/{templateID}", channelH.HandleDeleteChannelTemplate)
+					r.Post("/{templateID}/apply", channelH.HandleApplyChannelTemplate)
+				})
 
 				// Announcement channel follower routes.
 				r.Post("/{channelID}/followers", channelH.HandleFollowChannel)
@@ -458,6 +487,13 @@ func (s *Server) registerRoutes() {
 
 			// Public ban lists.
 			r.Get("/ban-lists/public", modH.HandleGetPublicBanLists)
+
+			// Webhook templates, preview, and outgoing events.
+			r.Route("/webhooks", func(r chi.Router) {
+				r.Get("/templates", webhookH.HandleGetWebhookTemplates)
+				r.Post("/preview", webhookH.HandlePreviewWebhookMessage)
+				r.Get("/outgoing-events", webhookH.HandleGetOutgoingEvents)
+			})
 
 			// User sticker packs.
 			r.Route("/stickers", func(r chi.Router) {

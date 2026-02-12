@@ -1976,12 +1976,15 @@ func (h *Handler) HandleResolveVanityURL(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleDiscoverGuilds returns a list of public, discoverable guilds.
+// Guilds that have been bumped recently appear higher in the listing.
 // GET /api/v1/guilds/discover
 func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	tag := r.URL.Query().Get("tag")
+	sortBy := r.URL.Query().Get("sort")
 	limit := 50
 
+	// The bump_score subquery counts bumps in the last 24 hours.
 	baseSQL := `SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 	            g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
 	            g.preferred_locale, g.max_members, g.vanity_url, g.verification_level,
@@ -2002,7 +2005,13 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 		args = append(args, tag)
 		argN++
 	}
-	baseSQL += fmt.Sprintf(` ORDER BY g.member_count DESC LIMIT $%d`, argN)
+
+	// Sort by bumps if requested, otherwise default to member_count.
+	if sortBy == "bumps" {
+		baseSQL += fmt.Sprintf(` ORDER BY (SELECT COUNT(*) FROM guild_bumps b WHERE b.guild_id = g.id AND b.bumped_at > now() - INTERVAL '24 hours') DESC, g.member_count DESC LIMIT $%d`, argN)
+	} else {
+		baseSQL += fmt.Sprintf(` ORDER BY g.member_count DESC LIMIT $%d`, argN)
+	}
 	args = append(args, limit)
 
 	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
@@ -2489,6 +2498,297 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", cloned)
 
 	writeJSON(w, http.StatusCreated, cloned)
+}
+
+// --- Server Guide ---
+
+// GuideStep represents a single step in a guild's server guide.
+type GuideStep struct {
+	ID        string  `json:"id"`
+	GuildID   string  `json:"guild_id"`
+	Title     string  `json:"title"`
+	Content   string  `json:"content"`
+	Position  int     `json:"position"`
+	ChannelID *string `json:"channel_id,omitempty"`
+	CreatedAt string  `json:"created_at"`
+}
+
+type updateServerGuideRequest struct {
+	Steps []struct {
+		Title     string  `json:"title"`
+		Content   string  `json:"content"`
+		Position  int     `json:"position"`
+		ChannelID *string `json:"channel_id,omitempty"`
+	} `json:"steps"`
+}
+
+// HandleGetServerGuide returns the server guide steps for a guild.
+// GET /api/v1/guilds/{guildID}/guide
+func (h *Handler) HandleGetServerGuide(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, guild_id, title, content, position, channel_id, created_at
+		 FROM guild_guides
+		 WHERE guild_id = $1
+		 ORDER BY position ASC, created_at ASC`,
+		guildID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to get server guide", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get server guide")
+		return
+	}
+	defer rows.Close()
+
+	steps := make([]GuideStep, 0)
+	for rows.Next() {
+		var s GuideStep
+		if err := rows.Scan(&s.ID, &s.GuildID, &s.Title, &s.Content, &s.Position, &s.ChannelID, &s.CreatedAt); err != nil {
+			h.Logger.Error("failed to scan guide step", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read server guide")
+			return
+		}
+		steps = append(steps, s)
+	}
+	if err := rows.Err(); err != nil {
+		h.Logger.Error("error iterating guide steps", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read server guide")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, steps)
+}
+
+// HandleUpdateServerGuide replaces the entire server guide for a guild.
+// Requires MANAGE_GUILD permission.
+// PUT /api/v1/guilds/{guildID}/guide
+func (h *Handler) HandleUpdateServerGuide(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		return
+	}
+
+	var req updateServerGuideRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if len(req.Steps) > 20 {
+		writeError(w, http.StatusBadRequest, "too_many_steps", "Server guide can have at most 20 steps")
+		return
+	}
+
+	for i, step := range req.Steps {
+		if step.Title == "" || len(step.Title) > 100 {
+			writeError(w, http.StatusBadRequest, "invalid_title", fmt.Sprintf("Step %d title must be 1-100 characters", i+1))
+			return
+		}
+		if step.Content == "" || len(step.Content) > 4000 {
+			writeError(w, http.StatusBadRequest, "invalid_content", fmt.Sprintf("Step %d content must be 1-4000 characters", i+1))
+			return
+		}
+	}
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Delete all existing guide steps for this guild.
+	_, err = tx.Exec(r.Context(), `DELETE FROM guild_guides WHERE guild_id = $1`, guildID)
+	if err != nil {
+		h.Logger.Error("failed to clear server guide", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
+		return
+	}
+
+	// Insert new guide steps.
+	steps := make([]GuideStep, 0, len(req.Steps))
+	for i, step := range req.Steps {
+		stepID := models.NewULID().String()
+		var s GuideStep
+		err := tx.QueryRow(r.Context(),
+			`INSERT INTO guild_guides (id, guild_id, title, content, position, channel_id, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, now())
+			 RETURNING id, guild_id, title, content, position, channel_id, created_at`,
+			stepID, guildID, step.Title, step.Content, i, step.ChannelID,
+		).Scan(&s.ID, &s.GuildID, &s.Title, &s.Content, &s.Position, &s.ChannelID, &s.CreatedAt)
+		if err != nil {
+			h.Logger.Error("failed to insert guide step", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
+			return
+		}
+		steps = append(steps, s)
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
+		return
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "guide_update", "guild", guildID, nil)
+
+	writeJSON(w, http.StatusOK, steps)
+}
+
+// --- Bump System ---
+
+// GuildBump represents a single bump action for a guild.
+type GuildBump struct {
+	ID       string `json:"id"`
+	GuildID  string `json:"guild_id"`
+	BumpedBy string `json:"bumped_by"`
+	BumpedAt string `json:"bumped_at"`
+}
+
+// BumpResponse is returned after a successful bump.
+type BumpResponse struct {
+	Success     bool   `json:"success"`
+	NextBumpAt  string `json:"next_bump_at"`
+	BumpMessage string `json:"bump_message"`
+}
+
+// HandleBumpGuild bumps a guild in the discovery listing.
+// Rate limited to once per 2 hours per guild.
+// POST /api/v1/guilds/{guildID}/bump
+func (h *Handler) HandleBumpGuild(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	// Check if the guild is discoverable; only discoverable guilds can be bumped.
+	var discoverable bool
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT discoverable FROM guilds WHERE id = $1`, guildID,
+	).Scan(&discoverable)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		return
+	}
+	if !discoverable {
+		writeError(w, http.StatusBadRequest, "not_discoverable", "Only discoverable guilds can be bumped")
+		return
+	}
+
+	// Rate limit: check if the guild was bumped in the last 2 hours.
+	var lastBump *time.Time
+	err = h.Pool.QueryRow(r.Context(),
+		`SELECT MAX(bumped_at) FROM guild_bumps WHERE guild_id = $1`,
+		guildID,
+	).Scan(&lastBump)
+	if err != nil && err != pgx.ErrNoRows {
+		h.Logger.Error("failed to check bump cooldown", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to bump guild")
+		return
+	}
+
+	cooldown := 2 * time.Hour
+	if lastBump != nil && time.Since(*lastBump) < cooldown {
+		nextBump := lastBump.Add(cooldown)
+		remaining := time.Until(nextBump)
+		minutes := int(remaining.Minutes())
+		writeError(w, http.StatusTooManyRequests, "bump_cooldown",
+			fmt.Sprintf("Guild was recently bumped. Try again in %d minutes.", minutes))
+		return
+	}
+
+	// Record the bump.
+	bumpID := models.NewULID().String()
+	now := time.Now()
+	_, err = h.Pool.Exec(r.Context(),
+		`INSERT INTO guild_bumps (id, guild_id, bumped_by, bumped_at) VALUES ($1, $2, $3, $4)`,
+		bumpID, guildID, userID, now,
+	)
+	if err != nil {
+		h.Logger.Error("failed to record guild bump", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to bump guild")
+		return
+	}
+
+	nextBumpAt := now.Add(cooldown)
+
+	writeJSON(w, http.StatusOK, BumpResponse{
+		Success:     true,
+		NextBumpAt:  nextBumpAt.Format(time.RFC3339),
+		BumpMessage: "Guild bumped! It will appear higher in discovery.",
+	})
+}
+
+// HandleGetBumpStatus returns the current bump cooldown status for a guild.
+// GET /api/v1/guilds/{guildID}/bump
+func (h *Handler) HandleGetBumpStatus(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	var lastBump *time.Time
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT MAX(bumped_at) FROM guild_bumps WHERE guild_id = $1`,
+		guildID,
+	).Scan(&lastBump)
+	if err != nil && err != pgx.ErrNoRows {
+		h.Logger.Error("failed to get bump status", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get bump status")
+		return
+	}
+
+	// Count total bumps in last 24 hours for display.
+	var bumpCount int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM guild_bumps WHERE guild_id = $1 AND bumped_at > now() - INTERVAL '24 hours'`,
+		guildID,
+	).Scan(&bumpCount)
+
+	cooldown := 2 * time.Hour
+	canBump := true
+	var nextBumpAt *string
+
+	if lastBump != nil && time.Since(*lastBump) < cooldown {
+		canBump = false
+		t := lastBump.Add(cooldown).Format(time.RFC3339)
+		nextBumpAt = &t
+	}
+
+	type bumpStatus struct {
+		CanBump    bool    `json:"can_bump"`
+		NextBumpAt *string `json:"next_bump_at,omitempty"`
+		LastBump   *string `json:"last_bump,omitempty"`
+		BumpCount  int     `json:"bump_count_24h"`
+	}
+
+	var lastBumpStr *string
+	if lastBump != nil {
+		s := lastBump.Format(time.RFC3339)
+		lastBumpStr = &s
+	}
+
+	writeJSON(w, http.StatusOK, bumpStatus{
+		CanBump:    canBump,
+		NextBumpAt: nextBumpAt,
+		LastBump:   lastBumpStr,
+		BumpCount:  bumpCount,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

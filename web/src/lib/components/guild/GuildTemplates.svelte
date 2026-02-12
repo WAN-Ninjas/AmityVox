@@ -1,0 +1,358 @@
+<script lang="ts">
+	import { api } from '$lib/api/client';
+
+	let { guildId }: { guildId: string } = $props();
+
+	interface GuildTemplate {
+		id: string;
+		guild_id: string;
+		name: string;
+		description?: string;
+		template_data: unknown;
+		creator_id: string;
+		created_at: string;
+	}
+
+	let templates = $state<GuildTemplate[]>([]);
+	let loading = $state(false);
+	let error = $state('');
+	let success = $state('');
+
+	// Create template form.
+	let showCreateForm = $state(false);
+	let newTemplateName = $state('');
+	let newTemplateDescription = $state('');
+	let creating = $state(false);
+
+	// Apply template form.
+	let applyingTemplateId = $state<string | null>(null);
+	let applyNewGuildName = $state('');
+	let applying = $state(false);
+	let showApplyDialog = $state(false);
+	let applyMode = $state<'new' | 'existing'>('new');
+
+	$effect(() => {
+		if (guildId) {
+			loadTemplates();
+		}
+	});
+
+	async function loadTemplates() {
+		loading = true;
+		error = '';
+		try {
+			const token = api.getToken();
+			const res = await fetch(`/api/v1/guilds/${guildId}/templates`, {
+				headers: { Authorization: `Bearer ${token}` }
+			});
+			if (!res.ok) {
+				const body = await res.json();
+				throw new Error(body?.error?.message || 'Failed to load templates');
+			}
+			const data = await res.json();
+			templates = data.data ?? [];
+		} catch (err: any) {
+			error = err.message || 'Failed to load templates';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function handleCreateTemplate() {
+		if (!newTemplateName.trim()) {
+			error = 'Please enter a template name.';
+			return;
+		}
+		creating = true;
+		error = '';
+		success = '';
+		try {
+			const token = api.getToken();
+			const res = await fetch(`/api/v1/guilds/${guildId}/templates`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${token}`
+				},
+				body: JSON.stringify({
+					name: newTemplateName.trim(),
+					description: newTemplateDescription.trim() || undefined
+				})
+			});
+			if (!res.ok) {
+				const body = await res.json();
+				throw new Error(body?.error?.message || 'Failed to create template');
+			}
+			const data = await res.json();
+			const newTemplate = data.data ?? data;
+			templates = [newTemplate, ...templates];
+			newTemplateName = '';
+			newTemplateDescription = '';
+			showCreateForm = false;
+			success = 'Template created successfully!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to create template';
+		} finally {
+			creating = false;
+		}
+	}
+
+	async function handleDeleteTemplate(templateId: string) {
+		if (!confirm('Are you sure you want to delete this template?')) return;
+		error = '';
+		try {
+			const token = api.getToken();
+			const res = await fetch(`/api/v1/guilds/${guildId}/templates/${templateId}`, {
+				method: 'DELETE',
+				headers: { Authorization: `Bearer ${token}` }
+			});
+			if (!res.ok) {
+				const body = await res.json();
+				throw new Error(body?.error?.message || 'Failed to delete template');
+			}
+			templates = templates.filter((t) => t.id !== templateId);
+			success = 'Template deleted.';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to delete template';
+		}
+	}
+
+	function openApplyDialog(templateId: string) {
+		applyingTemplateId = templateId;
+		applyNewGuildName = '';
+		applyMode = 'new';
+		showApplyDialog = true;
+		error = '';
+	}
+
+	async function handleApplyTemplate() {
+		if (!applyingTemplateId) return;
+		applying = true;
+		error = '';
+		success = '';
+		try {
+			const payload: Record<string, string> = {
+				template_id: applyingTemplateId
+			};
+			if (applyMode === 'new') {
+				if (!applyNewGuildName.trim()) {
+					error = 'Please enter a guild name.';
+					applying = false;
+					return;
+				}
+				payload.guild_name = applyNewGuildName.trim();
+			}
+			const token = api.getToken();
+			const res = await fetch(`/api/v1/guilds/${guildId}/templates/${applyingTemplateId}/apply`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${token}`
+				},
+				body: JSON.stringify(payload)
+			});
+			if (!res.ok) {
+				const body = await res.json();
+				throw new Error(body?.error?.message || 'Failed to apply template');
+			}
+			showApplyDialog = false;
+			applyingTemplateId = null;
+			if (applyMode === 'new') {
+				success = 'New guild created from template!';
+			} else {
+				success = 'Template applied to this guild!';
+			}
+			setTimeout(() => (success = ''), 5000);
+		} catch (err: any) {
+			error = err.message || 'Failed to apply template';
+		} finally {
+			applying = false;
+		}
+	}
+
+	function handleExportTemplate(template: GuildTemplate) {
+		const blob = new Blob([JSON.stringify(template.template_data, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `template-${template.name.replace(/\s+/g, '-').toLowerCase()}.json`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	function formatDate(iso: string): string {
+		return new Date(iso).toLocaleDateString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric'
+		});
+	}
+</script>
+
+<div class="space-y-4">
+	{#if error}
+		<div class="rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>
+	{/if}
+	{#if success}
+		<div class="rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{success}</div>
+	{/if}
+
+	<!-- Create Template -->
+	{#if showCreateForm}
+		<div class="rounded-lg bg-bg-secondary p-4">
+			<h4 class="mb-3 text-sm font-semibold text-text-primary">Create Template</h4>
+			<p class="mb-3 text-xs text-text-muted">
+				Save the current guild structure (roles, channels, categories, settings) as a reusable template.
+			</p>
+			<div class="mb-3">
+				<label for="templateName" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					Template Name
+				</label>
+				<input
+					id="templateName"
+					type="text"
+					class="input w-full"
+					placeholder="e.g., Community Server"
+					maxlength="100"
+					bind:value={newTemplateName}
+				/>
+			</div>
+			<div class="mb-3">
+				<label for="templateDesc" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					Description (optional)
+				</label>
+				<input
+					id="templateDesc"
+					type="text"
+					class="input w-full"
+					placeholder="A brief description of what this template sets up"
+					maxlength="500"
+					bind:value={newTemplateDescription}
+				/>
+			</div>
+			<div class="flex items-center gap-2">
+				<button class="btn-primary" onclick={handleCreateTemplate} disabled={creating || !newTemplateName.trim()}>
+					{creating ? 'Creating...' : 'Create Template'}
+				</button>
+				<button class="btn-secondary" onclick={() => (showCreateForm = false)}>Cancel</button>
+			</div>
+		</div>
+	{:else}
+		<button class="btn-primary" onclick={() => (showCreateForm = true)}>
+			Create Template from Current Structure
+		</button>
+	{/if}
+
+	<!-- Template List -->
+	{#if loading}
+		<div class="flex items-center gap-2 py-4">
+			<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+			<span class="text-sm text-text-muted">Loading templates...</span>
+		</div>
+	{:else if templates.length === 0}
+		<div class="rounded-lg bg-bg-secondary p-6 text-center">
+			<p class="text-sm text-text-muted">No templates yet.</p>
+			<p class="text-xs text-text-muted">Create one above to save this guild's structure as a reusable template.</p>
+		</div>
+	{:else}
+		<div class="space-y-3">
+			{#each templates as template (template.id)}
+				<div class="rounded-lg bg-bg-secondary p-4">
+					<div class="flex items-start justify-between">
+						<div>
+							<h4 class="text-sm font-semibold text-text-primary">{template.name}</h4>
+							{#if template.description}
+								<p class="mt-0.5 text-xs text-text-muted">{template.description}</p>
+							{/if}
+							<p class="mt-1 text-2xs text-text-muted">Created {formatDate(template.created_at)}</p>
+						</div>
+						<div class="flex items-center gap-2">
+							<button
+								class="text-xs text-brand-400 hover:text-brand-300"
+								onclick={() => openApplyDialog(template.id)}
+								title="Apply this template"
+							>
+								Apply
+							</button>
+							<button
+								class="text-xs text-text-muted hover:text-text-primary"
+								onclick={() => handleExportTemplate(template)}
+								title="Download template data as JSON"
+							>
+								Export
+							</button>
+							<button
+								class="text-xs text-red-400 hover:text-red-300"
+								onclick={() => handleDeleteTemplate(template.id)}
+								title="Delete this template"
+							>
+								Delete
+							</button>
+						</div>
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
+	<!-- Apply Template Dialog -->
+	{#if showApplyDialog}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+			onkeydown={(e) => { if (e.key === 'Escape') showApplyDialog = false; }}
+			onclick={() => (showApplyDialog = false)}
+		>
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="w-full max-w-md rounded-lg bg-bg-secondary p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+				<h3 class="mb-4 text-lg font-bold text-text-primary">Apply Template</h3>
+
+				<div class="mb-4 space-y-3">
+					<label class="flex items-center gap-2">
+						<input type="radio" name="applyMode" value="new" bind:group={applyMode} class="accent-brand-500" />
+						<span class="text-sm text-text-secondary">Create a new guild from this template</span>
+					</label>
+					<label class="flex items-center gap-2">
+						<input type="radio" name="applyMode" value="existing" bind:group={applyMode} class="accent-brand-500" />
+						<span class="text-sm text-text-secondary">Apply to this guild (adds missing roles/channels)</span>
+					</label>
+				</div>
+
+				{#if applyMode === 'new'}
+					<div class="mb-4">
+						<label for="newGuildName" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+							New Guild Name
+						</label>
+						<input
+							id="newGuildName"
+							type="text"
+							class="input w-full"
+							placeholder="My New Server"
+							maxlength="100"
+							bind:value={applyNewGuildName}
+						/>
+					</div>
+				{:else}
+					<div class="mb-4 rounded bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
+						This will add roles and channels from the template that don't already exist in this guild.
+						Existing roles and channels will not be modified or removed.
+					</div>
+				{/if}
+
+				<div class="flex items-center justify-end gap-2">
+					<button class="btn-secondary" onclick={() => (showApplyDialog = false)}>Cancel</button>
+					<button
+						class="btn-primary"
+						onclick={handleApplyTemplate}
+						disabled={applying || (applyMode === 'new' && !applyNewGuildName.trim())}
+					>
+						{applying ? 'Applying...' : applyMode === 'new' ? 'Create Guild' : 'Apply Template'}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+</div>

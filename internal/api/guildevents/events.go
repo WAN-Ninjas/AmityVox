@@ -29,21 +29,22 @@ type Handler struct {
 
 // GuildEvent represents a scheduled event in a guild.
 type GuildEvent struct {
-	ID              string     `json:"id"`
-	GuildID         string     `json:"guild_id"`
-	CreatorID       string     `json:"creator_id"`
-	Name            string     `json:"name"`
-	Description     *string    `json:"description,omitempty"`
-	Location        *string    `json:"location,omitempty"`
-	ChannelID       *string    `json:"channel_id,omitempty"`
-	ImageID         *string    `json:"image_id,omitempty"`
-	ScheduledStart  time.Time  `json:"scheduled_start"`
-	ScheduledEnd    *time.Time `json:"scheduled_end,omitempty"`
-	Status          string     `json:"status"`
-	InterestedCount int        `json:"interested_count"`
-	CreatedAt       time.Time  `json:"created_at"`
-	Creator         *User      `json:"creator,omitempty"`
-	UserRSVP        *string    `json:"user_rsvp,omitempty"`
+	ID                string     `json:"id"`
+	GuildID           string     `json:"guild_id"`
+	CreatorID         string     `json:"creator_id"`
+	Name              string     `json:"name"`
+	Description       *string    `json:"description,omitempty"`
+	Location          *string    `json:"location,omitempty"`
+	ChannelID         *string    `json:"channel_id,omitempty"`
+	ImageID           *string    `json:"image_id,omitempty"`
+	ScheduledStart    time.Time  `json:"scheduled_start"`
+	ScheduledEnd      *time.Time `json:"scheduled_end,omitempty"`
+	Status            string     `json:"status"`
+	InterestedCount   int        `json:"interested_count"`
+	AutoCancelMinutes int        `json:"auto_cancel_minutes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	Creator           *User      `json:"creator,omitempty"`
+	UserRSVP          *string    `json:"user_rsvp,omitempty"`
 }
 
 // User is a minimal user representation embedded in event responses.
@@ -64,24 +65,26 @@ type EventRSVP struct {
 }
 
 type createEventRequest struct {
-	Name           string  `json:"name"`
-	Description    *string `json:"description"`
-	Location       *string `json:"location"`
-	ChannelID      *string `json:"channel_id"`
-	ImageID        *string `json:"image_id"`
-	ScheduledStart string  `json:"scheduled_start"`
-	ScheduledEnd   *string `json:"scheduled_end"`
+	Name              string  `json:"name"`
+	Description       *string `json:"description"`
+	Location          *string `json:"location"`
+	ChannelID         *string `json:"channel_id"`
+	ImageID           *string `json:"image_id"`
+	ScheduledStart    string  `json:"scheduled_start"`
+	ScheduledEnd      *string `json:"scheduled_end"`
+	AutoCancelMinutes *int    `json:"auto_cancel_minutes"`
 }
 
 type updateEventRequest struct {
-	Name           *string `json:"name"`
-	Description    *string `json:"description"`
-	Location       *string `json:"location"`
-	ChannelID      *string `json:"channel_id"`
-	ImageID        *string `json:"image_id"`
-	ScheduledStart *string `json:"scheduled_start"`
-	ScheduledEnd   *string `json:"scheduled_end"`
-	Status         *string `json:"status"`
+	Name              *string `json:"name"`
+	Description       *string `json:"description"`
+	Location          *string `json:"location"`
+	ChannelID         *string `json:"channel_id"`
+	ImageID           *string `json:"image_id"`
+	ScheduledStart    *string `json:"scheduled_start"`
+	ScheduledEnd      *string `json:"scheduled_end"`
+	Status            *string `json:"status"`
+	AutoCancelMinutes *int    `json:"auto_cancel_minutes"`
 }
 
 type rsvpRequest struct {
@@ -184,19 +187,28 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 
 	eventID := models.NewULID().String()
 
+	autoCancelMinutes := 30 // default
+	if req.AutoCancelMinutes != nil {
+		if *req.AutoCancelMinutes < 0 || *req.AutoCancelMinutes > 1440 {
+			writeError(w, http.StatusBadRequest, "invalid_auto_cancel", "auto_cancel_minutes must be between 0 and 1440")
+			return
+		}
+		autoCancelMinutes = *req.AutoCancelMinutes
+	}
+
 	var evt GuildEvent
 	err = h.Pool.QueryRow(r.Context(),
 		`INSERT INTO guild_events (id, guild_id, creator_id, name, description, location, channel_id, image_id,
-		                           scheduled_start, scheduled_end, status, interested_count, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'scheduled', 0, now())
+		                           scheduled_start, scheduled_end, status, interested_count, auto_cancel_minutes, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'scheduled', 0, $11, now())
 		 RETURNING id, guild_id, creator_id, name, description, location, channel_id, image_id,
-		           scheduled_start, scheduled_end, status, interested_count, created_at`,
+		           scheduled_start, scheduled_end, status, interested_count, auto_cancel_minutes, created_at`,
 		eventID, guildID, userID, req.Name, req.Description, req.Location,
-		req.ChannelID, req.ImageID, scheduledStart, scheduledEnd,
+		req.ChannelID, req.ImageID, scheduledStart, scheduledEnd, autoCancelMinutes,
 	).Scan(
 		&evt.ID, &evt.GuildID, &evt.CreatorID, &evt.Name, &evt.Description,
 		&evt.Location, &evt.ChannelID, &evt.ImageID, &evt.ScheduledStart,
-		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.CreatedAt,
+		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create guild event", slog.String("error", err.Error()))
@@ -209,7 +221,60 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, evt)
 }
 
+// autoCancelOverdueEvents checks for events in a guild that are past their
+// scheduled start time plus the auto_cancel_minutes grace window and marks
+// them as cancelled. This is a check-on-fetch approach that runs each time
+// events are listed or fetched for a guild, avoiding the need for a separate
+// background worker.
+func (h *Handler) autoCancelOverdueEvents(ctx context.Context, guildID string) {
+	// Find all scheduled events that are past their start time + grace window.
+	tag, err := h.Pool.Exec(ctx,
+		`UPDATE guild_events
+		 SET status = 'cancelled'
+		 WHERE guild_id = $1
+		   AND status = 'scheduled'
+		   AND scheduled_start + (auto_cancel_minutes * INTERVAL '1 minute') < now()`,
+		guildID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to auto-cancel overdue events",
+			slog.String("guild_id", guildID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if tag.RowsAffected() > 0 {
+		h.Logger.Info("auto-cancelled overdue events",
+			slog.String("guild_id", guildID),
+			slog.Int64("count", tag.RowsAffected()),
+		)
+		// Publish event update for each cancelled event so gateway clients
+		// see the status change in real time.
+		rows, err := h.Pool.Query(ctx,
+			`SELECT id, guild_id, creator_id, name, status FROM guild_events
+			 WHERE guild_id = $1 AND status = 'cancelled'
+			   AND scheduled_start + (auto_cancel_minutes * INTERVAL '1 minute') < now()
+			   AND scheduled_start + (auto_cancel_minutes * INTERVAL '1 minute') > now() - INTERVAL '1 minute'`,
+			guildID,
+		)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id, gID, creatorID, name, status string
+				if rows.Scan(&id, &gID, &creatorID, &name, &status) == nil {
+					h.EventBus.PublishJSON(ctx, events.SubjectGuildEventUpdate, "GUILD_EVENT_UPDATE", map[string]string{
+						"id":       id,
+						"guild_id": gID,
+						"status":   status,
+					})
+				}
+			}
+		}
+	}
+}
+
 // HandleListEvents lists upcoming events for a guild.
+// Before returning results, auto-cancels any overdue events past their grace window.
 // GET /api/v1/guilds/{guildID}/events
 func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
@@ -219,6 +284,9 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
+
+	// Auto-cancel any overdue events before returning the list.
+	h.autoCancelOverdueEvents(r.Context(), guildID)
 
 	// Parse query parameters.
 	statusFilter := r.URL.Query().Get("status")
@@ -238,7 +306,7 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 	if statusFilter != "" {
 		query = `SELECT e.id, e.guild_id, e.creator_id, e.name, e.description, e.location,
 		                e.channel_id, e.image_id, e.scheduled_start, e.scheduled_end,
-		                e.status, e.interested_count, e.created_at,
+		                e.status, e.interested_count, e.auto_cancel_minutes, e.created_at,
 		                u.id, u.username, u.display_name, u.avatar_id,
 		                r.status
 		         FROM guild_events e
@@ -251,7 +319,7 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 	} else {
 		query = `SELECT e.id, e.guild_id, e.creator_id, e.name, e.description, e.location,
 		                e.channel_id, e.image_id, e.scheduled_start, e.scheduled_end,
-		                e.status, e.interested_count, e.created_at,
+		                e.status, e.interested_count, e.auto_cancel_minutes, e.created_at,
 		                u.id, u.username, u.display_name, u.avatar_id,
 		                r.status
 		         FROM guild_events e
@@ -278,7 +346,7 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 		err := rows.Scan(
 			&evt.ID, &evt.GuildID, &evt.CreatorID, &evt.Name, &evt.Description,
 			&evt.Location, &evt.ChannelID, &evt.ImageID, &evt.ScheduledStart,
-			&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.CreatedAt,
+			&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 			&creator.ID, &creator.Username, &creator.DisplayName, &creator.AvatarID,
 			&evt.UserRSVP,
 		)
@@ -300,11 +368,15 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGetEvent returns a single guild event by ID.
+// Also auto-cancels overdue events before returning the result.
 // GET /api/v1/guilds/{guildID}/events/{eventID}
 func (h *Handler) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	guildID := chi.URLParam(r, "guildID")
 	eventID := chi.URLParam(r, "eventID")
+
+	// Auto-cancel overdue events before returning.
+	h.autoCancelOverdueEvents(r.Context(), guildID)
 
 	if !h.isMember(r.Context(), guildID, userID) {
 		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
@@ -316,7 +388,7 @@ func (h *Handler) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT e.id, e.guild_id, e.creator_id, e.name, e.description, e.location,
 		        e.channel_id, e.image_id, e.scheduled_start, e.scheduled_end,
-		        e.status, e.interested_count, e.created_at,
+		        e.status, e.interested_count, e.auto_cancel_minutes, e.created_at,
 		        u.id, u.username, u.display_name, u.avatar_id,
 		        r.status
 		 FROM guild_events e
@@ -327,7 +399,7 @@ func (h *Handler) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	).Scan(
 		&evt.ID, &evt.GuildID, &evt.CreatorID, &evt.Name, &evt.Description,
 		&evt.Location, &evt.ChannelID, &evt.ImageID, &evt.ScheduledStart,
-		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.CreatedAt,
+		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 		&creator.ID, &creator.Username, &creator.DisplayName, &creator.AvatarID,
 		&evt.UserRSVP,
 	)
@@ -414,16 +486,17 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 			image_id = COALESCE($7, image_id),
 			scheduled_start = COALESCE($8, scheduled_start),
 			scheduled_end = COALESCE($9, scheduled_end),
-			status = COALESCE($10, status)
+			status = COALESCE($10, status),
+			auto_cancel_minutes = COALESCE($11, auto_cancel_minutes)
 		 WHERE id = $1 AND guild_id = $2
 		 RETURNING id, guild_id, creator_id, name, description, location, channel_id, image_id,
-		           scheduled_start, scheduled_end, status, interested_count, created_at`,
+		           scheduled_start, scheduled_end, status, interested_count, auto_cancel_minutes, created_at`,
 		eventID, guildID, req.Name, req.Description, req.Location,
-		req.ChannelID, req.ImageID, scheduledStart, scheduledEnd, req.Status,
+		req.ChannelID, req.ImageID, scheduledStart, scheduledEnd, req.Status, req.AutoCancelMinutes,
 	).Scan(
 		&evt.ID, &evt.GuildID, &evt.CreatorID, &evt.Name, &evt.Description,
 		&evt.Location, &evt.ChannelID, &evt.ImageID, &evt.ScheduledStart,
-		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.CreatedAt,
+		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to update guild event", slog.String("error", err.Error()))
