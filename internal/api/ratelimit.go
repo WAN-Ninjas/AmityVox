@@ -3,8 +3,10 @@ package api
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/amityvox/amityvox/internal/auth"
@@ -13,17 +15,23 @@ import (
 
 // Rate limit tiers for different endpoint categories.
 const (
-	// Global rate limit: 120 requests per minute per user/IP.
-	globalRateLimit  = 120
-	globalRateWindow = 1 * time.Minute
+	// Authenticated user global rate limit: 600 requests per minute.
+	// Users clicking through settings/menus trigger many parallel API calls,
+	// so this needs to be generous.
+	authedRateLimit  = 600
+	authedRateWindow = 1 * time.Minute
+
+	// Unauthenticated global rate limit: 60 requests per minute per IP.
+	unauthRateLimit  = 60
+	unauthRateWindow = 1 * time.Minute
 
 	// Auth rate limit: 10 requests per minute per IP (login/register).
 	authRateLimit  = 10
 	authRateWindow = 1 * time.Minute
 
-	// Message creation: 5 messages per 5 seconds per user.
-	messageRateLimit  = 5
-	messageRateWindow = 5 * time.Second
+	// Message creation: 10 messages per 10 seconds per user.
+	messageRateLimit  = 10
+	messageRateWindow = 10 * time.Second
 
 	// Search: 30 queries per minute per user.
 	searchRateLimit  = 30
@@ -45,22 +53,31 @@ func (s *Server) rateLimitMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Determine rate limit key: user ID if authenticated, IP otherwise.
-			key := auth.UserIDFromContext(r.Context())
-			if key == "" {
-				key = clientIP(r)
+			// Use different rate limits for authenticated vs unauthenticated requests.
+			userID := auth.UserIDFromContext(r.Context())
+			var key string
+			var limit int
+			var window time.Duration
+
+			if userID != "" {
+				key = "global:" + userID
+				limit = authedRateLimit
+				window = authedRateWindow
+			} else {
+				key = "global:" + clientIP(r)
+				limit = unauthRateLimit
+				window = unauthRateWindow
 			}
 
-			// Check global rate limit.
-			result, err := s.Cache.CheckRateLimitInfo(r.Context(), "global:"+key, globalRateLimit, globalRateWindow)
+			result, err := s.Cache.CheckRateLimitInfo(r.Context(), key, limit, window)
 			if err != nil {
 				s.Logger.Debug("rate limit check failed", slog.String("error", err.Error()))
 				next.ServeHTTP(w, r)
 				return
 			}
-			setRateLimitHeaders(w, result, globalRateWindow)
+			setRateLimitHeaders(w, result, window)
 			if !result.Allowed {
-				writeRateLimitResponse(w, globalRateWindow)
+				writeRateLimitResponse(w, window)
 				return
 			}
 
@@ -190,9 +207,19 @@ func isAuthEndpoint(r *http.Request) bool {
 }
 
 // clientIP extracts the client IP from the request, preferring X-Forwarded-For.
+// It normalizes the result to a bare IP (no port, no extra entries).
 func clientIP(r *http.Request) string {
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return fwd
+		if i := strings.IndexByte(fwd, ','); i >= 0 {
+			fwd = fwd[:i]
+		}
+		fwd = strings.TrimSpace(fwd)
+		if fwd != "" {
+			return fwd
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		return host
 	}
 	return r.RemoteAddr
 }
