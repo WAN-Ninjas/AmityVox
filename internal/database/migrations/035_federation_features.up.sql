@@ -7,7 +7,7 @@
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS federation_peer_status (
-    peer_id         TEXT PRIMARY KEY REFERENCES federation_peers(peer_id) ON DELETE CASCADE,
+    peer_id         TEXT PRIMARY KEY,
     instance_id     TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'unknown',   -- 'healthy', 'degraded', 'unreachable', 'unknown'
     last_sync_at    TIMESTAMPTZ,

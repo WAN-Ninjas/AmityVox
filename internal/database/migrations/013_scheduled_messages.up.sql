@@ -7,4 +7,4 @@ CREATE TABLE IF NOT EXISTS scheduled_messages (
     scheduled_for TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_scheduled_messages_due ON scheduled_messages (scheduled_for) WHERE scheduled_for > now();
+CREATE INDEX idx_scheduled_messages_due ON scheduled_messages (scheduled_for);
