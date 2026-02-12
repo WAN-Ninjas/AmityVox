@@ -84,6 +84,7 @@
 	// --- Privacy tab state ---
 	let dmPrivacy = $state<'everyone' | 'friends' | 'nobody'>('everyone');
 	let friendRequestPrivacy = $state<'everyone' | 'mutual_guilds' | 'nobody'>('everyone');
+	let nsfwContentFilter = $state<'blur_all' | 'blur_suspicious' | 'show_all'>('blur_all');
 	let privacyLoading = $state(false);
 	let privacySuccess = $state('');
 
@@ -104,6 +105,7 @@
 	let showImportModal = $state(false);
 	let importJson = $state('');
 	let importError = $state('');
+	let importFileInput: HTMLInputElement;
 
 	// --- Connected Accounts state ---
 	interface ConnectedAccounts {
@@ -126,6 +128,12 @@
 		compactMode = localStorage.getItem('av-compact') === 'true';
 		reducedMotion = localStorage.getItem('av-reduced-motion') === 'true';
 		dyslexicFont = localStorage.getItem('av-dyslexic-font') === 'true';
+
+		// Load NSFW filter from localStorage.
+		const storedNsfwFilter = localStorage.getItem('av-nsfw-filter');
+		if (storedNsfwFilter === 'blur_all' || storedNsfwFilter === 'blur_suspicious' || storedNsfwFilter === 'show_all') {
+			nsfwContentFilter = storedNsfwFilter;
+		}
 
 		// Load DND schedule from store.
 		const schedule = $dndSchedule;
@@ -313,6 +321,7 @@
 			notificationSounds = settings.notification_sounds ?? true;
 			dmPrivacy = settings.dm_privacy ?? 'everyone';
 			friendRequestPrivacy = settings.friend_request_privacy ?? 'everyone';
+			nsfwContentFilter = settings.nsfw_content_filter ?? 'blur_all';
 		} catch {
 			// Use defaults if settings don't exist yet.
 		}
@@ -387,8 +396,11 @@
 		try {
 			await api.updateUserSettings({
 				dm_privacy: dmPrivacy,
-				friend_request_privacy: friendRequestPrivacy
+				friend_request_privacy: friendRequestPrivacy,
+				nsfw_content_filter: nsfwContentFilter
 			});
+			// Persist NSFW filter to localStorage for MessageItem to read.
+			localStorage.setItem('av-nsfw-filter', nsfwContentFilter);
 			privacySuccess = 'Privacy settings saved!';
 			setTimeout(() => (privacySuccess = ''), 3000);
 		} catch (err: any) {
@@ -531,6 +543,40 @@
 		} catch (err: any) {
 			importError = err.message || 'Failed to import theme.';
 		}
+	}
+
+	function handleImportFile(e: Event) {
+		const target = e.target as HTMLInputElement;
+		const file = target.files?.[0];
+		if (!file) return;
+		if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+			importError = 'Please select a JSON file.';
+			return;
+		}
+		importError = '';
+		const reader = new FileReader();
+		reader.onload = () => {
+			const text = reader.result as string;
+			try {
+				const imported = importTheme(text);
+				addCustomTheme(imported);
+				syncSettingsToApi();
+				showImportModal = false;
+				editorSuccess = `Theme "${imported.name}" imported from file!`;
+				setTimeout(() => (editorSuccess = ''), 3000);
+			} catch (err: any) {
+				importError = err.message || 'Failed to import theme from file.';
+			}
+		};
+		reader.onerror = () => {
+			importError = 'Failed to read file.';
+		};
+		reader.readAsText(file);
+		target.value = '';
+	}
+
+	function triggerImportFilePicker() {
+		importFileInput?.click();
 	}
 
 	function editExistingTheme(themeObj: CustomTheme) {
@@ -1083,6 +1129,21 @@
 						</div>
 					</div>
 
+					<div class="rounded-lg bg-bg-secondary p-4">
+						<h3 class="mb-1 text-sm font-semibold text-text-primary">NSFW Content Filter</h3>
+						<p class="mb-3 text-xs text-text-muted">Control how images are displayed in NSFW-marked channels.</p>
+						<div class="space-y-2">
+							<label class="flex items-center gap-2">
+								<input type="radio" name="nsfwFilter" value="blur_all" bind:group={nsfwContentFilter} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Blur all media in NSFW channels</span>
+							</label>
+							<label class="flex items-center gap-2">
+								<input type="radio" name="nsfwFilter" value="show_all" bind:group={nsfwContentFilter} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Show all media</span>
+							</label>
+						</div>
+					</div>
+
 					<button class="btn-primary" onclick={savePrivacy} disabled={privacyLoading}>
 						{privacyLoading ? 'Saving...' : 'Save Privacy Settings'}
 					</button>
@@ -1159,6 +1220,23 @@
 								<p class="text-xs text-text-muted">Create, edit, import and export custom color themes.</p>
 							</div>
 							<div class="flex gap-2">
+								<button
+									class="btn-secondary text-xs"
+									onclick={() => {
+										const colors = getCurrentThemeColors();
+										const exported = exportTheme({ name: theme + '-exported', colors, createdAt: new Date().toISOString() });
+										const blob = new Blob([exported], { type: 'application/json' });
+										const url = URL.createObjectURL(blob);
+										const a = document.createElement('a');
+										a.href = url;
+										a.download = `${theme}-theme.json`;
+										a.click();
+										URL.revokeObjectURL(url);
+									}}
+									title="Export the current active theme colors as a JSON file"
+								>
+									Export Current
+								</button>
 								<button class="btn-secondary text-xs" onclick={openImportModal}>
 									Import
 								</button>
@@ -1380,22 +1458,51 @@
 						{#if showImportModal}
 							<div class="mt-4 rounded-lg border border-bg-modifier bg-bg-secondary p-4">
 								<h3 class="mb-2 text-sm font-semibold text-text-primary">Import Theme</h3>
-								<p class="mb-3 text-xs text-text-muted">Paste the JSON content of an exported theme file.</p>
 
 								{#if importError}
 									<div class="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{importError}</div>
 								{/if}
 
+								<!-- File upload option -->
+								<div class="mb-4 rounded-lg bg-bg-primary p-4 text-center">
+									<p class="mb-2 text-xs text-text-muted">Select a .json theme file to import</p>
+									<input
+										bind:this={importFileInput}
+										type="file"
+										accept=".json,application/json"
+										class="hidden"
+										onchange={handleImportFile}
+									/>
+									<button class="btn-primary text-sm" onclick={triggerImportFilePicker}>
+										<span class="inline-flex items-center gap-1.5">
+											<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+												<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+												<polyline points="17 8 12 3 7 8" />
+												<line x1="12" y1="3" x2="12" y2="15" />
+											</svg>
+											Choose File
+										</span>
+									</button>
+								</div>
+
+								<!-- Divider -->
+								<div class="mb-4 flex items-center gap-3">
+									<div class="flex-1 border-t border-bg-modifier"></div>
+									<span class="text-xs text-text-muted">or paste JSON</span>
+									<div class="flex-1 border-t border-bg-modifier"></div>
+								</div>
+
+								<!-- Paste JSON option -->
 								<textarea
 									bind:value={importJson}
 									class="input mb-3 w-full font-mono text-xs"
-									rows="8"
+									rows="6"
 									placeholder={'{"name": "My Theme", "version": 1, "colors": {...}}'}
 								></textarea>
 
 								<div class="flex gap-2">
 									<button class="btn-primary" onclick={handleImportTheme} disabled={!importJson.trim()}>
-										Import
+										Import from Paste
 									</button>
 									<button class="btn-secondary" onclick={() => (showImportModal = false)}>
 										Cancel

@@ -14,8 +14,9 @@
 	import { memberTimeouts } from '$lib/stores/members';
 	import { startReply, startEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
-	import { currentChannelId } from '$lib/stores/channels';
+	import { currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { addToast } from '$lib/stores/toast';
+	import { blockedUserIds } from '$lib/stores/blocked';
 
 	interface Props {
 		message: Message;
@@ -35,6 +36,37 @@
 	let showForward = $state(false);
 	let forwardTargetId = $state('');
 	let forwarding = $state(false);
+
+	// --- Blocked user support ---
+	const isAuthorBlocked = $derived($blockedUserIds.has(message.author_id));
+	let showBlockedContent = $state(false);
+
+	// --- NSFW content filter ---
+	const isNsfwChannel = $derived($currentChannel?.nsfw ?? false);
+	let nsfwFilterSetting = $state<'blur_all' | 'blur_suspicious' | 'show_all'>('blur_all');
+	let revealedImages = $state<Set<string>>(new Set());
+
+	// Load NSFW filter setting from localStorage (synced from user settings).
+	$effect(() => {
+		try {
+			const stored = localStorage.getItem('av-nsfw-filter');
+			if (stored === 'blur_all' || stored === 'blur_suspicious' || stored === 'show_all') {
+				nsfwFilterSetting = stored;
+			}
+		} catch {
+			// Use default.
+		}
+	});
+
+	function shouldBlurImage(attachmentId: string): boolean {
+		if (!isNsfwChannel) return false;
+		if (nsfwFilterSetting !== 'blur_all') return false;
+		return !revealedImages.has(attachmentId);
+	}
+
+	function revealImage(attachmentId: string) {
+		revealedImages = new Set([...revealedImages, attachmentId]);
+	}
 
 	const authorPresence = $derived($presenceMap.get(message.author_id) ?? undefined);
 
@@ -228,6 +260,26 @@
 	}
 </script>
 
+<!-- System lockdown message: prominent alert display -->
+{#if message.message_type === 'system_lockdown'}
+<div
+	class="mx-4 my-2 flex items-center gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3"
+	id="msg-{message.id}"
+>
+	<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-yellow-500/20">
+		<svg class="h-5 w-5 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+			<path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+		</svg>
+	</div>
+	<div class="flex-1">
+		<p class="text-sm font-semibold text-yellow-400">Raid Protection Lockdown</p>
+		<p class="text-xs text-yellow-300/80">{message.content}</p>
+	</div>
+	<time class="text-xs text-yellow-500/60" title={new Date(message.created_at).toLocaleString()}>
+		{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+	</time>
+</div>
+{:else}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="group relative flex gap-4 px-4 py-0.5 hover:bg-bg-modifier/30"
@@ -264,99 +316,146 @@
 	{/if}
 
 	<div class="min-w-0 flex-1" class:mt-3={repliedMessage && !isCompact}>
-		{#if !isCompact}
-			<div class="flex items-baseline gap-2">
-				<button class="font-medium text-text-primary hover:underline" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
-				{#if isAuthorTimedOut}
-					<span class="inline-flex items-center" title="This user is timed out">
-						<svg class="h-3.5 w-3.5 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<circle cx="12" cy="12" r="10" />
-							<path d="M12 6v6l4 2" />
-						</svg>
-					</span>
-				{/if}
-				<time class="text-xs text-text-muted" title={fullDateTime}>{relativeTime}</time>
-				{#if message.pinned}
-					<span class="text-2xs text-yellow-500" title="Pinned">📌</span>
-				{/if}
-				{#if message.edited_at}
-					<button
-						class="text-2xs text-text-muted hover:underline"
-						title="Edited: {editedTime}"
-						onclick={() => (showEditHistory = true)}
-					>(edited)</button>
-				{/if}
-				{#if message.flags & 1}
-					<span class="flex items-center gap-0.5 text-2xs text-green-400" title="Published to followers">
-						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
-						</svg>
-						Published
-					</span>
-				{/if}
-				{#if message.thread_id}
-					<button
-						class="flex items-center gap-1 text-2xs text-brand-400 hover:underline"
-						onclick={handleViewThread}
-					>
-						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-						</svg>
-						Thread
-					</button>
-				{/if}
+		{#if isAuthorBlocked && !showBlockedContent}
+			<!-- Blocked user placeholder -->
+			<div class="flex items-center gap-3 rounded bg-bg-modifier/50 px-3 py-2">
+				<svg class="h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<circle cx="12" cy="12" r="10" />
+					<path d="M4.93 4.93l14.14 14.14" />
+				</svg>
+				<span class="text-sm text-text-muted">Blocked message</span>
+				<button
+					class="ml-auto text-xs text-text-muted hover:text-text-secondary"
+					onclick={() => (showBlockedContent = true)}
+				>
+					Show message
+				</button>
 			</div>
-		{/if}
-
-		{#if message.content}
-			<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
-				<MarkdownRenderer content={message.content} />
-			</div>
-		{/if}
-
-		<!-- Attachments -->
-		{#if message.attachments?.length > 0}
-			<div class="mt-1 flex flex-wrap gap-2">
-				{#each message.attachments as attachment (attachment.id)}
-					{#if attachment.content_type?.startsWith('image/')}
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<img
-							src="/api/v1/files/{attachment.id}"
-							alt={attachment.filename}
-							class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
-							loading="lazy"
-							onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
-							oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-						/>
-					{:else if attachment.content_type?.startsWith('video/')}
-						<video
-							src="/api/v1/files/{attachment.id}"
-							controls
-							class="max-h-80 max-w-md rounded"
-							preload="metadata"
-						>
-							<track kind="captions" />
-						</video>
-					{:else}
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<a
-							href="/api/v1/files/{attachment.id}"
-							class="flex items-center gap-2 rounded bg-bg-secondary px-3 py-2 text-sm text-text-link hover:underline"
-							download={attachment.filename}
-							oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-						>
-							<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z" />
-							</svg>
-							{attachment.filename}
-							<span class="text-xs text-text-muted">
-								({(attachment.size_bytes / 1024).toFixed(0)} KB)
-							</span>
-						</a>
+		{:else}
+			{#if !isCompact}
+				<div class="flex items-baseline gap-2">
+					<button class="font-medium text-text-primary hover:underline" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
+					{#if isAuthorBlocked}
+						<span class="text-2xs text-red-400">(blocked)</span>
 					{/if}
-				{/each}
-			</div>
-		{/if}
+					{#if isAuthorTimedOut}
+						<span class="inline-flex items-center" title="This user is timed out">
+							<svg class="h-3.5 w-3.5 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<circle cx="12" cy="12" r="10" />
+								<path d="M12 6v6l4 2" />
+							</svg>
+						</span>
+					{/if}
+					<time class="text-xs text-text-muted" title={fullDateTime}>{relativeTime}</time>
+					{#if message.pinned}
+						<span class="text-2xs text-yellow-500" title="Pinned">📌</span>
+					{/if}
+					{#if message.edited_at}
+						<button
+							class="text-2xs text-text-muted hover:underline"
+							title="Edited: {editedTime}"
+							onclick={() => (showEditHistory = true)}
+						>(edited)</button>
+					{/if}
+					{#if message.flags & 1}
+						<span class="flex items-center gap-0.5 text-2xs text-green-400" title="Published to followers">
+							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+							</svg>
+							Published
+						</span>
+					{/if}
+					{#if message.thread_id}
+						<button
+							class="flex items-center gap-1 text-2xs text-brand-400 hover:underline"
+							onclick={handleViewThread}
+						>
+							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+							</svg>
+							Thread
+						</button>
+					{/if}
+					{#if isAuthorBlocked}
+						<button
+							class="text-2xs text-text-muted hover:text-text-secondary"
+							onclick={() => (showBlockedContent = false)}
+						>
+							Hide
+						</button>
+					{/if}
+				</div>
+			{/if}
+
+			{#if message.content}
+				<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
+					<MarkdownRenderer content={message.content} />
+				</div>
+			{/if}
+
+			<!-- Attachments -->
+			{#if message.attachments?.length > 0}
+				<div class="mt-1 flex flex-wrap gap-2">
+					{#each message.attachments as attachment (attachment.id)}
+						{#if attachment.content_type?.startsWith('image/')}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							{#if shouldBlurImage(attachment.id)}
+								<div
+									class="relative max-h-80 max-w-md cursor-pointer overflow-hidden rounded"
+									onclick={() => revealImage(attachment.id)}
+								>
+									<img
+										src="/api/v1/files/{attachment.id}"
+										alt={attachment.filename}
+										class="max-h-80 max-w-md rounded transition-[filter]"
+										style="filter: blur(20px);"
+										loading="lazy"
+									/>
+									<div class="absolute inset-0 flex items-center justify-center bg-black/30">
+										<span class="rounded bg-bg-floating/80 px-3 py-1.5 text-xs font-medium text-text-primary">
+											Click to reveal NSFW image
+										</span>
+									</div>
+								</div>
+							{:else}
+								<img
+									src="/api/v1/files/{attachment.id}"
+									alt={attachment.filename}
+									class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
+									loading="lazy"
+									onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
+									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
+								/>
+							{/if}
+						{:else if attachment.content_type?.startsWith('video/')}
+							<video
+								src="/api/v1/files/{attachment.id}"
+								controls
+								class="max-h-80 max-w-md rounded"
+								preload="metadata"
+							>
+								<track kind="captions" />
+							</video>
+						{:else}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<a
+								href="/api/v1/files/{attachment.id}"
+								class="flex items-center gap-2 rounded bg-bg-secondary px-3 py-2 text-sm text-text-link hover:underline"
+								download={attachment.filename}
+								oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
+							>
+								<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+									<path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z" />
+								</svg>
+								{attachment.filename}
+								<span class="text-xs text-text-muted">
+									({(attachment.size_bytes / 1024).toFixed(0)} KB)
+								</span>
+							</a>
+						{/if}
+					{/each}
+				</div>
+			{/if}
 
 		<!-- Embeds -->
 		{#if message.embeds?.length > 0}
@@ -398,6 +497,7 @@
 					</button>
 				{/each}
 			</div>
+		{/if}
 		{/if}
 	</div>
 
@@ -456,6 +556,7 @@
 		</div>
 	{/if}
 </div>
+{/if}
 
 <!-- Message context menu -->
 {#if contextMenu}

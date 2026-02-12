@@ -6,6 +6,7 @@ package moderation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -575,6 +576,12 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Check the previous lockdown state before updating, to detect transitions.
+	var prevLockdownActive bool
+	_ = h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(lockdown_active, false) FROM guild_raid_config WHERE guild_id = $1`, guildID,
+	).Scan(&prevLockdownActive)
+
 	var config models.GuildRaidConfig
 	err := h.Pool.QueryRow(r.Context(),
 		`INSERT INTO guild_raid_config (guild_id, enabled, join_rate_limit, join_rate_window,
@@ -608,7 +615,84 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// If lockdown just activated, create a system message and publish an event.
+	if config.LockdownActive && !prevLockdownActive {
+		h.publishLockdownAlert(r.Context(), guildID, config)
+	}
+
 	writeJSON(w, http.StatusOK, config)
+}
+
+// publishLockdownAlert creates a system_lockdown message in the guild's first
+// text channel and publishes a NATS event so connected clients see the alert
+// in real-time.
+func (h *Handler) publishLockdownAlert(ctx context.Context, guildID string, config models.GuildRaidConfig) {
+	// Find the guild's first text channel to post the alert in.
+	var channelID string
+	err := h.Pool.QueryRow(ctx,
+		`SELECT id FROM channels
+		 WHERE guild_id = $1 AND channel_type = 'text'
+		 ORDER BY position ASC, created_at ASC
+		 LIMIT 1`,
+		guildID,
+	).Scan(&channelID)
+	if err != nil {
+		h.Logger.Warn("no text channel found for lockdown alert",
+			slog.String("guild_id", guildID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	// Build the alert message content.
+	alertContent := fmt.Sprintf(
+		"Raid protection activated: lockdown engaged (rate limit: %d joins in %d seconds)",
+		config.JoinRateLimit, config.JoinRateWindow,
+	)
+
+	// Insert the system message.
+	msgID := models.NewULID().String()
+	var msg models.Message
+	err = h.Pool.QueryRow(ctx,
+		`INSERT INTO messages (id, channel_id, author_id, content, message_type, flags, created_at)
+		 VALUES ($1, $2, '00000000000000000000000000', $3, $4, 0, now())
+		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		           encrypted, encryption_session_id, created_at`,
+		msgID, channelID, alertContent, models.MessageTypeSystemLockdown,
+	).Scan(
+		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create lockdown alert message",
+			slog.String("guild_id", guildID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	// Update last_message_id on the channel.
+	h.Pool.Exec(ctx,
+		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
+
+	// Publish MESSAGE_CREATE event so connected clients see it in real-time.
+	msgData, _ := json.Marshal(msg)
+	h.EventBus.Publish(ctx, events.SubjectMessageCreate, events.Event{
+		Type:      "MESSAGE_CREATE",
+		ChannelID: channelID,
+		GuildID:   guildID,
+		Data:      msgData,
+	})
+
+	h.Logger.Info("lockdown alert published",
+		slog.String("guild_id", guildID),
+		slog.String("channel_id", channelID),
+		slog.String("message_id", msgID),
+	)
 }
 
 // HandleReportToAdmin escalates a message report to instance admins.

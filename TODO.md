@@ -164,7 +164,7 @@
 - [x] Create events for voice channels, stage channels, or external locations
 - [x] Event details: name, description, date/time, cover image, recurrence
 - [x] RSVP / "Interested" tracking with count
-- [ ] Event reminders via push notification (15 min, 1 hour before)
+- [x] Event reminders via push notification (15 min, 1 hour before)
 - [x] Event listing in guild sidebar and dedicated events tab
 - [ ] Auto-cancel if event doesn't start within configurable window
 
@@ -181,7 +181,7 @@
 - [x] Announcement channel type with "Follow" support
 - [x] Cross-server message publishing — followers get messages in their servers
 - [x] "Published" indicator on announcement messages
-- [ ] Follow management UI (which servers are following your announcements)
+- [x] Follow management UI (which servers are following your announcements)
 
 ### Custom Status & Rich Presence
 - [x] Custom status (text + single emoji) displayed on profile and member list
@@ -247,7 +247,7 @@
 - [ ] Video player improvements — inline playback with controls, volume, fullscreen
 - [x] Image paste from clipboard (Ctrl+V to upload)
 - [x] Drag-and-drop multiple files with individual progress bars
-- [ ] File size limit display in upload dialog
+- [x] File size limit display in upload dialog
 - [ ] Image compression options (original vs. compressed)
 
 ---
@@ -262,7 +262,7 @@
 - [x] Actions: delete message, timeout user, alert channel, log only
 - [x] Exempt roles and channels per rule
 - [x] AutoMod action log viewer (what was caught, when, what action was taken)
-- [ ] Test rule — preview what messages would match before enabling
+- [x] Test rule — preview what messages would match before enabling
 
 ### Server Verification Levels
 - [x] None — anyone can chat immediately
@@ -275,8 +275,8 @@
 ### Raid Protection
 - [x] Join rate detection (X joins in Y seconds triggers lockdown)
 - [x] Automatic lockdown mode (pause invites, restrict new member permissions)
-- [ ] DM spam detection (new member sending identical DMs to many members)
-- [ ] Anti-raid alert in mod channel
+- [x] DM spam detection (new member sending identical DMs to many members)
+- [x] Anti-raid alert in mod channel
 - [x] Lockdown controls (enable/disable from guild settings or slash command)
 - [x] New member holding period (restrict actions for first N minutes)
 
@@ -292,16 +292,16 @@
 ### NSFW & Content Safety
 - [x] NSFW channel designation (toggle in channel settings)
 - [x] Age gate / content warning before viewing NSFW channels
-- [ ] Content filter setting per user (blur all images in NSFW, blur suspicious, show all)
+- [x] Content filter setting per user (blur all images in NSFW, blur suspicious, show all)
 - [x] Report message to server mods (with reason)
 - [x] Report message to instance admins
-- [ ] User block improvements — blocked users' messages hidden with "blocked message" placeholder
+- [x] User block improvements — blocked users' messages hidden with "blocked message" placeholder
 
 ### Shared Ban Lists (Inspired by Matrix Mjolnir)
 - [x] Exportable ban lists (JSON format with user IDs, reasons, timestamps)
 - [x] Import ban lists from other servers/instances
 - [x] Subscribable ban lists — auto-apply bans from trusted list sources
-- [ ] Ban list management UI in guild settings
+- [x] Ban list management UI in guild settings
 
 ### Instance-Wide Moderation (Admin)
 - [x] Instance-wide user ban (not just per-guild)
@@ -322,7 +322,7 @@
 - [x] Theme system with CSS variables (colors, fonts, border radius, spacing)
 - [x] Built-in theme presets (Dark, Light, AMOLED, Solarized, Nord, Dracula, Monokai, Catppuccin)
 - [ ] Theme editor UI — live preview with color pickers for every variable
-- [ ] Import/export themes as JSON files
+- [x] Import/export themes as JSON files
 - [x] Per-user theme selection (stored in user settings, synced across devices)
 - [ ] Custom CSS injection (advanced mode — paste raw CSS, sandboxed to prevent XSS)
 - [ ] Community theme gallery (share themes with other users via shareable links)

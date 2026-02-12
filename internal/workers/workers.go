@@ -79,6 +79,7 @@ func (m *Manager) Start(ctx context.Context) {
 	// Start push notification worker if enabled.
 	if m.notifications != nil && m.notifications.Enabled() {
 		m.startNotificationWorker(ctx)
+		m.startEventReminderWorker(ctx)
 		m.startPeriodic(ctx, "push-sub-cleanup", 24*time.Hour, m.cleanStalePushSubscriptions)
 	}
 

@@ -100,7 +100,8 @@ export type MessageType =
 	| 'system_ban'
 	| 'system_pin'
 	| 'reply'
-	| 'thread_created';
+	| 'thread_created'
+	| 'system_lockdown';
 
 export interface ScheduledMessage {
 	id: string;
@@ -584,6 +585,7 @@ export interface UserSettings {
 	notification_sounds: boolean;
 	dm_privacy: 'everyone' | 'friends' | 'nobody';
 	friend_request_privacy: 'everyone' | 'mutual_guilds' | 'nobody';
+	nsfw_content_filter?: 'blur_all' | 'blur_suspicious' | 'show_all';
 	dnd_schedule?: {
 		enabled: boolean;
 		startHour: number;
@@ -639,4 +641,47 @@ export interface OnboardingOption {
 	emoji?: string;
 	role_ids: string[];
 	channel_ids: string[];
+}
+
+// --- Ban Lists ---
+
+export interface BanList {
+	id: string;
+	guild_id: string;
+	name: string;
+	description: string | null;
+	public: boolean;
+	entry_count: number;
+	created_at: string;
+}
+
+export interface BanListEntry {
+	id: string;
+	list_id: string;
+	user_id: string;
+	reason: string | null;
+	added_by: string;
+	created_at: string;
+	username?: string;
+}
+
+export interface BanListSubscription {
+	id: string;
+	guild_id: string;
+	list_id: string;
+	list_name: string;
+	auto_ban: boolean;
+	created_at: string;
+}
+
+// --- Channel Followers ---
+
+export interface ChannelFollower {
+	id: string;
+	channel_id: string;
+	guild_id: string;
+	webhook_id: string;
+	guild_name?: string;
+	channel_name?: string;
+	created_at: string;
 }

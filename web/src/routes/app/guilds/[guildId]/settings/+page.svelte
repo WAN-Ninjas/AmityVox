@@ -5,9 +5,9 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
-	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt } from '$lib/types';
+	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt, BanList, BanListEntry, BanListSubscription } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding';
+	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding' | 'ban-lists';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -90,6 +90,14 @@
 	let editingExemptRoles = $state<string[]>([]);
 	let editingExemptChannels = $state<string[]>([]);
 
+	// AutoMod: test rule
+	let testRuleType = $state<string>('word_filter');
+	let testRuleConfigText = $state('');
+	let testSampleText = $state('');
+	let testResult = $state<{ matched: boolean; matched_content: string | null } | null>(null);
+	let testingRule = $state(false);
+	let testError = $state('');
+
 	// --- Moderation ---
 	let warnings = $state<MemberWarning[]>([]);
 	let reports = $state<MessageReport[]>([]);
@@ -126,6 +134,29 @@
 	let newOptionRoleIds = $state<string[]>([]);
 	let newOptionChannelIds = $state<string[]>([]);
 
+	// --- Ban Lists ---
+	let banLists = $state<BanList[]>([]);
+	let banListEntries = $state<Map<string, BanListEntry[]>>(new Map());
+	let banListSubscriptions = $state<BanListSubscription[]>([]);
+	let publicBanLists = $state<BanList[]>([]);
+	let loadingBanLists = $state(false);
+	let creatingBanList = $state(false);
+	let newBanListName = $state('');
+	let newBanListDescription = $state('');
+	let newBanListPublic = $state(false);
+	let expandedBanListId = $state<string | null>(null);
+	let loadingBanListEntries = $state(false);
+	let newEntryUserId = $state('');
+	let newEntryReason = $state('');
+	let addingEntry = $state(false);
+	let showSubscribePanel = $state(false);
+	let subscribingListId = $state('');
+	let subscribingAutoBan = $state(false);
+	let subscribing = $state(false);
+	let importingListId = $state<string | null>(null);
+	let importData = $state('');
+	let importing = $state(false);
+
 	const isOwner = $derived($currentGuild?.owner_id === $currentUser?.id);
 
 	$effect(() => {
@@ -152,6 +183,7 @@
 		if (currentTab === 'moderation' && reports.length === 0) loadReports(gId);
 		if (currentTab === 'raid' && !raidConfig) loadRaid(gId);
 		if (currentTab === 'onboarding' && !onboardingConfig) loadOnboarding(gId);
+		if (currentTab === 'ban-lists' && banLists.length === 0) loadBanLists(gId);
 	});
 
 	// --- Data loading ---
@@ -251,6 +283,195 @@
 			} catch {}
 		}
 		finally { loadingOnboarding = false; }
+	}
+
+	// --- Ban List data loading ---
+
+	async function loadBanLists(guildId: string) {
+		loadingBanLists = true;
+		try {
+			const [lists, subs, pub] = await Promise.all([
+				api.getBanLists(guildId),
+				api.getBanListSubscriptions(guildId),
+				api.getPublicBanLists()
+			]);
+			banLists = lists;
+			banListSubscriptions = subs;
+			publicBanLists = pub;
+		} catch {}
+		finally { loadingBanLists = false; }
+	}
+
+	async function loadBanListEntriesFor(guildId: string, listId: string) {
+		loadingBanListEntries = true;
+		try {
+			const entries = await api.getBanListEntries(guildId, listId);
+			banListEntries = new Map(banListEntries);
+			banListEntries.set(listId, entries);
+		} catch {}
+		finally { loadingBanListEntries = false; }
+	}
+
+	// --- Ban List actions ---
+
+	async function handleCreateBanList() {
+		if (!$currentGuild || !newBanListName.trim()) return;
+		creatingBanList = true;
+		error = '';
+		try {
+			const list = await api.createBanList($currentGuild.id, {
+				name: newBanListName.trim(),
+				description: newBanListDescription.trim() || undefined,
+				public: newBanListPublic
+			});
+			banLists = [...banLists, list];
+			newBanListName = '';
+			newBanListDescription = '';
+			newBanListPublic = false;
+			success = 'Ban list created!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to create ban list';
+		} finally {
+			creatingBanList = false;
+		}
+	}
+
+	async function handleDeleteBanList(listId: string) {
+		if (!$currentGuild || !confirm('Delete this ban list? All entries will be removed.')) return;
+		error = '';
+		try {
+			await api.deleteBanList($currentGuild.id, listId);
+			banLists = banLists.filter(l => l.id !== listId);
+			if (expandedBanListId === listId) expandedBanListId = null;
+		} catch (err: any) {
+			error = err.message || 'Failed to delete ban list';
+		}
+	}
+
+	async function toggleExpandBanList(listId: string) {
+		if (expandedBanListId === listId) {
+			expandedBanListId = null;
+			return;
+		}
+		expandedBanListId = listId;
+		if (!banListEntries.has(listId) && $currentGuild) {
+			await loadBanListEntriesFor($currentGuild.id, listId);
+		}
+	}
+
+	async function handleAddBanListEntry() {
+		if (!$currentGuild || !expandedBanListId || !newEntryUserId.trim()) return;
+		addingEntry = true;
+		error = '';
+		try {
+			const entry = await api.addBanListEntry($currentGuild.id, expandedBanListId, {
+				user_id: newEntryUserId.trim(),
+				reason: newEntryReason.trim() || undefined
+			});
+			const existing = banListEntries.get(expandedBanListId) ?? [];
+			banListEntries = new Map(banListEntries);
+			banListEntries.set(expandedBanListId, [...existing, entry]);
+			banLists = banLists.map(l => l.id === expandedBanListId ? { ...l, entry_count: l.entry_count + 1 } : l);
+			newEntryUserId = '';
+			newEntryReason = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to add entry';
+		} finally {
+			addingEntry = false;
+		}
+	}
+
+	async function handleRemoveBanListEntry(listId: string, entryId: string) {
+		if (!$currentGuild) return;
+		error = '';
+		try {
+			await api.removeBanListEntry($currentGuild.id, listId, entryId);
+			const existing = banListEntries.get(listId) ?? [];
+			banListEntries = new Map(banListEntries);
+			banListEntries.set(listId, existing.filter(e => e.id !== entryId));
+			banLists = banLists.map(l => l.id === listId ? { ...l, entry_count: Math.max(0, l.entry_count - 1) } : l);
+		} catch (err: any) {
+			error = err.message || 'Failed to remove entry';
+		}
+	}
+
+	async function handleExportBanList(listId: string) {
+		if (!$currentGuild) return;
+		error = '';
+		try {
+			const data = await api.exportBanList($currentGuild.id, listId);
+			const json = JSON.stringify(data, null, 2);
+			const blob = new Blob([json], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `ban-list-${listId}.json`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+			success = 'Ban list exported!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to export ban list';
+		}
+	}
+
+	async function handleImportBanList() {
+		if (!$currentGuild || !importingListId || !importData.trim()) return;
+		importing = true;
+		error = '';
+		try {
+			const parsed = JSON.parse(importData);
+			await api.importBanList($currentGuild.id, importingListId, parsed);
+			// Reload entries for this list
+			await loadBanListEntriesFor($currentGuild.id, importingListId);
+			// Reload ban lists to get updated entry counts
+			const lists = await api.getBanLists($currentGuild.id);
+			banLists = lists;
+			importingListId = null;
+			importData = '';
+			success = 'Ban list imported!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to import ban list (check JSON format)';
+		} finally {
+			importing = false;
+		}
+	}
+
+	async function handleSubscribeBanList() {
+		if (!$currentGuild || !subscribingListId) return;
+		subscribing = true;
+		error = '';
+		try {
+			const sub = await api.subscribeBanList($currentGuild.id, {
+				list_id: subscribingListId,
+				auto_ban: subscribingAutoBan
+			});
+			banListSubscriptions = [...banListSubscriptions, sub];
+			subscribingListId = '';
+			subscribingAutoBan = false;
+			showSubscribePanel = false;
+			success = 'Subscribed to ban list!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to subscribe to ban list';
+		} finally {
+			subscribing = false;
+		}
+	}
+
+	async function handleUnsubscribeBanList(subId: string) {
+		if (!$currentGuild || !confirm('Unsubscribe from this ban list?')) return;
+		error = '';
+		try {
+			await api.unsubscribeBanList($currentGuild.id, subId);
+			banListSubscriptions = banListSubscriptions.filter(s => s.id !== subId);
+		} catch (err: any) {
+			error = err.message || 'Failed to unsubscribe';
+		}
 	}
 
 	// --- Onboarding actions ---
@@ -788,6 +1009,51 @@
 		return channel?.name ?? channelId.slice(0, 8) + '...';
 	}
 
+	// --- AutoMod test rule ---
+
+	function buildTestConfig(): Record<string, unknown> {
+		const text = testRuleConfigText.trim();
+		if (!text) return {};
+		switch (testRuleType) {
+			case 'word_filter':
+				return { words: text.split(',').map(w => w.trim()).filter(Boolean) };
+			case 'regex_filter':
+				return { patterns: text.split(',').map(p => p.trim()).filter(Boolean) };
+			case 'mention_spam': {
+				const n = parseInt(text, 10);
+				return { max_mentions: isNaN(n) ? 5 : n };
+			}
+			case 'caps_filter': {
+				const n = parseInt(text, 10);
+				return { max_caps_percent: isNaN(n) ? 70 : n };
+			}
+			case 'link_filter':
+				return { blocked_domains: text.split(',').map(d => d.trim()).filter(Boolean) };
+			case 'invite_filter':
+				return {};
+			default:
+				return {};
+		}
+	}
+
+	async function handleTestAutoModRule() {
+		if (!$currentGuild || !testSampleText.trim()) return;
+		testingRule = true;
+		testResult = null;
+		testError = '';
+		try {
+			testResult = await api.testAutoModRule($currentGuild.id, {
+				rule_type: testRuleType,
+				config: buildTestConfig(),
+				sample_text: testSampleText.trim()
+			});
+		} catch (err: any) {
+			testError = err.message || 'Failed to test rule';
+		} finally {
+			testingRule = false;
+		}
+	}
+
 	// --- Moderation actions ---
 
 	async function handleResolveReport(reportId: string, status: 'resolved' | 'dismissed') {
@@ -843,7 +1109,8 @@
 		{ id: 'automod', label: 'AutoMod' },
 		{ id: 'moderation', label: 'Moderation' },
 		{ id: 'raid', label: 'Raid Protection' },
-		{ id: 'onboarding', label: 'Onboarding' }
+		{ id: 'onboarding', label: 'Onboarding' },
+		{ id: 'ban-lists', label: 'Ban Lists' }
 	];
 
 	const expiryOptions = [
@@ -1614,6 +1881,106 @@
 					</div>
 				{/if}
 
+			<!-- AutoMod: Test Rule Section -->
+				<div class="mt-8 rounded-lg bg-bg-secondary p-4">
+					<h2 class="mb-3 text-lg font-semibold text-text-primary">Test Rule</h2>
+					<p class="mb-3 text-xs text-text-muted">Preview what messages would match a rule before enabling it. Enter your rule configuration and sample text to test.</p>
+
+					<div class="mb-3 grid grid-cols-2 gap-3">
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Rule Type</label>
+							<select class="input w-full" bind:value={testRuleType}>
+								<option value="word_filter">Word Filter</option>
+								<option value="regex_filter">Regex Filter</option>
+								<option value="invite_filter">Invite Links</option>
+								<option value="mention_spam">Mention Spam</option>
+								<option value="caps_filter">Caps Filter</option>
+								<option value="link_filter">Link Filter</option>
+							</select>
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+								{#if testRuleType === 'word_filter'}
+									Blocked Words (comma-separated)
+								{:else if testRuleType === 'regex_filter'}
+									Patterns (comma-separated)
+								{:else if testRuleType === 'mention_spam'}
+									Max Mentions (number)
+								{:else if testRuleType === 'caps_filter'}
+									Max Caps Percent (number)
+								{:else if testRuleType === 'link_filter'}
+									Blocked Domains (comma-separated)
+								{:else}
+									Config (not needed)
+								{/if}
+							</label>
+							<input
+								type="text"
+								class="input w-full"
+								bind:value={testRuleConfigText}
+								placeholder={
+									testRuleType === 'word_filter' ? 'spam, badword, test' :
+									testRuleType === 'regex_filter' ? '\\btest\\b, spam\\d+' :
+									testRuleType === 'mention_spam' ? '5' :
+									testRuleType === 'caps_filter' ? '70' :
+									testRuleType === 'link_filter' ? 'evil.com, spam.net' :
+									'N/A'
+								}
+								disabled={testRuleType === 'invite_filter'}
+							/>
+						</div>
+					</div>
+
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Sample Text</label>
+						<textarea
+							class="input w-full resize-y"
+							bind:value={testSampleText}
+							rows="3"
+							placeholder="Enter a sample message to test against the rule..."
+						></textarea>
+					</div>
+
+					<button
+						class="btn-primary"
+						onclick={handleTestAutoModRule}
+						disabled={testingRule || !testSampleText.trim()}
+					>
+						{testingRule ? 'Testing...' : 'Test Rule'}
+					</button>
+
+					{#if testError}
+						<div class="mt-3 rounded bg-red-500/10 border border-red-500/30 p-3 text-sm text-red-400">
+							{testError}
+						</div>
+					{/if}
+
+					{#if testResult}
+						<div class="mt-3 rounded p-3 text-sm {testResult.matched ? 'bg-red-500/10 border border-red-500/30' : 'bg-green-500/10 border border-green-500/30'}">
+							{#if testResult.matched}
+								<div class="flex items-center gap-2">
+									<svg class="h-5 w-5 text-red-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+									</svg>
+									<div>
+										<p class="font-semibold text-red-400">Matched</p>
+										{#if testResult.matched_content}
+											<p class="text-xs text-red-300/80 mt-0.5">Reason: {testResult.matched_content}</p>
+										{/if}
+									</div>
+								</div>
+							{:else}
+								<div class="flex items-center gap-2">
+									<svg class="h-5 w-5 text-green-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M5 13l4 4L19 7" />
+									</svg>
+									<p class="font-semibold text-green-400">No match -- this text would not trigger the rule.</p>
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</div>
+
 			<!-- ==================== MODERATION ==================== -->
 			{:else if currentTab === 'moderation'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Moderation</h1>
@@ -2067,6 +2434,276 @@
 						{/if}
 					</div>
 				{/if}
+
+			<!-- ==================== BAN LISTS ==================== -->
+			{:else if currentTab === 'ban-lists'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Ban Lists</h1>
+				<p class="mb-4 text-sm text-text-muted">
+					Create and manage shared ban lists. Public lists can be subscribed to by other guilds.
+				</p>
+
+				<!-- Create Ban List Form -->
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h2 class="mb-3 text-sm font-bold uppercase tracking-wide text-text-muted">Create Ban List</h2>
+					<div class="mb-2">
+						<input
+							type="text" class="input w-full" placeholder="Ban list name..."
+							bind:value={newBanListName} maxlength="100"
+						/>
+					</div>
+					<div class="mb-2">
+						<textarea
+							class="input w-full" placeholder="Description (optional)..." rows="2"
+							bind:value={newBanListDescription} maxlength="500"
+						></textarea>
+					</div>
+					<div class="mb-3 flex items-center gap-2">
+						<label class="flex items-center gap-2 text-sm text-text-muted">
+							<input type="checkbox" bind:checked={newBanListPublic} class="rounded" />
+							Make public (other guilds can discover and subscribe)
+						</label>
+					</div>
+					<button
+						class="btn-primary"
+						onclick={handleCreateBanList}
+						disabled={creatingBanList || !newBanListName.trim()}
+					>
+						{creatingBanList ? 'Creating...' : 'Create Ban List'}
+					</button>
+				</div>
+
+				<!-- Ban Lists -->
+				{#if loadingBanLists}
+					<p class="text-sm text-text-muted">Loading ban lists...</p>
+				{:else if banLists.length === 0}
+					<p class="text-sm text-text-muted">No ban lists yet. Create one above.</p>
+				{:else}
+					<div class="mb-6 space-y-2">
+						{#each banLists as list (list.id)}
+							<div class="rounded-lg bg-bg-secondary">
+								<div class="flex items-center justify-between p-3">
+									<button
+										class="flex min-w-0 flex-1 items-center gap-3 text-left"
+										onclick={() => toggleExpandBanList(list.id)}
+									>
+										<svg
+											class="h-4 w-4 shrink-0 text-text-muted transition-transform {expandedBanListId === list.id ? 'rotate-90' : ''}"
+											fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+										>
+											<path d="M9 5l7 7-7 7" />
+										</svg>
+										<div class="min-w-0 flex-1">
+											<div class="flex items-center gap-2">
+												<span class="text-sm font-medium text-text-primary">{list.name}</span>
+												{#if list.public}
+													<span class="rounded bg-green-500/15 px-1.5 py-0.5 text-2xs text-green-400">Public</span>
+												{/if}
+												<span class="rounded bg-bg-modifier px-1.5 py-0.5 text-2xs text-text-muted">
+													{list.entry_count} {list.entry_count === 1 ? 'entry' : 'entries'}
+												</span>
+											</div>
+											{#if list.description}
+												<p class="mt-0.5 text-xs text-text-muted">{list.description}</p>
+											{/if}
+										</div>
+									</button>
+									<div class="flex items-center gap-2">
+										<button
+											class="text-xs text-brand-400 hover:text-brand-300"
+											onclick={() => handleExportBanList(list.id)}
+											title="Export ban list"
+										>
+											Export
+										</button>
+										<button
+											class="text-xs text-brand-400 hover:text-brand-300"
+											onclick={() => { importingListId = importingListId === list.id ? null : list.id; importData = ''; }}
+											title="Import entries"
+										>
+											Import
+										</button>
+										<button
+											class="text-xs text-red-400 hover:text-red-300"
+											onclick={() => handleDeleteBanList(list.id)}
+											title="Delete ban list"
+										>
+											Delete
+										</button>
+									</div>
+								</div>
+
+								<!-- Import panel -->
+								{#if importingListId === list.id}
+									<div class="border-t border-bg-modifier px-3 py-3">
+										<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Import Entries (JSON)</h4>
+										<textarea
+											class="input mb-2 w-full font-mono text-xs" rows="4"
+											bind:value={importData}
+											placeholder='Paste exported ban list JSON here...'
+										></textarea>
+										<div class="flex gap-2">
+											<button
+												class="btn-primary text-xs"
+												onclick={handleImportBanList}
+												disabled={importing || !importData.trim()}
+											>
+												{importing ? 'Importing...' : 'Import'}
+											</button>
+											<button
+												class="btn-secondary text-xs"
+												onclick={() => { importingListId = null; importData = ''; }}
+											>
+												Cancel
+											</button>
+										</div>
+									</div>
+								{/if}
+
+								<!-- Expanded entries -->
+								{#if expandedBanListId === list.id}
+									<div class="border-t border-bg-modifier px-3 py-3">
+										{#if loadingBanListEntries}
+											<p class="text-xs text-text-muted">Loading entries...</p>
+										{:else}
+											<!-- Add entry form -->
+											<div class="mb-3 flex gap-2">
+												<input
+													type="text" class="input flex-1 text-sm" placeholder="User ID..."
+													bind:value={newEntryUserId}
+												/>
+												<input
+													type="text" class="input flex-1 text-sm" placeholder="Reason (optional)..."
+													bind:value={newEntryReason}
+												/>
+												<button
+													class="btn-primary text-xs"
+													onclick={handleAddBanListEntry}
+													disabled={addingEntry || !newEntryUserId.trim()}
+												>
+													{addingEntry ? 'Adding...' : 'Add'}
+												</button>
+											</div>
+
+											{@const entries = banListEntries.get(list.id) ?? []}
+											{#if entries.length === 0}
+												<p class="text-xs text-text-muted">No entries in this ban list.</p>
+											{:else}
+												<div class="space-y-1.5">
+													{#each entries as entry (entry.id)}
+														<div class="flex items-center justify-between rounded-md bg-bg-primary p-2">
+															<div class="min-w-0 flex-1">
+																<div class="flex items-center gap-2">
+																	<span class="text-sm text-text-primary">
+																		{entry.username ?? entry.user_id}
+																	</span>
+																</div>
+																{#if entry.reason}
+																	<p class="mt-0.5 text-xs text-text-muted">Reason: {entry.reason}</p>
+																{/if}
+																<p class="mt-0.5 text-2xs text-text-muted">Added {formatDate(entry.created_at)}</p>
+															</div>
+															<button
+																class="shrink-0 text-xs text-red-400 hover:text-red-300"
+																onclick={() => handleRemoveBanListEntry(list.id, entry.id)}
+															>
+																Remove
+															</button>
+														</div>
+													{/each}
+												</div>
+											{/if}
+										{/if}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+				<!-- Subscriptions -->
+				<div class="mb-6">
+					<h2 class="mb-3 text-sm font-bold uppercase tracking-wide text-text-muted">Subscriptions</h2>
+					<p class="mb-3 text-xs text-text-muted">
+						Subscribe to ban lists from other guilds. When auto-ban is enabled, users on subscribed lists are automatically banned.
+					</p>
+
+					{#if banListSubscriptions.length === 0}
+						<p class="mb-3 text-sm text-text-muted">No subscriptions yet.</p>
+					{:else}
+						<div class="mb-3 space-y-2">
+							{#each banListSubscriptions as sub (sub.id)}
+								<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
+									<div>
+										<span class="text-sm font-medium text-text-primary">{sub.list_name}</span>
+										<div class="mt-0.5 flex gap-2 text-xs text-text-muted">
+											{#if sub.auto_ban}
+												<span class="rounded bg-red-500/15 px-1.5 py-0.5 text-red-400">Auto-ban enabled</span>
+											{:else}
+												<span class="rounded bg-bg-modifier px-1.5 py-0.5">Manual review</span>
+											{/if}
+											<span>Since {formatDate(sub.created_at)}</span>
+										</div>
+									</div>
+									<button
+										class="text-xs text-red-400 hover:text-red-300"
+										onclick={() => handleUnsubscribeBanList(sub.id)}
+									>
+										Unsubscribe
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if !showSubscribePanel}
+						<button
+							class="btn-secondary text-sm"
+							onclick={() => (showSubscribePanel = true)}
+						>
+							Subscribe to a Ban List
+						</button>
+					{:else}
+						<div class="rounded-lg bg-bg-secondary p-4">
+							<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Subscribe to Public Ban List</h3>
+							{#if publicBanLists.length === 0}
+								<p class="mb-2 text-xs text-text-muted">No public ban lists available.</p>
+							{:else}
+								<div class="mb-2">
+									<select class="input w-full" bind:value={subscribingListId}>
+										<option value="">Select a ban list...</option>
+										{#each publicBanLists.filter(pl => !banListSubscriptions.some(s => s.list_id === pl.id)) as pubList (pubList.id)}
+											<option value={pubList.id}>
+												{pubList.name} ({pubList.entry_count} entries)
+												{#if pubList.description} - {pubList.description}{/if}
+											</option>
+										{/each}
+									</select>
+								</div>
+								<div class="mb-3 flex items-center gap-2">
+									<label class="flex items-center gap-2 text-sm text-text-muted">
+										<input type="checkbox" bind:checked={subscribingAutoBan} class="rounded" />
+										Auto-ban users on this list
+									</label>
+								</div>
+							{/if}
+							<div class="flex gap-2">
+								<button
+									class="btn-primary text-xs"
+									onclick={handleSubscribeBanList}
+									disabled={subscribing || !subscribingListId}
+								>
+									{subscribing ? 'Subscribing...' : 'Subscribe'}
+								</button>
+								<button
+									class="btn-secondary text-xs"
+									onclick={() => { showSubscribePanel = false; subscribingListId = ''; subscribingAutoBan = false; }}
+								>
+									Cancel
+								</button>
+							</div>
+						</div>
+					{/if}
+				</div>
 			{/if}
 		</div>
 	</div>

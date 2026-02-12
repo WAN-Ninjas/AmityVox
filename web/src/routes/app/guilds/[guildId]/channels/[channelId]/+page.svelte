@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import type { Channel, Message } from '$lib/types';
+	import type { Channel, Message, ChannelFollower } from '$lib/types';
 	import { setChannel, currentChannel, currentChannelId } from '$lib/stores/channels';
 	import { currentGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
@@ -18,12 +18,20 @@
 
 	let showMembers = $state(true);
 	let showPins = $state(false);
+	let showFollowers = $state(false);
 	let activeThread = $state<{ channel: Channel; parentMessage: Message | null } | null>(null);
 	let isDragging = $state(false);
 	let dragCounter = 0;
 	let isUploading = $state(false);
 	let nsfwAccepted = $state(false);
 	const isArchived = $derived($currentChannel?.archived ?? false);
+
+	// --- Channel Followers (announcement channels) ---
+	let followers = $state<ChannelFollower[]>([]);
+	let loadingFollowers = $state(false);
+	let followTargetChannelId = $state('');
+	let following = $state(false);
+	let guildChannelsForFollow = $state<Channel[]>([]);
 
 	function isNsfwAcceptedForChannel(channelId: string): boolean {
 		try {
@@ -115,6 +123,60 @@
 		activeThread = { channel: threadChannel, parentMessage };
 		showPins = false;
 	}
+
+	// --- Channel Followers ---
+
+	function toggleFollowers() {
+		showFollowers = !showFollowers;
+		if (showFollowers) {
+			activeThread = null;
+			showPins = false;
+			loadFollowers();
+		}
+	}
+
+	async function loadFollowers() {
+		const channelId = $currentChannelId;
+		if (!channelId) return;
+		loadingFollowers = true;
+		try {
+			const [f, channels] = await Promise.all([
+				api.getChannelFollowers(channelId),
+				$currentGuild ? api.getGuildChannels($currentGuild.id) : Promise.resolve([])
+			]);
+			followers = f;
+			guildChannelsForFollow = channels.filter(c => c.channel_type === 'text');
+		} catch {}
+		finally { loadingFollowers = false; }
+	}
+
+	async function handleFollowChannel() {
+		const channelId = $currentChannelId;
+		if (!channelId || !followTargetChannelId) return;
+		following = true;
+		try {
+			const follower = await api.followChannel(channelId, { target_channel_id: followTargetChannelId });
+			followers = [...followers, follower];
+			followTargetChannelId = '';
+			addToast('Channel followed! Announcements will be forwarded.', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to follow channel', 'error');
+		} finally {
+			following = false;
+		}
+	}
+
+	async function handleUnfollowChannel(followerId: string) {
+		const channelId = $currentChannelId;
+		if (!channelId) return;
+		try {
+			await api.unfollowChannel(channelId, followerId);
+			followers = followers.filter(f => f.id !== followerId);
+			addToast('Unfollowed channel', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to unfollow', 'error');
+		}
+	}
 </script>
 
 <svelte:head>
@@ -183,8 +245,10 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<TopBar
 			onToggleMembers={() => (showMembers = !showMembers)}
-			onTogglePins={() => { showPins = !showPins; if (showPins) activeThread = null; }}
+			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; showFollowers = false; } }}
+			onToggleFollowers={toggleFollowers}
 			{showPins}
+			{showFollowers}
 		/>
 		{#if $currentChannel?.channel_type === 'voice'}
 			<!-- Voice channel controls banner -->
@@ -241,7 +305,96 @@
 		<PinnedMessages onclose={() => (showPins = false)} onscrollto={scrollToMessage} />
 	{/if}
 
-	{#if showMembers && !showPins && !activeThread}
+	{#if showFollowers && !activeThread && !showPins}
+		<aside class="flex w-64 shrink-0 flex-col border-l border-bg-floating bg-bg-secondary">
+			<div class="flex items-center justify-between border-b border-bg-floating px-4 py-3">
+				<h2 class="text-sm font-bold text-text-primary">Channel Followers</h2>
+				<button
+					class="text-text-muted hover:text-text-primary"
+					onclick={() => (showFollowers = false)}
+					title="Close"
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M6 18L18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+
+			<div class="flex-1 overflow-y-auto p-4">
+				{#if loadingFollowers}
+					<p class="text-sm text-text-muted">Loading followers...</p>
+				{:else}
+					<!-- Follow form -->
+					<div class="mb-4">
+						<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Forward to Channel</h3>
+						<p class="mb-2 text-2xs text-text-muted">
+							Announcements from this channel will be forwarded to the selected text channel.
+						</p>
+						<select class="input mb-2 w-full text-sm" bind:value={followTargetChannelId}>
+							<option value="">Select a channel...</option>
+							{#each guildChannelsForFollow as ch (ch.id)}
+								<option value={ch.id}>#{ch.name ?? 'unnamed'}</option>
+							{/each}
+						</select>
+						<button
+							class="btn-primary w-full text-xs"
+							onclick={handleFollowChannel}
+							disabled={following || !followTargetChannelId}
+						>
+							{following ? 'Following...' : 'Follow'}
+						</button>
+					</div>
+
+					<!-- Current followers -->
+					<div>
+						<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">
+							Current Followers ({followers.length})
+						</h3>
+						{#if followers.length === 0}
+							<p class="text-xs text-text-muted">No followers yet.</p>
+						{:else}
+							<div class="space-y-2">
+								{#each followers as follower (follower.id)}
+									<div class="flex items-center justify-between rounded-lg bg-bg-primary p-2.5">
+										<div class="min-w-0 flex-1">
+											<p class="text-sm text-text-primary">
+												{#if follower.guild_name}
+													{follower.guild_name}
+												{:else}
+													Guild
+												{/if}
+											</p>
+											<p class="text-xs text-text-muted">
+												{#if follower.channel_name}
+													#{follower.channel_name}
+												{:else}
+													Channel
+												{/if}
+											</p>
+											<p class="mt-0.5 text-2xs text-text-muted">
+												Since {new Date(follower.created_at).toLocaleDateString()}
+											</p>
+										</div>
+										<button
+											class="shrink-0 text-xs text-red-400 hover:text-red-300"
+											onclick={() => handleUnfollowChannel(follower.id)}
+											title="Unfollow"
+										>
+											<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+												<path d="M6 18L18 6M6 6l12 12" />
+											</svg>
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</aside>
+	{/if}
+
+	{#if showMembers && !showPins && !activeThread && !showFollowers}
 		<MemberList />
 	{/if}
 </div>

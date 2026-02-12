@@ -315,6 +315,7 @@ const (
 	MessageTypePoll          = "poll"
 	MessageTypeForward       = "forward"
 	MessageTypeScheduled     = "scheduled"
+	MessageTypeSystemLockdown = "system_lockdown"
 )
 
 // MessageFlag constants for messages.flags bitfield.
