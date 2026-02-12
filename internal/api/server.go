@@ -20,6 +20,7 @@ import (
 
 	"github.com/amityvox/amityvox/internal/api/admin"
 	"github.com/amityvox/amityvox/internal/api/bookmarks"
+	"github.com/amityvox/amityvox/internal/api/bots"
 	"github.com/amityvox/amityvox/internal/api/channels"
 	"github.com/amityvox/amityvox/internal/api/guildevents"
 	"github.com/amityvox/amityvox/internal/api/guilds"
@@ -183,6 +184,12 @@ func (s *Server) registerRoutes() {
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
 	}
+	botH := &bots.Handler{
+		Pool:        s.DB.Pool,
+		AuthService: s.AuthService,
+		EventBus:    s.EventBus,
+		Logger:      s.Logger,
+	}
 
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
@@ -228,6 +235,8 @@ func (s *Server) registerRoutes() {
 				r.Patch("/@me/settings", userH.HandleUpdateUserSettings)
 				r.Get("/@me/blocked", userH.HandleGetBlockedUsers)
 				r.Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
+				r.Get("/@me/bots", botH.HandleListMyBots)
+				r.Post("/@me/bots", botH.HandleCreateBot)
 				r.Get("/{userID}", userH.HandleGetUser)
 				r.Get("/{userID}/note", userH.HandleGetUserNote)
 				r.Put("/{userID}/note", userH.HandleSetUserNote)
@@ -239,6 +248,24 @@ func (s *Server) registerRoutes() {
 				r.Get("/{userID}/mutual-friends", userH.HandleGetMutualFriends)
 				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)
 				r.Get("/{userID}/badges", userH.HandleGetUserBadges)
+			})
+
+			// Bot management routes.
+			r.Route("/bots/{botID}", func(r chi.Router) {
+				r.Get("/", botH.HandleGetBot)
+				r.Patch("/", botH.HandleUpdateBot)
+				r.Delete("/", botH.HandleDeleteBot)
+				r.Route("/tokens", func(r chi.Router) {
+					r.Get("/", botH.HandleListTokens)
+					r.Post("/", botH.HandleCreateToken)
+					r.Delete("/{tokenID}", botH.HandleDeleteToken)
+				})
+				r.Route("/commands", func(r chi.Router) {
+					r.Get("/", botH.HandleListCommands)
+					r.Post("/", botH.HandleRegisterCommand)
+					r.Patch("/{commandID}", botH.HandleUpdateCommand)
+					r.Delete("/{commandID}", botH.HandleDeleteCommand)
+				})
 			})
 
 			// Guild routes.

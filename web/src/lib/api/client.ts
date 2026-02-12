@@ -46,7 +46,9 @@ import type {
 	BanList,
 	BanListEntry,
 	BanListSubscription,
-	ChannelFollower
+	ChannelFollower,
+	BotToken,
+	SlashCommand
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -228,7 +230,7 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages${qs ? '?' + qs : ''}`);
 	}
 
-	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean }): Promise<Message> {
+	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[] }): Promise<Message> {
 		return this.post(`/channels/${channelId}/messages`, { content, ...opts });
 	}
 
@@ -1063,6 +1065,56 @@ class ApiClient {
 
 	unfollowChannel(channelId: string, followerId: string): Promise<void> {
 		return this.del(`/channels/${channelId}/followers/${followerId}`);
+	}
+
+	// --- Bots ---
+
+	getMyBots(): Promise<User[]> {
+		return this.get('/users/@me/bots');
+	}
+
+	createBot(name: string, description?: string): Promise<User> {
+		return this.post('/users/@me/bots', { name, description: description ?? '' });
+	}
+
+	getBot(botId: string): Promise<User> {
+		return this.get(`/bots/${botId}`);
+	}
+
+	updateBot(botId: string, data: { name?: string; description?: string }): Promise<User> {
+		return this.patch(`/bots/${botId}`, data);
+	}
+
+	deleteBot(botId: string): Promise<void> {
+		return this.del(`/bots/${botId}`);
+	}
+
+	getBotTokens(botId: string): Promise<BotToken[]> {
+		return this.get(`/bots/${botId}/tokens`);
+	}
+
+	createBotToken(botId: string, name?: string): Promise<BotToken> {
+		return this.post(`/bots/${botId}/tokens`, { name: name ?? 'default' });
+	}
+
+	deleteBotToken(botId: string, tokenId: string): Promise<void> {
+		return this.del(`/bots/${botId}/tokens/${tokenId}`);
+	}
+
+	getBotCommands(botId: string): Promise<SlashCommand[]> {
+		return this.get(`/bots/${botId}/commands`);
+	}
+
+	registerBotCommand(botId: string, data: { name: string; description: string; guild_id?: string; options?: unknown[] }): Promise<SlashCommand> {
+		return this.post(`/bots/${botId}/commands`, data);
+	}
+
+	updateBotCommand(botId: string, commandId: string, data: { name?: string; description?: string; options?: unknown[] }): Promise<SlashCommand> {
+		return this.patch(`/bots/${botId}/commands/${commandId}`, data);
+	}
+
+	deleteBotCommand(botId: string, commandId: string): Promise<void> {
+		return this.del(`/bots/${botId}/commands/${commandId}`);
 	}
 }
 

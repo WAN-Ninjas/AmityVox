@@ -8,6 +8,7 @@
 	import ImageLightbox from '$components/common/ImageLightbox.svelte';
 	import EditHistoryModal from '$components/chat/EditHistoryModal.svelte';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
+	import AudioPlayer from '$components/chat/AudioPlayer.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
@@ -427,6 +428,12 @@
 									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
 								/>
 							{/if}
+						{:else if attachment.content_type?.startsWith('audio/')}
+							<AudioPlayer
+								src="/api/v1/files/{attachment.id}"
+								waveform={message.voice_waveform}
+								durationMs={message.voice_duration_ms}
+							/>
 						{:else if attachment.content_type?.startsWith('video/')}
 							<video
 								src="/api/v1/files/{attachment.id}"

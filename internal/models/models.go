@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -293,12 +294,14 @@ type Message struct {
 	MasqueradeName      *string    `json:"masquerade_name,omitempty"`
 	MasqueradeAvatar    *string    `json:"masquerade_avatar,omitempty"`
 	MasqueradeColor     *string    `json:"masquerade_color,omitempty"`
-	Encrypted           bool         `json:"encrypted"`
-	EncryptionSessionID *string      `json:"encryption_session_id,omitempty"`
-	Attachments         []Attachment `json:"attachments,omitempty"`
-	Embeds              []Embed      `json:"embeds,omitempty"`
-	CreatedAt           time.Time    `json:"created_at"`
-	Author              *User        `json:"author,omitempty"`
+	Encrypted           bool            `json:"encrypted"`
+	EncryptionSessionID *string         `json:"encryption_session_id,omitempty"`
+	VoiceDurationMs     *int            `json:"voice_duration_ms,omitempty"`
+	VoiceWaveform       json.RawMessage `json:"voice_waveform,omitempty"`
+	Attachments         []Attachment    `json:"attachments,omitempty"`
+	Embeds              []Embed         `json:"embeds,omitempty"`
+	CreatedAt           time.Time       `json:"created_at"`
+	Author              *User           `json:"author,omitempty"`
 }
 
 // MessageType constants for messages.message_type.
@@ -659,6 +662,32 @@ type ChannelFollower struct {
 	WebhookID string    `json:"webhook_id"`
 	GuildID   string    `json:"guild_id"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// BotToken represents an API authentication token for a bot user.
+// Bot tokens are hashed with SHA-256 before storage; the raw token is only
+// returned once at creation time. Corresponds to the bot_tokens table.
+type BotToken struct {
+	ID         string     `json:"id"`
+	BotID      string     `json:"bot_id"`
+	TokenHash  string     `json:"-"` // never expose hash
+	Name       string     `json:"name"`
+	Token      string     `json:"token,omitempty"` // only set on creation response
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+// SlashCommand represents a bot-registered slash command. Commands can be
+// global (guild_id is nil) or guild-scoped. Corresponds to the slash_commands table.
+type SlashCommand struct {
+	ID          string          `json:"id"`
+	BotID       string          `json:"bot_id"`
+	GuildID     *string         `json:"guild_id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Options     json.RawMessage `json:"options"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // Verification level constants for guilds.
