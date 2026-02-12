@@ -137,7 +137,7 @@
 - [x] Prometheus metrics exporter
 - [x] install.sh one-liner script
 - [x] Automated backup/restore tooling
-- [ ] Multi-arch Docker images (amd64 + arm64)
+- [x] Multi-arch Docker images (amd64 + arm64)
 - [ ] RPi5 performance profiling + optimization pass
 
 ---
@@ -148,9 +148,9 @@
 
 ### Server Onboarding
 - [x] Welcome screen with server description and featured channels
-- [ ] Onboarding questionnaire flow — customizable questions that assign roles/channels
-- [ ] Rules/ToS acceptance gate before participating (membership screening)
-- [ ] Default channels configuration (which channels new members see first)
+- [x] Onboarding questionnaire flow — customizable questions that assign roles/channels
+- [x] Rules/ToS acceptance gate before participating (membership screening)
+- [x] Default channels configuration (which channels new members see first)
 - [ ] Server guide — curated walkthrough for new members
 
 ### Server Discovery

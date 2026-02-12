@@ -4,12 +4,48 @@
 	import { presenceMap } from '$lib/stores/presence';
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
-	import type { GuildEvent } from '$lib/types';
+	import type { GuildEvent, OnboardingConfig } from '$lib/types';
+	import OnboardingModal from '$lib/components/guild/OnboardingModal.svelte';
 
 	let events = $state<GuildEvent[]>([]);
 	let eventsLoading = $state(true);
 	let eventsError = $state(false);
 	let members = $state<{ total: number; online: number }>({ total: 0, online: 0 });
+
+	// --- Onboarding ---
+	let showOnboarding = $state(false);
+	let onboardingConfig = $state<OnboardingConfig | null>(null);
+
+	// Check onboarding status whenever guildId changes.
+	$effect(() => {
+		const guildId = $page.params.guildId;
+		if (!guildId) return;
+
+		showOnboarding = false;
+		onboardingConfig = null;
+
+		api.getOnboardingStatus(guildId)
+			.then((status) => {
+				if (!status.completed) {
+					return api.getOnboarding(guildId);
+				}
+				return null;
+			})
+			.then((config) => {
+				if (config && config.enabled) {
+					onboardingConfig = config;
+					showOnboarding = true;
+				}
+			})
+			.catch(() => {
+				// Onboarding not available or error; silently ignore.
+			});
+	});
+
+	function handleOnboardingComplete() {
+		showOnboarding = false;
+		onboardingConfig = null;
+	}
 
 	// Load guild events whenever guildId changes.
 	$effect(() => {
@@ -290,3 +326,13 @@
 		</div>
 	{/if}
 </div>
+
+{#if onboardingConfig && $currentGuild}
+	<OnboardingModal
+		bind:open={showOnboarding}
+		guildId={$page.params.guildId}
+		guildName={$currentGuild.name}
+		onboarding={onboardingConfig}
+		onComplete={handleOnboardingComplete}
+	/>
+{/if}

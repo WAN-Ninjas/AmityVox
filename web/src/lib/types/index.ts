@@ -612,3 +612,31 @@ export interface FederationPeer {
 	last_seen_at: string | null;
 	created_at: string;
 }
+
+// --- Onboarding ---
+
+export interface OnboardingConfig {
+	enabled: boolean;
+	welcome_message: string;
+	rules: string[];
+	default_channel_ids: string[];
+	prompts: OnboardingPrompt[];
+}
+
+export interface OnboardingPrompt {
+	id: string;
+	title: string;
+	required: boolean;
+	single_select: boolean;
+	position: number;
+	options: OnboardingOption[];
+}
+
+export interface OnboardingOption {
+	id: string;
+	label: string;
+	description?: string;
+	emoji?: string;
+	role_ids: string[];
+	channel_ids: string[];
+}

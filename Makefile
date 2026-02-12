@@ -48,6 +48,14 @@ docker:
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg BUILD_DATE=$(DATE) .
 
+## docker-multiarch: Build multi-arch Docker image (amd64 + arm64)
+docker-multiarch:
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-t amityvox:$(VERSION) -f deploy/docker/Dockerfile \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(DATE) .
+
 ## docker-up: Start all services with Docker Compose
 docker-up:
 	docker compose -f deploy/docker/docker-compose.yml up -d

@@ -25,6 +25,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/guilds"
 	"github.com/amityvox/amityvox/internal/api/invites"
 	"github.com/amityvox/amityvox/internal/api/moderation"
+	"github.com/amityvox/amityvox/internal/api/onboarding"
 	"github.com/amityvox/amityvox/internal/api/polls"
 	"github.com/amityvox/amityvox/internal/api/stickers"
 	"github.com/amityvox/amityvox/internal/api/users"
@@ -177,6 +178,11 @@ func (s *Server) registerRoutes() {
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
 	}
+	onboardH := &onboarding.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
 
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
@@ -316,6 +322,17 @@ func (s *Server) registerRoutes() {
 					r.Get("/{packID}/stickers", stickerH.HandleGetPackStickers)
 					r.Post("/{packID}/stickers", stickerH.HandleAddSticker)
 					r.Delete("/{packID}/stickers/{stickerID}", stickerH.HandleDeleteSticker)
+				})
+
+				// Guild onboarding routes.
+				r.Route("/{guildID}/onboarding", func(r chi.Router) {
+					r.Get("/", onboardH.HandleGetOnboarding)
+					r.Put("/", onboardH.HandleUpdateOnboarding)
+					r.Post("/prompts", onboardH.HandleCreatePrompt)
+					r.Put("/prompts/{promptID}", onboardH.HandleUpdatePrompt)
+					r.Delete("/prompts/{promptID}", onboardH.HandleDeletePrompt)
+					r.Post("/complete", onboardH.HandleCompleteOnboarding)
+					r.Get("/status", onboardH.HandleGetOnboardingStatus)
 				})
 
 				// Guild event routes.
