@@ -1,0 +1,19 @@
+# Dockerfile.test — runs frontend unit tests inside Docker.
+# Usage: docker compose -f deploy/docker/docker-compose.yml run --rm test-frontend
+
+FROM node:24-alpine
+
+WORKDIR /app
+
+# Cache npm dependencies.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+# Copy frontend source.
+COPY web/ .
+
+# Generate SvelteKit type definitions (tsconfig.json extends .svelte-kit/tsconfig.json).
+RUN npx svelte-kit sync
+
+# Default command: run vitest
+CMD ["npm", "run", "test"]

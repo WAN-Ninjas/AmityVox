@@ -38,6 +38,9 @@ services:
       AMITYVOX_WEBSOCKET_LISTEN: "0.0.0.0:8081"
       AMITYVOX_LOGGING_LEVEL: "${AMITYVOX_LOGGING_LEVEL:-info}"
       AMITYVOX_LOGGING_FORMAT: "${AMITYVOX_LOGGING_FORMAT:-json}"
+      AMITYVOX_AUTH_WEBAUTHN_RP_DISPLAY_NAME: "${AMITYVOX_INSTANCE_NAME:-AmityVox}"
+      AMITYVOX_AUTH_WEBAUTHN_RP_ID: "${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
+      AMITYVOX_AUTH_WEBAUTHN_RP_ORIGINS: "https://${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
     depends_on:
       postgresql:
         condition: service_healthy
@@ -52,7 +55,7 @@ services:
   # PostgreSQL — primary data store
   # ============================================================
   postgresql:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: amityvox-postgresql
     restart: unless-stopped
     environment:
@@ -78,14 +81,14 @@ services:
     image: nats:2-alpine
     container_name: amityvox-nats
     restart: unless-stopped
-    command: ["--jetstream", "--store_dir", "/data"]
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
     volumes:
       - nats_data:/data
     ports:
       - "4222:4222"
       - "8222:8222"
     healthcheck:
-      test: ["CMD", "nats-server", "--signal", "ldm"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -115,12 +118,13 @@ services:
   # Garage — S3-compatible file storage
   # ============================================================
   garage:
-    image: dxflrs/garage:v1.0
+    image: dxflrs/garage:v1.0.1
     container_name: amityvox-garage
     restart: unless-stopped
     volumes:
       - garage_data:/var/lib/garage/data
       - garage_meta:/var/lib/garage/meta
+      - ../../deploy/garage/garage.toml:/etc/garage.toml:ro
     ports:
       - "3900:3900"
       - "3902:3902"
@@ -149,7 +153,7 @@ services:
   # Meilisearch — full-text search
   # ============================================================
   meilisearch:
-    image: getmeili/meilisearch:v1.7
+    image: getmeili/meilisearch:v1.35
     container_name: amityvox-meilisearch
     restart: unless-stopped
     volumes:
@@ -180,15 +184,50 @@ services:
       - "443:443/udp"
     volumes:
       - ../../deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../../web/build:/srv:ro
+      - web_build:/srv:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
+      amityvox:
+        condition: service_started
+      web-init:
+        condition: service_completed_successfully
+    networks:
       - amityvox
+
+  # ============================================================
+  # Web Init — copies frontend build to shared volume for Caddy
+  # ============================================================
+  web-init:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      target: frontend
+    container_name: amityvox-web-init
+    entrypoint: ["sh", "-c", "cp -r /web/build/* /srv/"]
+    volumes:
+      - web_build:/srv
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Frontend Test Runner (on-demand)
+  # Usage: docker compose -f deploy/docker/docker-compose.yml run --rm test-frontend
+  # ============================================================
+  test-frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.test
+    container_name: amityvox-test-frontend
+    working_dir: /app
+    command: ["npm", "run", "test"]
+    profiles:
+      - test
     networks:
       - amityvox
 
 volumes:
+  web_build:
   postgres_data:
   nats_data:
   dragonfly_data:
