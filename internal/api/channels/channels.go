@@ -254,6 +254,10 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		messages = append(messages, m)
 	}
 
+	h.enrichMessagesWithAuthors(r.Context(), messages)
+	h.enrichMessagesWithAttachments(r.Context(), messages)
+	h.enrichMessagesWithEmbeds(r.Context(), messages)
+
 	writeJSON(w, http.StatusOK, messages)
 }
 
@@ -362,7 +366,15 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	h.Pool.Exec(r.Context(),
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
+	// Populate author user data for the response and event.
+	h.enrichMessageWithAuthor(r.Context(), &msg)
+
+	h.EventBus.Publish(r.Context(), events.SubjectMessageCreate, events.Event{
+		Type:      "MESSAGE_CREATE",
+		ChannelID: channelID,
+		UserID:    userID,
+		Data:      mustMarshal(msg),
+	})
 
 	writeJSON(w, http.StatusCreated, msg)
 }
@@ -458,7 +470,13 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageUpdate, "MESSAGE_UPDATE", msg)
+	h.enrichMessageWithAuthor(r.Context(), &msg)
+
+	h.EventBus.Publish(r.Context(), events.SubjectMessageUpdate, events.Event{
+		Type:      "MESSAGE_UPDATE",
+		ChannelID: channelID,
+		Data:      mustMarshal(msg),
+	})
 
 	writeJSON(w, http.StatusOK, msg)
 }
@@ -552,8 +570,10 @@ func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageDelete, "MESSAGE_DELETE", map[string]string{
-		"id": messageID, "channel_id": channelID,
+	h.EventBus.Publish(r.Context(), events.SubjectMessageDelete, events.Event{
+		Type:      "MESSAGE_DELETE",
+		ChannelID: channelID,
+		Data:      mustMarshal(map[string]string{"id": messageID, "channel_id": channelID}),
 	})
 
 	w.WriteHeader(http.StatusNoContent)
@@ -1296,6 +1316,153 @@ func (h *Handler) loadEmbeds(ctx context.Context, messageID string) []models.Emb
 	return embeds
 }
 
+// enrichMessagesWithAuthors fetches author user data for a batch of messages
+// and populates the Author field on each message.
+func (h *Handler) enrichMessagesWithAuthors(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	// Collect unique author IDs.
+	authorIDs := make(map[string]struct{})
+	for _, m := range messages {
+		authorIDs[m.AuthorID] = struct{}{}
+	}
+
+	ids := make([]string, 0, len(authorIDs))
+	for id := range authorIDs {
+		ids = append(ids, id)
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, instance_id, username, display_name, avatar_id,
+		        status_text, status_presence, bio, flags, created_at
+		 FROM users WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	userMap := make(map[string]*models.User)
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusPresence, &u.Bio, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			continue
+		}
+		userCopy := u
+		userMap[u.ID] = &userCopy
+	}
+
+	for i := range messages {
+		if u, ok := userMap[messages[i].AuthorID]; ok {
+			messages[i].Author = u
+		}
+	}
+}
+
+// enrichMessagesWithAttachments batch-loads attachments for a list of messages
+// using a single query to avoid N+1.
+func (h *Handler) enrichMessagesWithAttachments(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, len(messages))
+	for i, m := range messages {
+		msgIDs[i] = m.ID
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, created_at
+		 FROM attachments WHERE message_id = ANY($1)
+		 ORDER BY created_at`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	attachMap := make(map[string][]models.Attachment)
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(
+			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.CreatedAt,
+		); err != nil {
+			continue
+		}
+		if a.MessageID != nil {
+			attachMap[*a.MessageID] = append(attachMap[*a.MessageID], a)
+		}
+	}
+
+	for i := range messages {
+		if atts, ok := attachMap[messages[i].ID]; ok {
+			messages[i].Attachments = atts
+		}
+	}
+}
+
+// enrichMessagesWithEmbeds batch-loads embeds for a list of messages.
+func (h *Handler) enrichMessagesWithEmbeds(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, len(messages))
+	for i, m := range messages {
+		msgIDs[i] = m.ID
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, message_id, embed_type, url, title, description, site_name,
+		        icon_url, color, image_url, image_width, image_height,
+		        video_url, special_type, special_id, created_at
+		 FROM embeds WHERE message_id = ANY($1)
+		 ORDER BY created_at`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	embedMap := make(map[string][]models.Embed)
+	for rows.Next() {
+		var e models.Embed
+		if err := rows.Scan(
+			&e.ID, &e.MessageID, &e.EmbedType, &e.URL, &e.Title, &e.Description,
+			&e.SiteName, &e.IconURL, &e.Color, &e.ImageURL, &e.ImageWidth, &e.ImageHeight,
+			&e.VideoURL, &e.SpecialType, &e.SpecialID, &e.CreatedAt,
+		); err != nil {
+			continue
+		}
+		embedMap[e.MessageID] = append(embedMap[e.MessageID], e)
+	}
+
+	for i := range messages {
+		if embs, ok := embedMap[messages[i].ID]; ok {
+			messages[i].Embeds = embs
+		}
+	}
+}
+
+// enrichMessageWithAuthor fetches author user data for a single message.
+func (h *Handler) enrichMessageWithAuthor(ctx context.Context, msg *models.Message) {
+	var u models.User
+	err := h.Pool.QueryRow(ctx,
+		`SELECT id, instance_id, username, display_name, avatar_id,
+		        status_text, status_presence, bio, flags, created_at
+		 FROM users WHERE id = $1`, msg.AuthorID).Scan(
+		&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+		&u.StatusText, &u.StatusPresence, &u.Bio, &u.Flags, &u.CreatedAt,
+	)
+	if err == nil {
+		msg.Author = &u
+	}
+}
+
 // HandleCrosspostMessage forwards a message to another channel.
 // POST /api/v1/channels/{channelID}/messages/{messageID}/crosspost
 func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request) {
@@ -1431,6 +1598,11 @@ func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID st
 		return true
 	}
 	return computed&perm != 0
+}
+
+func mustMarshal(v interface{}) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

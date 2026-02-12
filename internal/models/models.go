@@ -33,9 +33,21 @@ type User struct {
 	BotOwnerID     *string   `json:"bot_owner_id,omitempty"`
 	PasswordHash   *string   `json:"-"`
 	TOTPSecret     *string   `json:"-"`
-	Email          *string   `json:"email,omitempty"`
+	Email          *string   `json:"-"`
 	Flags          int       `json:"flags"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+// SelfUser is a response-only wrapper that includes the email field.
+// Used for endpoints where the user is viewing their own profile (@me, login, register).
+type SelfUser struct {
+	*User
+	Email *string `json:"email,omitempty"`
+}
+
+// ToSelf returns a SelfUser wrapper that includes the email field in JSON output.
+func (u *User) ToSelf() SelfUser {
+	return SelfUser{User: u, Email: u.Email}
 }
 
 // UserFlags defines bitfield flags for user account status.
@@ -203,6 +215,7 @@ type GuildMember struct {
 	TimeoutUntil *time.Time `json:"timeout_until,omitempty"`
 	Deaf         bool       `json:"deaf"`
 	Mute         bool       `json:"mute"`
+	User         *User      `json:"user,omitempty"`
 }
 
 // IsTimedOut reports whether the member is currently timed out.
@@ -258,6 +271,7 @@ type Message struct {
 	Attachments         []Attachment `json:"attachments,omitempty"`
 	Embeds              []Embed      `json:"embeds,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
+	Author              *User        `json:"author,omitempty"`
 }
 
 // MessageType constants for messages.message_type.

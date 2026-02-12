@@ -50,7 +50,7 @@ func (h *Handler) HandleGetSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, user.ToSelf())
 }
 
 // HandleUpdateSelf updates the authenticated user's profile fields.
@@ -87,7 +87,7 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 
 	h.EventBus.PublishJSON(r.Context(), events.SubjectUserUpdate, "USER_UPDATE", user)
 
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, user.ToSelf())
 }
 
 // HandleGetUser returns a user's public profile by ID.

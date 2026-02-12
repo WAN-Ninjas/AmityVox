@@ -302,7 +302,8 @@ func (s *Service) checkUserFlags(ctx context.Context, userID string) error {
 	var flags int
 	err := s.pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
 	if err != nil {
-		return nil // if we can't read flags, don't block — let the handler deal with it
+		s.logger.Error("failed to check user flags", slog.String("user_id", userID), slog.String("error", err.Error()))
+		return fmt.Errorf("checking user flags: %w", err)
 	}
 	const flagSuspended = 1 << 0
 	const flagDeleted = 1 << 1

@@ -6,6 +6,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -221,8 +223,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Register the client.
 	s.registerClient(client)
 
-	// Set user presence to online.
+	// Set user presence to online and broadcast to guild members.
 	s.cache.SetPresence(r.Context(), client.userID, presence.StatusOnline, s.heartbeatTimeout)
+	s.broadcastPresence(r.Context(), client.userID, presence.StatusOnline)
 
 	client.mu.Lock()
 	client.lastHeartbeat = time.Now()
@@ -248,6 +251,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.unregisterClient(client)
 
 	s.cache.RemovePresence(context.Background(), client.userID)
+	s.broadcastPresence(context.Background(), client.userID, "offline")
 
 	s.logger.Info("client disconnected",
 		slog.String("user_id", client.userID),
@@ -363,7 +367,7 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 	}
 
 	client.userID = userID
-	client.sessionID = payload.Token
+	client.sessionID = generateWSSessionID()
 	client.identified = true
 
 	// Load guild memberships for event filtering.
@@ -382,8 +386,8 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 	}
 
 	readyData, _ := json.Marshal(map[string]interface{}{
-		"user":      user,
-		"guild_ids": guildIDList,
+		"user":       user,
+		"guild_ids":  guildIDList,
 		"session_id": client.sessionID,
 	})
 
@@ -425,7 +429,12 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 			var data struct {
 				ChannelID string `json:"channel_id"`
 			}
-			if err := json.Unmarshal(msg.Data, &data); err == nil {
+			if err := json.Unmarshal(msg.Data, &data); err == nil && data.ChannelID != "" {
+				// Verify the user has access to this channel.
+				if !s.hasChannelAccess(ctx, client, data.ChannelID) {
+					break
+				}
+
 				// Set typing indicator with 8-second auto-expiry.
 				typingKey := fmt.Sprintf("typing:%s:%s", data.ChannelID, client.userID)
 				s.cache.SetPresence(ctx, typingKey, "typing", 8*time.Second)
@@ -456,6 +465,16 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 				SelfDeaf  bool    `json:"self_deaf"`
 			}
 			if err := json.Unmarshal(msg.Data, &data); err == nil {
+				// Verify guild membership before allowing voice state updates.
+				if data.GuildID != nil {
+					client.mu.Lock()
+					isMember := client.guildIDs[*data.GuildID]
+					client.mu.Unlock()
+					if !isMember {
+						break
+					}
+				}
+
 				voiceState := map[string]interface{}{
 					"user_id":   client.userID,
 					"self_mute": data.SelfMute,
@@ -665,9 +684,29 @@ func (s *Server) dispatchEvent(subject string, event events.Event) {
 // shouldDispatchTo determines if a client should receive a given event based on
 // guild membership and event targeting.
 func (s *Server) shouldDispatchTo(client *Client, subject string, event events.Event) bool {
+	// Presence updates: dispatch to all clients that share a guild with the user.
+	if event.Type == "PRESENCE_UPDATE" && event.UserID != "" {
+		// Always deliver to the user themselves.
+		if event.UserID == client.userID {
+			return true
+		}
+		// Also deliver to guild members that share a guild with this user.
+		if s.pool != nil {
+			var shares bool
+			s.pool.QueryRow(context.Background(),
+				`SELECT EXISTS(
+					SELECT 1 FROM guild_members a
+					JOIN guild_members b ON a.guild_id = b.guild_id
+					WHERE a.user_id = $1 AND b.user_id = $2
+				)`, event.UserID, client.userID).Scan(&shares)
+			return shares
+		}
+		return false
+	}
+
 	// User-specific events: only dispatch to the targeted user.
 	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
-		if event.Type == "PRESENCE_UPDATE" || event.Type == "USER_UPDATE" {
+		if event.Type == "USER_UPDATE" {
 			return event.UserID == client.userID
 		}
 	}
@@ -705,18 +744,43 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 			client.mu.Unlock()
 			return isMember
 		}
-		// DM channel — check if the user is a participant.
-		// For DMs, dispatch to both participants.
-		return true
+		// DM/group channel — verify the user is a participant via channel_recipients.
+		var isRecipient bool
+		s.pool.QueryRow(context.Background(),
+			`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+			event.ChannelID, client.userID).Scan(&isRecipient)
+		return isRecipient
 	}
 
-	// Typing events for specific channels.
-	if strings.HasPrefix(subject, "amityvox.channel.") {
-		return true // DM or uncategorized — allow
+	// Typing events for specific channels — require channel access check.
+	if strings.HasPrefix(subject, "amityvox.channel.") && s.pool != nil {
+		// Extract channel ID from the event data if available.
+		var data struct {
+			ChannelID string `json:"channel_id"`
+		}
+		if json.Unmarshal(event.Data, &data) == nil && data.ChannelID != "" {
+			// Check if it's a guild channel or DM.
+			var chGuildID *string
+			s.pool.QueryRow(context.Background(),
+				`SELECT guild_id FROM channels WHERE id = $1`, data.ChannelID).Scan(&chGuildID)
+			if chGuildID != nil {
+				client.mu.Lock()
+				isMember := client.guildIDs[*chGuildID]
+				client.mu.Unlock()
+				return isMember
+			}
+			// DM/group — check recipient membership.
+			var isRecipient bool
+			s.pool.QueryRow(context.Background(),
+				`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+				data.ChannelID, client.userID).Scan(&isRecipient)
+			return isRecipient
+		}
+		return false
 	}
 
-	// Default: dispatch to all (e.g., system events).
-	return true
+	// Default: deny dispatch for unrecognized events (fail-closed).
+	return false
 }
 
 // NotifyGuildJoin updates all connected clients for a user when they join a new guild.
@@ -766,9 +830,58 @@ func (s *Server) sendMessage(client *Client, msg GatewayMessage) {
 	}
 }
 
+// broadcastPresence publishes a PRESENCE_UPDATE event via NATS so that all
+// connected guild members are notified of the status change.
+func (s *Server) broadcastPresence(ctx context.Context, userID, status string) {
+	data, _ := json.Marshal(map[string]string{
+		"user_id": userID,
+		"status":  status,
+	})
+	_ = s.eventBus.Publish(ctx, events.SubjectPresenceUpdate, events.Event{
+		Type:   "PRESENCE_UPDATE",
+		UserID: userID,
+		Data:   data,
+	})
+}
+
 // sendReconnect sends an op:6 RECONNECT to a client before shutdown.
 func (s *Server) sendReconnect(client *Client) {
 	s.sendMessage(client, GatewayMessage{Op: OpReconnect})
+}
+
+// generateWSSessionID creates a random identifier for WebSocket session resume.
+// This is NOT the auth token — it's a separate opaque ID used only for the WS
+// resume protocol so the auth token is never sent back over the WebSocket.
+func generateWSSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// hasChannelAccess checks whether a client has access to a channel, either via
+// guild membership (for guild channels) or recipient status (for DM/group channels).
+func (s *Server) hasChannelAccess(ctx context.Context, client *Client, channelID string) bool {
+	if s.pool == nil {
+		return false
+	}
+	var guildID *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if err != nil {
+		return false
+	}
+	if guildID != nil {
+		client.mu.Lock()
+		isMember := client.guildIDs[*guildID]
+		client.mu.Unlock()
+		return isMember
+	}
+	// DM/group channel — check recipient list.
+	var isRecipient bool
+	s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+		channelID, client.userID).Scan(&isRecipient)
+	return isRecipient
 }
 
 // ClientCount returns the number of currently connected clients.

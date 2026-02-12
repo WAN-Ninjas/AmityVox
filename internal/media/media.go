@@ -23,6 +23,7 @@ import (
 
 	"github.com/buckket/go-blurhash"
 	"github.com/disintegration/imaging"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -59,7 +60,15 @@ type Service struct {
 
 // New creates a new media service connected to S3-compatible storage.
 func New(cfg Config) (*Service, error) {
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
+	// minio.New expects host:port without scheme; strip http:// or https:// if present.
+	endpoint := cfg.Endpoint
+	if strings.HasPrefix(endpoint, "http://") {
+		endpoint = strings.TrimPrefix(endpoint, "http://")
+	} else if strings.HasPrefix(endpoint, "https://") {
+		endpoint = strings.TrimPrefix(endpoint, "https://")
+		cfg.UseSSL = true
+	}
+	client, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
@@ -132,12 +141,17 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate content type by sniffing the first 512 bytes.
+	// Determine content type by sniffing the first 512 bytes (authoritative).
 	contentType := http.DetectContentType(fileData)
 
-	// Use the provided content type if available and reasonable.
+	// Only allow user-provided content type for safe, non-scriptable media types.
 	if ct := header.Header.Get("Content-Type"); ct != "" && ct != "application/octet-stream" {
-		contentType = ct
+		// Allow user type only for image/audio/video subtypes, never text/html, application/*, svg, etc.
+		if strings.HasPrefix(ct, "image/") && ct != "image/svg+xml" {
+			contentType = ct
+		} else if strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "video/") {
+			contentType = ct
+		}
 	}
 
 	// Generate attachment ID and S3 key.
@@ -414,12 +428,75 @@ func extractDatePath(s3Key string) string {
 	return time.Now().UTC().Format("2006/01/02")
 }
 
+// HandleGetFile serves a file by its attachment ID.
+// GET /api/v1/files/{fileID}
+func (s *Service) HandleGetFile(w http.ResponseWriter, r *http.Request) {
+	fileID := r.PathValue("fileID")
+	if fileID == "" {
+		// Fallback for chi router.
+		fileID = chi.URLParam(r, "fileID")
+	}
+
+	var filename, contentType, s3Key string
+	var sizeBytes int64
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT filename, content_type, size_bytes, s3_key FROM attachments WHERE id = $1`, fileID,
+	).Scan(&filename, &contentType, &sizeBytes, &s3Key)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "file_not_found", "File not found")
+		return
+	}
+
+	obj, err := s.client.GetObject(r.Context(), s.bucket, s3Key, minio.GetObjectOptions{})
+	if err != nil {
+		s.logger.Error("failed to get file from S3",
+			slog.String("error", err.Error()),
+			slog.String("key", s3Key),
+		)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve file")
+		return
+	}
+	defer obj.Close()
+
+	// Sanitize filename: strip path separators and control characters, replace quotes.
+	safeFilename := sanitizeFilename(filename)
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, safeFilename))
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	io.Copy(w, obj)
+}
+
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+}
+
+// sanitizeFilename removes path separators, control characters, and quotes from
+// a filename to prevent header injection in Content-Disposition.
+func sanitizeFilename(name string) string {
+	// Extract just the base filename (no directory traversal).
+	name = path.Base(name)
+	// Replace quotes and backslashes that could break the header value.
+	replacer := strings.NewReplacer(`"`, "_", `\`, "_", "\n", "", "\r", "")
+	name = replacer.Replace(name)
+	// Remove any remaining control characters.
+	var safe strings.Builder
+	for _, r := range name {
+		if r >= 32 {
+			safe.WriteRune(r)
+		}
+	}
+	result := safe.String()
+	if result == "" || result == "." || result == ".." {
+		return "file"
+	}
+	return result
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
