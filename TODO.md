@@ -47,25 +47,26 @@
 ## Phase 4 (v0.4.0) — UI/QoL Overhaul — IN PROGRESS
 
 ### Documentation & Infrastructure Setup
-- [ ] Update CLAUDE.md with feature completion safeguards
-- [ ] Create `docs/ui-standards.md` frontend conventions document
-- [ ] Set up vitest for frontend unit tests
-- [ ] Set up Playwright for frontend E2E tests
-- [ ] Add test scripts to `web/package.json`
+- [x] Update CLAUDE.md with feature completion safeguards
+- [x] Create `docs/ui-standards.md` frontend conventions document
+- [x] Set up vitest for frontend unit tests
+- [x] Set up Playwright for frontend E2E tests
+- [x] Add test scripts to `web/package.json`
 
 ### Sprint 1: Message Interactions
 > Goal: Messages feel interactive — users can right-click, reply, react, edit, delete.
 
-- [ ] **ContextMenu component** — Reusable `<ContextMenu>` positioned near cursor, closes on click-outside/Escape. Used across messages, attachments, users, channels.
-- [ ] **Message context menu** — Right-click message: Copy Text, Reply, Edit (own only), Delete (own or admin), Pin/Unpin, Copy Message Link
-- [ ] **Reply system** — Click "Reply" shows reply bar above input with quoted message preview + X to cancel. Sends `reply_to` field. Display reply reference above message in chat with clickable jump.
-- [ ] **Edit message** — Edit own messages via context menu or Up arrow on last message. Input shows edit mode (yellow border). PUT `/api/v1/channels/{id}/messages/{id}`. Show "(edited)" indicator with timestamp.
-- [ ] **Delete message** — Confirmation modal. DELETE endpoint. Remove from message list. Admins can delete any message.
-- [ ] **Reactions display** — Reaction chips below message with emoji + count. Click to toggle own reaction. Long-press/hover to see who reacted. POST/DELETE `/api/v1/channels/{id}/messages/{id}/reactions/{emoji}`.
-- [ ] **Attachment context menu** — Right-click attachment: Download, Open in New Tab, Copy URL. Images also get Copy Image.
-- [ ] **Message timestamps** — Hover shows full datetime tooltip. Show relative time ("2m ago", "Yesterday"). Date separator bars between different days.
+- [x] **ContextMenu component** — Reusable `<ContextMenu>` positioned near cursor, closes on click-outside/Escape. Used across messages, attachments, users, channels.
+- [x] **Message context menu** — Right-click message: Copy Text, Reply, Edit (own only), Delete (own or admin), Pin/Unpin, Copy Message Link
+- [x] **Reply system** — Click "Reply" shows reply bar above input with quoted message preview + X to cancel. Sends `reply_to` field. Display reply reference above message in chat with clickable jump.
+- [x] **Edit message** — Edit own messages via context menu or Up arrow on last message. Input shows edit mode (yellow border). PUT `/api/v1/channels/{id}/messages/{id}`. Show "(edited)" indicator with timestamp.
+- [x] **Delete message** — Confirmation modal. DELETE endpoint. Remove from message list. Admins can delete any message.
+- [x] **Reactions display** — Reaction chips below message with emoji + count. Click to toggle own reaction. Long-press/hover to see who reacted. POST/DELETE `/api/v1/channels/{id}/messages/{id}/reactions/{emoji}`.
+- [x] **Attachment context menu** — Right-click attachment: Download, Open in New Tab, Copy URL. Images also get Copy Image.
+- [x] **Message timestamps** — Hover shows full datetime tooltip. Show relative time ("2m ago", "Yesterday"). Date separator bars between different days.
 
 **Sprint 1 Tests:**
+- [x] messageInteraction store unit test: start/cancel reply, start/cancel edit, mutual exclusivity
 - [ ] ContextMenu unit test: open, close, position, keyboard
 - [ ] MessageItem unit test: context menu items, edit mode, reactions
 - [ ] MessageInput unit test: reply bar, edit mode, submit
