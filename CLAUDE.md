@@ -96,19 +96,91 @@ amityvox/
 
 ## Current Phase
 
-**Phase 1: Foundation** — Project scaffold, database schema, config loading, basic auth, REST API skeleton.
+**Phase 4: UI/QoL Overhaul** — See `TODO.md` for detailed sprint tasks.
 
-## Docker Build
+## Development Environment — Docker First
 
-The Dockerfile should be a multi-stage build:
-1. Stage 1: Go build (produces single static binary)
-2. Stage 2: Minimal runtime image (distroless or alpine)
+**All development, building, and testing happens inside Docker.** Do not rely on locally installed Node.js, Go, or other tools. The Docker images contain the correct versions.
+
+### Docker Build
+
+The Dockerfile is a 3-stage multi-stage build:
+1. **Stage 1 (frontend):** `node:24-alpine` — Installs npm deps, builds SvelteKit to static files
+2. **Stage 2 (builder):** `golang:1.26-alpine` — Compiles Go binary with version info
+3. **Stage 3 (runtime):** `alpine:3.21` — Minimal image with binary + frontend assets
 
 Target architectures: `linux/amd64` and `linux/arm64`
+
+### Key Commands
+```bash
+make docker-up              # Start all services
+make docker-down            # Stop all services
+make docker-restart         # Rebuild and restart (backend + frontend)
+make docker-build           # Build all images without starting
+make docker-test-frontend   # Run frontend tests in Docker
+make docker-test            # Run all tests (Go + frontend)
+make docker-logs            # Follow all service logs
+```
+
+### Rules
+1. **Never assume local tool versions.** The Dockerfile pins Node.js, Go, and Alpine versions. All builds use Docker images.
+2. **Frontend is built inside Docker.** The `web-init` service copies the built SvelteKit output to a shared volume that Caddy serves.
+3. **Test in Docker.** Use `make docker-test-frontend` to run frontend tests in the correct Node.js version. Use `make test` for Go tests.
+4. **Version changes happen in Dockerfile.** To upgrade Node, Go, or Alpine, update the `FROM` lines in `deploy/docker/Dockerfile`.
 
 ## Minimum Hardware Target
 
 Raspberry Pi 5 with 8GB RAM. The Go binary should target 50-100MB RSS. Be careful with goroutine counts, connection pools, and buffer sizes.
+
+## Feature Completion Rules
+
+These rules prevent half-done features and orphaned code. Follow them strictly.
+
+1. **End-to-end verification required.** Every feature must work from UI click through API call to database and back. No "TODO" or "placeholder" implementations allowed in committed code.
+2. **Every backend handler must be wired to a route.** After writing a handler, verify it appears in the chi router setup in `internal/api/server.go`. Grep for the handler name to confirm.
+3. **Every frontend API method must match a real backend route.** After adding a method to `api/client.ts`, verify the endpoint exists in the backend router. No dead API methods.
+4. **Batch-load related data.** When fetching lists (messages, members, guilds), load related entities (authors, attachments, roles) in batch using `WHERE id = ANY($1)`. Never N+1 query.
+5. **Error handling at every layer.** API client: catch and display errors. Backend: return proper error envelope `{"error": {"code": "...", "message": "..."}}`. Never silently swallow errors.
+6. **Loading states for async operations.** Every button that triggers an API call shows loading state. Every list shows loading indicator while fetching.
+7. **Frontend tests for new code.** Every new component gets a `*.test.ts` file. Every new store gets a `*.test.ts` file. No exceptions.
+8. **WebSocket events for real-time features.** If data can change (messages, presence, typing), updates must flow through WebSocket events, not polling.
+9. **Check TODO.md after completing work.** Check off completed items. If a feature is partially done, do not check it off.
+10. **Read before write.** Always read existing code before modifying. Understand current patterns. Reuse existing utilities (writeJSON, writeError, ApiRequestError, etc).
+
+## Frontend Conventions
+
+See `docs/ui-standards.md` for complete frontend patterns including:
+- Svelte 5 runes usage ($state, $derived, $effect, $props)
+- Store patterns (Map-based, mutation functions)
+- API error handling
+- Context menu, modal, and toast patterns
+- CSS theme colors and utility classes
+- Testing standards
+
+## Version Policy — Always Use Latest Stable
+
+**All dependencies, tools, and infrastructure must use the latest stable versions.** Before writing code, verify you are targeting current releases. Do not pin to old versions.
+
+### Current Target Versions (update when new releases ship):
+- **Node.js:** 24.x LTS (Krypton)
+- **Go:** 1.26.x
+- **PostgreSQL:** 18.x
+- **Meilisearch:** v1.35+
+- **Svelte:** 5.x (latest)
+- **SvelteKit:** 2.x (latest)
+- **Vite:** 7.x
+- **Tailwind CSS:** 4.x
+- **TypeScript:** 5.9+
+- **Caddy:** 2.x (latest)
+- **NATS:** 2.x (latest)
+- **Alpine (Docker base):** 3.21
+
+### Rules:
+1. When adding a new dependency, use the latest stable version — never copy old version numbers.
+2. When modifying `package.json`, `go.mod`, `Dockerfile`, or `docker-compose.yml`, check if any specified versions are outdated and update them.
+3. Use semver ranges (`^` prefix) in `package.json` for patch/minor auto-updates.
+4. Pin major versions in Docker image tags (e.g., `postgres:18-alpine`, not `postgres:latest`).
+5. Run `npm update` periodically to pull latest within semver ranges.
 
 ## What NOT To Do
 
@@ -120,3 +192,4 @@ Raspberry Pi 5 with 8GB RAM. The Go binary should target 50-100MB RSS. Be carefu
 - Don't skip error handling
 - Don't store secrets in code — everything goes through config/env vars
 - Don't break the API versioning — all routes under /api/v1/
+- Don't use outdated package versions — always target latest stable releases

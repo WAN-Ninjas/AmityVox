@@ -1,0 +1,31 @@
+# Ignore local node_modules — npm ci installs fresh in Docker.
+web/node_modules
+web/.svelte-kit
+web/build
+
+# Git metadata.
+.git
+.gitignore
+
+# IDE and editor files.
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build artifacts.
+amityvox
+coverage.out
+coverage.html
+
+# Docker compose files (not needed in build context).
+deploy/docker/docker-compose.yml
+
+# Documentation not needed in image.
+docs/
+*.md
+!amityvox.example.toml
+
+# Environment files.
+.env
+.env.*

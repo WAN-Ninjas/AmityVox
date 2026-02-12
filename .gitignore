@@ -6,8 +6,8 @@
 *.so
 *.dylib
 
-# Test artifacts
-*.test
+# Test artifacts (Go test binaries, not Dockerfiles)
+*.test.exe
 *.out
 coverage.html
 coverage.txt

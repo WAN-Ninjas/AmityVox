@@ -1,12 +1,28 @@
 # AmityVox multi-stage Docker build.
-# Stage 1: Build the Go binary.
-# Stage 2: Create a minimal runtime image.
+# Stage 1: Build the SvelteKit frontend.
+# Stage 2: Build the Go binary.
+# Stage 3: Create a minimal runtime image.
 # Supports linux/amd64 and linux/arm64.
 
 # ============================================================
-# Stage 1: Build
+# Stage 1: Frontend Build (Node.js 24 LTS)
 # ============================================================
-FROM golang:1.23-alpine AS builder
+FROM node:24-alpine AS frontend
+
+WORKDIR /web
+
+# Cache npm dependencies.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+# Copy frontend source and build.
+COPY web/ .
+RUN npm run build
+
+# ============================================================
+# Stage 2: Backend Build (Go 1.26)
+# ============================================================
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -30,15 +46,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/amityvox
 
 # ============================================================
-# Stage 2: Runtime
+# Stage 3: Runtime
 # ============================================================
-FROM alpine:3.19
+FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -g 1000 amityvox && \
     adduser -u 1000 -G amityvox -D amityvox
 
 COPY --from=builder /amityvox /usr/local/bin/amityvox
+COPY --from=frontend /web/build /srv/web
 COPY amityvox.example.toml /etc/amityvox/amityvox.toml
 
 USER amityvox

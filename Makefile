@@ -1,4 +1,4 @@
-.PHONY: build test lint vet clean docker run migrate-up migrate-down web-install web-build web-check help
+.PHONY: build test lint vet clean docker run migrate-up migrate-down web-install web-build web-check docker-test docker-test-frontend docker-build help
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -62,7 +62,18 @@ docker-logs:
 
 ## docker-restart: Rebuild and restart AmityVox (keeps other services)
 docker-restart:
-	docker compose -f deploy/docker/docker-compose.yml up -d --build amityvox
+	docker compose -f deploy/docker/docker-compose.yml up -d --build amityvox web-init
+
+## docker-build: Build all Docker images (backend + frontend)
+docker-build:
+	docker compose -f deploy/docker/docker-compose.yml build amityvox web-init
+
+## docker-test-frontend: Run frontend tests in Docker
+docker-test-frontend:
+	docker compose -f deploy/docker/docker-compose.yml --profile test run --rm test-frontend
+
+## docker-test: Run all tests in Docker (Go + frontend)
+docker-test: test docker-test-frontend
 
 ## run: Build and run the server locally
 run: build

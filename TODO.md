@@ -42,31 +42,128 @@
 - [x] Integration tests with dockertest (PostgreSQL 16, NATS 2, Redis 7)
 - [x] SvelteKit frontend scaffold (web/ — full UI with auth, guilds, channels, messages, settings, admin)
 
-## Phase 4 (v0.4.0) — Next
+---
 
-### Frontend Polish
-- [ ] Transition animations (page transitions, sidebar expand/collapse)
-- [ ] Notification panel (toast notifications for mentions, DMs, system events)
-- [ ] Search UI (global search modal with filters: messages, users, guilds)
-- [ ] Mobile responsive layout (collapsible sidebars, touch gestures, bottom nav)
-- [ ] Markdown rendering in messages (bold, italic, code, links, spoilers)
-- [ ] Emoji picker component
-- [ ] Image lightbox / media gallery viewer
-- [ ] Unread indicators (badge counts on guilds/channels, unread line in messages)
-- [ ] Context menus (right-click on messages, users, channels)
-- [ ] Keyboard shortcuts (Ctrl+K search, Ctrl+/ help, arrow navigation)
+## Phase 4 (v0.4.0) — UI/QoL Overhaul — IN PROGRESS
+
+### Documentation & Infrastructure Setup
+- [ ] Update CLAUDE.md with feature completion safeguards
+- [ ] Create `docs/ui-standards.md` frontend conventions document
+- [ ] Set up vitest for frontend unit tests
+- [ ] Set up Playwright for frontend E2E tests
+- [ ] Add test scripts to `web/package.json`
+
+### Sprint 1: Message Interactions
+> Goal: Messages feel interactive — users can right-click, reply, react, edit, delete.
+
+- [ ] **ContextMenu component** — Reusable `<ContextMenu>` positioned near cursor, closes on click-outside/Escape. Used across messages, attachments, users, channels.
+- [ ] **Message context menu** — Right-click message: Copy Text, Reply, Edit (own only), Delete (own or admin), Pin/Unpin, Copy Message Link
+- [ ] **Reply system** — Click "Reply" shows reply bar above input with quoted message preview + X to cancel. Sends `reply_to` field. Display reply reference above message in chat with clickable jump.
+- [ ] **Edit message** — Edit own messages via context menu or Up arrow on last message. Input shows edit mode (yellow border). PUT `/api/v1/channels/{id}/messages/{id}`. Show "(edited)" indicator with timestamp.
+- [ ] **Delete message** — Confirmation modal. DELETE endpoint. Remove from message list. Admins can delete any message.
+- [ ] **Reactions display** — Reaction chips below message with emoji + count. Click to toggle own reaction. Long-press/hover to see who reacted. POST/DELETE `/api/v1/channels/{id}/messages/{id}/reactions/{emoji}`.
+- [ ] **Attachment context menu** — Right-click attachment: Download, Open in New Tab, Copy URL. Images also get Copy Image.
+- [ ] **Message timestamps** — Hover shows full datetime tooltip. Show relative time ("2m ago", "Yesterday"). Date separator bars between different days.
+
+**Sprint 1 Tests:**
+- [ ] ContextMenu unit test: open, close, position, keyboard
+- [ ] MessageItem unit test: context menu items, edit mode, reactions
+- [ ] MessageInput unit test: reply bar, edit mode, submit
+- [ ] E2E: send message, edit, delete, react
+
+### Sprint 2: DMs, Unread Indicators, Pinned Messages
+> Goal: Users can DM each other, see what's unread, and pin important messages.
+
+- [ ] **DM conversations** — Sidebar "Direct Messages" section below guilds. Show list of DM conversations with avatars. "New Message" button to start DM. GET/POST `/api/v1/users/@me/channels`.
+- [ ] **Unread indicators** — Bold channel name + numeric badge for unread messages. Track last-read message position per channel. PUT `/api/v1/channels/{id}/ack` when channel is viewed and scrolled to bottom.
+- [ ] **Unread badge on guilds** — White dot on guild icon sidebar if any channel within has unreads. Mention count badge if @mentioned.
+- [ ] **User popover** — Click username in chat or member list: avatar, display name, bio, role list, "Message" button (opens/creates DM), "Add Friend" button.
+- [ ] **Pinned messages panel** — Pin icon in channel header shows pin count. Click opens slide-out panel with pinned messages. GET `/api/v1/channels/{id}/pins`. Jump to message on click.
+- [ ] **Channel topic** — Show channel topic below name in header. Truncate with ellipsis, click to expand full topic.
+- [ ] **Typing indicators** — "User is typing..." animated dots at bottom of message list. Multiple users: "User1 and User2 are typing..." / "Several people are typing...". Uses existing WebSocket OpTyping.
+- [ ] **Online/offline presence** — Green (online), yellow (idle), red (DnD), gray (offline) dot on avatars. Uses existing presence system backend.
+
+**Sprint 2 Tests:**
+- [ ] DMList unit test: render, create DM
+- [ ] unreads store unit test: increment, reset, ack
+- [ ] UserPopover unit test: render, actions
+- [ ] PinnedMessages unit test: render, jump
+- [ ] E2E: create DM, send DM, check unread badge
+
+### Sprint 3: Settings That Work
+> Goal: All settings pages are functional, not just UI shells.
+
+- [ ] **Profile editing** — Change display name, bio, email. Upload avatar (file picker + crop/preview). PATCH `/api/v1/users/@me`. Changes reflect immediately in all views.
+- [ ] **Password change** — Current password + new password + confirm new. Validation (min length, match). POST `/api/v1/auth/password`. Clear sessions option.
+- [ ] **2FA setup** — Enable TOTP: show QR code (generated from secret), verify with 6-digit code, show backup codes. Disable: require current password + TOTP code. POST `/api/v1/auth/totp/enable`, `/verify`, `/disable`.
+- [ ] **Active sessions** — Table: device type, IP, location (GeoIP), last active, created. "Revoke" button per session. "Revoke All Others" button. GET/DELETE `/api/v1/auth/sessions`.
+- [ ] **Notification preferences** — Global: desktop notifications on/off, sounds on/off. Per-guild: mute all, mentions only, everything. Per-channel: mute toggle.
+- [ ] **Privacy settings** — Who can DM me: everyone / friends only / nobody. Who can add me as friend: everyone / mutual guilds / nobody.
+- [ ] **Appearance settings** — Theme: dark (default) / light. Font size: small / normal / large. Compact mode toggle (reduce spacing). Message grouping window. Stored in localStorage, synced to user_settings.
+- [ ] **Settings navigation** — Left sidebar with sections: My Account, Security, Notifications, Privacy, Appearance. Each section is its own SvelteKit route under `/settings/`.
+
+**Sprint 3 Tests:**
+- [ ] Profile form unit test: validation, submit, avatar preview
+- [ ] TwoFactorSetup unit test: QR display, code verify
+- [ ] SessionList unit test: render, revoke
+- [ ] settings store unit test: load, save, sync
+- [ ] E2E: change profile, change password, toggle appearance
+
+### Sprint 4: Guild Management
+> Goal: Guild owners/admins can fully manage their server.
+
+- [ ] **Guild settings page** — Edit name, description, icon (upload). Delete guild (type guild name to confirm). Transfer ownership.
+- [ ] **Role management** — Create/edit/delete roles. Drag to reorder. Permission editor: grid of checkboxes for each permission bit. Color picker (hex input + preset palette). Role assignment to members.
+- [ ] **Channel categories** — Create/rename/delete categories. Drag channels between categories. Collapse/expand categories. Category-level permission overrides.
+- [ ] **Custom emoji** — Upload image with name (alphanumeric + underscores). 50-emoji limit. Preview before upload. Delete emoji. Grid view in management. Available in message composer emoji picker.
+- [ ] **Webhook management** — Create webhook (name, avatar, channel). Edit name/avatar. Delete webhook. Copy webhook URL. Regenerate token.
+- [ ] **Invite management** — Create invite: optional max uses, optional expiry (1h, 6h, 12h, 1d, 7d, never). Table of active invites with uses/max, expires, creator. Revoke button.
+- [ ] **Audit log viewer** — Paginated list (50 per page). Each entry: action type icon, who did what, when. Filters: action type dropdown, user search. Expand entry for details/changes.
+- [ ] **Ban management** — List banned users with reason and date. Unban button. Ban dialog: optional reason, optional "delete message history" (1h, 6h, 12h, 24h, 7d).
+
+**Sprint 4 Tests:**
+- [ ] RoleEditor unit test: permission toggle, color, drag reorder
+- [ ] EmojiUploader unit test: preview, validate name
+- [ ] InviteManager unit test: create, revoke, expiry display
+- [ ] E2E: create role, assign to member, create invite, use invite
+
+### Sprint 5: Advanced Features
+> Goal: Power-user features that make AmityVox competitive.
+
+- [ ] **Threads** — "Create Thread" in message context menu. Thread panel slides in from right. Separate message stream. Thread indicator on parent message with reply count. POST `/api/v1/channels/{id}/messages/{id}/threads`.
+- [ ] **Message search** — Ctrl+K opens search modal. Full-text via Meilisearch. Filters: from user, in channel, has attachment, date range. Results with highlighted matches and surrounding context. Click to jump to message in channel.
+- [ ] **Message edit history** — Click "(edited)" badge to see previous versions. Modal with diff view showing what changed. GET `/api/v1/channels/{id}/messages/{id}/history`.
+- [ ] **User notes** — In user popover: "Note" textarea. Private to you. Auto-saves on blur. PUT `/api/v1/users/{id}/notes`.
+- [ ] **Enhanced markdown** — Code blocks with syntax highlighting (highlight.js or Shiki). Spoiler tags (`||text||`). Block quotes (`> text`). Ordered/unordered lists. Tables.
+- [ ] **Message forwarding** — "Forward" in context menu. Channel/DM picker dialog. Forwarded message shows attribution and original timestamp.
+- [ ] **Keyboard shortcuts** — Ctrl+K: search. Escape: close any panel/modal. Up: edit last message. Ctrl+Shift+M: mute current channel. Alt+Up/Down: navigate channels. ?: show shortcuts help.
+- [ ] **Notification toasts** — In-app toast component (bottom-right, auto-dismiss 5s). Desktop notification API for mentions/DMs when tab not focused. Notification permission request on first use.
+- [ ] **Transition animations** — Page transitions (fade/slide), sidebar expand/collapse, modal open/close, message appear. Svelte `transition:` and `animate:` directives.
+- [ ] **Image lightbox / media gallery** — Click image to open full-size overlay. Arrow keys to navigate between images in channel. Zoom support. Download button.
+- [ ] **Mobile responsive layout** — Collapsible sidebars (swipe/hamburger), touch-friendly hit targets, bottom navigation bar on small screens, no horizontal scroll.
+- [ ] **Emoji picker** — Grid of unicode + custom emoji. Category tabs. Search/filter. Skin tone selector. Recently used. Insert into message input at cursor.
+- [ ] **Giphy integration** — GIF button in message input opens Giphy search panel. Search, trending, preview. Click to insert GIF URL as message. Backend proxy endpoint to avoid exposing API key to client. Requires GIPHY_API_KEY in config. See `docs/giphy-setup.md` for setup instructions.
+
+**Sprint 5 Tests:**
+- [ ] ThreadPanel unit test: create, render, reply
+- [ ] SearchPanel unit test: query, results, jump
+- [ ] Markdown renderer unit test: each syntax element
+- [ ] Toast system unit test: show, dismiss, stack
+- [ ] E2E: search message, create thread, forward message
+
+---
+
+## Phase 5 (Future)
 
 ### Admin Dashboard
 - [ ] Live stats page (users, guilds, messages, connections — polls /admin/stats)
 - [ ] User management UI (list, search, suspend, unsuspend, set admin)
 - [ ] Instance settings editor (name, description, federation mode, registration)
 - [ ] Federation peer management (list, add, remove peers)
-- [ ] Audit log viewer with filters
 
 ### Channel Types
 - [ ] Forum channel UI (thread list, post/reply layout, tags, sorting)
 - [ ] Stage channel UI (speaker queue, hand raise, audience view)
-- [ ] Thread panel (side panel, thread list in parent channel)
 
 ### E2E Encryption UI
 - [ ] MLS key exchange flow in client (key package upload, welcome handling)
@@ -77,7 +174,6 @@
 ### Desktop & Mobile
 - [ ] Tauri desktop wrapper (window management, system tray, native notifications)
 - [ ] Capacitor mobile wrapper (iOS + Android, push notification integration)
-- [ ] Desktop-specific features (global hotkeys, auto-start, update checker)
 
 ### Extensibility
 - [ ] Plugin/WASM system (API for third-party plugins, sandboxed execution)
