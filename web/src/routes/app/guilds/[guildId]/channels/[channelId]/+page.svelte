@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import { setChannel, currentChannel } from '$lib/stores/channels';
 	import { currentGuild } from '$lib/stores/guilds';
+	import { currentTypingUsers } from '$lib/stores/typing';
 	import TopBar from '$components/layout/TopBar.svelte';
 	import MemberList from '$components/layout/MemberList.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
@@ -31,7 +32,7 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<TopBar onToggleMembers={() => (showMembers = !showMembers)} />
 		<MessageList />
-		<TypingIndicator />
+		<TypingIndicator typingUsers={$currentTypingUsers} />
 		<MessageInput />
 	</div>
 

@@ -484,8 +484,11 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT gm.guild_id, gm.user_id, gm.nickname, gm.avatar_id, gm.joined_at,
-		        gm.timeout_until, gm.deaf, gm.mute
+		        gm.timeout_until, gm.deaf, gm.mute,
+		        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_presence, u.bio, u.flags, u.created_at
 		 FROM guild_members gm
+		 JOIN users u ON u.id = gm.user_id
 		 WHERE gm.guild_id = $1
 		 ORDER BY gm.joined_at
 		 LIMIT 1000`,
@@ -500,13 +503,17 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 	members := make([]models.GuildMember, 0)
 	for rows.Next() {
 		var m models.GuildMember
+		var u models.User
 		if err := rows.Scan(
 			&m.GuildID, &m.UserID, &m.Nickname, &m.AvatarID, &m.JoinedAt,
 			&m.TimeoutUntil, &m.Deaf, &m.Mute,
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusPresence, &u.Bio, &u.Flags, &u.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read members")
 			return
 		}
+		m.User = &u
 		members = append(members, m)
 	}
 

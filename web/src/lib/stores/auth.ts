@@ -25,8 +25,8 @@ export async function initAuth() {
 	}
 }
 
-export async function login(email: string, password: string) {
-	const { user } = await api.login(email, password);
+export async function login(username: string, password: string) {
+	const { user } = await api.login(username, password);
 	currentUser.set(user);
 	return user;
 }

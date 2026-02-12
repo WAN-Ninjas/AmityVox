@@ -12,7 +12,9 @@ import type {
 	LoginResponse,
 	RegisterResponse,
 	ApiResponse,
-	ApiError
+	ApiError,
+	AdminStats,
+	InstanceInfo
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -98,8 +100,8 @@ class ApiClient {
 		return data;
 	}
 
-	async login(email: string, password: string): Promise<LoginResponse> {
-		const data = await this.post<LoginResponse>('/auth/login', { email, password });
+	async login(username: string, password: string): Promise<LoginResponse> {
+		const data = await this.post<LoginResponse>('/auth/login', { username, password });
 		this.setToken(data.token);
 		return data;
 	}
@@ -190,7 +192,7 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages${qs ? '?' + qs : ''}`);
 	}
 
-	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string }): Promise<Message> {
+	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[] }): Promise<Message> {
 		return this.post(`/channels/${channelId}/messages`, { content, ...opts });
 	}
 
@@ -305,6 +307,20 @@ class ApiClient {
 		if (guildId) params.set('guild_id', guildId);
 		if (channelId) params.set('channel_id', channelId);
 		return this.get(`/search/messages?${params}`);
+	}
+
+	// --- Admin ---
+
+	getAdminStats(): Promise<AdminStats> {
+		return this.get('/admin/stats');
+	}
+
+	getAdminInstance(): Promise<InstanceInfo> {
+		return this.patch('/admin/instance');
+	}
+
+	updateAdminInstance(data: { name?: string; description?: string; federation_mode?: string }): Promise<InstanceInfo> {
+		return this.patch('/admin/instance', data);
 	}
 }
 

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import type { Message } from '$lib/types';
 	import { currentChannelId } from '$lib/stores/channels';
-	import { getChannelMessages, loadMessages, isLoadingMessages } from '$lib/stores/messages';
+	import { messagesByChannel, loadMessages, isLoadingMessages } from '$lib/stores/messages';
 	import MessageItem from './MessageItem.svelte';
 
 	let messagesContainer: HTMLDivElement;
@@ -16,14 +16,11 @@
 		}
 	});
 
-	// Get messages for current channel.
+	// Get messages for current channel — tracks both currentChannelId AND messagesByChannel.
 	const messages = $derived.by(() => {
 		const channelId = $currentChannelId;
-		if (!channelId) return [];
-		const store = getChannelMessages(channelId);
-		let value: Message[] = [];
-		store.subscribe((v) => (value = v))();
-		return value;
+		if (!channelId) return [] as Message[];
+		return $messagesByChannel.get(channelId) ?? ([] as Message[]);
 	});
 
 	// Auto-scroll to bottom on new messages.

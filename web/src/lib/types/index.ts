@@ -74,6 +74,7 @@ export interface Message {
 	attachments: Attachment[];
 	embeds: Embed[];
 	created_at: string;
+	author?: User;
 }
 
 export type MessageType =
@@ -206,6 +207,40 @@ export interface TypingEvent {
 export interface PresenceUpdateEvent {
 	user_id: string;
 	status: string;
+}
+
+// --- Admin Types ---
+
+export interface AdminStats {
+	users: number;
+	online_users: number;
+	guilds: number;
+	channels: number;
+	messages: number;
+	messages_today: number;
+	files: number;
+	roles: number;
+	emoji: number;
+	invites: number;
+	federation_peers: number;
+	database_size: string;
+	go_version: string;
+	goroutines: number;
+	mem_alloc_mb: number;
+	mem_sys_mb: number;
+	num_cpu: number;
+	uptime: string;
+}
+
+export interface InstanceInfo {
+	id: string;
+	domain: string;
+	name: string | null;
+	description: string | null;
+	software: string;
+	software_version: string;
+	federation_mode: string;
+	created_at: string;
 }
 
 // --- API Response Types ---

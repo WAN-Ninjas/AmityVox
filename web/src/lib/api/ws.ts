@@ -5,8 +5,13 @@ import { GatewayOp, type GatewayMessage, type ReadyEvent } from '$lib/types';
 
 export type EventHandler = (eventType: string, data: unknown) => void;
 
-const WS_URL = `${location?.protocol === 'https:' ? 'wss:' : 'ws:'}//${location?.host}/ws`;
+function getWsUrl(): string {
+	if (typeof location === 'undefined') return 'ws://localhost/ws';
+	return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
+}
+
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
+const MAX_RECONNECT_ATTEMPTS = 50;
 
 export class GatewayClient {
 	private ws: WebSocket | null = null;
@@ -16,6 +21,7 @@ export class GatewayClient {
 	private sessionId: string | null = null;
 	private token: string;
 	private reconnectAttempt = 0;
+	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private handlers: EventHandler[] = [];
 	private closed = false;
 
@@ -44,34 +50,52 @@ export class GatewayClient {
 		if (this.ws) return;
 		this.closed = false;
 
+		const url = getWsUrl();
 		try {
-			this.ws = new WebSocket(WS_URL);
+			this.ws = new WebSocket(url);
 		} catch {
 			this.scheduleReconnect();
 			return;
 		}
 
 		this.ws.onopen = () => {
-			this.reconnectAttempt = 0;
+			// Don't reset reconnectAttempt here — only reset after successful READY.
 		};
 
 		this.ws.onmessage = (event) => {
-			const msg: GatewayMessage = JSON.parse(event.data);
-			this.handleMessage(msg);
+			try {
+				const msg: GatewayMessage = JSON.parse(event.data);
+				this.handleMessage(msg);
+			} catch (e) {
+				console.error('[GW] Failed to parse message:', e);
+			}
 		};
 
-		this.ws.onclose = () => {
+		this.ws.onclose = (event) => {
 			this.cleanup();
-			if (!this.closed) this.scheduleReconnect();
+			if (this.closed) return;
+
+			// Auth failure — don't reconnect, token is invalid.
+			if (event.code === 4001 || event.code === 4004) {
+				console.error('[GW] Auth rejected, not reconnecting');
+				this.emit('GATEWAY_AUTH_FAILED', null);
+				return;
+			}
+
+			this.scheduleReconnect();
 		};
 
 		this.ws.onerror = () => {
-			this.ws?.close();
+			// onerror is always followed by onclose, so just let onclose handle reconnection.
 		};
 	}
 
 	disconnect() {
 		this.closed = true;
+		if (this.reconnectTimer) {
+			clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
 		this.ws?.close();
 		this.cleanup();
 	}
@@ -92,6 +116,8 @@ export class GatewayClient {
 				if (msg.t === 'READY') {
 					const ready = msg.d as ReadyEvent;
 					this.sessionId = ready.session_id;
+					// Only reset backoff after a fully successful handshake.
+					this.reconnectAttempt = 0;
 				}
 				if (msg.t) this.emit(msg.t, msg.d);
 				break;
@@ -104,7 +130,6 @@ export class GatewayClient {
 
 	private identify() {
 		if (this.sessionId && this.sequence > 0) {
-			// Resume existing session.
 			this.send({
 				op: GatewayOp.Resume,
 				d: { token: this.token, session_id: this.sessionId, seq: this.sequence }
@@ -123,7 +148,6 @@ export class GatewayClient {
 
 		this.heartbeatInterval = setInterval(() => {
 			if (!this.heartbeatAcked) {
-				// Missed ACK — connection is dead.
 				this.ws?.close();
 				return;
 			}
@@ -151,9 +175,20 @@ export class GatewayClient {
 	}
 
 	private scheduleReconnect() {
-		const delay = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+		if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+			console.error('[GW] Max reconnect attempts reached, giving up');
+			this.emit('GATEWAY_EXHAUSTED', null);
+			return;
+		}
+
+		const base = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+		// Add jitter (0-25%) to prevent thundering herd.
+		const jitter = Math.random() * base * 0.25;
+		const delay = base + jitter;
 		this.reconnectAttempt++;
-		setTimeout(() => {
+
+		this.reconnectTimer = setTimeout(() => {
+			this.reconnectTimer = null;
 			if (!this.closed) this.connect();
 		}, delay);
 	}

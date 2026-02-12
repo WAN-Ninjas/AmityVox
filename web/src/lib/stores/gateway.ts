@@ -1,13 +1,15 @@
 // Gateway store — manages the WebSocket connection and dispatches events to stores.
 
 import { writable } from 'svelte/store';
+import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
 import { loadGuilds, updateGuild, removeGuild } from './guilds';
 import { updateChannel, removeChannel } from './channels';
 import { appendMessage, updateMessage, removeMessage } from './messages';
 import { updatePresence } from './presence';
-import type { User, Guild, Channel, Message, ReadyEvent } from '$lib/types';
+import { addTypingUser, clearTypingUser } from './typing';
+import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent } from '$lib/types';
 
 export const gatewayConnected = writable(false);
 
@@ -25,8 +27,21 @@ export function connectGateway(token: string) {
 				currentUser.set(ready.user);
 				gatewayConnected.set(true);
 				loadGuilds();
+				updatePresence(ready.user.id, 'online');
+				client?.updatePresence('online');
 				break;
 			}
+
+			// --- Gateway lifecycle ---
+			case 'GATEWAY_AUTH_FAILED':
+				// Token is invalid — redirect to login.
+				disconnectGateway();
+				goto('/login');
+				break;
+			case 'GATEWAY_EXHAUSTED':
+				// Too many failed reconnects — mark disconnected.
+				gatewayConnected.set(false);
+				break;
 
 			// --- Guild events ---
 			case 'GUILD_CREATE':
@@ -67,6 +82,13 @@ export function connectGateway(token: string) {
 					(data as { status: string }).status
 				);
 				break;
+
+			// --- Typing events ---
+			case 'TYPING_START': {
+				const typing = data as TypingEvent;
+				addTypingUser(typing.channel_id, typing.user_id);
+				break;
+			}
 
 			// --- User events ---
 			case 'USER_UPDATE':

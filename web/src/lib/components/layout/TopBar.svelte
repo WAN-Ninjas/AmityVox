@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { currentChannel } from '$lib/stores/channels';
 	import { currentGuild } from '$lib/stores/guilds';
+	import SearchModal from '$components/chat/SearchModal.svelte';
 
 	interface Props {
 		onToggleMembers?: () => void;
 	}
 
 	let { onToggleMembers }: Props = $props();
+	let showSearch = $state(false);
 </script>
 
 <header class="flex h-12 items-center border-b border-bg-floating bg-bg-tertiary px-4">
@@ -42,7 +44,11 @@
 		{/if}
 
 		<!-- Search -->
-		<button class="text-text-muted transition-colors hover:text-text-primary" title="Search">
+		<button
+			class="text-text-muted transition-colors hover:text-text-primary"
+			title="Search"
+			onclick={() => (showSearch = true)}
+		>
 			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 				<circle cx="11" cy="11" r="8" />
 				<path d="m21 21-4.35-4.35" />
@@ -50,3 +56,5 @@
 		</button>
 	</div>
 </header>
+
+<SearchModal bind:open={showSearch} onclose={() => (showSearch = false)} />
