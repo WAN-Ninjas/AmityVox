@@ -9,6 +9,7 @@ import type {
 	GuildMember,
 	Role,
 	Invite,
+	Session,
 	ReadState,
 	Relationship,
 	LoginResponse,
@@ -306,6 +307,38 @@ class ApiClient {
 
 	acceptInvite(code: string): Promise<Guild> {
 		return this.post(`/invites/${code}`);
+	}
+
+	// --- Auth / Security ---
+
+	changePassword(currentPassword: string, newPassword: string): Promise<void> {
+		return this.post('/auth/password', { current_password: currentPassword, new_password: newPassword });
+	}
+
+	enableTOTP(): Promise<{ secret: string; qr_url: string }> {
+		return this.post('/auth/totp/enable');
+	}
+
+	verifyTOTP(code: string): Promise<{ backup_codes: string[] }> {
+		return this.post('/auth/totp/verify', { code });
+	}
+
+	disableTOTP(code: string): Promise<void> {
+		return this.del('/auth/totp');
+	}
+
+	generateBackupCodes(): Promise<{ codes: string[] }> {
+		return this.post('/auth/backup-codes');
+	}
+
+	// --- Sessions ---
+
+	getSessions(): Promise<Session[]> {
+		return this.get('/users/@me/sessions');
+	}
+
+	deleteSession(sessionId: string): Promise<void> {
+		return this.del(`/users/@me/sessions/${sessionId}`);
 	}
 
 	// --- Typing ---
