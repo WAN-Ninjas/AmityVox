@@ -16,6 +16,36 @@
 	let showOnboarding = $state(false);
 	let onboardingConfig = $state<OnboardingConfig | null>(null);
 
+	// --- Server Guide ---
+	interface GuideStep {
+		id: string;
+		guild_id: string;
+		title: string;
+		content: string;
+		position: number;
+		channel_id: string | null;
+		created_at: string;
+	}
+
+	let guideSteps = $state<GuideStep[]>([]);
+	let guideLoading = $state(true);
+	let guideCurrentStep = $state(0);
+	let guideDismissed = $state(false);
+
+	// --- Bump System ---
+	interface BumpStatus {
+		can_bump: boolean;
+		next_bump_at: string | null;
+		last_bump: string | null;
+		bump_count_24h: number;
+	}
+
+	let bumpStatus = $state<BumpStatus | null>(null);
+	let bumpLoading = $state(false);
+	let bumpMessage = $state<string | null>(null);
+	let bumpCooldownText = $state('');
+	let bumpCooldownInterval: ReturnType<typeof setInterval> | null = null;
+
 	// Check onboarding status whenever guildId changes.
 	$effect(() => {
 		const guildId = $page.params.guildId;
@@ -68,6 +98,189 @@
 				eventsLoading = false;
 			});
 	});
+
+	// Load server guide whenever guildId changes.
+	$effect(() => {
+		const guildId = $page.params.guildId;
+		if (!guildId) return;
+
+		guideLoading = true;
+		guideCurrentStep = 0;
+		guideDismissed = false;
+
+		// Check localStorage to see if the user already dismissed this guild's guide.
+		const dismissKey = `guide_dismissed_${guildId}`;
+		if (typeof window !== 'undefined' && localStorage.getItem(dismissKey) === 'true') {
+			guideDismissed = true;
+		}
+
+		fetch(`/api/v1/guilds/${guildId}/guide`, {
+			headers: {
+				Authorization: `Bearer ${getToken()}`
+			}
+		})
+			.then((res) => {
+				if (!res.ok) throw new Error('Failed to load guide');
+				return res.json();
+			})
+			.then((json) => {
+				guideSteps = json.data ?? [];
+			})
+			.catch(() => {
+				guideSteps = [];
+			})
+			.finally(() => {
+				guideLoading = false;
+			});
+	});
+
+	// Load bump status whenever guildId changes.
+	$effect(() => {
+		const guildId = $page.params.guildId;
+		const guild = $currentGuild;
+		if (!guildId || !guild?.discoverable) {
+			bumpStatus = null;
+			return;
+		}
+
+		fetch(`/api/v1/guilds/${guildId}/bump`, {
+			headers: {
+				Authorization: `Bearer ${getToken()}`
+			}
+		})
+			.then((res) => {
+				if (!res.ok) throw new Error('Failed to load bump status');
+				return res.json();
+			})
+			.then((json) => {
+				bumpStatus = json.data;
+				updateBumpCooldown();
+			})
+			.catch(() => {
+				bumpStatus = null;
+			});
+	});
+
+	// Update bump cooldown timer.
+	$effect(() => {
+		if (bumpCooldownInterval) {
+			clearInterval(bumpCooldownInterval);
+			bumpCooldownInterval = null;
+		}
+
+		if (bumpStatus && !bumpStatus.can_bump && bumpStatus.next_bump_at) {
+			updateBumpCooldown();
+			bumpCooldownInterval = setInterval(updateBumpCooldown, 1000);
+		}
+
+		return () => {
+			if (bumpCooldownInterval) {
+				clearInterval(bumpCooldownInterval);
+				bumpCooldownInterval = null;
+			}
+		};
+	});
+
+	function updateBumpCooldown() {
+		if (!bumpStatus?.next_bump_at) {
+			bumpCooldownText = '';
+			return;
+		}
+
+		const next = new Date(bumpStatus.next_bump_at).getTime();
+		const now = Date.now();
+		const diff = next - now;
+
+		if (diff <= 0) {
+			bumpStatus = { ...bumpStatus, can_bump: true, next_bump_at: null };
+			bumpCooldownText = '';
+			if (bumpCooldownInterval) {
+				clearInterval(bumpCooldownInterval);
+				bumpCooldownInterval = null;
+			}
+			return;
+		}
+
+		const hours = Math.floor(diff / (1000 * 60 * 60));
+		const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+		const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+		if (hours > 0) {
+			bumpCooldownText = `${hours}h ${minutes}m`;
+		} else if (minutes > 0) {
+			bumpCooldownText = `${minutes}m ${seconds}s`;
+		} else {
+			bumpCooldownText = `${seconds}s`;
+		}
+	}
+
+	function getToken(): string {
+		if (typeof document === 'undefined') return '';
+		const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
+		if (match) return decodeURIComponent(match[1]);
+		return localStorage.getItem('token') ?? '';
+	}
+
+	async function handleBump() {
+		const guildId = $page.params.guildId;
+		if (!guildId || bumpLoading) return;
+
+		bumpLoading = true;
+		bumpMessage = null;
+
+		try {
+			const res = await fetch(`/api/v1/guilds/${guildId}/bump`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${getToken()}`
+				}
+			});
+
+			const json = await res.json();
+
+			if (res.ok) {
+				const data = json.data;
+				bumpMessage = data.bump_message;
+				bumpStatus = {
+					can_bump: false,
+					next_bump_at: data.next_bump_at,
+					last_bump: new Date().toISOString(),
+					bump_count_24h: (bumpStatus?.bump_count_24h ?? 0) + 1
+				};
+			} else {
+				bumpMessage = json.error?.message ?? 'Failed to bump guild';
+			}
+		} catch {
+			bumpMessage = 'Failed to bump guild';
+		} finally {
+			bumpLoading = false;
+			// Clear the message after a few seconds.
+			setTimeout(() => {
+				bumpMessage = null;
+			}, 5000);
+		}
+	}
+
+	function dismissGuide() {
+		const guildId = $page.params.guildId;
+		guideDismissed = true;
+		if (typeof window !== 'undefined' && guildId) {
+			localStorage.setItem(`guide_dismissed_${guildId}`, 'true');
+		}
+	}
+
+	function guideNext() {
+		if (guideCurrentStep < guideSteps.length - 1) {
+			guideCurrentStep++;
+		}
+	}
+
+	function guidePrev() {
+		if (guideCurrentStep > 0) {
+			guideCurrentStep--;
+		}
+	}
 
 	// Derive member counts from guild data and presence map.
 	$effect(() => {
@@ -170,7 +383,7 @@
 						</div>
 					{/if}
 				</div>
-				<div class="mb-1 min-w-0">
+				<div class="mb-1 min-w-0 flex-1">
 					<h1 class="truncate text-2xl font-bold text-text-primary">{$currentGuild.name}</h1>
 					{#if $currentGuild.description}
 						<p class="mt-1 text-sm text-text-muted">{$currentGuild.description}</p>
@@ -206,7 +419,138 @@
 						<span class="text-sm text-text-muted">Created {createdDate}</span>
 					</div>
 				{/if}
+
+				<!-- Bump Button (only for discoverable guilds) -->
+				{#if $currentGuild.discoverable && bumpStatus}
+					<div class="ml-auto flex items-center gap-2">
+						{#if bumpStatus.bump_count_24h > 0}
+							<span class="text-xs text-text-muted">
+								{bumpStatus.bump_count_24h} bump{bumpStatus.bump_count_24h !== 1 ? 's' : ''} today
+							</span>
+						{/if}
+						<button
+							onclick={handleBump}
+							disabled={!bumpStatus.can_bump || bumpLoading}
+							class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors
+								{bumpStatus.can_bump
+									? 'bg-brand-600 text-white hover:bg-brand-700'
+									: 'cursor-not-allowed bg-bg-primary text-text-muted'}"
+						>
+							{#if bumpLoading}
+								<svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+									<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+									<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+								</svg>
+							{:else}
+								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M12 19V5M5 12l7-7 7 7" />
+								</svg>
+							{/if}
+							{#if bumpStatus.can_bump}
+								Bump
+							{:else}
+								{bumpCooldownText}
+							{/if}
+						</button>
+					</div>
+				{/if}
 			</div>
+
+			<!-- Bump Feedback Message -->
+			{#if bumpMessage}
+				<div class="mb-4 rounded-lg border border-brand-600/30 bg-brand-600/10 px-4 py-2.5 text-sm text-brand-400">
+					{bumpMessage}
+				</div>
+			{/if}
+
+			<!-- Server Guide Walkthrough -->
+			{#if guideSteps.length > 0 && !guideDismissed && !guideLoading}
+				{@const step = guideSteps[guideCurrentStep]}
+				<div class="mb-6 rounded-lg border border-brand-600/20 bg-bg-secondary p-5">
+					<div class="mb-3 flex items-center justify-between">
+						<h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+							</svg>
+							Server Guide
+						</h2>
+						<button
+							onclick={dismissGuide}
+							class="rounded p-1 text-text-muted transition-colors hover:bg-bg-primary hover:text-text-primary"
+							title="Dismiss guide"
+						>
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M6 18L18 6M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+
+					<!-- Step indicator -->
+					<div class="mb-4 flex items-center gap-1">
+						{#each guideSteps as _, i}
+							<button
+								onclick={() => (guideCurrentStep = i)}
+								class="h-1.5 flex-1 rounded-full transition-colors {i === guideCurrentStep
+									? 'bg-brand-500'
+									: i < guideCurrentStep
+										? 'bg-brand-500/40'
+										: 'bg-bg-primary'}"
+							></button>
+						{/each}
+					</div>
+
+					<!-- Step content -->
+					{#if step}
+						<div class="mb-4">
+							<h3 class="mb-2 text-lg font-semibold text-text-primary">{step.title}</h3>
+							<div class="prose prose-sm text-text-secondary">
+								<p class="whitespace-pre-wrap text-sm leading-relaxed text-text-muted">{step.content}</p>
+							</div>
+							{#if step.channel_id}
+								<a
+									href="/app/guilds/{$page.params.guildId}/channels/{step.channel_id}"
+									class="mt-3 inline-flex items-center gap-1.5 rounded-md bg-brand-600/10 px-3 py-1.5 text-sm font-medium text-brand-400 transition-colors hover:bg-brand-600/20"
+								>
+									<span>#</span>
+									Go to channel
+								</a>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Navigation -->
+					<div class="flex items-center justify-between">
+						<span class="text-xs text-text-muted">
+							Step {guideCurrentStep + 1} of {guideSteps.length}
+						</span>
+						<div class="flex items-center gap-2">
+							{#if guideCurrentStep > 0}
+								<button
+									onclick={guidePrev}
+									class="rounded-md border border-bg-primary px-3 py-1.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-primary"
+								>
+									Previous
+								</button>
+							{/if}
+							{#if guideCurrentStep < guideSteps.length - 1}
+								<button
+									onclick={guideNext}
+									class="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700"
+								>
+									Next
+								</button>
+							{:else}
+								<button
+									onclick={dismissGuide}
+									class="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700"
+								>
+									Done
+								</button>
+							{/if}
+						</div>
+					</div>
+				</div>
+			{/if}
 
 			<div class="grid gap-6 md:grid-cols-2">
 				<!-- Featured Channels -->

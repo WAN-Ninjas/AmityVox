@@ -191,11 +191,14 @@ type Channel struct {
 	DefaultPermissions *int64     `json:"default_permissions,omitempty"`
 	UserLimit          int        `json:"user_limit"`
 	Bitrate            int        `json:"bitrate"`
-	Locked             bool       `json:"locked"`
-	LockedBy           *string    `json:"locked_by,omitempty"`
-	LockedAt           *time.Time `json:"locked_at,omitempty"`
-	Archived           bool       `json:"archived"`
-	CreatedAt          time.Time  `json:"created_at"`
+	Locked                    bool       `json:"locked"`
+	LockedBy                  *string    `json:"locked_by,omitempty"`
+	LockedAt                  *time.Time `json:"locked_at,omitempty"`
+	Archived                  bool       `json:"archived"`
+	ReadOnly                  bool       `json:"read_only"`
+	ReadOnlyRoleIDs           []string   `json:"read_only_role_ids,omitempty"`
+	DefaultAutoArchiveDuration int       `json:"default_auto_archive_duration"`
+	CreatedAt                 time.Time  `json:"created_at"`
 }
 
 // ChannelType constants for channels.channel_type.
@@ -691,6 +694,21 @@ type SlashCommand struct {
 	Options     json.RawMessage `json:"options"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+// ChannelTemplate represents a saved channel configuration that can be reused
+// when creating new channels in a guild. Corresponds to the channel_templates table.
+type ChannelTemplate struct {
+	ID                   string          `json:"id"`
+	GuildID              string          `json:"guild_id"`
+	Name                 string          `json:"name"`
+	ChannelType          string          `json:"channel_type"`
+	Topic                *string         `json:"topic,omitempty"`
+	SlowmodeSeconds      int             `json:"slowmode_seconds"`
+	NSFW                 bool            `json:"nsfw"`
+	PermissionOverwrites json.RawMessage `json:"permission_overwrites,omitempty"`
+	CreatedBy            string          `json:"created_by"`
+	CreatedAt            time.Time       `json:"created_at"`
 }
 
 // Verification level constants for guilds.

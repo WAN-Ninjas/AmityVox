@@ -127,14 +127,17 @@ func init() {
 }
 
 type updateChannelRequest struct {
-	Name            *string `json:"name"`
-	Topic           *string `json:"topic"`
-	Position        *int    `json:"position"`
-	NSFW            *bool   `json:"nsfw"`
-	SlowmodeSeconds *int    `json:"slowmode_seconds"`
-	UserLimit       *int    `json:"user_limit"`
-	Bitrate         *int    `json:"bitrate"`
-	Archived        *bool   `json:"archived"`
+	Name                       *string   `json:"name"`
+	Topic                      *string   `json:"topic"`
+	Position                   *int      `json:"position"`
+	NSFW                       *bool     `json:"nsfw"`
+	SlowmodeSeconds            *int      `json:"slowmode_seconds"`
+	UserLimit                  *int      `json:"user_limit"`
+	Bitrate                    *int      `json:"bitrate"`
+	Archived                   *bool     `json:"archived"`
+	ReadOnly                   *bool     `json:"read_only"`
+	ReadOnlyRoleIDs            []string  `json:"read_only_role_ids"`
+	DefaultAutoArchiveDuration *int      `json:"default_auto_archive_duration"`
 }
 
 type createMessageRequest struct {
@@ -206,6 +209,16 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate auto-archive duration if provided.
+	if req.DefaultAutoArchiveDuration != nil {
+		valid := map[int]bool{0: true, 60: true, 1440: true, 4320: true, 10080: true}
+		if !valid[*req.DefaultAutoArchiveDuration] {
+			writeError(w, http.StatusBadRequest, "invalid_auto_archive",
+				"Auto-archive duration must be 0 (never), 60 (1h), 1440 (1d), 4320 (3d), or 10080 (7d)")
+			return
+		}
+	}
+
 	var channel models.Channel
 	err := h.Pool.QueryRow(r.Context(),
 		`UPDATE channels SET
@@ -216,19 +229,26 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 			slowmode_seconds = COALESCE($6, slowmode_seconds),
 			user_limit = COALESCE($7, user_limit),
 			bitrate = COALESCE($8, bitrate),
-			archived = COALESCE($9, archived)
+			archived = COALESCE($9, archived),
+			read_only = COALESCE($10, read_only),
+			read_only_role_ids = COALESCE($11, read_only_role_ids),
+			default_auto_archive_duration = COALESCE($12, default_auto_archive_duration)
 		 WHERE id = $1
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
 		channelID, req.Name, req.Topic, req.Position, req.NSFW, req.SlowmodeSeconds,
-		req.UserLimit, req.Bitrate, req.Archived,
+		req.UserLimit, req.Bitrate, req.Archived, req.ReadOnly, req.ReadOnlyRoleIDs,
+		req.DefaultAutoArchiveDuration,
 	).Scan(
 		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
 		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
 		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
 		&channel.UserLimit, &channel.Bitrate,
-		&channel.Locked, &channel.LockedBy, &channel.LockedAt, &channel.Archived, &channel.CreatedAt,
+		&channel.Locked, &channel.LockedBy, &channel.LockedAt,
+		&channel.Archived, &channel.ReadOnly, &channel.ReadOnlyRoleIDs,
+		&channel.DefaultAutoArchiveDuration, &channel.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -385,9 +405,12 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if channel is locked or archived.
-	var channelLocked, channelArchived bool
-	h.Pool.QueryRow(r.Context(), `SELECT locked, archived FROM channels WHERE id = $1`, channelID).Scan(&channelLocked, &channelArchived)
+	// Check if channel is locked, archived, or read-only.
+	var channelLocked, channelArchived, channelReadOnly bool
+	var readOnlyRoleIDs []string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT locked, archived, read_only, read_only_role_ids FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelLocked, &channelArchived, &channelReadOnly, &readOnlyRoleIDs)
 	if channelArchived {
 		writeError(w, http.StatusForbidden, "channel_archived", "This channel is archived and read-only")
 		return
@@ -395,6 +418,50 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	if channelLocked {
 		writeError(w, http.StatusForbidden, "channel_locked", "This channel is locked")
 		return
+	}
+	// Read-only check: only users with a whitelisted role, guild owners, or admins can post.
+	if channelReadOnly {
+		allowed := false
+		// Check if user is guild owner or instance admin (they always bypass).
+		var chGuildID *string
+		h.Pool.QueryRow(r.Context(), `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&chGuildID)
+		if chGuildID != nil {
+			var ownerID string
+			h.Pool.QueryRow(r.Context(), `SELECT owner_id FROM guilds WHERE id = $1`, *chGuildID).Scan(&ownerID)
+			if userID == ownerID {
+				allowed = true
+			}
+		}
+		if !allowed {
+			var userFlags int
+			h.Pool.QueryRow(r.Context(), `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
+			if userFlags&models.UserFlagAdmin != 0 {
+				allowed = true
+			}
+		}
+		if !allowed {
+			// Check if the user has the Administrator permission via roles.
+			if h.hasChannelPermission(r.Context(), channelID, userID, permissions.Administrator) {
+				allowed = true
+			}
+		}
+		if !allowed && len(readOnlyRoleIDs) > 0 && chGuildID != nil {
+			// Check if user has any of the whitelisted roles.
+			var matchCount int
+			h.Pool.QueryRow(r.Context(),
+				`SELECT COUNT(*) FROM member_roles
+				 WHERE guild_id = $1 AND user_id = $2 AND role_id = ANY($3)`,
+				*chGuildID, userID, readOnlyRoleIDs,
+			).Scan(&matchCount)
+			if matchCount > 0 {
+				allowed = true
+			}
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "channel_read_only",
+				"This channel is read-only. Only users with specific roles can post.")
+			return
+		}
 	}
 
 	var req createMessageRequest
@@ -1227,10 +1294,12 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check the parent channel is in a guild.
+	// Check the parent channel is in a guild and fetch its auto-archive duration.
 	var guildID *string
+	var parentAutoArchive int
 	h.Pool.QueryRow(r.Context(),
-		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+		`SELECT guild_id, default_auto_archive_duration FROM channels WHERE id = $1`, channelID,
+	).Scan(&guildID, &parentAutoArchive)
 	if guildID == nil {
 		writeError(w, http.StatusBadRequest, "invalid_channel", "Threads can only be created in guild channels")
 		return
@@ -1245,21 +1314,24 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	// Create the thread as a new channel linked to the guild.
+	// Create the thread as a new channel linked to the guild, inheriting the parent's auto-archive duration.
 	var thread models.Channel
 	err = tx.QueryRow(r.Context(),
-		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, created_at)
-		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, now())
+		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, created_at)
+		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, now())
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
-		threadID, guildID, req.Name, userID,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
+		threadID, guildID, req.Name, userID, parentAutoArchive,
 	).Scan(
 		&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
 		&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,
 		&thread.LastMessageID, &thread.OwnerID, &thread.DefaultPermissions,
 		&thread.UserLimit, &thread.Bitrate,
-		&thread.Locked, &thread.LockedBy, &thread.LockedAt, &thread.Archived, &thread.CreatedAt,
+		&thread.Locked, &thread.LockedBy, &thread.LockedAt,
+		&thread.Archived, &thread.ReadOnly, &thread.ReadOnlyRoleIDs,
+		&thread.DefaultAutoArchiveDuration, &thread.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create thread channel", slog.String("error", err.Error()))
@@ -1310,11 +1382,30 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-archive expired threads on fetch: any thread whose last message is older
+	// than its default_auto_archive_duration gets archived automatically.
+	h.Pool.Exec(r.Context(),
+		`UPDATE channels SET archived = TRUE
+		 WHERE id IN (
+		     SELECT DISTINCT c.id
+		     FROM channels c
+		     JOIN messages m2 ON m2.thread_id = c.id
+		     WHERE m2.channel_id = $1
+		       AND c.archived = FALSE
+		       AND c.default_auto_archive_duration > 0
+		       AND COALESCE(
+		           (SELECT MAX(msg.created_at) FROM messages msg WHERE msg.channel_id = c.id),
+		           c.created_at
+		       ) < now() - make_interval(mins => c.default_auto_archive_duration)
+		 )`,
+		channelID,
+	)
+
 	// Find all threads originating from messages in this channel.
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT DISTINCT c.id, c.guild_id, c.category_id, c.channel_type, c.name, c.topic,
 		        c.position, c.slowmode_seconds, c.nsfw, c.encrypted, c.last_message_id,
-		        c.owner_id, c.default_permissions, c.created_at
+		        c.owner_id, c.default_permissions, c.archived, c.default_auto_archive_duration, c.created_at
 		 FROM channels c
 		 JOIN messages m ON m.thread_id = c.id
 		 WHERE m.channel_id = $1
@@ -1334,7 +1425,7 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
-			&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+			&c.OwnerID, &c.DefaultPermissions, &c.Archived, &c.DefaultAutoArchiveDuration, &c.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read threads")
 			return
@@ -1524,14 +1615,17 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		        archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at
 		 FROM channels WHERE id = $1`,
 		channelID,
 	).Scan(
 		&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 		&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
 		&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
-		&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
+		&c.Locked, &c.LockedBy, &c.LockedAt,
+		&c.Archived, &c.ReadOnly, &c.ReadOnlyRoleIDs,
+		&c.DefaultAutoArchiveDuration, &c.CreatedAt,
 	)
 	return &c, err
 }
@@ -2107,6 +2201,313 @@ func (h *Handler) HandlePublishMessage(w http.ResponseWriter, r *http.Request) {
 		"channel_id":      channelID,
 		"followers_count": len(followers),
 	})
+}
+
+// --- Channel Templates ---
+
+// HandleCreateChannelTemplate saves a channel configuration as a reusable template.
+// POST /api/v1/guilds/{guildID}/channel-templates
+func (h *Handler) HandleCreateChannelTemplate(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	// Permission check: ManageChannels required to create templates.
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	var req struct {
+		Name                 string          `json:"name"`
+		ChannelType          string          `json:"channel_type"`
+		Topic                *string         `json:"topic"`
+		SlowmodeSeconds      int             `json:"slowmode_seconds"`
+		NSFW                 bool            `json:"nsfw"`
+		PermissionOverwrites json.RawMessage `json:"permission_overwrites"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Name == "" || len(req.Name) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Template name must be 1-100 characters")
+		return
+	}
+
+	validTypes := map[string]bool{
+		"text": true, "voice": true, "announcement": true, "forum": true, "stage": true,
+	}
+	if req.ChannelType == "" {
+		req.ChannelType = "text"
+	}
+	if !validTypes[req.ChannelType] {
+		writeError(w, http.StatusBadRequest, "invalid_type", "Invalid channel type")
+		return
+	}
+
+	if req.SlowmodeSeconds < 0 || req.SlowmodeSeconds > 21600 {
+		writeError(w, http.StatusBadRequest, "invalid_slowmode", "Slowmode must be 0-21600 seconds")
+		return
+	}
+
+	templateID := models.NewULID().String()
+
+	var tmpl models.ChannelTemplate
+	err := h.Pool.QueryRow(r.Context(),
+		`INSERT INTO channel_templates (id, guild_id, name, channel_type, topic, slowmode_seconds, nsfw, permission_overwrites, created_by, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		 RETURNING id, guild_id, name, channel_type, topic, slowmode_seconds, nsfw, permission_overwrites, created_by, created_at`,
+		templateID, guildID, req.Name, req.ChannelType, req.Topic, req.SlowmodeSeconds,
+		req.NSFW, req.PermissionOverwrites, userID,
+	).Scan(
+		&tmpl.ID, &tmpl.GuildID, &tmpl.Name, &tmpl.ChannelType, &tmpl.Topic,
+		&tmpl.SlowmodeSeconds, &tmpl.NSFW, &tmpl.PermissionOverwrites,
+		&tmpl.CreatedBy, &tmpl.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create channel template", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, tmpl)
+}
+
+// HandleGetChannelTemplates lists all channel templates for a guild.
+// GET /api/v1/guilds/{guildID}/channel-templates
+func (h *Handler) HandleGetChannelTemplates(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	// Any guild member can view templates.
+	var isMember bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, userID,
+	).Scan(&isMember)
+	if !isMember {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, guild_id, name, channel_type, topic, slowmode_seconds, nsfw, permission_overwrites, created_by, created_at
+		 FROM channel_templates WHERE guild_id = $1
+		 ORDER BY created_at DESC`,
+		guildID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get templates")
+		return
+	}
+	defer rows.Close()
+
+	templates := make([]models.ChannelTemplate, 0)
+	for rows.Next() {
+		var tmpl models.ChannelTemplate
+		if err := rows.Scan(
+			&tmpl.ID, &tmpl.GuildID, &tmpl.Name, &tmpl.ChannelType, &tmpl.Topic,
+			&tmpl.SlowmodeSeconds, &tmpl.NSFW, &tmpl.PermissionOverwrites,
+			&tmpl.CreatedBy, &tmpl.CreatedAt,
+		); err != nil {
+			h.Logger.Error("failed to scan channel template", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read templates")
+			return
+		}
+		templates = append(templates, tmpl)
+	}
+
+	writeJSON(w, http.StatusOK, templates)
+}
+
+// HandleDeleteChannelTemplate deletes a channel template.
+// DELETE /api/v1/guilds/{guildID}/channel-templates/{templateID}
+func (h *Handler) HandleDeleteChannelTemplate(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	templateID := chi.URLParam(r, "templateID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM channel_templates WHERE id = $1 AND guild_id = $2`,
+		templateID, guildID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete template")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "template_not_found", "Template not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleApplyChannelTemplate creates a new channel from a saved template.
+// POST /api/v1/guilds/{guildID}/channel-templates/{templateID}/apply
+func (h *Handler) HandleApplyChannelTemplate(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	templateID := chi.URLParam(r, "templateID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	var req struct {
+		Name       string  `json:"name"`
+		CategoryID *string `json:"category_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Name == "" || len(req.Name) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Channel name must be 1-100 characters")
+		return
+	}
+
+	// Fetch the template.
+	var tmpl models.ChannelTemplate
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT id, guild_id, name, channel_type, topic, slowmode_seconds, nsfw, permission_overwrites, created_by, created_at
+		 FROM channel_templates WHERE id = $1 AND guild_id = $2`,
+		templateID, guildID,
+	).Scan(
+		&tmpl.ID, &tmpl.GuildID, &tmpl.Name, &tmpl.ChannelType, &tmpl.Topic,
+		&tmpl.SlowmodeSeconds, &tmpl.NSFW, &tmpl.PermissionOverwrites,
+		&tmpl.CreatedBy, &tmpl.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "template_not_found", "Template not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
+		return
+	}
+
+	channelID := models.NewULID().String()
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Create the channel from the template.
+	var channel models.Channel
+	err = tx.QueryRow(r.Context(),
+		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position, slowmode_seconds, nsfw, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, now())
+		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
+		channelID, guildID, req.CategoryID, tmpl.ChannelType, req.Name, tmpl.Topic,
+		tmpl.SlowmodeSeconds, tmpl.NSFW,
+	).Scan(
+		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
+		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
+		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
+		&channel.UserLimit, &channel.Bitrate,
+		&channel.Locked, &channel.LockedBy, &channel.LockedAt,
+		&channel.Archived, &channel.ReadOnly, &channel.ReadOnlyRoleIDs,
+		&channel.DefaultAutoArchiveDuration, &channel.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create channel from template", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
+		return
+	}
+
+	// Apply permission overwrites from the template if any.
+	if len(tmpl.PermissionOverwrites) > 0 {
+		var overwrites []struct {
+			TargetType       string `json:"target_type"`
+			TargetID         string `json:"target_id"`
+			PermissionsAllow int64  `json:"permissions_allow"`
+			PermissionsDeny  int64  `json:"permissions_deny"`
+		}
+		if jsonErr := json.Unmarshal(tmpl.PermissionOverwrites, &overwrites); jsonErr == nil {
+			for _, ow := range overwrites {
+				tx.Exec(r.Context(),
+					`INSERT INTO channel_permission_overrides (channel_id, target_type, target_id, permissions_allow, permissions_deny)
+					 VALUES ($1, $2, $3, $4, $5)
+					 ON CONFLICT (channel_id, target_id) DO UPDATE SET
+					     permissions_allow = EXCLUDED.permissions_allow,
+					     permissions_deny = EXCLUDED.permissions_deny`,
+					channelID, ow.TargetType, ow.TargetID, ow.PermissionsAllow, ow.PermissionsDeny,
+				)
+			}
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+
+	writeJSON(w, http.StatusCreated, channel)
+}
+
+// hasGuildPermission checks if a user has a specific permission in a guild.
+// Guild owners and instance admins always pass. Then checks default_permissions + role overrides.
+func (h *Handler) hasGuildPermission(ctx context.Context, guildID, userID string, perm uint64) bool {
+	// Owner has all permissions.
+	var ownerID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		return false
+	}
+	if userID == ownerID {
+		return true
+	}
+
+	// Admin flag.
+	var userFlags int
+	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
+	if userFlags&models.UserFlagAdmin != 0 {
+		return true
+	}
+
+	// Default permissions + role permissions.
+	var defaultPerms int64
+	h.Pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms)
+	computed := uint64(defaultPerms)
+
+	rows, _ := h.Pool.Query(ctx,
+		`SELECT r.permissions_allow, r.permissions_deny
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		guildID, userID,
+	)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var allow, deny int64
+			rows.Scan(&allow, &deny)
+			computed |= uint64(allow)
+			computed &^= uint64(deny)
+		}
+	}
+
+	if computed&permissions.Administrator != 0 {
+		return true
+	}
+	return computed&perm != 0
 }
 
 // hasChannelPermission checks if a user has a specific permission in the guild

@@ -5,9 +5,10 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
+	import WebhookPanel from '$components/guild/WebhookPanel.svelte';
 	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt, BanList, BanListEntry, BanListSubscription, StickerPack, Sticker } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'stickers' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding' | 'ban-lists';
+	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'stickers' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding' | 'ban-lists' | 'templates';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -65,6 +66,7 @@
 	// --- Webhooks ---
 	let webhooks = $state<Webhook[]>([]);
 	let loadingWebhooks = $state(false);
+	let webhookChannels = $state<Channel[]>([]);
 	let newWebhookName = $state('');
 	let newWebhookChannel = $state('');
 	let creatingWebhook = $state(false);
@@ -170,6 +172,31 @@
 	let importData = $state('');
 	let importing = $state(false);
 
+	// --- Channel Templates ---
+	interface ChannelTemplate {
+		id: string;
+		guild_id: string;
+		name: string;
+		channel_type: string;
+		topic: string | null;
+		slowmode_seconds: number;
+		nsfw: boolean;
+		permission_overwrites: unknown;
+		created_by: string;
+		created_at: string;
+	}
+	let channelTemplates = $state<ChannelTemplate[]>([]);
+	let loadingTemplates = $state(false);
+	let creatingTemplate = $state(false);
+	let newTemplateName = $state('');
+	let newTemplateChannelType = $state('text');
+	let newTemplateTopic = $state('');
+	let newTemplateSlowmode = $state(0);
+	let newTemplateNsfw = $state(false);
+	let applyingTemplateId = $state<string | null>(null);
+	let applyChannelName = $state('');
+	let applyingTemplate = $state(false);
+
 	const isOwner = $derived($currentGuild?.owner_id === $currentUser?.id);
 
 	$effect(() => {
@@ -198,6 +225,7 @@
 		if (currentTab === 'raid' && !raidConfig) loadRaid(gId);
 		if (currentTab === 'onboarding' && !onboardingConfig) loadOnboarding(gId);
 		if (currentTab === 'ban-lists' && banLists.length === 0) loadBanLists(gId);
+		if (currentTab === 'templates' && channelTemplates.length === 0) loadChannelTemplates(gId);
 	});
 
 	// --- Data loading ---
@@ -228,7 +256,14 @@
 
 	async function loadWebhooks(guildId: string) {
 		loadingWebhooks = true;
-		try { webhooks = await api.getGuildWebhooks(guildId); } catch {}
+		try {
+			const [wh, ch] = await Promise.all([
+				api.getGuildWebhooks(guildId),
+				api.getGuildChannels(guildId)
+			]);
+			webhooks = wh;
+			webhookChannels = ch;
+		} catch {}
 		finally { loadingWebhooks = false; }
 	}
 
@@ -1216,6 +1251,105 @@
 		}
 	}
 
+	// --- Channel Templates ---
+
+	async function loadChannelTemplates(guildId: string) {
+		loadingTemplates = true;
+		try {
+			const res = await fetch(`/api/v1/guilds/${guildId}/channel-templates`, {
+				headers: { 'Authorization': `Bearer ${api.getToken()}` }
+			});
+			const json = await res.json();
+			if (!res.ok) throw new Error(json.error?.message || 'Failed to load templates');
+			channelTemplates = json.data ?? [];
+		} catch {}
+		finally { loadingTemplates = false; }
+	}
+
+	async function handleCreateTemplate() {
+		if (!$currentGuild || !newTemplateName.trim()) return;
+		creatingTemplate = true;
+		error = '';
+		try {
+			const res = await fetch(`/api/v1/guilds/${$currentGuild.id}/channel-templates`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${api.getToken()}`
+				},
+				body: JSON.stringify({
+					name: newTemplateName.trim(),
+					channel_type: newTemplateChannelType,
+					topic: newTemplateTopic.trim() || null,
+					slowmode_seconds: newTemplateSlowmode,
+					nsfw: newTemplateNsfw
+				})
+			});
+			const json = await res.json();
+			if (!res.ok) throw new Error(json.error?.message || 'Failed to create template');
+			channelTemplates = [...channelTemplates, json.data];
+			newTemplateName = '';
+			newTemplateTopic = '';
+			newTemplateSlowmode = 0;
+			newTemplateNsfw = false;
+			newTemplateChannelType = 'text';
+			success = 'Channel template created!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to create template';
+		} finally {
+			creatingTemplate = false;
+		}
+	}
+
+	async function handleDeleteTemplate(templateId: string) {
+		if (!$currentGuild) return;
+		error = '';
+		try {
+			const res = await fetch(`/api/v1/guilds/${$currentGuild.id}/channel-templates/${templateId}`, {
+				method: 'DELETE',
+				headers: { 'Authorization': `Bearer ${api.getToken()}` }
+			});
+			if (!res.ok) {
+				const json = await res.json();
+				throw new Error(json.error?.message || 'Failed to delete template');
+			}
+			channelTemplates = channelTemplates.filter(t => t.id !== templateId);
+			success = 'Template deleted!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to delete template';
+		}
+	}
+
+	async function handleApplyTemplate() {
+		if (!$currentGuild || !applyingTemplateId || !applyChannelName.trim()) return;
+		applyingTemplate = true;
+		error = '';
+		try {
+			const res = await fetch(`/api/v1/guilds/${$currentGuild.id}/channel-templates/${applyingTemplateId}/apply`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${api.getToken()}`
+				},
+				body: JSON.stringify({
+					name: applyChannelName.trim()
+				})
+			});
+			const json = await res.json();
+			if (!res.ok) throw new Error(json.error?.message || 'Failed to apply template');
+			applyingTemplateId = null;
+			applyChannelName = '';
+			success = `Channel "${json.data.name}" created from template!`;
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to apply template';
+		} finally {
+			applyingTemplate = false;
+		}
+	}
+
 	// --- Helpers ---
 
 	const tabs: { id: Tab; label: string }[] = [
@@ -1232,7 +1366,8 @@
 		{ id: 'moderation', label: 'Moderation' },
 		{ id: 'raid', label: 'Raid Protection' },
 		{ id: 'onboarding', label: 'Onboarding' },
-		{ id: 'ban-lists', label: 'Ban Lists' }
+		{ id: 'ban-lists', label: 'Ban Lists' },
+		{ id: 'templates', label: 'Templates' }
 	];
 
 	const expiryOptions = [
@@ -1787,59 +1922,16 @@
 			{:else if currentTab === 'webhooks'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Webhooks</h1>
 
-				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
-					<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Webhook</h3>
-					<div class="mb-3">
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
-						<input type="text" class="input w-full" bind:value={newWebhookName} placeholder="Webhook name" maxlength="80" />
-					</div>
-					<div class="mb-3">
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel ID</label>
-						<input type="text" class="input w-full" bind:value={newWebhookChannel} placeholder="Channel ID to post in" />
-					</div>
-					<button class="btn-primary" onclick={handleCreateWebhook} disabled={creatingWebhook || !newWebhookName.trim() || !newWebhookChannel}>
-						{creatingWebhook ? 'Creating...' : 'Create Webhook'}
-					</button>
-				</div>
-
 				{#if loadingWebhooks}
 					<p class="text-sm text-text-muted">Loading webhooks...</p>
-				{:else if webhooks.length === 0}
-					<p class="text-sm text-text-muted">No webhooks yet.</p>
-				{:else}
-					<div class="space-y-2">
-						{#each webhooks as wh (wh.id)}
-							<div class="rounded-lg bg-bg-secondary p-3">
-								<div class="flex items-center justify-between">
-									<div>
-										<span class="text-sm font-medium text-text-primary">{wh.name}</span>
-										<p class="text-xs text-text-muted">
-											Type: {wh.webhook_type} &middot; Channel: {wh.channel_id.slice(0, 8)}...
-										</p>
-									</div>
-									<div class="flex items-center gap-2">
-										<button
-											class="text-xs text-brand-400 hover:text-brand-300"
-											onclick={() => copyWebhookUrl(wh)}
-										>
-											Copy URL
-										</button>
-										<button
-											class="text-xs text-red-400 hover:text-red-300"
-											onclick={() => handleDeleteWebhook(wh.id)}
-										>
-											Delete
-										</button>
-									</div>
-								</div>
-								<div class="mt-2 rounded bg-bg-primary p-2">
-									<code class="break-all text-2xs text-text-muted">
-										{window.location.origin}/api/v1/webhooks/{wh.id}/{wh.token}
-									</code>
-								</div>
-							</div>
-						{/each}
-					</div>
+				{:else if $currentGuild}
+					<WebhookPanel
+						guildId={$currentGuild.id}
+						bind:webhooks={webhooks}
+						channels={webhookChannels}
+						onError={(msg) => { error = msg; setTimeout(() => (error = ''), 5000); }}
+						onSuccess={(msg) => { success = msg; setTimeout(() => (success = ''), 3000); }}
+					/>
 				{/if}
 
 			<!-- ==================== AUDIT LOG ==================== -->
@@ -2943,6 +3035,145 @@
 						</div>
 					{/if}
 				</div>
+
+			<!-- ==================== TEMPLATES ==================== -->
+			{:else if currentTab === 'templates'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Channel Templates</h1>
+				<p class="mb-4 text-sm text-text-muted">
+					Save channel configurations as reusable templates. When creating new channels, apply a template to instantly configure type, topic, slowmode, and permissions.
+				</p>
+
+				<!-- Create template form -->
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Template</h3>
+					<div class="space-y-3">
+						<div>
+							<label class="mb-1 block text-xs text-text-muted">Template Name</label>
+							<input
+								type="text"
+								class="input w-full"
+								placeholder="e.g. Announcement Channel"
+								bind:value={newTemplateName}
+								maxlength="100"
+							/>
+						</div>
+						<div class="flex gap-3">
+							<div class="flex-1">
+								<label class="mb-1 block text-xs text-text-muted">Channel Type</label>
+								<select class="input w-full" bind:value={newTemplateChannelType}>
+									<option value="text">Text</option>
+									<option value="voice">Voice</option>
+									<option value="announcement">Announcement</option>
+									<option value="forum">Forum</option>
+									<option value="stage">Stage</option>
+								</select>
+							</div>
+							<div class="flex-1">
+								<label class="mb-1 block text-xs text-text-muted">Slowmode (seconds)</label>
+								<input
+									type="number"
+									class="input w-full"
+									bind:value={newTemplateSlowmode}
+									min="0"
+									max="21600"
+								/>
+							</div>
+						</div>
+						<div>
+							<label class="mb-1 block text-xs text-text-muted">Topic</label>
+							<input
+								type="text"
+								class="input w-full"
+								placeholder="Channel topic (optional)"
+								bind:value={newTemplateTopic}
+							/>
+						</div>
+						<div class="flex items-center gap-2">
+							<label class="flex items-center gap-2 text-sm text-text-muted">
+								<input type="checkbox" bind:checked={newTemplateNsfw} class="rounded" />
+								NSFW
+							</label>
+						</div>
+						<button
+							class="btn-primary text-sm"
+							onclick={handleCreateTemplate}
+							disabled={creatingTemplate || !newTemplateName.trim()}
+						>
+							{creatingTemplate ? 'Creating...' : 'Create Template'}
+						</button>
+					</div>
+				</div>
+
+				<!-- Template list -->
+				{#if loadingTemplates}
+					<p class="text-sm text-text-muted">Loading templates...</p>
+				{:else if channelTemplates.length === 0}
+					<p class="text-sm text-text-muted">No templates yet. Create one above.</p>
+				{:else}
+					<div class="space-y-3">
+						{#each channelTemplates as tmpl (tmpl.id)}
+							<div class="rounded-lg bg-bg-secondary p-4">
+								<div class="flex items-start justify-between">
+									<div>
+										<h4 class="text-sm font-semibold text-text-primary">{tmpl.name}</h4>
+										<div class="mt-1 flex flex-wrap gap-2">
+											<span class="rounded bg-bg-modifier px-1.5 py-0.5 text-xs text-text-muted">{tmpl.channel_type}</span>
+											{#if tmpl.nsfw}
+												<span class="rounded bg-red-500/20 px-1.5 py-0.5 text-xs text-red-400">NSFW</span>
+											{/if}
+											{#if tmpl.slowmode_seconds > 0}
+												<span class="rounded bg-bg-modifier px-1.5 py-0.5 text-xs text-text-muted">Slowmode: {tmpl.slowmode_seconds}s</span>
+											{/if}
+										</div>
+										{#if tmpl.topic}
+											<p class="mt-1 text-xs text-text-muted">{tmpl.topic}</p>
+										{/if}
+										<p class="mt-1 text-xs text-text-muted">Created {formatDate(tmpl.created_at)}</p>
+									</div>
+									<div class="flex gap-2">
+										{#if applyingTemplateId === tmpl.id}
+											<div class="flex items-center gap-2">
+												<input
+													type="text"
+													class="input text-xs"
+													placeholder="New channel name"
+													bind:value={applyChannelName}
+													maxlength="100"
+												/>
+												<button
+													class="btn-primary text-xs"
+													onclick={handleApplyTemplate}
+													disabled={applyingTemplate || !applyChannelName.trim()}
+												>
+													{applyingTemplate ? 'Creating...' : 'Create'}
+												</button>
+												<button
+													class="btn-secondary text-xs"
+													onclick={() => { applyingTemplateId = null; applyChannelName = ''; }}
+												>
+													Cancel
+												</button>
+											</div>
+										{:else}
+											<button
+												class="btn-primary text-xs"
+												onclick={() => { applyingTemplateId = tmpl.id; applyChannelName = ''; }}
+											>
+												Apply
+											</button>
+										{/if}
+										<button
+											class="text-xs text-red-400 hover:text-red-300"
+											onclick={() => handleDeleteTemplate(tmpl.id)}
+										>
+											Delete
+										</button>
+									</div>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			{/if}
 		</div>
 	</div>
