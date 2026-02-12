@@ -965,6 +965,11 @@ func (s *Server) registerRoutes() {
 		// Webhook execution — uses token auth, no Bearer token needed.
 		r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
 	})
+
+	// Start outgoing webhook event subscriber (delivers events to outgoing webhook URLs).
+	if s.EventBus != nil {
+		webhookH.StartOutgoingWebhookSubscriber()
+	}
 }
 
 // Start begins listening for HTTP requests on the configured address.
