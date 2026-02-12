@@ -1,29 +1,36 @@
 <script lang="ts">
-	import type { Message } from '$lib/types';
+	import type { Message, Channel } from '$lib/types';
 	import Avatar from '$components/common/Avatar.svelte';
 	import ContextMenu from '$components/common/ContextMenu.svelte';
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import UserPopover from '$components/common/UserPopover.svelte';
+	import ImageLightbox from '$components/common/ImageLightbox.svelte';
+	import EditHistoryModal from '$components/chat/EditHistoryModal.svelte';
+	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
 	import { startReply, startEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentChannelId } from '$lib/stores/channels';
+	import { addToast } from '$lib/stores/toast';
 
 	interface Props {
 		message: Message;
 		isCompact?: boolean;
 		onscrollto?: (messageId: string) => void;
+		onopenthread?: (threadChannel: Channel, parentMessage: Message) => void;
 	}
 
-	let { message, isCompact = false, onscrollto }: Props = $props();
+	let { message, isCompact = false, onscrollto, onopenthread }: Props = $props();
 
 	let contextMenu = $state<{ x: number; y: number } | null>(null);
 	let attachmentContextMenu = $state<{ x: number; y: number; attachment: any } | null>(null);
 	let showQuickReactions = $state(false);
 	let userPopover = $state<{ x: number; y: number } | null>(null);
+	let lightboxSrc = $state<string | null>(null);
+	let showEditHistory = $state(false);
 
 	const authorPresence = $derived($presenceMap.get(message.author_id) ?? undefined);
 
@@ -97,8 +104,9 @@
 		contextMenu = null;
 		try {
 			await api.deleteMessage(message.channel_id, message.id);
+			addToast('Message deleted', 'success');
 		} catch (err: any) {
-			console.error('Failed to delete message:', err);
+			addToast('Failed to delete message', 'error');
 		}
 	}
 
@@ -107,11 +115,13 @@
 		try {
 			if (message.pinned) {
 				await api.unpinMessage(message.channel_id, message.id);
+				addToast('Message unpinned', 'success');
 			} else {
 				await api.pinMessage(message.channel_id, message.id);
+				addToast('Message pinned', 'success');
 			}
 		} catch (err: any) {
-			console.error('Failed to pin/unpin message:', err);
+			addToast('Failed to pin/unpin message', 'error');
 		}
 	}
 
@@ -119,6 +129,7 @@
 		contextMenu = null;
 		if (message.content) {
 			navigator.clipboard.writeText(message.content);
+			addToast('Text copied', 'info');
 		}
 	}
 
@@ -126,6 +137,30 @@
 		contextMenu = null;
 		const url = `${window.location.origin}/app/guilds/${message.channel_id}#${message.id}`;
 		navigator.clipboard.writeText(url);
+		addToast('Link copied', 'info');
+	}
+
+	async function handleCreateThread() {
+		contextMenu = null;
+		const name = message.content?.slice(0, 50) || 'New Thread';
+		try {
+			const threadChannel = await api.createThread(message.channel_id, message.id, name);
+			addToast('Thread created', 'success');
+			onopenthread?.(threadChannel, message);
+		} catch (err: any) {
+			addToast('Failed to create thread', 'error');
+		}
+	}
+
+	function handleViewThread() {
+		contextMenu = null;
+		if (message.thread_id) {
+			api.getChannel(message.thread_id).then((ch) => {
+				onopenthread?.(ch, message);
+			}).catch(() => {
+				addToast('Failed to open thread', 'error');
+			});
+		}
 	}
 
 	async function toggleReaction(emoji: string) {
@@ -138,7 +173,7 @@
 				await api.addReaction(message.channel_id, message.id, emoji);
 			}
 		} catch (err: any) {
-			console.error('Failed to toggle reaction:', err);
+			addToast('Failed to toggle reaction', 'error');
 		}
 	}
 
@@ -159,6 +194,7 @@
 	function copyAttachmentUrl(attachment: any) {
 		attachmentContextMenu = null;
 		navigator.clipboard.writeText(`${window.location.origin}/api/v1/files/${attachment.id}`);
+		addToast('URL copied', 'info');
 	}
 </script>
 
@@ -193,7 +229,7 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="mt-0.5 shrink-0 cursor-pointer" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>
-			<Avatar name={displayName} size="md" status={authorPresence} />
+			<Avatar name={displayName} status={authorPresence} />
 		</div>
 	{/if}
 
@@ -206,13 +242,30 @@
 					<span class="text-2xs text-yellow-500" title="Pinned">📌</span>
 				{/if}
 				{#if message.edited_at}
-					<span class="text-2xs text-text-muted" title="Edited: {editedTime}">(edited)</span>
+					<button
+						class="text-2xs text-text-muted hover:underline"
+						title="Edited: {editedTime}"
+						onclick={() => (showEditHistory = true)}
+					>(edited)</button>
+				{/if}
+				{#if message.thread_id}
+					<button
+						class="flex items-center gap-1 text-2xs text-brand-400 hover:underline"
+						onclick={handleViewThread}
+					>
+						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+						</svg>
+						Thread
+					</button>
 				{/if}
 			</div>
 		{/if}
 
 		{#if message.content}
-			<p class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">{message.content}</p>
+			<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
+				<MarkdownRenderer content={message.content} />
+			</div>
 		{/if}
 
 		<!-- Attachments -->
@@ -224,10 +277,20 @@
 						<img
 							src="/api/v1/files/{attachment.id}"
 							alt={attachment.filename}
-							class="max-h-80 max-w-md rounded cursor-pointer"
+							class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
 							loading="lazy"
+							onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
 							oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
 						/>
+					{:else if attachment.content_type?.startsWith('video/')}
+						<video
+							src="/api/v1/files/{attachment.id}"
+							controls
+							class="max-h-80 max-w-md rounded"
+							preload="metadata"
+						>
+							<track kind="captions" />
+						</video>
 					{:else}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<a
@@ -313,6 +376,15 @@
 					<path d="M3 10h10a5 5 0 015 5v6M3 10l6 6m-6-6l6-6" />
 				</svg>
 			</button>
+			<button
+				class="p-1.5 text-text-muted hover:text-text-primary"
+				title="Create Thread"
+				onclick={handleCreateThread}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+				</svg>
+			</button>
 			{#if isOwnMessage}
 				<button
 					class="p-1.5 text-text-muted hover:text-text-primary"
@@ -350,6 +422,11 @@
 			<ContextMenuItem label="Edit Message" onclick={handleEdit} />
 		{/if}
 		<ContextMenuItem label={message.pinned ? 'Unpin Message' : 'Pin Message'} onclick={handlePin} />
+		{#if !message.thread_id}
+			<ContextMenuItem label="Create Thread" onclick={handleCreateThread} />
+		{:else}
+			<ContextMenuItem label="View Thread" onclick={handleViewThread} />
+		{/if}
 		<ContextMenuItem label="Copy Message Link" onclick={handleCopyLink} />
 		{#if isOwnMessage}
 			<ContextMenuDivider />
@@ -376,3 +453,16 @@
 		onclose={() => (userPopover = null)}
 	/>
 {/if}
+
+<!-- Image lightbox -->
+{#if lightboxSrc}
+	<ImageLightbox src={lightboxSrc} onclose={() => (lightboxSrc = null)} />
+{/if}
+
+<!-- Edit history modal -->
+<EditHistoryModal
+	open={showEditHistory}
+	channelId={message.channel_id}
+	messageId={message.id}
+	onclose={() => (showEditHistory = false)}
+/>

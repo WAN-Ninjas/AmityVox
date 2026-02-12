@@ -6,10 +6,15 @@
 	import { replyingTo, editingMessage, cancelReply, cancelEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentUser } from '$lib/stores/auth';
+	import { addToast } from '$lib/stores/toast';
+	import EmojiPicker from '$components/common/EmojiPicker.svelte';
+	import GiphyPicker from '$components/common/GiphyPicker.svelte';
 
 	let content = $state('');
 	let inputEl: HTMLTextAreaElement;
 	let typingTimeout: ReturnType<typeof setTimeout> | null = null;
+	let showEmojiPicker = $state(false);
+	let showGiphyPicker = $state(false);
 
 	// When entering edit mode, populate the input with the message content.
 	$effect(() => {
@@ -37,7 +42,7 @@
 				cancelEdit();
 			} catch (e) {
 				content = msg;
-				console.error('Failed to edit message:', e);
+				addToast('Failed to edit message', 'error');
 			}
 			return;
 		}
@@ -55,7 +60,7 @@
 			appendMessage(sent);
 		} catch (e) {
 			content = msg;
-			console.error('Failed to send message:', e);
+			addToast('Failed to send message', 'error');
 		}
 	}
 
@@ -67,6 +72,10 @@
 		}
 
 		if (e.key === 'Escape') {
+			if (showEmojiPicker) {
+				showEmojiPicker = false;
+				return;
+			}
 			if (isEditing) {
 				cancelEdit();
 				content = '';
@@ -121,9 +130,27 @@
 			const sent = await api.sendMessage($currentChannelId, '', { attachment_ids: [uploaded.id] });
 			appendMessage(sent);
 		} catch (err) {
-			console.error('Upload failed:', err);
+			addToast('Upload failed', 'error');
 		}
 		target.value = '';
+	}
+
+	function insertEmoji(emoji: string) {
+		content += emoji;
+		showEmojiPicker = false;
+		inputEl?.focus();
+	}
+
+	async function insertGif(gifUrl: string) {
+		showGiphyPicker = false;
+		const channelId = $currentChannelId;
+		if (!channelId) return;
+		try {
+			const sent = await api.sendMessage(channelId, gifUrl);
+			appendMessage(sent);
+		} catch (e) {
+			addToast('Failed to send GIF', 'error');
+		}
 	}
 </script>
 
@@ -195,6 +222,42 @@
 				class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
 				rows="1"
 			></textarea>
+
+			<!-- GIF picker button -->
+			{#if !isEditing}
+				<div class="relative self-center">
+					<button
+						class="text-text-muted hover:text-text-primary"
+						title="GIF"
+						onclick={() => { showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; }}
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+						</svg>
+					</button>
+					{#if showGiphyPicker}
+						<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Emoji picker button -->
+			{#if !isEditing}
+				<div class="relative self-center">
+					<button
+						class="text-text-muted hover:text-text-primary"
+						title="Emoji"
+						onclick={() => { showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; }}
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+						</svg>
+					</button>
+					{#if showEmojiPicker}
+						<EmojiPicker onselect={insertEmoji} onclose={() => (showEmojiPicker = false)} />
+					{/if}
+				</div>
+			{/if}
 
 			<!-- Submit hint -->
 			{#if isEditing}

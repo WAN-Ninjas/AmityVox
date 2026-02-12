@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { Message } from '$lib/types';
 	import { api } from '$lib/api/client';
+	import { goto } from '$app/navigation';
 	import { currentGuildId } from '$lib/stores/guilds';
 	import { currentChannelId } from '$lib/stores/channels';
 	import Modal from '$components/common/Modal.svelte';
+	import Avatar from '$components/common/Avatar.svelte';
 
 	interface Props {
 		open?: boolean;
@@ -17,6 +19,18 @@
 	let searching = $state(false);
 	let searched = $state(false);
 	let searchScope = $state<'guild' | 'channel' | 'all'>('guild');
+	let inputEl: HTMLInputElement;
+
+	// Auto-focus search input when modal opens.
+	$effect(() => {
+		if (open) {
+			setTimeout(() => inputEl?.focus(), 100);
+		} else {
+			query = '';
+			results = [];
+			searched = false;
+		}
+	});
 
 	async function handleSearch() {
 		if (!query.trim()) return;
@@ -39,15 +53,31 @@
 		if (e.key === 'Enter') handleSearch();
 	}
 
+	function jumpToMessage(msg: Message) {
+		onclose?.();
+		// Navigate to the channel containing this message.
+		const guildId = $currentGuildId;
+		if (guildId) {
+			goto(`/app/guilds/${guildId}/channels/${msg.channel_id}#msg-${msg.id}`);
+		}
+	}
+
 	function formatTime(ts: string): string {
 		const d = new Date(ts);
 		return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	}
+
+	function highlightMatch(text: string, q: string): string {
+		if (!q.trim() || !text) return text;
+		const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		return text.replace(new RegExp(`(${escaped})`, 'gi'), '<mark class="bg-yellow-500/30 text-text-primary rounded px-0.5">$1</mark>');
 	}
 </script>
 
 <Modal {open} title="Search Messages" {onclose}>
 	<div class="mb-4 flex gap-2">
 		<input
+			bind:this={inputEl}
 			type="text"
 			class="input flex-1"
 			placeholder="Search messages..."
@@ -94,20 +124,34 @@
 
 	<div class="max-h-80 overflow-y-auto">
 		{#if searching}
-			<p class="py-4 text-center text-sm text-text-muted">Searching...</p>
+			<div class="flex items-center justify-center py-8">
+				<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+			</div>
 		{:else if searched && results.length === 0}
 			<p class="py-4 text-center text-sm text-text-muted">No results found.</p>
 		{:else}
 			{#each results as msg (msg.id)}
-				<div class="mb-2 rounded bg-bg-primary p-3">
-					<div class="flex items-baseline gap-2 text-xs text-text-muted">
-						<span class="font-medium text-text-primary">{msg.author_id}</span>
-						<time>{formatTime(msg.created_at)}</time>
+				<button
+					class="mb-2 w-full rounded bg-bg-primary p-3 text-left transition-colors hover:bg-bg-modifier"
+					onclick={() => jumpToMessage(msg)}
+				>
+					<div class="flex items-center gap-2 text-xs">
+						<Avatar
+							name={msg.author?.display_name ?? msg.author?.username ?? 'U'}
+							src={msg.author?.avatar_id ? `/api/v1/files/${msg.author.avatar_id}` : null}
+							size="sm"
+						/>
+						<span class="font-medium text-text-primary">
+							{msg.author?.display_name ?? msg.author?.username ?? msg.author_id.slice(0, 8)}
+						</span>
+						<time class="text-text-muted">{formatTime(msg.created_at)}</time>
 					</div>
 					{#if msg.content}
-						<p class="mt-1 text-sm text-text-secondary">{msg.content}</p>
+						<p class="mt-1 text-sm text-text-secondary">
+							{@html highlightMatch(msg.content, query)}
+						</p>
 					{/if}
-				</div>
+				</button>
 			{/each}
 		{/if}
 	</div>

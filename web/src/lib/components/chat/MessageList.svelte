@@ -1,9 +1,15 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import type { Message } from '$lib/types';
+	import type { Message, Channel } from '$lib/types';
 	import { currentChannelId } from '$lib/stores/channels';
 	import { messagesByChannel, loadMessages, isLoadingMessages } from '$lib/stores/messages';
 	import MessageItem from './MessageItem.svelte';
+
+	interface Props {
+		onopenthread?: (threadChannel: Channel, parentMessage: Message) => void;
+	}
+
+	let { onopenthread }: Props = $props();
 
 	let messagesContainer: HTMLDivElement;
 	let shouldAutoScroll = $state(true);
@@ -125,6 +131,7 @@
 					message={msg}
 					isCompact={isCompact(msg, i)}
 					onscrollto={scrollToMessage}
+					{onopenthread}
 				/>
 			{/each}
 		</div>

@@ -4,6 +4,7 @@
 	import { addDMChannel } from '$lib/stores/dms';
 	import { presenceMap } from '$lib/stores/presence';
 	import { currentUser } from '$lib/stores/auth';
+	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
 	import Avatar from './Avatar.svelte';
 
@@ -19,6 +20,9 @@
 	let user = $state<User | null>(null);
 	let loading = $state(true);
 	let error = $state('');
+	let note = $state('');
+	let noteLoaded = $state(false);
+	let noteSaving = $state(false);
 
 	const isSelf = $derived($currentUser?.id === userId);
 	const status = $derived($presenceMap.get(userId) ?? 'offline');
@@ -28,12 +32,18 @@
 			.then((u) => (user = u))
 			.catch((e) => (error = e.message || 'Failed to load user'))
 			.finally(() => (loading = false));
+
+		if (!isSelf) {
+			api.getUserNote(userId)
+				.then((data) => { note = data.note ?? ''; noteLoaded = true; })
+				.catch(() => { noteLoaded = true; });
+		}
 	});
 
 	// Position the popover so it doesn't overflow the viewport.
 	const popoverStyle = $derived.by(() => {
 		const maxW = 320;
-		const maxH = 300;
+		const maxH = 400;
 		let left = x;
 		let top = y;
 
@@ -55,7 +65,19 @@
 			onclose();
 			goto(`/app/dms/${channel.id}`);
 		} catch (err: any) {
-			console.error('Failed to create DM:', err);
+			addToast('Failed to create DM', 'error');
+		}
+	}
+
+	async function saveNote() {
+		if (noteSaving) return;
+		noteSaving = true;
+		try {
+			await api.setUserNote(userId, note);
+		} catch (err: any) {
+			addToast('Failed to save note', 'error');
+		} finally {
+			noteSaving = false;
 		}
 	}
 
@@ -144,6 +166,21 @@
 					{new Date(user.created_at).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
 				</p>
 			</div>
+
+			<!-- Note -->
+			{#if !isSelf && noteLoaded}
+				<div class="mt-3 border-t border-bg-modifier pt-3">
+					<h4 class="mb-1 text-2xs font-bold uppercase tracking-wide text-text-muted">Note</h4>
+					<textarea
+						class="w-full resize-none rounded bg-bg-primary px-2 py-1.5 text-xs text-text-secondary outline-none placeholder:text-text-muted focus:ring-1 focus:ring-brand-500"
+						placeholder="Click to add a note"
+						rows="2"
+						maxlength="256"
+						bind:value={note}
+						onblur={saveNote}
+					></textarea>
+				</div>
+			{/if}
 
 			<!-- Actions -->
 			{#if !isSelf}
