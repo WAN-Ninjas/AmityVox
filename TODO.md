@@ -244,7 +244,7 @@
 ### Media Processing
 - [x] Voice messages — record and send audio clips inline in text channels
 - [x] Audio waveform visualization for voice messages
-- [ ] Video player improvements — inline playback with controls, volume, fullscreen
+- [x] Video player improvements — inline playback with controls, volume, fullscreen
 - [x] Image paste from clipboard (Ctrl+V to upload)
 - [x] Drag-and-drop multiple files with individual progress bars
 - [x] File size limit display in upload dialog
@@ -321,10 +321,10 @@
 ### Custom Themes
 - [x] Theme system with CSS variables (colors, fonts, border radius, spacing)
 - [x] Built-in theme presets (Dark, Light, AMOLED, Solarized, Nord, Dracula, Monokai, Catppuccin)
-- [ ] Theme editor UI — live preview with color pickers for every variable
+- [x] Theme editor UI — live preview with color pickers for every variable
 - [x] Import/export themes as JSON files
 - [x] Per-user theme selection (stored in user settings, synced across devices)
-- [ ] Custom CSS injection (advanced mode — paste raw CSS, sandboxed to prevent XSS)
+- [x] Custom CSS injection (advanced mode — paste raw CSS, sandboxed to prevent XSS)
 - [ ] Community theme gallery (share themes with other users via shareable links)
 
 ### Bot API & Framework
@@ -402,9 +402,9 @@
 
 ### Message Improvements
 - [x] Message scheduling — compose now, send at a specific date/time
-- [ ] Message bookmarks/reminders — save any message with optional reminder time
-- [ ] Bulk message operations — select multiple messages, bulk delete/move/pin
-- [ ] Message link previews — pasting an AmityVox message link shows inline embed of that message
+- [x] Message bookmarks/reminders — save any message with optional reminder time
+- [x] Bulk message operations — select multiple messages, bulk delete/move/pin
+- [x] Message link previews — pasting an AmityVox message link shows inline embed of that message
 - [ ] Quoted replies with message preview for cross-channel replies
 - [x] Silent messages — send without triggering notifications (prefix with @silent or toggle)
 - [x] Slow mode bypass for specific roles
@@ -417,24 +417,24 @@
 - [ ] Read-only channels (announcement-style, only certain roles can post)
 - [ ] Channel-specific custom emoji (emoji only available within that channel)
 - [ ] Default thread auto-archive duration per channel
-- [ ] Channel clone — duplicate channel with all settings/permissions
+- [x] Channel clone — duplicate channel with all settings/permissions
 
 ### Navigation & UX
 - [x] Command palette (Ctrl+K) — unified search for channels, users, messages, settings, actions
-- [ ] Quick switcher — type channel/guild name to jump instantly
+- [x] Quick switcher — type channel/guild name to jump instantly
 - [ ] Channel groups — custom grouping beyond categories (user-side organization)
-- [ ] Collapsible sidebar sections (DMs, each guild's categories)
+- [x] Collapsible sidebar sections (DMs, each guild's categories)
 - [x] Mark all as read (per guild or global)
 - [x] Jump to unread — button that scrolls to first unread message
 - [x] Scroll to bottom button with unread count
-- [ ] Back/forward navigation history (like browser)
-- [ ] Recent channels list (quickly return to previously viewed channels)
+- [x] Back/forward navigation history (like browser)
+- [x] Recent channels list (quickly return to previously viewed channels)
 
 ### Notification Improvements
 - [x] Notification center — dedicated panel showing all recent notifications in one place
 - [x] Notification grouping (group by channel/guild)
-- [ ] Notification sounds — custom sounds per notification type
-- [ ] Do Not Disturb scheduling (auto-enable DND during certain hours)
+- [x] Notification sounds — custom sounds per notification type
+- [x] Do Not Disturb scheduling (auto-enable DND during certain hours)
 - [ ] Per-thread notification settings
 - [x] Mention highlights in channel list (show which channels have mentions vs just unreads)
 
@@ -444,15 +444,15 @@
 - [x] Reduced motion mode (disable animations)
 - [x] Font size scaling (apply globally, including UI chrome not just messages)
 - [ ] Keyboard-only navigation for all features
-- [ ] Alt text for uploaded images (optional field on upload)
+- [x] Alt text for uploaded images (optional field on upload)
 - [x] Dyslexia-friendly font option (OpenDyslexic)
 
 ### Stickers
-- [ ] Sticker pack system — upload sets of images as sticker packs
-- [ ] Sticker picker in message input (separate tab from emoji)
-- [ ] Guild sticker packs (custom stickers per server)
-- [ ] User sticker packs (personal stickers usable anywhere)
-- [ ] Sticker pack sharing — share pack via link
+- [x] Sticker pack system — upload sets of images as sticker packs
+- [x] Sticker picker in message input (separate tab from emoji)
+- [x] Guild sticker packs (custom stickers per server)
+- [x] User sticker packs (personal stickers usable anywhere)
+- [ ] Sticker pack sharing — share pack via link (needs shareable link generation)
 
 ---
 
