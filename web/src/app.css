@@ -2,10 +2,197 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== Theme Definitions ===== */
+
+/* Dark (default — Discord-inspired) */
+:root,
+[data-theme='dark'] {
+	--brand-50: #e8eaf6;
+	--brand-100: #c5cae9;
+	--brand-200: #9fa8da;
+	--brand-300: #7986cb;
+	--brand-400: #5c6bc0;
+	--brand-500: #3f51b5;
+	--brand-600: #3949ab;
+	--brand-700: #303f9f;
+	--brand-800: #283593;
+	--brand-900: #1a237e;
+	--bg-primary: #1e1f22;
+	--bg-secondary: #2b2d31;
+	--bg-tertiary: #313338;
+	--bg-modifier: #383a40;
+	--bg-floating: #111214;
+	--text-primary: #f2f3f5;
+	--text-secondary: #b5bac1;
+	--text-muted: #949ba4;
+	--text-link: #00a8fc;
+}
+
+/* Light */
+[data-theme='light'] {
+	--brand-50: #e8eaf6;
+	--brand-100: #c5cae9;
+	--brand-200: #9fa8da;
+	--brand-300: #5c6bc0;
+	--brand-400: #3f51b5;
+	--brand-500: #3949ab;
+	--brand-600: #303f9f;
+	--brand-700: #283593;
+	--brand-800: #1a237e;
+	--brand-900: #0d1257;
+	--bg-primary: #ffffff;
+	--bg-secondary: #f2f3f5;
+	--bg-tertiary: #e3e5e8;
+	--bg-modifier: #d4d7dc;
+	--bg-floating: #ffffff;
+	--text-primary: #060607;
+	--text-secondary: #4e5058;
+	--text-muted: #6d6f78;
+	--text-link: #006ce7;
+}
+
+/* AMOLED */
+[data-theme='amoled'] {
+	--brand-50: #e8eaf6;
+	--brand-100: #c5cae9;
+	--brand-200: #9fa8da;
+	--brand-300: #7986cb;
+	--brand-400: #5c6bc0;
+	--brand-500: #3f51b5;
+	--brand-600: #3949ab;
+	--brand-700: #303f9f;
+	--brand-800: #283593;
+	--brand-900: #1a237e;
+	--bg-primary: #000000;
+	--bg-secondary: #0a0a0a;
+	--bg-tertiary: #111111;
+	--bg-modifier: #1a1a1a;
+	--bg-floating: #000000;
+	--text-primary: #f2f3f5;
+	--text-secondary: #b5bac1;
+	--text-muted: #949ba4;
+	--text-link: #00a8fc;
+}
+
+/* Nord */
+[data-theme='nord'] {
+	--brand-50: #e5f0fb;
+	--brand-100: #c2daf5;
+	--brand-200: #88b4e8;
+	--brand-300: #6fa0de;
+	--brand-400: #5e81ac;
+	--brand-500: #5e81ac;
+	--brand-600: #4c6e97;
+	--brand-700: #3b5b82;
+	--brand-800: #2a486d;
+	--brand-900: #1a3558;
+	--bg-primary: #2e3440;
+	--bg-secondary: #3b4252;
+	--bg-tertiary: #434c5e;
+	--bg-modifier: #4c566a;
+	--bg-floating: #242933;
+	--text-primary: #eceff4;
+	--text-secondary: #d8dee9;
+	--text-muted: #a5b1c2;
+	--text-link: #88c0d0;
+}
+
+/* Dracula */
+[data-theme='dracula'] {
+	--brand-50: #f2e6ff;
+	--brand-100: #dcbfff;
+	--brand-200: #c59fff;
+	--brand-300: #bd93f9;
+	--brand-400: #bd93f9;
+	--brand-500: #a675e0;
+	--brand-600: #8b5cc7;
+	--brand-700: #7044ae;
+	--brand-800: #552d95;
+	--brand-900: #3b167c;
+	--bg-primary: #282a36;
+	--bg-secondary: #21222c;
+	--bg-tertiary: #343746;
+	--bg-modifier: #44475a;
+	--bg-floating: #1e1f29;
+	--text-primary: #f8f8f2;
+	--text-secondary: #c5c8d6;
+	--text-muted: #6272a4;
+	--text-link: #8be9fd;
+}
+
+/* Catppuccin Mocha */
+[data-theme='catppuccin'] {
+	--brand-50: #f0e4f9;
+	--brand-100: #d9c2ef;
+	--brand-200: #c39fe5;
+	--brand-300: #cba6f7;
+	--brand-400: #cba6f7;
+	--brand-500: #b48ae0;
+	--brand-600: #9d6ec9;
+	--brand-700: #8652b2;
+	--brand-800: #6f369b;
+	--brand-900: #581a84;
+	--bg-primary: #1e1e2e;
+	--bg-secondary: #181825;
+	--bg-tertiary: #313244;
+	--bg-modifier: #45475a;
+	--bg-floating: #11111b;
+	--text-primary: #cdd6f4;
+	--text-secondary: #bac2de;
+	--text-muted: #6c7086;
+	--text-link: #89b4fa;
+}
+
+/* Solarized Dark */
+[data-theme='solarized'] {
+	--brand-50: #e0f0f8;
+	--brand-100: #b3dbed;
+	--brand-200: #80c5e1;
+	--brand-300: #268bd2;
+	--brand-400: #268bd2;
+	--brand-500: #2077b8;
+	--brand-600: #1a639e;
+	--brand-700: #144f84;
+	--brand-800: #0e3b6a;
+	--brand-900: #082750;
+	--bg-primary: #002b36;
+	--bg-secondary: #073642;
+	--bg-tertiary: #0a4050;
+	--bg-modifier: #1c5566;
+	--bg-floating: #001f27;
+	--text-primary: #fdf6e3;
+	--text-secondary: #eee8d5;
+	--text-muted: #839496;
+	--text-link: #268bd2;
+}
+
+/* High Contrast — maximum readability */
+[data-theme='high-contrast'] {
+	--brand-50: #e6f0ff;
+	--brand-100: #b3d4ff;
+	--brand-200: #80b8ff;
+	--brand-300: #4d9cff;
+	--brand-400: #1a80ff;
+	--brand-500: #0066ff;
+	--brand-600: #0052cc;
+	--brand-700: #003d99;
+	--brand-800: #002966;
+	--brand-900: #001433;
+	--bg-primary: #000000;
+	--bg-secondary: #1a1a1a;
+	--bg-tertiary: #0d0d0d;
+	--bg-modifier: #333333;
+	--bg-floating: #0d0d0d;
+	--text-primary: #ffffff;
+	--text-secondary: #e6e6e6;
+	--text-muted: #b3b3b3;
+	--text-link: #4d9cff;
+}
+
 @layer base {
 	* {
 		scrollbar-width: thin;
-		scrollbar-color: #1e1f22 transparent;
+		scrollbar-color: var(--bg-primary) transparent;
 	}
 
 	::-webkit-scrollbar {
@@ -18,12 +205,12 @@
 	}
 
 	::-webkit-scrollbar-thumb {
-		background: #1e1f22;
+		background: var(--bg-primary);
 		border-radius: 4px;
 	}
 
 	::-webkit-scrollbar-thumb:hover {
-		background: #383a40;
+		background: var(--bg-modifier);
 	}
 }
 
@@ -49,4 +236,36 @@
 			ring-1 ring-bg-modifier placeholder:text-text-muted
 			focus:ring-brand-500;
 	}
+}
+
+/* Compact mode */
+[data-compact='true'] .message-item {
+	padding-top: 0.125rem;
+	padding-bottom: 0.125rem;
+}
+
+/* Reduced Motion — disable animations for accessibility */
+[data-reduced-motion='true'] *,
+[data-reduced-motion='true'] *::before,
+[data-reduced-motion='true'] *::after {
+	animation-duration: 0.01ms !important;
+	animation-iteration-count: 1 !important;
+	transition-duration: 0.01ms !important;
+	scroll-behavior: auto !important;
+}
+
+/* Dyslexia-friendly font — OpenDyslexic loaded from CDN */
+@import url('https://fonts.cdnfonts.com/css/opendyslexic');
+
+[data-dyslexic-font='true'] {
+	font-family: 'OpenDyslexic', sans-serif !important;
+}
+
+[data-dyslexic-font='true'] * {
+	font-family: inherit !important;
+}
+
+/* Custom theme indicator — provides a subtle border glow when a custom theme is active */
+[data-custom-theme='true'] {
+	/* Custom theme is active — inline styles on :root handle the actual colors */
 }

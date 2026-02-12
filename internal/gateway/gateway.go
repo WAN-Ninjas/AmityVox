@@ -385,10 +385,42 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 		guildIDList = append(guildIDList, gid)
 	}
 
+	// Collect all guild member user IDs for bulk presence lookup.
+	memberUserIDs := make([]string, 0)
+	if s.pool != nil {
+		rows, err := s.pool.Query(ctx,
+			`SELECT DISTINCT gm2.user_id FROM guild_members gm1
+			 JOIN guild_members gm2 ON gm1.guild_id = gm2.guild_id
+			 WHERE gm1.user_id = $1 AND gm2.user_id != $1`, userID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var uid string
+				if rows.Scan(&uid) == nil {
+					memberUserIDs = append(memberUserIDs, uid)
+				}
+			}
+		}
+	}
+
+	// Get presence for all guild co-members.
+	presences := make(map[string]string)
+	if len(memberUserIDs) > 0 {
+		bulkPresence, err := s.cache.GetBulkPresence(ctx, memberUserIDs)
+		if err == nil {
+			for uid, status := range bulkPresence {
+				if status != "offline" {
+					presences[uid] = status
+				}
+			}
+		}
+	}
+
 	readyData, _ := json.Marshal(map[string]interface{}{
 		"user":       user,
 		"guild_ids":  guildIDList,
 		"session_id": client.sessionID,
+		"presences":  presences,
 	})
 
 	s.sendMessage(client, GatewayMessage{
@@ -423,6 +455,7 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 			}
 			if err := json.Unmarshal(msg.Data, &data); err == nil {
 				s.cache.SetPresence(ctx, client.userID, data.Status, s.heartbeatTimeout)
+				s.broadcastPresence(ctx, client.userID, data.Status)
 			}
 
 		case OpTyping:
@@ -690,18 +723,36 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		if event.UserID == client.userID {
 			return true
 		}
-		// Also deliver to guild members that share a guild with this user.
-		if s.pool != nil {
-			var shares bool
-			s.pool.QueryRow(context.Background(),
-				`SELECT EXISTS(
-					SELECT 1 FROM guild_members a
-					JOIN guild_members b ON a.guild_id = b.guild_id
-					WHERE a.user_id = $1 AND b.user_id = $2
-				)`, event.UserID, client.userID).Scan(&shares)
-			return shares
+		// Collect the event user's guild IDs from any connected client, then
+		// check for overlap with the target client. Uses two separate lock
+		// scopes to avoid nested locking (prevents ABBA deadlock).
+		var eventUserGuildIDs []string
+		s.clientsMu.RLock()
+		for otherClient := range s.clients {
+			if otherClient.userID == event.UserID {
+				otherClient.mu.Lock()
+				for gid := range otherClient.guildIDs {
+					eventUserGuildIDs = append(eventUserGuildIDs, gid)
+				}
+				otherClient.mu.Unlock()
+				break
+			}
 		}
-		return false
+		s.clientsMu.RUnlock()
+
+		if len(eventUserGuildIDs) == 0 {
+			return false
+		}
+		client.mu.Lock()
+		shared := false
+		for _, gid := range eventUserGuildIDs {
+			if client.guildIDs[gid] {
+				shared = true
+				break
+			}
+		}
+		client.mu.Unlock()
+		return shared
 	}
 
 	// User-specific events: only dispatch to the targeted user.

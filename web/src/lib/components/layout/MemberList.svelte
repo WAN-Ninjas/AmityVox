@@ -6,6 +6,7 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import { presenceMap } from '$lib/stores/presence';
 	import { addDMChannel } from '$lib/stores/dms';
+	import { setGuildMembers, memberTimeouts } from '$lib/stores/members';
 	import { goto } from '$app/navigation';
 
 	let members = $state<GuildMember[]>([]);
@@ -21,11 +22,15 @@
 			// Track which guild we're loading to discard stale responses.
 			loadingGuildId = guildId;
 			api.getMembers(guildId).then((m) => {
-				if (loadingGuildId === guildId) members = m;
+				if (loadingGuildId === guildId) {
+					members = m;
+					setGuildMembers(m);
+				}
 			}).catch(() => {});
 		} else {
 			loadingGuildId = null;
 			members = [];
+			setGuildMembers([]);
 		}
 	});
 
@@ -95,6 +100,11 @@
 	function getMemberName(member: GuildMember): string {
 		return member.nickname ?? member.user?.display_name ?? member.user?.username ?? '?';
 	}
+
+	function isMemberTimedOut(member: GuildMember): boolean {
+		if (!member.timeout_until) return false;
+		return new Date(member.timeout_until).getTime() > Date.now();
+	}
 </script>
 
 <svelte:window onclick={closeContextMenu} />
@@ -116,8 +126,16 @@
 							size="sm"
 							status={$presenceMap.get(member.user_id) ?? 'online'}
 						/>
-						<span class="truncate text-sm text-text-secondary">
+						<span class="flex items-center gap-1 truncate text-sm text-text-secondary">
 							{getMemberName(member)}
+							{#if isMemberTimedOut(member)}
+								<svg class="h-3.5 w-3.5 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<title>Timed out</title>
+									<circle cx="12" cy="12" r="10" />
+									<path d="M12 6v6l4 2" />
+								</svg>
+								<span class="text-2xs text-yellow-500">(Timed out)</span>
+							{/if}
 						</span>
 					</button>
 				{/each}
@@ -137,8 +155,16 @@
 							size="sm"
 							status="offline"
 						/>
-						<span class="truncate text-sm text-text-secondary">
+						<span class="flex items-center gap-1 truncate text-sm text-text-secondary">
 							{getMemberName(member)}
+							{#if isMemberTimedOut(member)}
+								<svg class="h-3.5 w-3.5 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<title>Timed out</title>
+									<circle cx="12" cy="12" r="10" />
+									<path d="M12 6v6l4 2" />
+								</svg>
+								<span class="text-2xs text-yellow-500">(Timed out)</span>
+							{/if}
 						</span>
 					</button>
 				{/each}

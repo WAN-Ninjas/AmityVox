@@ -25,7 +25,22 @@ import type {
 	Webhook,
 	UserSettings,
 	Category,
-	FederationPeer
+	FederationPeer,
+	Poll,
+	MessageBookmark,
+	GuildEvent,
+	EventRSVP,
+	MemberWarning,
+	MessageReport,
+	RaidConfig,
+	AutoModRule,
+	AutoModAction,
+	UserBadge,
+	ScheduledMessage,
+	InstanceBan,
+	RegistrationSettings,
+	RegistrationToken,
+	Announcement
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -128,12 +143,16 @@ class ApiClient {
 		return this.get('/users/@me');
 	}
 
-	updateMe(data: Partial<Pick<User, 'username' | 'display_name' | 'bio' | 'status_text'>>): Promise<User> {
+	updateMe(data: Partial<Pick<User, 'username' | 'display_name' | 'bio' | 'status_text' | 'status_emoji' | 'status_presence' | 'pronouns' | 'accent_color' | 'banner_id'>> & { status_expires_at?: string | null; avatar_id?: string | null }): Promise<User> {
 		return this.patch('/users/@me', data);
 	}
 
 	getUser(userId: string): Promise<User> {
 		return this.get(`/users/${userId}`);
+	}
+
+	getUserBadges(userId: string): Promise<UserBadge[]> {
+		return this.get(`/users/${userId}/badges`);
 	}
 
 	getMyGuilds(): Promise<Guild[]> {
@@ -203,8 +222,22 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages${qs ? '?' + qs : ''}`);
 	}
 
-	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[] }): Promise<Message> {
+	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean }): Promise<Message> {
 		return this.post(`/channels/${channelId}/messages`, { content, ...opts });
+	}
+
+	// --- Scheduled Messages ---
+
+	scheduleMessage(channelId: string, content: string, scheduledFor: string, opts?: { attachment_ids?: string[] }): Promise<ScheduledMessage> {
+		return this.post(`/channels/${channelId}/scheduled-messages`, { content, scheduled_for: scheduledFor, ...opts });
+	}
+
+	getScheduledMessages(channelId: string): Promise<ScheduledMessage[]> {
+		return this.get(`/channels/${channelId}/scheduled-messages`);
+	}
+
+	deleteScheduledMessage(channelId: string, messageId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/scheduled-messages/${messageId}`);
 	}
 
 	editMessage(channelId: string, messageId: string, content: string): Promise<Message> {
@@ -410,13 +443,28 @@ class ApiClient {
 		const token = this.getToken();
 		if (token) headers['Authorization'] = `Bearer ${token}`;
 
-		const res = await fetch(`${API_BASE}/files/upload`, {
-			method: 'POST',
-			headers,
-			body: formData
-		});
+		let res: Response;
+		try {
+			res = await fetch(`${API_BASE}/files/upload`, {
+				method: 'POST',
+				headers,
+				body: formData
+			});
+		} catch {
+			throw new ApiRequestError('Network error during upload — file may be too large', 'network_error', 0);
+		}
 
-		const json = await res.json();
+		let json: unknown;
+		try {
+			json = await res.json();
+		} catch {
+			throw new ApiRequestError(
+				res.ok ? 'Invalid server response' : `Upload failed (${res.status})`,
+				'upload_failed',
+				res.status
+			);
+		}
+
 		if (!res.ok) {
 			const err = json as ApiError;
 			throw new ApiRequestError(err.error?.message || 'Upload failed', 'upload_failed', res.status);
@@ -518,6 +566,66 @@ class ApiClient {
 
 	removeFederationPeer(peerId: string): Promise<void> {
 		return this.del(`/admin/federation/peers/${peerId}`);
+	}
+
+	// --- Admin Instance Bans ---
+
+	instanceBanUser(userId: string, reason: string): Promise<void> {
+		return this.post(`/admin/users/${userId}/instance-ban`, { reason });
+	}
+
+	instanceUnbanUser(userId: string): Promise<void> {
+		return this.post(`/admin/users/${userId}/instance-unban`);
+	}
+
+	getInstanceBans(): Promise<InstanceBan[]> {
+		return this.get('/admin/instance-bans');
+	}
+
+	// --- Admin Registration ---
+
+	getRegistrationSettings(): Promise<RegistrationSettings> {
+		return this.get('/admin/registration');
+	}
+
+	updateRegistrationSettings(data: { mode?: string; message?: string | null }): Promise<RegistrationSettings> {
+		return this.patch('/admin/registration', data);
+	}
+
+	createRegistrationToken(data: { max_uses?: number; note?: string; expires_in_hours?: number }): Promise<RegistrationToken> {
+		return this.post('/admin/registration/tokens', data);
+	}
+
+	getRegistrationTokens(): Promise<RegistrationToken[]> {
+		return this.get('/admin/registration/tokens');
+	}
+
+	deleteRegistrationToken(tokenId: string): Promise<void> {
+		return this.del(`/admin/registration/tokens/${tokenId}`);
+	}
+
+	// --- Admin Announcements ---
+
+	createAnnouncement(data: { title: string; content: string; severity: string; expires_in_hours?: number }): Promise<Announcement> {
+		return this.post('/admin/announcements', data);
+	}
+
+	getAdminAnnouncements(): Promise<Announcement[]> {
+		return this.get('/admin/announcements');
+	}
+
+	updateAnnouncement(id: string, data: { active?: boolean; title?: string; content?: string }): Promise<Announcement> {
+		return this.patch(`/admin/announcements/${id}`, data);
+	}
+
+	deleteAnnouncement(id: string): Promise<void> {
+		return this.del(`/admin/announcements/${id}`);
+	}
+
+	// --- Active Announcements (all users) ---
+
+	getActiveAnnouncements(): Promise<Announcement[]> {
+		return this.get('/announcements');
 	}
 
 	// --- Notification Preferences ---
@@ -658,6 +766,177 @@ class ApiClient {
 
 	deletePushSubscription(subscriptionId: string): Promise<void> {
 		return this.del(`/notifications/subscriptions/${subscriptionId}`);
+	}
+
+	// --- Polls ---
+
+	createPoll(channelId: string, question: string, options: string[], opts?: { multi_vote?: boolean; anonymous?: boolean; duration?: number }): Promise<Poll> {
+		return this.post(`/channels/${channelId}/polls`, { question, options, ...opts });
+	}
+
+	getPoll(channelId: string, pollId: string): Promise<Poll> {
+		return this.get(`/channels/${channelId}/polls/${pollId}`);
+	}
+
+	votePoll(channelId: string, pollId: string, optionIds: string[]): Promise<{ poll_id: string; option_ids: string[] }> {
+		return this.post(`/channels/${channelId}/polls/${pollId}/votes`, { option_ids: optionIds });
+	}
+
+	closePoll(channelId: string, pollId: string): Promise<{ poll_id: string; closed: boolean }> {
+		return this.post(`/channels/${channelId}/polls/${pollId}/close`);
+	}
+
+	deletePoll(channelId: string, pollId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/polls/${pollId}`);
+	}
+
+	// --- Bookmarks ---
+
+	createBookmark(messageId: string, note?: string): Promise<MessageBookmark> {
+		return this.put(`/messages/${messageId}/bookmark`, note ? { note } : undefined);
+	}
+
+	deleteBookmark(messageId: string): Promise<void> {
+		return this.del(`/messages/${messageId}/bookmark`);
+	}
+
+	getBookmarks(params?: { limit?: number; before?: string }): Promise<MessageBookmark[]> {
+		const query = new URLSearchParams();
+		if (params?.limit) query.set('limit', String(params.limit));
+		if (params?.before) query.set('before', params.before);
+		const qs = query.toString();
+		return this.get(`/users/@me/bookmarks${qs ? '?' + qs : ''}`);
+	}
+
+	// --- Guild Events ---
+
+	createGuildEvent(guildId: string, data: { name: string; description?: string; location?: string; channel_id?: string; image_id?: string; scheduled_start: string; scheduled_end?: string }): Promise<GuildEvent> {
+		return this.post(`/guilds/${guildId}/events`, data);
+	}
+
+	getGuildEvents(guildId: string, params?: { status?: string; limit?: number }): Promise<GuildEvent[]> {
+		const query = new URLSearchParams();
+		if (params?.status) query.set('status', params.status);
+		if (params?.limit) query.set('limit', String(params.limit));
+		const qs = query.toString();
+		return this.get(`/guilds/${guildId}/events${qs ? '?' + qs : ''}`);
+	}
+
+	getGuildEvent(guildId: string, eventId: string): Promise<GuildEvent> {
+		return this.get(`/guilds/${guildId}/events/${eventId}`);
+	}
+
+	updateGuildEvent(guildId: string, eventId: string, data: Partial<{ name: string; description: string; location: string; channel_id: string; scheduled_start: string; scheduled_end: string; status: string }>): Promise<GuildEvent> {
+		return this.patch(`/guilds/${guildId}/events/${eventId}`, data);
+	}
+
+	deleteGuildEvent(guildId: string, eventId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/events/${eventId}`);
+	}
+
+	rsvpEvent(guildId: string, eventId: string, status: 'interested' | 'going'): Promise<EventRSVP> {
+		return this.post(`/guilds/${guildId}/events/${eventId}/rsvp`, { status });
+	}
+
+	deleteRsvp(guildId: string, eventId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/events/${eventId}/rsvp`);
+	}
+
+	getEventRsvps(guildId: string, eventId: string): Promise<EventRSVP[]> {
+		return this.get(`/guilds/${guildId}/events/${eventId}/rsvps`);
+	}
+
+	// --- Server Discovery ---
+
+	discoverGuilds(params?: Record<string, string>): Promise<Guild[]> {
+		const query = new URLSearchParams(params);
+		const qs = query.toString();
+		return this.get(`/guilds/discover${qs ? '?' + qs : ''}`);
+	}
+
+	getGuildPreview(guildId: string): Promise<Guild & { member_count: number }> {
+		return this.get(`/guilds/${guildId}/preview`);
+	}
+
+	joinGuild(guildId: string): Promise<{ guild_id: string; name: string; joined: boolean }> {
+		return this.post(`/guilds/${guildId}/join`, {});
+	}
+
+	// --- Moderation: Warnings ---
+
+	warnMember(guildId: string, memberId: string, reason: string): Promise<MemberWarning> {
+		return this.post(`/guilds/${guildId}/members/${memberId}/warn`, { reason });
+	}
+
+	getMemberWarnings(guildId: string, memberId: string): Promise<MemberWarning[]> {
+		return this.get(`/guilds/${guildId}/members/${memberId}/warnings`);
+	}
+
+	deleteWarning(guildId: string, warningId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/warnings/${warningId}`);
+	}
+
+	// --- Moderation: Reports ---
+
+	reportMessage(channelId: string, messageId: string, reason: string): Promise<MessageReport> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/report`, { reason });
+	}
+
+	getReports(guildId: string, params?: { status?: string }): Promise<MessageReport[]> {
+		const query = new URLSearchParams();
+		if (params?.status) query.set('status', params.status);
+		const qs = query.toString();
+		return this.get(`/guilds/${guildId}/reports${qs ? '?' + qs : ''}`);
+	}
+
+	resolveReport(guildId: string, reportId: string, status: 'resolved' | 'dismissed'): Promise<MessageReport> {
+		return this.patch(`/guilds/${guildId}/reports/${reportId}`, { status });
+	}
+
+	// --- Moderation: Channel Lock ---
+
+	lockChannel(channelId: string): Promise<{ locked: boolean }> {
+		return this.post(`/channels/${channelId}/lock`);
+	}
+
+	unlockChannel(channelId: string): Promise<{ locked: boolean }> {
+		return this.post(`/channels/${channelId}/unlock`);
+	}
+
+	// --- Moderation: Raid Config ---
+
+	getRaidConfig(guildId: string): Promise<RaidConfig> {
+		return this.get(`/guilds/${guildId}/raid-config`);
+	}
+
+	updateRaidConfig(guildId: string, data: Partial<RaidConfig>): Promise<RaidConfig> {
+		return this.patch(`/guilds/${guildId}/raid-config`, data);
+	}
+
+	// --- AutoMod ---
+
+	getAutoModRules(guildId: string): Promise<AutoModRule[]> {
+		return this.get(`/guilds/${guildId}/automod/rules`);
+	}
+
+	createAutoModRule(guildId: string, data: Partial<AutoModRule>): Promise<AutoModRule> {
+		return this.post(`/guilds/${guildId}/automod/rules`, data);
+	}
+
+	getAutoModRule(guildId: string, ruleId: string): Promise<AutoModRule> {
+		return this.get(`/guilds/${guildId}/automod/rules/${ruleId}`);
+	}
+
+	updateAutoModRule(guildId: string, ruleId: string, data: Partial<AutoModRule>): Promise<AutoModRule> {
+		return this.patch(`/guilds/${guildId}/automod/rules/${ruleId}`, data);
+	}
+
+	deleteAutoModRule(guildId: string, ruleId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/automod/rules/${ruleId}`);
+	}
+
+	getAutoModActions(guildId: string): Promise<AutoModAction[]> {
+		return this.get(`/guilds/${guildId}/automod/actions`);
 	}
 
 	// --- Role Updates ---

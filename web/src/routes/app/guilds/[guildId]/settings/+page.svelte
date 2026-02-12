@@ -5,20 +5,25 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
-	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category } from '$lib/types';
+	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit';
+	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
 	let name = $state('');
 	let description = $state('');
+	let verificationLevel = $state(0);
 	let iconFile = $state<File | null>(null);
 	let iconPreview = $state<string | null>(null);
+	let guildTags = $state<string[]>([]);
+	let newTag = $state('');
 	let saving = $state(false);
 	let error = $state('');
 	let success = $state('');
 	let deleteConfirm = $state('');
+
+	const availableTags = ['Gaming', 'Music', 'Education', 'Science & Tech', 'Entertainment', 'Art & Creative', 'Community', 'Other'];
 
 	// --- Roles ---
 	let roles = $state<Role[]>([]);
@@ -63,12 +68,48 @@
 	let auditLog = $state<AuditLogEntry[]>([]);
 	let loadingAudit = $state(false);
 
+	// --- AutoMod ---
+	let automodRules = $state<AutoModRule[]>([]);
+	let automodActions = $state<AutoModAction[]>([]);
+	let loadingAutomod = $state(false);
+	let creatingRule = $state(false);
+	let newRuleType = $state<string>('word_filter');
+	let newRuleName = $state('');
+	let newRuleAction = $state<string>('delete');
+	let newRuleEnabled = $state(true);
+	let newRuleExemptRoles = $state<string[]>([]);
+	let newRuleExemptChannels = $state<string[]>([]);
+
+	// AutoMod: guild roles & channels available for exemption selection
+	let automodGuildRoles = $state<Role[]>([]);
+	let automodGuildChannels = $state<Channel[]>([]);
+	let loadingAutomodMeta = $state(false);
+
+	// AutoMod: editing exemptions on an existing rule
+	let editingExemptRuleId = $state<string | null>(null);
+	let editingExemptRoles = $state<string[]>([]);
+	let editingExemptChannels = $state<string[]>([]);
+
+	// --- Moderation ---
+	let warnings = $state<MemberWarning[]>([]);
+	let reports = $state<MessageReport[]>([]);
+	let loadingWarnings = $state(false);
+	let loadingReports = $state(false);
+	let reportFilter = $state<string>('open');
+
+	// --- Raid Config ---
+	let raidConfig = $state<RaidConfig | null>(null);
+	let loadingRaid = $state(false);
+	let savingRaid = $state(false);
+
 	const isOwner = $derived($currentGuild?.owner_id === $currentUser?.id);
 
 	$effect(() => {
 		if ($currentGuild) {
 			name = $currentGuild.name;
 			description = $currentGuild.description ?? '';
+			verificationLevel = $currentGuild.verification_level ?? 0;
+			guildTags = [...($currentGuild.tags ?? [])];
 		}
 	});
 
@@ -83,6 +124,9 @@
 		if (currentTab === 'emoji' && emoji.length === 0) loadEmoji(gId);
 		if (currentTab === 'webhooks' && webhooks.length === 0) loadWebhooks(gId);
 		if (currentTab === 'audit' && auditLog.length === 0) loadAudit(gId);
+		if (currentTab === 'automod' && automodRules.length === 0) loadAutomod(gId);
+		if (currentTab === 'moderation' && reports.length === 0) loadReports(gId);
+		if (currentTab === 'raid' && !raidConfig) loadRaid(gId);
 	});
 
 	// --- Data loading ---
@@ -129,6 +173,39 @@
 		finally { loadingAudit = false; }
 	}
 
+	async function loadAutomod(guildId: string) {
+		loadingAutomod = true;
+		loadingAutomodMeta = true;
+		try {
+			const [rules, actions, guildRoles, guildChannels] = await Promise.all([
+				api.getAutoModRules(guildId),
+				api.getAutoModActions(guildId),
+				api.getRoles(guildId),
+				api.getGuildChannels(guildId)
+			]);
+			automodRules = rules;
+			automodActions = actions;
+			automodGuildRoles = guildRoles;
+			automodGuildChannels = guildChannels;
+		} catch {}
+		finally {
+			loadingAutomod = false;
+			loadingAutomodMeta = false;
+		}
+	}
+
+	async function loadReports(guildId: string) {
+		loadingReports = true;
+		try { reports = await api.getReports(guildId, { status: reportFilter }); } catch {}
+		finally { loadingReports = false; }
+	}
+
+	async function loadRaid(guildId: string) {
+		loadingRaid = true;
+		try { raidConfig = await api.getRaidConfig(guildId); } catch {}
+		finally { loadingRaid = false; }
+	}
+
 	// --- Overview actions ---
 
 	function handleIconSelect(e: Event) {
@@ -152,7 +229,9 @@
 			}
 
 			const payload: Record<string, unknown> = {
-				name, description: description || undefined
+				name, description: description || undefined,
+				verification_level: verificationLevel,
+				tags: guildTags
 			};
 			if (iconId) payload.icon_id = iconId;
 
@@ -366,6 +445,142 @@
 		}
 	}
 
+	// --- AutoMod actions ---
+
+	async function handleCreateAutomodRule() {
+		if (!$currentGuild || !newRuleName.trim()) return;
+		creatingRule = true;
+		try {
+			const rule = await api.createAutoModRule($currentGuild.id, {
+				name: newRuleName.trim(),
+				rule_type: newRuleType,
+				action: newRuleAction,
+				enabled: newRuleEnabled,
+				config: {},
+				exempt_roles: newRuleExemptRoles,
+				exempt_channels: newRuleExemptChannels,
+				timeout_duration: 0
+			});
+			automodRules = [...automodRules, rule];
+			newRuleName = '';
+			newRuleExemptRoles = [];
+			newRuleExemptChannels = [];
+		} catch (err: any) {
+			error = err.message || 'Failed to create AutoMod rule';
+		} finally {
+			creatingRule = false;
+		}
+	}
+
+	async function handleToggleAutomodRule(rule: AutoModRule) {
+		if (!$currentGuild) return;
+		try {
+			const updated = await api.updateAutoModRule($currentGuild.id, rule.id, { enabled: !rule.enabled });
+			automodRules = automodRules.map(r => r.id === rule.id ? updated : r);
+		} catch (err: any) {
+			error = err.message || 'Failed to update rule';
+		}
+	}
+
+	async function handleDeleteAutomodRule(ruleId: string) {
+		if (!$currentGuild || !confirm('Delete this AutoMod rule?')) return;
+		try {
+			await api.deleteAutoModRule($currentGuild.id, ruleId);
+			automodRules = automodRules.filter(r => r.id !== ruleId);
+			if (editingExemptRuleId === ruleId) editingExemptRuleId = null;
+		} catch (err: any) {
+			error = err.message || 'Failed to delete rule';
+		}
+	}
+
+	function startEditingExemptions(rule: AutoModRule) {
+		editingExemptRuleId = rule.id;
+		editingExemptRoles = [...(rule.exempt_roles ?? [])];
+		editingExemptChannels = [...(rule.exempt_channels ?? [])];
+	}
+
+	function cancelEditingExemptions() {
+		editingExemptRuleId = null;
+		editingExemptRoles = [];
+		editingExemptChannels = [];
+	}
+
+	async function handleSaveExemptions() {
+		if (!$currentGuild || !editingExemptRuleId) return;
+		try {
+			const updated = await api.updateAutoModRule($currentGuild.id, editingExemptRuleId, {
+				exempt_roles: editingExemptRoles,
+				exempt_channels: editingExemptChannels
+			});
+			automodRules = automodRules.map(r => r.id === editingExemptRuleId ? updated : r);
+			editingExemptRuleId = null;
+			editingExemptRoles = [];
+			editingExemptChannels = [];
+			success = 'Exemptions updated!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to update exemptions';
+		}
+	}
+
+	function toggleArrayItem(arr: string[], item: string): string[] {
+		if (arr.includes(item)) {
+			return arr.filter(i => i !== item);
+		}
+		return [...arr, item];
+	}
+
+	function getRoleName(roleId: string): string {
+		const role = automodGuildRoles.find(r => r.id === roleId);
+		return role?.name ?? roleId.slice(0, 8) + '...';
+	}
+
+	function getChannelName(channelId: string): string {
+		const channel = automodGuildChannels.find(c => c.id === channelId);
+		return channel?.name ?? channelId.slice(0, 8) + '...';
+	}
+
+	// --- Moderation actions ---
+
+	async function handleResolveReport(reportId: string, status: 'resolved' | 'dismissed') {
+		if (!$currentGuild) return;
+		try {
+			const updated = await api.resolveReport($currentGuild.id, reportId, status);
+			reports = reports.map(r => r.id === reportId ? updated : r);
+		} catch (err: any) {
+			error = err.message || 'Failed to resolve report';
+		}
+	}
+
+	async function handleFilterReports() {
+		if (!$currentGuild) return;
+		loadingReports = true;
+		try { reports = await api.getReports($currentGuild.id, { status: reportFilter }); } catch {}
+		finally { loadingReports = false; }
+	}
+
+	// --- Raid actions ---
+
+	async function handleSaveRaid() {
+		if (!$currentGuild || !raidConfig) return;
+		savingRaid = true;
+		try {
+			raidConfig = await api.updateRaidConfig($currentGuild.id, {
+				enabled: raidConfig.enabled,
+				join_rate_limit: raidConfig.join_rate_limit,
+				join_rate_window: raidConfig.join_rate_window,
+				min_account_age: raidConfig.min_account_age,
+				lockdown_active: raidConfig.lockdown_active
+			});
+			success = 'Raid protection settings saved!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to save raid config';
+		} finally {
+			savingRaid = false;
+		}
+	}
+
 	// --- Helpers ---
 
 	const tabs: { id: Tab; label: string }[] = [
@@ -376,7 +591,10 @@
 		{ id: 'bans', label: 'Bans' },
 		{ id: 'emoji', label: 'Emoji' },
 		{ id: 'webhooks', label: 'Webhooks' },
-		{ id: 'audit', label: 'Audit Log' }
+		{ id: 'audit', label: 'Audit Log' },
+		{ id: 'automod', label: 'AutoMod' },
+		{ id: 'moderation', label: 'Moderation' },
+		{ id: 'raid', label: 'Raid Protection' }
 	];
 
 	const expiryOptions = [
@@ -493,6 +711,58 @@
 				<div class="mb-6">
 					<label for="guildDesc" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Description</label>
 					<textarea id="guildDesc" bind:value={description} class="input w-full" rows="3" maxlength="1024"></textarea>
+				</div>
+
+				<div class="mb-6">
+					<label for="verificationLevel" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Verification Level</label>
+					<select id="verificationLevel" bind:value={verificationLevel} class="input w-full">
+						<option value={0}>None</option>
+						<option value={1}>Low — Verified email</option>
+						<option value={2}>Medium — Registered 5+ min</option>
+						<option value={3}>High — Member 10+ min</option>
+						<option value={4}>Highest — Phone verified</option>
+					</select>
+					<p class="mt-1 text-xs text-text-muted">
+						{#if verificationLevel === 0}
+							No verification required to participate. Anyone can join and send messages immediately.
+						{:else if verificationLevel === 1}
+							Members must have a verified email address on their account.
+						{:else if verificationLevel === 2}
+							Members must be registered on this instance for at least 5 minutes.
+						{:else if verificationLevel === 3}
+							Members must have been a member of this guild for at least 10 minutes before they can participate.
+						{:else}
+							Members must have a verified phone number linked to their account.
+						{/if}
+					</p>
+				</div>
+
+				<!-- Tags (for discovery) -->
+				<div class="mb-6">
+					<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Category Tags</label>
+					<p class="mb-2 text-xs text-text-muted">Add tags to help users find your server in discovery. Max 5 tags.</p>
+					<div class="mb-2 flex flex-wrap gap-1.5">
+						{#each guildTags as tag, i}
+							<span class="flex items-center gap-1 rounded-full bg-brand-500/15 px-2.5 py-1 text-xs text-brand-400">
+								{tag}
+								<button class="ml-0.5 text-brand-400/70 hover:text-brand-400" onclick={() => { guildTags = guildTags.filter((_, idx) => idx !== i); }}>
+									<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" /></svg>
+								</button>
+							</span>
+						{/each}
+					</div>
+					{#if guildTags.length < 5}
+						<div class="flex flex-wrap gap-1.5">
+							{#each availableTags.filter(t => !guildTags.includes(t)) as tag}
+								<button
+									class="rounded-full bg-bg-modifier px-2.5 py-1 text-xs text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
+									onclick={() => { guildTags = [...guildTags, tag]; }}
+								>
+									+ {tag}
+								</button>
+							{/each}
+						</div>
+					{/if}
 				</div>
 
 				<button class="btn-primary" onclick={handleSave} disabled={saving}>
@@ -845,6 +1115,359 @@
 								{/if}
 							</div>
 						{/each}
+					</div>
+				{/if}
+
+			<!-- ==================== AUTOMOD ==================== -->
+			{:else if currentTab === 'automod'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">AutoMod Rules</h1>
+
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Rule</h3>
+					<div class="mb-3 grid grid-cols-2 gap-3">
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Rule Name</label>
+							<input type="text" class="input w-full" bind:value={newRuleName} placeholder="My rule" maxlength="100" />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Type</label>
+							<select class="input w-full" bind:value={newRuleType}>
+								<option value="word_filter">Word Filter</option>
+								<option value="regex_filter">Regex Filter</option>
+								<option value="invite_filter">Invite Links</option>
+								<option value="mention_spam">Mention Spam</option>
+								<option value="caps_filter">Caps Filter</option>
+								<option value="spam_filter">Spam Filter</option>
+								<option value="link_filter">Link Filter</option>
+							</select>
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Action</label>
+							<select class="input w-full" bind:value={newRuleAction}>
+								<option value="delete">Delete Message</option>
+								<option value="warn">Warn User</option>
+								<option value="timeout">Timeout User</option>
+								<option value="log">Log Only</option>
+							</select>
+						</div>
+						<div class="flex items-end">
+							<label class="flex items-center gap-2 text-sm text-text-muted">
+								<input type="checkbox" bind:checked={newRuleEnabled} class="rounded" />
+								Enabled
+							</label>
+						</div>
+					</div>
+
+					<!-- Exempt Roles -->
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Exempt Roles</label>
+						<p class="mb-1.5 text-xs text-text-muted">Members with these roles will not be affected by this rule.</p>
+						{#if loadingAutomodMeta}
+							<p class="text-xs text-text-muted">Loading roles...</p>
+						{:else if automodGuildRoles.length === 0}
+							<p class="text-xs text-text-muted">No roles available.</p>
+						{:else}
+							<div class="flex flex-wrap gap-1.5">
+								{#each automodGuildRoles as role (role.id)}
+									<button
+										type="button"
+										class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors {newRuleExemptRoles.includes(role.id) ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40' : 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary hover:text-text-secondary'}"
+										onclick={() => { newRuleExemptRoles = toggleArrayItem(newRuleExemptRoles, role.id); }}
+									>
+										<span class="h-2 w-2 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></span>
+										{role.name}
+										{#if newRuleExemptRoles.includes(role.id)}
+											<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+
+					<!-- Exempt Channels -->
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Exempt Channels</label>
+						<p class="mb-1.5 text-xs text-text-muted">Messages in these channels will not be checked by this rule.</p>
+						{#if loadingAutomodMeta}
+							<p class="text-xs text-text-muted">Loading channels...</p>
+						{:else if automodGuildChannels.length === 0}
+							<p class="text-xs text-text-muted">No channels available.</p>
+						{:else}
+							<div class="flex flex-wrap gap-1.5">
+								{#each automodGuildChannels.filter(c => c.channel_type === 'text' || c.channel_type === 'announcement' || c.channel_type === 'forum') as channel (channel.id)}
+									<button
+										type="button"
+										class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors {newRuleExemptChannels.includes(channel.id) ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40' : 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary hover:text-text-secondary'}"
+										onclick={() => { newRuleExemptChannels = toggleArrayItem(newRuleExemptChannels, channel.id); }}
+									>
+										<span class="text-text-muted">#</span>
+										{channel.name ?? 'unnamed'}
+										{#if newRuleExemptChannels.includes(channel.id)}
+											<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+
+					<button class="btn-primary" onclick={handleCreateAutomodRule} disabled={creatingRule || !newRuleName.trim()}>
+						{creatingRule ? 'Creating...' : 'Create Rule'}
+					</button>
+				</div>
+
+				{#if loadingAutomod}
+					<p class="text-sm text-text-muted">Loading AutoMod rules...</p>
+				{:else if automodRules.length === 0}
+					<p class="text-sm text-text-muted">No AutoMod rules configured.</p>
+				{:else}
+					<div class="space-y-2">
+						{#each automodRules as rule (rule.id)}
+							<div class="rounded-lg bg-bg-secondary p-3">
+								<div class="flex items-center justify-between">
+									<div class="flex items-center gap-3">
+										<button
+											class="h-4 w-4 rounded border {rule.enabled ? 'border-green-500 bg-green-500' : 'border-text-muted'}"
+											onclick={() => handleToggleAutomodRule(rule)}
+											title={rule.enabled ? 'Disable' : 'Enable'}
+										></button>
+										<div>
+											<span class="text-sm font-medium text-text-primary">{rule.name}</span>
+											<div class="flex gap-2 text-xs text-text-muted">
+												<span class="rounded bg-bg-modifier px-1.5 py-0.5">{rule.rule_type.replace('_', ' ')}</span>
+												<span class="rounded bg-bg-modifier px-1.5 py-0.5">{rule.action}</span>
+											</div>
+										</div>
+									</div>
+									<div class="flex items-center gap-2">
+										<button
+											class="text-xs text-brand-400 hover:text-brand-300"
+											onclick={() => startEditingExemptions(rule)}
+										>
+											{editingExemptRuleId === rule.id ? 'Editing...' : 'Exemptions'}
+										</button>
+										<button class="text-xs text-red-400 hover:text-red-300" onclick={() => handleDeleteAutomodRule(rule.id)}>
+											Delete
+										</button>
+									</div>
+								</div>
+
+								<!-- Show current exemptions summary (when not editing) -->
+								{#if editingExemptRuleId !== rule.id && ((rule.exempt_roles && rule.exempt_roles.length > 0) || (rule.exempt_channels && rule.exempt_channels.length > 0))}
+									<div class="mt-2 border-t border-bg-modifier pt-2">
+										{#if rule.exempt_roles && rule.exempt_roles.length > 0}
+											<div class="mb-1 flex flex-wrap items-center gap-1">
+												<span class="text-xs text-text-muted">Exempt roles:</span>
+												{#each rule.exempt_roles as roleId}
+													<span class="rounded-full bg-bg-modifier px-2 py-0.5 text-xs text-text-secondary">
+														{getRoleName(roleId)}
+													</span>
+												{/each}
+											</div>
+										{/if}
+										{#if rule.exempt_channels && rule.exempt_channels.length > 0}
+											<div class="flex flex-wrap items-center gap-1">
+												<span class="text-xs text-text-muted">Exempt channels:</span>
+												{#each rule.exempt_channels as channelId}
+													<span class="rounded-full bg-bg-modifier px-2 py-0.5 text-xs text-text-secondary">
+														#{getChannelName(channelId)}
+													</span>
+												{/each}
+											</div>
+										{/if}
+									</div>
+								{/if}
+
+								<!-- Inline editing of exemptions -->
+								{#if editingExemptRuleId === rule.id}
+									<div class="mt-3 border-t border-bg-modifier pt-3">
+										<!-- Exempt Roles Editor -->
+										<div class="mb-3">
+											<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Exempt Roles</label>
+											{#if automodGuildRoles.length === 0}
+												<p class="text-xs text-text-muted">No roles available.</p>
+											{:else}
+												<div class="flex flex-wrap gap-1.5">
+													{#each automodGuildRoles as role (role.id)}
+														<button
+															type="button"
+															class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors {editingExemptRoles.includes(role.id) ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40' : 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary hover:text-text-secondary'}"
+															onclick={() => { editingExemptRoles = toggleArrayItem(editingExemptRoles, role.id); }}
+														>
+															<span class="h-2 w-2 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></span>
+															{role.name}
+															{#if editingExemptRoles.includes(role.id)}
+																<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+															{/if}
+														</button>
+													{/each}
+												</div>
+											{/if}
+										</div>
+
+										<!-- Exempt Channels Editor -->
+										<div class="mb-3">
+											<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Exempt Channels</label>
+											{#if automodGuildChannels.length === 0}
+												<p class="text-xs text-text-muted">No channels available.</p>
+											{:else}
+												<div class="flex flex-wrap gap-1.5">
+													{#each automodGuildChannels.filter(c => c.channel_type === 'text' || c.channel_type === 'announcement' || c.channel_type === 'forum') as channel (channel.id)}
+														<button
+															type="button"
+															class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors {editingExemptChannels.includes(channel.id) ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40' : 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary hover:text-text-secondary'}"
+															onclick={() => { editingExemptChannels = toggleArrayItem(editingExemptChannels, channel.id); }}
+														>
+															<span class="text-text-muted">#</span>
+															{channel.name ?? 'unnamed'}
+															{#if editingExemptChannels.includes(channel.id)}
+																<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+															{/if}
+														</button>
+													{/each}
+												</div>
+											{/if}
+										</div>
+
+										<div class="flex gap-2">
+											<button class="btn-primary text-xs" onclick={handleSaveExemptions}>
+												Save Exemptions
+											</button>
+											<button class="btn-secondary text-xs" onclick={cancelEditingExemptions}>
+												Cancel
+											</button>
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+				{#if automodActions.length > 0}
+					<h2 class="mb-3 mt-8 text-lg font-semibold text-text-primary">Recent Actions</h2>
+					<div class="space-y-2">
+						{#each automodActions.slice(0, 20) as action (action.id)}
+							<div class="rounded-lg bg-bg-secondary p-3">
+								<div class="flex items-center justify-between">
+									<div>
+										<span class="text-sm text-text-primary">{action.rule_name}</span>
+										<span class="ml-2 text-xs text-text-muted">({action.action_taken})</span>
+									</div>
+									<span class="text-xs text-text-muted">{formatDate(action.created_at)}</span>
+								</div>
+								{#if action.matched_content}
+									<p class="mt-1 truncate text-xs text-text-muted">Matched: {action.matched_content}</p>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+			<!-- ==================== MODERATION ==================== -->
+			{:else if currentTab === 'moderation'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Moderation</h1>
+
+				<div class="mb-6">
+					<h2 class="mb-3 text-lg font-semibold text-text-primary">Message Reports</h2>
+					<div class="mb-3 flex items-center gap-2">
+						<select class="input" bind:value={reportFilter} onchange={handleFilterReports}>
+							<option value="open">Open</option>
+							<option value="resolved">Resolved</option>
+							<option value="dismissed">Dismissed</option>
+							<option value="">All</option>
+						</select>
+					</div>
+
+					{#if loadingReports}
+						<p class="text-sm text-text-muted">Loading reports...</p>
+					{:else if reports.length === 0}
+						<p class="text-sm text-text-muted">No reports found.</p>
+					{:else}
+						<div class="space-y-2">
+							{#each reports as report (report.id)}
+								<div class="rounded-lg bg-bg-secondary p-3">
+									<div class="flex items-center justify-between">
+										<div>
+											<span class="text-sm text-text-primary">{report.reason}</span>
+											<div class="mt-1 flex gap-2 text-xs text-text-muted">
+												<span class="rounded px-1.5 py-0.5 {report.status === 'open' ? 'bg-yellow-500/20 text-yellow-400' : report.status === 'resolved' ? 'bg-green-500/20 text-green-400' : 'bg-text-muted/20'}">
+													{report.status}
+												</span>
+												<span>Channel: {report.channel_id.slice(0, 8)}...</span>
+												<span>{formatDate(report.created_at)}</span>
+											</div>
+										</div>
+										{#if report.status === 'open'}
+											<div class="flex gap-2">
+												<button class="text-xs text-green-400 hover:text-green-300" onclick={() => handleResolveReport(report.id, 'resolved')}>
+													Resolve
+												</button>
+												<button class="text-xs text-text-muted hover:text-text-secondary" onclick={() => handleResolveReport(report.id, 'dismissed')}>
+													Dismiss
+												</button>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+			<!-- ==================== RAID PROTECTION ==================== -->
+			{:else if currentTab === 'raid'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Raid Protection</h1>
+
+				{#if loadingRaid}
+					<p class="text-sm text-text-muted">Loading raid configuration...</p>
+				{:else if raidConfig}
+					<div class="space-y-6">
+						<label class="flex items-center gap-3">
+							<input type="checkbox" bind:checked={raidConfig.enabled} class="rounded" />
+							<div>
+								<span class="text-sm font-medium text-text-primary">Enable Raid Protection</span>
+								<p class="text-xs text-text-muted">Automatically detect and respond to join raids</p>
+							</div>
+						</label>
+
+						{#if raidConfig.enabled}
+							<div class="grid grid-cols-2 gap-4">
+								<div>
+									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Max Joins Per Window</label>
+									<input type="number" class="input w-full" bind:value={raidConfig.join_rate_limit} min="1" max="100" />
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Window (seconds)</label>
+									<input type="number" class="input w-full" bind:value={raidConfig.join_rate_window} min="5" max="300" />
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Min Account Age (seconds)</label>
+									<input type="number" class="input w-full" bind:value={raidConfig.min_account_age} min="0" max="604800" />
+									<p class="mt-1 text-xs text-text-muted">0 = no requirement. 300 = 5 minutes.</p>
+								</div>
+							</div>
+						{/if}
+
+						<div class="border-t border-bg-modifier pt-4">
+							<label class="flex items-center gap-3">
+								<input type="checkbox" bind:checked={raidConfig.lockdown_active} class="rounded" />
+								<div>
+									<span class="text-sm font-medium text-text-primary {raidConfig.lockdown_active ? 'text-red-400' : ''}">
+										{raidConfig.lockdown_active ? 'Lockdown Active' : 'Manual Lockdown'}
+									</span>
+									<p class="text-xs text-text-muted">When enabled, new joins are blocked and invites are paused</p>
+									{#if raidConfig.lockdown_active && raidConfig.lockdown_started_at}
+										<p class="text-xs text-red-400">Started: {formatDate(raidConfig.lockdown_started_at)}</p>
+									{/if}
+								</div>
+							</label>
+						</div>
+
+						<button class="btn-primary" onclick={handleSaveRaid} disabled={savingRaid}>
+							{savingRaid ? 'Saving...' : 'Save Raid Settings'}
+						</button>
 					</div>
 				{/if}
 			{/if}

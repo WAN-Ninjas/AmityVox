@@ -11,6 +11,7 @@
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
+	import { memberTimeouts } from '$lib/stores/members';
 	import { startReply, startEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentChannelId } from '$lib/stores/channels';
@@ -38,6 +39,12 @@
 	const authorPresence = $derived($presenceMap.get(message.author_id) ?? undefined);
 
 	const isOwnMessage = $derived($currentUser?.id === message.author_id);
+
+	const isAuthorTimedOut = $derived.by(() => {
+		const until = $memberTimeouts.get(message.author_id);
+		if (!until) return false;
+		return new Date(until).getTime() > Date.now();
+	});
 
 	const displayName = $derived(
 		message.masquerade_name ?? message.author?.display_name ?? message.author?.username ?? message.author_id
@@ -260,6 +267,14 @@
 		{#if !isCompact}
 			<div class="flex items-baseline gap-2">
 				<button class="font-medium text-text-primary hover:underline" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
+				{#if isAuthorTimedOut}
+					<span class="inline-flex items-center" title="This user is timed out">
+						<svg class="h-3.5 w-3.5 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<circle cx="12" cy="12" r="10" />
+							<path d="M12 6v6l4 2" />
+						</svg>
+					</span>
+				{/if}
 				<time class="text-xs text-text-muted" title={fullDateTime}>{relativeTime}</time>
 				{#if message.pinned}
 					<span class="text-2xs text-yellow-500" title="Pinned">📌</span>
@@ -270,6 +285,14 @@
 						title="Edited: {editedTime}"
 						onclick={() => (showEditHistory = true)}
 					>(edited)</button>
+				{/if}
+				{#if message.flags & 1}
+					<span class="flex items-center gap-0.5 text-2xs text-green-400" title="Published to followers">
+						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+						</svg>
+						Published
+					</span>
 				{/if}
 				{#if message.thread_id}
 					<button

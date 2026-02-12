@@ -6,25 +6,78 @@ import { describe, it, expect } from 'vitest';
  * we replicate the pure transformation pipeline here as a standalone function.
  * This matches the exact logic in MarkdownRenderer.svelte's $derived.by().
  */
+
+// Mock katex for unit tests — we don't need the full rendering engine,
+// just verify that the right formulas are detected and passed through.
+const mockKatex = {
+	renderToString(formula: string, opts: { displayMode: boolean; throwOnError: boolean }) {
+		// Simulate KaTeX output: wrap in a span with class "katex" or "katex-display".
+		if (formula === 'INVALID') throw new Error('KaTeX parse error');
+		const cls = opts.displayMode ? 'katex-display' : 'katex';
+		return `<span class="${cls}">${formula}</span>`;
+	}
+};
+
 function escapeHtml(str: string): string {
 	return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function renderMath(formula: string, displayMode: boolean): string {
+	try {
+		return mockKatex.renderToString(formula, {
+			displayMode,
+			throwOnError: true
+		});
+	} catch (_e) {
+		const escaped = escapeHtml(formula);
+		const delimiter = displayMode ? '$$' : '$';
+		return `<span class="text-red-400" title="KaTeX parse error">${delimiter}${escaped}${delimiter}</span>`;
+	}
+}
+
 function renderMarkdown(content: string): string {
 	if (!content) return '';
-	let text = escapeHtml(content);
+
+	const placeholders: string[] = [];
+	let placeholderIndex = 0;
+
+	function addPlaceholder(html: string): string {
+		const key = `\x00PH${placeholderIndex++}\x00`;
+		placeholders.push(html);
+		return key;
+	}
+
+	let text = content;
 
 	// Code blocks
 	text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
 		const langAttr = lang ? ` data-lang="${lang}"` : '';
-		return `<pre class="my-1 overflow-x-auto rounded bg-bg-primary p-3 text-xs"><code${langAttr}>${code.trimEnd()}</code></pre>`;
+		const escapedCode = escapeHtml(code.trimEnd());
+		return addPlaceholder(
+			`<pre class="my-1 overflow-x-auto rounded bg-bg-primary p-3 text-xs"><code${langAttr}>${escapedCode}</code></pre>`
+		);
 	});
 
 	// Inline code
-	text = text.replace(
-		/`([^`]+)`/g,
-		'<code class="rounded bg-bg-primary px-1 py-0.5 text-xs font-mono text-brand-300">$1</code>'
-	);
+	text = text.replace(/`([^`]+)`/g, (_match, code) => {
+		const escapedCode = escapeHtml(code);
+		return addPlaceholder(
+			`<code class="rounded bg-bg-primary px-1 py-0.5 text-xs font-mono text-brand-300">${escapedCode}</code>`
+		);
+	});
+
+	// Display math: $$...$$
+	text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_match, formula) => {
+		return addPlaceholder(renderMath(formula, true));
+	});
+
+	// Inline math: $...$
+	text = text.replace(/(?<!\$)\$(?!\$)([^\n$]+?)\$(?!\$)/g, (_match, formula) => {
+		return addPlaceholder(renderMath(formula, false));
+	});
+
+	// Escape HTML
+	text = escapeHtml(text);
 
 	// Spoiler
 	text = text.replace(
@@ -80,6 +133,11 @@ function renderMarkdown(content: string): string {
 		/^\d+\. (.+)$/gm,
 		'<li class="ml-4 list-decimal text-text-secondary">$1</li>'
 	);
+
+	// Restore placeholders
+	text = text.replace(/\x00PH(\d+)\x00/g, (_match, idx) => {
+		return placeholders[parseInt(idx, 10)] ?? '';
+	});
 
 	return text;
 }
@@ -335,5 +393,103 @@ describe('MarkdownRenderer', () => {
 		const html = renderMarkdown(content);
 		expect(html).toContain('&lt;div&gt;');
 		expect(html).not.toContain('<div>test</div>');
+	});
+
+	// --- KaTeX / Math Rendering ---
+
+	describe('inline math ($...$)', () => {
+		it('renders inline math with single dollar signs', () => {
+			const html = renderMarkdown('The formula $E=mc^2$ is famous');
+			expect(html).toContain('class="katex"');
+			expect(html).toContain('E=mc^2');
+		});
+
+		it('renders multiple inline math expressions', () => {
+			const html = renderMarkdown('$a^2$ plus $b^2$ equals $c^2$');
+			const matches = html.match(/class="katex"/g);
+			expect(matches).toHaveLength(3);
+		});
+
+		it('does not match double dollar signs as inline math', () => {
+			const html = renderMarkdown('$$x^2$$');
+			// Should be display math, not inline
+			expect(html).toContain('class="katex-display"');
+			expect(html).not.toContain('class="katex"');
+		});
+
+		it('does not process math inside inline code', () => {
+			const html = renderMarkdown('use `$variable$` in code');
+			expect(html).toContain('<code');
+			expect(html).toContain('$variable$');
+			expect(html).not.toContain('class="katex"');
+		});
+
+		it('does not process math inside code blocks', () => {
+			const html = renderMarkdown('```\n$x^2$\n```');
+			expect(html).toContain('<pre');
+			expect(html).toContain('$x^2$');
+			expect(html).not.toContain('class="katex"');
+		});
+	});
+
+	describe('display math ($$...$$)', () => {
+		it('renders display math with double dollar signs', () => {
+			const html = renderMarkdown('$$\\int_0^1 x^2 dx$$');
+			expect(html).toContain('class="katex-display"');
+			expect(html).toContain('\\int_0^1 x^2 dx');
+		});
+
+		it('renders multiline display math', () => {
+			const html = renderMarkdown('$$\nx^2 + y^2 = z^2\n$$');
+			expect(html).toContain('class="katex-display"');
+			expect(html).toContain('x^2 + y^2 = z^2');
+		});
+
+		it('renders display math alongside text', () => {
+			const html = renderMarkdown('Consider the equation:\n$$a^2 + b^2 = c^2$$\nwhich is well known.');
+			expect(html).toContain('class="katex-display"');
+			expect(html).toContain('Consider the equation:');
+			expect(html).toContain('which is well known.');
+		});
+	});
+
+	describe('math error handling', () => {
+		it('shows raw formula with error styling on parse failure', () => {
+			const html = renderMarkdown('$INVALID$');
+			expect(html).toContain('text-red-400');
+			expect(html).toContain('KaTeX parse error');
+			expect(html).toContain('$INVALID$');
+		});
+
+		it('shows raw display formula with error styling on parse failure', () => {
+			const html = renderMarkdown('$$INVALID$$');
+			expect(html).toContain('text-red-400');
+			expect(html).toContain('KaTeX parse error');
+			expect(html).toContain('$$INVALID$$');
+		});
+	});
+
+	describe('math with other markdown', () => {
+		it('renders math alongside bold text', () => {
+			const html = renderMarkdown('**Theorem:** $a^2 + b^2 = c^2$');
+			expect(html).toContain('<strong');
+			expect(html).toContain('Theorem:');
+			expect(html).toContain('class="katex"');
+		});
+
+		it('renders math alongside italic text', () => {
+			const html = renderMarkdown('*Note:* $x = 5$');
+			expect(html).toContain('<em>');
+			expect(html).toContain('class="katex"');
+		});
+
+		it('does not apply markdown formatting inside math', () => {
+			// The underscores in x_1 should NOT become italic
+			const html = renderMarkdown('$x_1 + x_2$');
+			expect(html).toContain('class="katex"');
+			expect(html).toContain('x_1 + x_2');
+			// Should not contain <em> generated from the underscores
+			expect(html).not.toContain('<em>1 + x</em>');
+		});
 	});
 });

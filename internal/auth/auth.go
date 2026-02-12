@@ -75,6 +75,7 @@ type RegisterRequest struct {
 	Username string  `json:"username"`
 	Password string  `json:"password"`
 	Email    *string `json:"email,omitempty"`
+	Token    string  `json:"token,omitempty"` // Registration token for invite-only instances.
 }
 
 // LoginRequest is the request body for user login.
@@ -125,12 +126,15 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, ip, userAge
 		`INSERT INTO users (id, instance_id, username, password_hash, email, status_presence, created_at)
 		 VALUES ($1, $2, $3, $4, $5, 'offline', now())
 		 RETURNING id, instance_id, username, display_name, avatar_id, status_text,
-		           status_presence, bio, bot_owner_id, email, flags, created_at`,
+		           status_emoji, status_presence, status_expires_at, bio,
+		           banner_id, accent_color, pronouns,
+		           bot_owner_id, email, flags, created_at`,
 		userID, s.instanceID, req.Username, hash, req.Email,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
-		&user.AvatarID, &user.StatusText, &user.StatusPresence, &user.Bio,
-		&user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
+		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
+		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "unique constraint") || strings.Contains(err.Error(), "duplicate key") {
@@ -162,14 +166,18 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip, userAgent str
 	var passwordHash *string
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id, status_text,
-		        status_presence, bio, bot_owner_id, password_hash, totp_secret, email, flags, created_at
+		        status_emoji, status_presence, status_expires_at, bio,
+		        banner_id, accent_color, pronouns,
+		        bot_owner_id, password_hash, totp_secret, email, flags, created_at
 		 FROM users
 		 WHERE username = $1 AND instance_id = $2`,
 		req.Username, s.instanceID,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
-		&user.AvatarID, &user.StatusText, &user.StatusPresence, &user.Bio,
-		&user.BotOwnerID, &passwordHash, &user.TOTPSecret, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
+		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
+		&user.Pronouns, &user.BotOwnerID, &passwordHash, &user.TOTPSecret,
+		&user.Email, &user.Flags, &user.CreatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil, &AuthError{Code: "invalid_credentials", Message: "Invalid username or password", Status: 401}
@@ -422,13 +430,16 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*models.User, err
 	var user models.User
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id, status_text,
-		        status_presence, bio, bot_owner_id, email, flags, created_at
+		        status_emoji, status_presence, status_expires_at, bio,
+		        banner_id, accent_color, pronouns,
+		        bot_owner_id, email, flags, created_at
 		 FROM users WHERE id = $1`,
 		userID,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
-		&user.AvatarID, &user.StatusText, &user.StatusPresence, &user.Bio,
-		&user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
+		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
+		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, &AuthError{Code: "user_not_found", Message: "User not found", Status: 404}

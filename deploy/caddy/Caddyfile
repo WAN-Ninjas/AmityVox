@@ -10,6 +10,9 @@ amityvox.chat {
 
 	# Reverse proxy API requests to AmityVox core.
 	handle /api/* {
+		request_body {
+			max_size 550MB
+		}
 		reverse_proxy amityvox:8080
 	}
 

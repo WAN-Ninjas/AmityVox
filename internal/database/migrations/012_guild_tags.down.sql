@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_guilds_tags;
+ALTER TABLE guilds DROP COLUMN IF EXISTS tags;

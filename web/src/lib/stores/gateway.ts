@@ -1,17 +1,18 @@
 // Gateway store — manages the WebSocket connection and dispatches events to stores.
 
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
-import { loadGuilds, updateGuild, removeGuild } from './guilds';
-import { updateChannel, removeChannel } from './channels';
+import { loadGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
+import { updateChannel, removeChannel, channels as channelsStore } from './channels';
 import { appendMessage, updateMessage, removeMessage } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
 import { incrementUnread, loadReadState } from './unreads';
-import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent } from '$lib/types';
+import { addNotification } from './notifications';
+import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
 
@@ -32,6 +33,12 @@ export function connectGateway(token: string) {
 				loadDMs();
 				loadReadState();
 				updatePresence(ready.user.id, 'online');
+				// Load initial presence for all online guild members.
+				if (ready.presences) {
+					for (const [uid, status] of Object.entries(ready.presences)) {
+						updatePresence(uid, status as string);
+					}
+				}
 				client?.updatePresence('online');
 				break;
 			}
@@ -85,6 +92,29 @@ export function connectGateway(token: string) {
 					const isMention = msg.mention_everyone ||
 						(selfId ? msg.mention_user_ids?.includes(selfId) : false);
 					incrementUnread(msg.channel_id, isMention);
+
+					// Build notification for mentions, replies, and DMs.
+					const channel = get(channelsStore).get(msg.channel_id);
+					const isDM = channel?.channel_type === 'dm' || channel?.channel_type === 'group';
+					const isReply = msg.message_type === 'reply' || (msg.reply_to_ids && msg.reply_to_ids.length > 0);
+					const senderName = msg.author?.display_name ?? msg.author?.username ?? 'Unknown';
+
+					if (isMention || isDM || isReply) {
+						const guildId = channel?.guild_id ?? null;
+						const guild = guildId ? get(guildsStore).get(guildId) ?? null : null;
+
+						addNotification({
+							type: isDM ? 'dm' : isReply ? 'reply' : 'mention',
+							guild_id: guildId,
+							guild_name: guild?.name ?? null,
+							channel_id: msg.channel_id,
+							channel_name: channel?.name ?? null,
+							message_id: msg.id,
+							sender_id: msg.author_id,
+							sender_name: senderName,
+							content: msg.content ? msg.content.slice(0, 200) : null
+						});
+					}
 				}
 				break;
 			}
@@ -117,6 +147,26 @@ export function connectGateway(token: string) {
 			case 'USER_UPDATE':
 				currentUser.set(data as User);
 				break;
+
+			// --- Relationship events (friend requests) ---
+			case 'RELATIONSHIP_ADD': {
+				const rel = data as Relationship;
+				if (rel.type === 'pending_incoming') {
+					const senderName = rel.user?.display_name ?? rel.user?.username ?? 'Someone';
+					addNotification({
+						type: 'friend_request',
+						guild_id: null,
+						guild_name: null,
+						channel_id: null,
+						channel_name: null,
+						message_id: null,
+						sender_id: rel.target_id,
+						sender_name: senderName,
+						content: `${senderName} sent you a friend request`
+					});
+				}
+				break;
+			}
 		}
 	});
 

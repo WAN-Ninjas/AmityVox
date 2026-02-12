@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -130,6 +131,246 @@ func (s *Server) handleVoiceLeave(w http.ResponseWriter, r *http.Request) {
 	})
 
 	WriteNoContent(w)
+}
+
+// handleVoiceServerMute server-mutes/unmutes a user in a voice channel.
+// POST /api/v1/voice/{channelID}/members/{userID}/mute
+func (s *Server) handleVoiceServerMute(w http.ResponseWriter, r *http.Request) {
+	if s.Voice == nil {
+		WriteError(w, http.StatusServiceUnavailable, "voice_disabled", "Voice is not enabled on this instance")
+		return
+	}
+
+	actorID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	// Get guild ID.
+	var guildID *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if guildID == nil {
+		WriteError(w, http.StatusBadRequest, "not_guild_channel", "Cannot server-mute in DM channels")
+		return
+	}
+
+	// Check MuteMembers permission.
+	if !checkGuildPerm(r.Context(), s.DB.Pool, *guildID, actorID, permissions.MuteMembers) {
+		WriteError(w, http.StatusForbidden, "missing_permission", "You need MUTE_MEMBERS permission")
+		return
+	}
+
+	// Parse request body.
+	var req struct {
+		Muted bool `json:"muted"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	// Check target is in this voice channel.
+	vs := s.Voice.GetVoiceState(targetUserID)
+	if vs == nil || vs.ChannelID != channelID {
+		WriteError(w, http.StatusBadRequest, "not_in_channel", "Target user is not in this voice channel")
+		return
+	}
+
+	// Apply mute via LiveKit.
+	if err := s.Voice.MuteParticipant(r.Context(), channelID, targetUserID, req.Muted); err != nil {
+		s.Logger.Error("failed to mute participant", "error", err.Error())
+	}
+
+	// Update voice state.
+	s.Voice.SetServerMute(targetUserID, req.Muted)
+
+	// Publish VOICE_STATE_UPDATE.
+	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+		"user_id":    targetUserID,
+		"guild_id":   *guildID,
+		"channel_id": channelID,
+		"self_mute":  vs.SelfMute,
+		"self_deaf":  vs.SelfDeaf,
+		"muted":      req.Muted,
+		"deafened":   vs.Deafened,
+	})
+
+	WriteNoContent(w)
+}
+
+// handleVoiceServerDeafen server-deafens/undeafens a user in a voice channel.
+// POST /api/v1/voice/{channelID}/members/{userID}/deafen
+func (s *Server) handleVoiceServerDeafen(w http.ResponseWriter, r *http.Request) {
+	if s.Voice == nil {
+		WriteError(w, http.StatusServiceUnavailable, "voice_disabled", "Voice is not enabled on this instance")
+		return
+	}
+
+	actorID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	// Get guild ID.
+	var guildID *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if guildID == nil {
+		WriteError(w, http.StatusBadRequest, "not_guild_channel", "Cannot server-deafen in DM channels")
+		return
+	}
+
+	// Check DeafenMembers permission.
+	if !checkGuildPerm(r.Context(), s.DB.Pool, *guildID, actorID, permissions.DeafenMembers) {
+		WriteError(w, http.StatusForbidden, "missing_permission", "You need DEAFEN_MEMBERS permission")
+		return
+	}
+
+	// Parse request body.
+	var req struct {
+		Deafened bool `json:"deafened"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	// Check target is in this voice channel.
+	vs := s.Voice.GetVoiceState(targetUserID)
+	if vs == nil || vs.ChannelID != channelID {
+		WriteError(w, http.StatusBadRequest, "not_in_channel", "Target user is not in this voice channel")
+		return
+	}
+
+	// Apply deafen via LiveKit.
+	if err := s.Voice.DeafenParticipant(r.Context(), channelID, targetUserID, req.Deafened); err != nil {
+		s.Logger.Error("failed to deafen participant", "error", err.Error())
+	}
+
+	// Update voice state.
+	s.Voice.SetServerDeafen(targetUserID, req.Deafened)
+
+	// Publish VOICE_STATE_UPDATE.
+	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+		"user_id":    targetUserID,
+		"guild_id":   *guildID,
+		"channel_id": channelID,
+		"self_mute":  vs.SelfMute,
+		"self_deaf":  vs.SelfDeaf,
+		"muted":      vs.Muted,
+		"deafened":   req.Deafened,
+	})
+
+	WriteNoContent(w)
+}
+
+// handleVoiceMoveUser moves a user from one voice channel to another.
+// POST /api/v1/voice/{channelID}/members/{userID}/move
+func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
+	if s.Voice == nil {
+		WriteError(w, http.StatusServiceUnavailable, "voice_disabled", "Voice is not enabled on this instance")
+		return
+	}
+
+	actorID := auth.UserIDFromContext(r.Context())
+	sourceChannelID := chi.URLParam(r, "channelID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	// Get guild ID from source channel.
+	var guildID *string
+	err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, sourceChannelID).Scan(&guildID)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "channel_not_found", "Source channel not found")
+		return
+	}
+	if guildID == nil {
+		WriteError(w, http.StatusBadRequest, "not_guild_channel", "Cannot move members in DM channels")
+		return
+	}
+
+	// Check MoveMembers permission.
+	if !checkGuildPerm(r.Context(), s.DB.Pool, *guildID, actorID, permissions.MoveMembers) {
+		WriteError(w, http.StatusForbidden, "missing_permission", "You need MOVE_MEMBERS permission")
+		return
+	}
+
+	// Parse request body.
+	var req struct {
+		TargetChannelID string `json:"target_channel_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TargetChannelID == "" {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "target_channel_id is required")
+		return
+	}
+
+	// Verify target channel exists, is in the same guild, and is voice/stage.
+	var targetType string
+	var targetGuildID *string
+	err = s.DB.Pool.QueryRow(r.Context(),
+		`SELECT channel_type, guild_id FROM channels WHERE id = $1`, req.TargetChannelID,
+	).Scan(&targetType, &targetGuildID)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "channel_not_found", "Target channel not found")
+		return
+	}
+	if targetGuildID == nil || *targetGuildID != *guildID {
+		WriteError(w, http.StatusBadRequest, "wrong_guild", "Target channel must be in the same guild")
+		return
+	}
+	if targetType != models.ChannelTypeVoice && targetType != models.ChannelTypeStage {
+		WriteError(w, http.StatusBadRequest, "not_voice_channel", "Target must be a voice or stage channel")
+		return
+	}
+
+	// Check target is in the source voice channel.
+	vs := s.Voice.GetVoiceState(targetUserID)
+	if vs == nil || vs.ChannelID != sourceChannelID {
+		WriteError(w, http.StatusBadRequest, "not_in_channel", "Target user is not in the source voice channel")
+		return
+	}
+
+	// Remove from old room.
+	_ = s.Voice.RemoveParticipant(r.Context(), sourceChannelID, targetUserID)
+
+	// Ensure target room exists.
+	_ = s.Voice.EnsureRoom(r.Context(), req.TargetChannelID)
+
+	// Update voice state.
+	s.Voice.UpdateVoiceState(targetUserID, *guildID, req.TargetChannelID, vs.SelfMute, vs.SelfDeaf)
+
+	// Publish VOICE_STATE_UPDATE for the move (new channel).
+	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+		"user_id":    targetUserID,
+		"guild_id":   *guildID,
+		"channel_id": req.TargetChannelID,
+		"self_mute":  vs.SelfMute,
+		"self_deaf":  vs.SelfDeaf,
+		"muted":      vs.Muted,
+		"deafened":   vs.Deafened,
+	})
+
+	// Generate a new token for the target channel so the client can reconnect.
+	canSpeak := checkGuildPerm(r.Context(), s.DB.Pool, *guildID, targetUserID, permissions.Speak)
+	token, err := s.Voice.GenerateToken(targetUserID, req.TargetChannelID, canSpeak, true, canSpeak)
+	if err != nil {
+		s.Logger.Error("failed to generate move token", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate voice token for move")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"token":      token,
+		"url":        s.Config.LiveKit.URL,
+		"channel_id": req.TargetChannelID,
+	})
 }
 
 // handleGetVoiceStates returns the current voice states for a channel.

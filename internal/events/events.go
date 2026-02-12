@@ -49,8 +49,9 @@ const (
 	SubjectGuildEmojiUpdate  = "amityvox.guild.emoji_update"
 
 	// User/presence events.
-	SubjectPresenceUpdate = "amityvox.presence.update"
-	SubjectUserUpdate     = "amityvox.user.update"
+	SubjectPresenceUpdate      = "amityvox.presence.update"
+	SubjectUserUpdate          = "amityvox.user.update"
+	SubjectRelationshipUpdate  = "amityvox.user.relationship_update"
 
 	// Voice events.
 	SubjectVoiceStateUpdate  = "amityvox.voice.state_update"
@@ -61,6 +62,16 @@ const (
 
 	// AutoMod events.
 	SubjectAutomodAction = "amityvox.automod.action"
+
+	// Poll events.
+	SubjectPollCreate = "amityvox.poll.create"
+	SubjectPollVote   = "amityvox.poll.vote"
+	SubjectPollClose  = "amityvox.poll.close"
+
+	// Guild event events.
+	SubjectGuildEventCreate = "amityvox.guild.event_create"
+	SubjectGuildEventUpdate = "amityvox.guild.event_update"
+	SubjectGuildEventDelete = "amityvox.guild.event_delete"
 
 	// Federation events.
 	SubjectFederationRetry = "amityvox.federation.retry"
@@ -136,6 +147,7 @@ func (b *Bus) EnsureStreams() error {
 				"amityvox.user.>",
 				"amityvox.voice.>",
 				"amityvox.automod.>",
+				"amityvox.poll.>",
 			},
 			Retention: nats.LimitsPolicy,
 			MaxAge:    24 * time.Hour,

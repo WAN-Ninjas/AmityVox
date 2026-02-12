@@ -121,7 +121,7 @@ docker exec amityvox amityvox admin create-user \
   --email admin@example.com \
   --password 'YourSecurePassword'
 
-docker exec amityvox amityvox admin set-admin --username admin
+docker exec amityvox amityvox admin set-admin admin
 ```
 
 ### 3. Open the web client
@@ -244,10 +244,10 @@ amityvox migrate up                     # Run pending migrations
 amityvox migrate down                   # Rollback last migration
 amityvox migrate status                 # Show migration status
 amityvox admin create-user              # Create a user
-amityvox admin suspend --username X     # Suspend a user
-amityvox admin unsuspend --username X   # Unsuspend a user
-amityvox admin set-admin --username X   # Grant admin flag
-amityvox admin unset-admin --username X # Revoke admin flag
+amityvox admin suspend X                # Suspend a user
+amityvox admin unsuspend X              # Unsuspend a user
+amityvox admin set-admin X              # Grant admin flag
+amityvox admin unset-admin X            # Revoke admin flag
 amityvox admin list-users               # List all users
 amityvox version                        # Print version info
 ```

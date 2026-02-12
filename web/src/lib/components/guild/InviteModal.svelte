@@ -29,7 +29,7 @@
 		try {
 			invite = await api.createInvite(guildId, {
 				max_uses: maxUses || undefined,
-				max_age_seconds: maxAge || undefined
+				max_age_seconds: maxAge
 			});
 		} catch (err: any) {
 			error = err.message || 'Failed to create invite';

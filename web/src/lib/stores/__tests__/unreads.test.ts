@@ -19,7 +19,11 @@ vi.mock('../channels', () => {
 
 import {
 	unreadCounts,
+	unreadState,
 	getUnreadCount,
+	getMentionCount,
+	mentionCounts,
+	getLastReadId,
 	incrementUnread,
 	clearChannelUnreads,
 	totalUnreads
@@ -27,8 +31,9 @@ import {
 
 describe('unreads store', () => {
 	beforeEach(() => {
-		// Reset unread counts.
+		// Reset unread counts and mention state.
 		unreadCounts.set(new Map());
+		unreadState.set(new Map());
 	});
 
 	it('starts with zero unreads', () => {
@@ -64,5 +69,31 @@ describe('unreads store', () => {
 
 	it('returns 0 for channels with no unreads', () => {
 		expect(get(getUnreadCount('ch-unknown'))).toBe(0);
+	});
+
+	it('tracks mention counts when incrementing with isMention=true', () => {
+		incrementUnread('ch-1', true);
+		incrementUnread('ch-1', true);
+		incrementUnread('ch-1'); // not a mention
+		incrementUnread('ch-2', true);
+
+		expect(get(getMentionCount('ch-1'))).toBe(2);
+		expect(get(getMentionCount('ch-2'))).toBe(1);
+		expect(get(getMentionCount('ch-unknown'))).toBe(0);
+	});
+
+	it('exposes mentionCounts derived store as a Map', () => {
+		incrementUnread('ch-1', true);
+		incrementUnread('ch-2', true);
+		incrementUnread('ch-3'); // no mention
+
+		const counts = get(mentionCounts);
+		expect(counts.get('ch-1')).toBe(1);
+		expect(counts.get('ch-2')).toBe(1);
+		expect(counts.has('ch-3')).toBe(false);
+	});
+
+	it('returns null lastReadId for unknown channels', () => {
+		expect(get(getLastReadId('ch-unknown'))).toBeNull();
 	});
 });

@@ -182,10 +182,11 @@ func runServe() error {
 	// Create media/S3 storage service.
 	var mediaSvc *media.Service
 	if cfg.Storage.Endpoint != "" {
-		maxMB, _ := cfg.Media.MaxUploadSizeBytes()
-		if maxMB <= 0 {
-			maxMB = 100 * 1024 * 1024
+		maxBytes, _ := cfg.Media.MaxUploadSizeBytes()
+		if maxBytes <= 0 {
+			maxBytes = 100 * 1024 * 1024
 		}
+		logger.Info("media upload limit configured", slog.Int64("max_bytes", maxBytes), slog.String("max_upload_size", cfg.Media.MaxUploadSize))
 		svc, err := media.New(media.Config{
 			Endpoint:       cfg.Storage.Endpoint,
 			Bucket:         cfg.Storage.Bucket,
@@ -193,7 +194,7 @@ func runServe() error {
 			SecretKey:      cfg.Storage.SecretKey,
 			Region:         cfg.Storage.Region,
 			UseSSL:         cfg.Storage.UseSSL,
-			MaxUploadMB:    maxMB / (1024 * 1024),
+			MaxUploadMB:    maxBytes / (1024 * 1024),
 			ThumbnailSizes: cfg.Media.ImageThumbnailSizes,
 			StripExif:      cfg.Media.StripExif,
 			Pool:           db.Pool,

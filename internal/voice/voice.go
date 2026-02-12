@@ -130,13 +130,44 @@ func (s *Service) ListParticipants(ctx context.Context, channelID string) ([]*li
 }
 
 // MuteParticipant server-mutes a participant in a voice channel.
+// Preserves the current deafen state to avoid conflicting permission updates.
 func (s *Service) MuteParticipant(ctx context.Context, channelID, userID string, muted bool) error {
+	// Check current deafen state so we don't accidentally undo it.
+	s.statesMu.RLock()
+	deafened := false
+	if vs, ok := s.states[userID]; ok {
+		deafened = vs.Deafened
+	}
+	s.statesMu.RUnlock()
+
 	_, err := s.roomClient.UpdateParticipant(ctx, &livekit.UpdateParticipantRequest{
 		Room:     channelID,
 		Identity: userID,
 		Permission: &livekit.ParticipantPermission{
 			CanPublish:   !muted,
-			CanSubscribe: true,
+			CanSubscribe: !deafened,
+		},
+	})
+	return err
+}
+
+// DeafenParticipant server-deafens a participant in a voice channel.
+// Preserves the current mute state to avoid conflicting permission updates.
+func (s *Service) DeafenParticipant(ctx context.Context, channelID, userID string, deafened bool) error {
+	// Check current mute state so we don't accidentally undo it.
+	s.statesMu.RLock()
+	muted := false
+	if vs, ok := s.states[userID]; ok {
+		muted = vs.Muted
+	}
+	s.statesMu.RUnlock()
+
+	_, err := s.roomClient.UpdateParticipant(ctx, &livekit.UpdateParticipantRequest{
+		Room:     channelID,
+		Identity: userID,
+		Permission: &livekit.ParticipantPermission{
+			CanPublish:   !muted,
+			CanSubscribe: !deafened,
 		},
 	})
 	return err
@@ -149,6 +180,24 @@ func (s *Service) RemoveParticipant(ctx context.Context, channelID, userID strin
 		Identity: userID,
 	})
 	return err
+}
+
+// SetServerMute sets the server-side mute flag on a user's voice state.
+func (s *Service) SetServerMute(userID string, muted bool) {
+	s.statesMu.Lock()
+	defer s.statesMu.Unlock()
+	if vs, ok := s.states[userID]; ok {
+		vs.Muted = muted
+	}
+}
+
+// SetServerDeafen sets the server-side deafen flag on a user's voice state.
+func (s *Service) SetServerDeafen(userID string, deafened bool) {
+	s.statesMu.Lock()
+	defer s.statesMu.Unlock()
+	if vs, ok := s.states[userID]; ok {
+		vs.Deafened = deafened
+	}
 }
 
 // UpdateVoiceState updates the in-memory voice state for a user.

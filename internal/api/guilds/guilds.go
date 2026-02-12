@@ -37,11 +37,16 @@ type createGuildRequest struct {
 }
 
 type updateGuildRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	IconID      *string `json:"icon_id"`
-	BannerID    *string `json:"banner_id"`
-	NSFW        *bool   `json:"nsfw"`
+	Name              *string  `json:"name"`
+	Description       *string  `json:"description"`
+	IconID            *string  `json:"icon_id"`
+	BannerID          *string  `json:"banner_id"`
+	NSFW              *bool    `json:"nsfw"`
+	Discoverable      *bool    `json:"discoverable"`
+	VerificationLevel *int     `json:"verification_level"`
+	AFKChannelID      *string  `json:"afk_channel_id"`
+	AFKTimeout        *int     `json:"afk_timeout"`
+	Tags              []string `json:"tags"`
 }
 
 type createChannelRequest struct {
@@ -120,12 +125,14 @@ func (h *Handler) HandleCreateGuild(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO guilds (id, instance_id, owner_id, name, description, default_permissions, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, now())
 		 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
-		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members, created_at`,
+		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
+		           verification_level, afk_channel_id, afk_timeout, created_at`,
 		guildID, h.InstanceID, userID, req.Name, req.Description, defaultPerms,
 	).Scan(
 		&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
 		&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
-		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers, &guild.CreatedAt,
+		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
+		&guild.VerificationLevel, &guild.AFKChannelID, &guild.AFKTimeout, &guild.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create guild", slog.String("error", err.Error()))
@@ -208,6 +215,12 @@ func (h *Handler) HandleUpdateGuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If tags were provided, update them; otherwise keep existing.
+	var tagsArg interface{} = nil
+	if req.Tags != nil {
+		tagsArg = req.Tags
+	}
+
 	var guild models.Guild
 	err := h.Pool.QueryRow(r.Context(),
 		`UPDATE guilds SET
@@ -215,15 +228,24 @@ func (h *Handler) HandleUpdateGuild(w http.ResponseWriter, r *http.Request) {
 			description = COALESCE($3, description),
 			icon_id = COALESCE($4, icon_id),
 			banner_id = COALESCE($5, banner_id),
-			nsfw = COALESCE($6, nsfw)
+			nsfw = COALESCE($6, nsfw),
+			discoverable = COALESCE($7, discoverable),
+			verification_level = COALESCE($8, verification_level),
+			afk_channel_id = COALESCE($9, afk_channel_id),
+			afk_timeout = COALESCE($10, afk_timeout),
+			tags = COALESCE($11, tags)
 		 WHERE id = $1
 		 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
-		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members, created_at`,
-		guildID, req.Name, req.Description, req.IconID, req.BannerID, req.NSFW,
+		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
+		           vanity_url, verification_level, afk_channel_id, afk_timeout,
+		           tags, member_count, created_at`,
+		guildID, req.Name, req.Description, req.IconID, req.BannerID, req.NSFW, req.Discoverable, req.VerificationLevel, req.AFKChannelID, req.AFKTimeout, tagsArg,
 	).Scan(
 		&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
 		&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
-		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers, &guild.CreatedAt,
+		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
+		&guild.VanityURL, &guild.VerificationLevel, &guild.AFKChannelID, &guild.AFKTimeout,
+		&guild.Tags, &guild.MemberCount, &guild.CreatedAt,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update guild")
@@ -346,12 +368,14 @@ func (h *Handler) HandleTransferGuildOwnership(w http.ResponseWriter, r *http.Re
 		`UPDATE guilds SET owner_id = $2
 		 WHERE id = $1
 		 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
-		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members, created_at`,
+		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
+		           verification_level, created_at`,
 		guildID, req.NewOwnerID,
 	).Scan(
 		&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
 		&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
-		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers, &guild.CreatedAt,
+		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
+		&guild.VerificationLevel, &guild.CreatedAt,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to transfer ownership")
@@ -378,7 +402,7 @@ func (h *Handler) HandleGetGuildChannels(w http.ResponseWriter, r *http.Request)
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		        default_permissions, created_at
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
 		 FROM channels WHERE guild_id = $1
 		 ORDER BY position, created_at`,
 		guildID,
@@ -395,7 +419,8 @@ func (h *Handler) HandleGetGuildChannels(w http.ResponseWriter, r *http.Request)
 		if err := rows.Scan(
 			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
-			&c.OwnerID, &c.DefaultPermissions, &c.CreatedAt,
+			&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
+			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read channels")
 			return
@@ -452,12 +477,14 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, created_at`,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
 		channelID, guildID, req.CategoryID, req.ChannelType, req.Name, req.Topic, position, nsfw,
 	).Scan(
 		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
 		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
-		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions, &channel.CreatedAt,
+		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
+		&channel.UserLimit, &channel.Bitrate,
+		&channel.Locked, &channel.LockedBy, &channel.LockedAt, &channel.Archived, &channel.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create channel", slog.String("error", err.Error()))
@@ -486,7 +513,8 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 		`SELECT gm.guild_id, gm.user_id, gm.nickname, gm.avatar_id, gm.joined_at,
 		        gm.timeout_until, gm.deaf, gm.mute,
 		        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
-		        u.status_text, u.status_presence, u.bio, u.flags, u.created_at
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns, u.flags, u.created_at
 		 FROM guild_members gm
 		 JOIN users u ON u.id = gm.user_id
 		 WHERE gm.guild_id = $1
@@ -508,7 +536,8 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 			&m.GuildID, &m.UserID, &m.Nickname, &m.AvatarID, &m.JoinedAt,
 			&m.TimeoutUntil, &m.Deaf, &m.Mute,
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
-			&u.StatusText, &u.StatusPresence, &u.Bio, &u.Flags, &u.CreatedAt,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read members")
 			return
@@ -1177,9 +1206,11 @@ func (h *Handler) HandleCreateGuildInvite(w http.ResponseWriter, r *http.Request
 
 	code := generateInviteCode()
 
-	// Default max age: 24 hours.
+	// Expiry: 0 means never, nil defaults to 24 hours, positive value is seconds.
 	var expiresAt *time.Time
-	if req.MaxAgeSeconds != nil && *req.MaxAgeSeconds > 0 {
+	if req.MaxAgeSeconds != nil && *req.MaxAgeSeconds == 0 {
+		// Explicitly "never" — leave expiresAt nil.
+	} else if req.MaxAgeSeconds != nil && *req.MaxAgeSeconds > 0 {
 		t := time.Now().Add(time.Duration(*req.MaxAgeSeconds) * time.Second)
 		expiresAt = &t
 	} else {
@@ -1750,13 +1781,15 @@ func (h *Handler) getGuild(ctx context.Context, guildID string) (*models.Guild, 
 	err := h.Pool.QueryRow(ctx,
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
 		        g.default_permissions, g.flags, g.nsfw, g.discoverable, g.preferred_locale,
-		        g.max_members, g.vanity_url, g.member_count, g.created_at
+		        g.max_members, g.vanity_url, g.verification_level, g.afk_channel_id, g.afk_timeout,
+		        g.tags, g.member_count, g.created_at
 		 FROM guilds g WHERE g.id = $1`,
 		guildID,
 	).Scan(
 		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 		&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-		&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.MemberCount, &g.CreatedAt,
+		&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel, &g.AFKChannelID, &g.AFKTimeout,
+		&g.Tags, &g.MemberCount, &g.CreatedAt,
 	)
 	return &g, err
 }
@@ -1771,13 +1804,15 @@ func (h *Handler) HandleGetGuildPreview(w http.ResponseWriter, r *http.Request) 
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id, g.banner_id,
 		        g.flags, g.nsfw, g.discoverable, g.preferred_locale,
-		        g.member_count, g.created_at
+		        g.verification_level, g.afk_channel_id, g.afk_timeout,
+		        g.tags, g.member_count, g.created_at
 		 FROM guilds g WHERE g.id = $1`,
 		guildID,
 	).Scan(
 		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 		&g.BannerID, &g.Flags, &g.NSFW, &g.Discoverable, &g.PreferredLocale,
-		&g.MemberCount, &g.CreatedAt,
+		&g.VerificationLevel, &g.AFKChannelID, &g.AFKTimeout,
+		&g.Tags, &g.MemberCount, &g.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -1944,26 +1979,35 @@ func (h *Handler) HandleResolveVanityURL(w http.ResponseWriter, r *http.Request)
 // GET /api/v1/guilds/discover
 func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
+	tag := r.URL.Query().Get("tag")
 	limit := 50
 
 	baseSQL := `SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
 	            g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
-	            g.preferred_locale, g.max_members, g.vanity_url,
+	            g.preferred_locale, g.max_members, g.vanity_url, g.verification_level,
+	            g.afk_channel_id, g.afk_timeout, g.tags,
 	            g.member_count, g.created_at
 	     FROM guilds g
 	     WHERE g.discoverable = true`
 
+	argN := 1
 	var args []interface{}
 	if query != "" {
-		baseSQL += ` AND g.name ILIKE '%' || $1 || '%' ORDER BY g.member_count DESC LIMIT $2`
-		args = append(args, query, limit)
-	} else {
-		baseSQL += ` ORDER BY g.member_count DESC LIMIT $1`
-		args = append(args, limit)
+		baseSQL += fmt.Sprintf(` AND g.name ILIKE '%%' || $%d || '%%'`, argN)
+		args = append(args, query)
+		argN++
 	}
+	if tag != "" && tag != "All" {
+		baseSQL += fmt.Sprintf(` AND $%d = ANY(g.tags)`, argN)
+		args = append(args, tag)
+		argN++
+	}
+	baseSQL += fmt.Sprintf(` ORDER BY g.member_count DESC LIMIT $%d`, argN)
+	args = append(args, limit)
 
 	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
 	if err != nil {
+		h.Logger.Error("discover guilds query failed", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to discover guilds")
 		return
 	}
@@ -1975,8 +2019,11 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 			&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.MemberCount, &g.CreatedAt,
+			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel,
+			&g.AFKChannelID, &g.AFKTimeout, &g.Tags,
+			&g.MemberCount, &g.CreatedAt,
 		); err != nil {
+			h.Logger.Error("discover guilds scan failed", slog.String("error", err.Error()))
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")
 			return
 		}
@@ -1984,6 +2031,73 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, guilds)
+}
+
+// HandleJoinDiscoverableGuild allows a user to join a discoverable guild directly.
+// POST /api/v1/guilds/{guildID}/join
+func (h *Handler) HandleJoinDiscoverableGuild(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	// Check guild exists and is discoverable.
+	var discoverable bool
+	var guildName string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT discoverable, name FROM guilds WHERE id = $1`, guildID,
+	).Scan(&discoverable, &guildName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Guild not found")
+		return
+	}
+	if !discoverable {
+		writeError(w, http.StatusForbidden, "not_discoverable", "This guild is not open for direct joins")
+		return
+	}
+
+	// Check already a member.
+	if h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusConflict, "already_member", "You are already a member of this guild")
+		return
+	}
+
+	// Check ban.
+	var banned bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, userID,
+	).Scan(&banned)
+	if banned {
+		writeError(w, http.StatusForbidden, "banned", "You are banned from this guild")
+		return
+	}
+
+	// Add member.
+	_, err = h.Pool.Exec(r.Context(),
+		`INSERT INTO guild_members (guild_id, user_id, joined_at) VALUES ($1, $2, now())`,
+		guildID, userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
+		return
+	}
+
+	// Increment member count.
+	h.Pool.Exec(r.Context(), `UPDATE guilds SET member_count = member_count + 1 WHERE id = $1`, guildID)
+
+	// Publish guild join event.
+	if h.EventBus != nil {
+		h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD",
+			map[string]interface{}{
+				"guild_id": guildID,
+				"user_id":  userID,
+			})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"guild_id": guildID,
+		"name":     guildName,
+		"joined":   true,
+	})
 }
 
 func (h *Handler) isMember(ctx context.Context, guildID, userID string) bool {

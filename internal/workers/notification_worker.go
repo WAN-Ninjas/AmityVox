@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/notifications"
 )
 
@@ -39,6 +40,7 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 		GuildID         string   `json:"guild_id"`
 		AuthorID        string   `json:"author_id"`
 		Content         string   `json:"content"`
+		Flags           int      `json:"flags"`
 		MentionUserIDs  []string `json:"mention_user_ids"`
 		MentionRoleIDs  []string `json:"mention_role_ids"`
 		MentionEveryone bool     `json:"mention_everyone"`
@@ -49,6 +51,11 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 	}
 
 	if msg.Content == "" {
+		return
+	}
+
+	// Skip notifications for silent messages.
+	if msg.Flags&models.MessageFlagSilent != 0 {
 		return
 	}
 

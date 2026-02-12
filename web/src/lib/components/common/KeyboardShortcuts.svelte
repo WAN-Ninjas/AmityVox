@@ -1,11 +1,14 @@
 <script lang="ts">
 	import Modal from './Modal.svelte';
+	import { markAllRead } from '$lib/stores/unreads';
+	import { goto } from '$app/navigation';
 
 	interface Props {
 		onToggleSearch?: () => void;
+		onToggleMembers?: () => void;
 	}
 
-	let { onToggleSearch }: Props = $props();
+	let { onToggleSearch, onToggleMembers }: Props = $props();
 	let showHelp = $state(false);
 
 	function handleGlobalKeydown(e: KeyboardEvent) {
@@ -20,6 +23,27 @@
 			return;
 		}
 
+		// Ctrl+Shift+M: mark all as read
+		if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'M') {
+			e.preventDefault();
+			markAllRead();
+			return;
+		}
+
+		// Ctrl+Shift+U: toggle member list
+		if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'U') {
+			e.preventDefault();
+			onToggleMembers?.();
+			return;
+		}
+
+		// Ctrl+,: open settings
+		if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+			e.preventDefault();
+			goto('/app/settings');
+			return;
+		}
+
 		// ? key (not in input): show shortcuts help
 		if (e.key === '?' && !isInput && !e.ctrlKey && !e.metaKey) {
 			e.preventDefault();
@@ -29,7 +53,10 @@
 	}
 
 	const shortcuts = [
-		{ keys: 'Ctrl+K', description: 'Search messages' },
+		{ keys: 'Ctrl+K', description: 'Open command palette' },
+		{ keys: 'Ctrl+Shift+M', description: 'Mark all as read' },
+		{ keys: 'Ctrl+Shift+U', description: 'Toggle member list' },
+		{ keys: 'Ctrl+,', description: 'Open settings' },
 		{ keys: 'Enter', description: 'Send message' },
 		{ keys: 'Shift+Enter', description: 'New line in message' },
 		{ keys: 'Escape', description: 'Close panel/modal, cancel edit/reply' },
