@@ -127,8 +127,16 @@ func New(natsURL string, logger *slog.Logger) (*Bus, error) {
 func (b *Bus) EnsureStreams() error {
 	streams := []nats.StreamConfig{
 		{
-			Name:      "AMITYVOX_EVENTS",
-			Subjects:  []string{"amityvox.>"},
+			Name: "AMITYVOX_EVENTS",
+			Subjects: []string{
+				"amityvox.message.>",
+				"amityvox.channel.>",
+				"amityvox.guild.>",
+				"amityvox.presence.>",
+				"amityvox.user.>",
+				"amityvox.voice.>",
+				"amityvox.automod.>",
+			},
 			Retention: nats.LimitsPolicy,
 			MaxAge:    24 * time.Hour,
 			Storage:   nats.FileStorage,

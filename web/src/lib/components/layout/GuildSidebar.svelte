@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { guildList, currentGuildId, setGuild } from '$lib/stores/guilds';
 	import Avatar from '$components/common/Avatar.svelte';
+	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
+	import { goto } from '$app/navigation';
 
 	let showCreateModal = $state(false);
 
 	function selectGuild(id: string) {
-		setGuild(id);
+		goto(`/app/guilds/${id}`);
 	}
 </script>
 
@@ -15,7 +17,7 @@
 		class="flex h-12 w-12 items-center justify-center rounded-2xl bg-bg-tertiary text-text-primary transition-all hover:rounded-xl hover:bg-brand-500"
 		class:!rounded-xl={$currentGuildId === null}
 		class:!bg-brand-500={$currentGuildId === null}
-		onclick={() => setGuild(null)}
+		onclick={() => { setGuild(null); goto('/app'); }}
 		title="Home"
 	>
 		<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
@@ -64,3 +66,5 @@
 		</svg>
 	</button>
 </nav>
+
+<CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />

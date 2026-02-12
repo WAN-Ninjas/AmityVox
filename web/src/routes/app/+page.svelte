@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { currentGuildId } from '$lib/stores/guilds';
 	import { currentUser } from '$lib/stores/auth';
+	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
+
+	let showCreateModal = $state(false);
 </script>
 
 <svelte:head>
@@ -17,11 +20,13 @@
 				Select a guild from the sidebar to get started, or create a new one.
 			</p>
 			<div class="flex justify-center gap-4">
-				<button class="btn-primary">Create a Guild</button>
-				<button class="btn-secondary">Join a Guild</button>
+				<button class="btn-primary" onclick={() => (showCreateModal = true)}>Create a Guild</button>
+				<button class="btn-secondary" onclick={() => (showCreateModal = true)}>Join a Guild</button>
 			</div>
 		</div>
 	{:else}
 		<p class="text-text-muted">Select a channel from the sidebar.</p>
 	{/if}
 </div>
+
+<CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />

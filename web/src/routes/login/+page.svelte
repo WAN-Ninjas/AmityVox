@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { login } from '$lib/stores/auth';
 
-	let email = $state('');
+	let username = $state('');
 	let password = $state('');
 	let error = $state('');
 	let loading = $state(false);
@@ -13,7 +13,7 @@
 		loading = true;
 
 		try {
-			await login(email, password);
+			await login(username, password);
 			goto('/app');
 		} catch (err: any) {
 			error = err.message || 'Login failed';
@@ -39,16 +39,16 @@
 
 			<form onsubmit={handleSubmit}>
 				<div class="mb-4">
-					<label for="email" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-						Email
+					<label for="username" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+						Username
 					</label>
 					<input
-						id="email"
-						type="email"
-						bind:value={email}
+						id="username"
+						type="text"
+						bind:value={username}
 						required
 						class="input w-full"
-						autocomplete="email"
+						autocomplete="username"
 					/>
 				</div>
 

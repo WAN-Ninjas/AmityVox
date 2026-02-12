@@ -2,6 +2,7 @@
 	import { currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { api } from '$lib/api/client';
 	import { getGatewayClient } from '$lib/stores/gateway';
+	import { appendMessage } from '$lib/stores/messages';
 
 	let content = $state('');
 	let inputEl: HTMLTextAreaElement;
@@ -18,7 +19,8 @@
 		if (inputEl) inputEl.style.height = 'auto';
 
 		try {
-			await api.sendMessage(channelId, msg);
+			const sent = await api.sendMessage(channelId, msg);
+			appendMessage(sent);
 		} catch (e) {
 			// Restore content on failure.
 			content = msg;
@@ -58,7 +60,8 @@
 
 		try {
 			const uploaded = await api.uploadFile(file);
-			await api.sendMessage($currentChannelId, '', { nonce: uploaded.id });
+			const sent = await api.sendMessage($currentChannelId, '', { attachment_ids: [uploaded.id] });
+			appendMessage(sent);
 		} catch (err) {
 			console.error('Upload failed:', err);
 		}

@@ -264,6 +264,7 @@ func Load(path string) (*Config, error) {
 		if os.IsNotExist(err) {
 			// No config file; use defaults + env overrides
 			applyEnvOverrides(&cfg)
+			deriveDefaults(&cfg)
 			if err := validate(&cfg); err != nil {
 				return nil, err
 			}
@@ -277,6 +278,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	deriveDefaults(&cfg)
 
 	if err := validate(&cfg); err != nil {
 		return nil, err
@@ -382,6 +384,17 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Auth.RequireEmail = v == "true" || v == "1"
 	}
 
+	// WebAuthn
+	if v := os.Getenv("AMITYVOX_AUTH_WEBAUTHN_RP_DISPLAY_NAME"); v != "" {
+		cfg.Auth.WebAuthn.RPDisplayName = v
+	}
+	if v := os.Getenv("AMITYVOX_AUTH_WEBAUTHN_RP_ID"); v != "" {
+		cfg.Auth.WebAuthn.RPID = v
+	}
+	if v := os.Getenv("AMITYVOX_AUTH_WEBAUTHN_RP_ORIGINS"); v != "" {
+		cfg.Auth.WebAuthn.RPOrigins = strings.Split(v, ",")
+	}
+
 	// Media
 	if v := os.Getenv("AMITYVOX_MEDIA_MAX_UPLOAD_SIZE"); v != "" {
 		cfg.Media.MaxUploadSize = v
@@ -434,6 +447,27 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AMITYVOX_METRICS_LISTEN"); v != "" {
 		cfg.Metrics.Listen = v
+	}
+}
+
+// deriveDefaults fills in config values that can be inferred from other settings.
+// Called after env overrides so that explicitly set values are not overwritten.
+func deriveDefaults(cfg *Config) {
+	if cfg.Auth.WebAuthn.RPID == "" || cfg.Auth.WebAuthn.RPID == "localhost" {
+		if cfg.Instance.Domain != "" && cfg.Instance.Domain != "localhost" {
+			cfg.Auth.WebAuthn.RPID = cfg.Instance.Domain
+		}
+	}
+	if cfg.Auth.WebAuthn.RPDisplayName == "" {
+		if cfg.Instance.Name != "" {
+			cfg.Auth.WebAuthn.RPDisplayName = cfg.Instance.Name
+		}
+	}
+	if len(cfg.Auth.WebAuthn.RPOrigins) == 0 ||
+		(len(cfg.Auth.WebAuthn.RPOrigins) == 1 && cfg.Auth.WebAuthn.RPOrigins[0] == "http://localhost") {
+		if cfg.Instance.Domain != "" && cfg.Instance.Domain != "localhost" {
+			cfg.Auth.WebAuthn.RPOrigins = []string{"https://" + cfg.Instance.Domain}
+		}
 	}
 }
 
