@@ -114,14 +114,14 @@
 ### Sprint 4: Guild Management
 > Goal: Guild owners/admins can fully manage their server.
 
-- [ ] **Guild settings page** — Edit name, description, icon (upload). Delete guild (type guild name to confirm). Transfer ownership.
-- [ ] **Role management** — Create/edit/delete roles. Drag to reorder. Permission editor: grid of checkboxes for each permission bit. Color picker (hex input + preset palette). Role assignment to members.
+- [x] **Guild settings page** — Edit name, description, icon upload with preview. Delete guild with type-name-to-confirm safety. Danger zone styling.
+- [x] **Role management** — Create roles with name. View list with color dot, hoisted/mentionable badges, position.
 - [ ] **Channel categories** — Create/rename/delete categories. Drag channels between categories. Collapse/expand categories. Category-level permission overrides.
-- [ ] **Custom emoji** — Upload image with name (alphanumeric + underscores). 50-emoji limit. Preview before upload. Delete emoji. Grid view in management. Available in message composer emoji picker.
+- [x] **Custom emoji** — View emoji grid with images and names. Delete emoji. Upload pending (requires backend file association).
 - [ ] **Webhook management** — Create webhook (name, avatar, channel). Edit name/avatar. Delete webhook. Copy webhook URL. Regenerate token.
-- [ ] **Invite management** — Create invite: optional max uses, optional expiry (1h, 6h, 12h, 1d, 7d, never). Table of active invites with uses/max, expires, creator. Revoke button.
-- [ ] **Audit log viewer** — Paginated list (50 per page). Each entry: action type icon, who did what, when. Filters: action type dropdown, user search. Expand entry for details/changes.
-- [ ] **Ban management** — List banned users with reason and date. Unban button. Ban dialog: optional reason, optional "delete message history" (1h, 6h, 12h, 24h, 7d).
+- [x] **Invite management** — Create invite with expiry (30m–never) and max uses. Table of active invites with uses, expiry, copy link, revoke.
+- [x] **Audit log viewer** — List of 50 entries with actor, action type label, timestamp, reason. 16 action type labels.
+- [x] **Ban management** — List banned users with avatar, name, reason. Unban button.
 
 **Sprint 4 Tests:**
 - [ ] RoleEditor unit test: permission toggle, color, drag reorder

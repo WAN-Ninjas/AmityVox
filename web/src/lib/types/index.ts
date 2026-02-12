@@ -251,6 +251,41 @@ export interface InstanceInfo {
 	created_at: string;
 }
 
+// --- Ban ---
+
+export interface Ban {
+	guild_id: string;
+	user_id: string;
+	reason: string | null;
+	created_at: string;
+	user?: User;
+}
+
+// --- Audit Log ---
+
+export interface AuditLogEntry {
+	id: string;
+	guild_id: string;
+	actor_id: string;
+	action_type: string;
+	target_id: string | null;
+	changes: Record<string, unknown> | null;
+	reason: string | null;
+	created_at: string;
+	actor?: User;
+}
+
+// --- Emoji ---
+
+export interface CustomEmoji {
+	id: string;
+	guild_id: string;
+	name: string;
+	creator_id: string | null;
+	animated: boolean;
+	created_at: string;
+}
+
 // --- Session ---
 
 export interface Session {

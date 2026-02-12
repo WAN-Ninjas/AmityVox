@@ -9,6 +9,9 @@ import type {
 	GuildMember,
 	Role,
 	Invite,
+	Ban,
+	AuditLogEntry,
+	CustomEmoji,
 	Session,
 	ReadState,
 	Relationship,
@@ -297,8 +300,16 @@ class ApiClient {
 
 	// --- Invites ---
 
+	getGuildInvites(guildId: string): Promise<Invite[]> {
+		return this.get(`/guilds/${guildId}/invites`);
+	}
+
 	createInvite(guildId: string, opts?: { max_uses?: number; max_age_seconds?: number }): Promise<Invite> {
 		return this.post(`/guilds/${guildId}/invites`, opts);
+	}
+
+	deleteInvite(code: string): Promise<void> {
+		return this.del(`/invites/${code}`);
 	}
 
 	getInvite(code: string): Promise<Invite> {
@@ -307,6 +318,33 @@ class ApiClient {
 
 	acceptInvite(code: string): Promise<Guild> {
 		return this.post(`/invites/${code}`);
+	}
+
+	// --- Bans ---
+
+	getGuildBans(guildId: string): Promise<Ban[]> {
+		return this.get(`/guilds/${guildId}/bans`);
+	}
+
+	// --- Audit Log ---
+
+	getAuditLog(guildId: string, params?: { limit?: number; before?: string; action_type?: string }): Promise<AuditLogEntry[]> {
+		const query = new URLSearchParams();
+		if (params?.limit) query.set('limit', String(params.limit));
+		if (params?.before) query.set('before', params.before);
+		if (params?.action_type) query.set('action_type', params.action_type);
+		const qs = query.toString();
+		return this.get(`/guilds/${guildId}/audit-log${qs ? '?' + qs : ''}`);
+	}
+
+	// --- Emoji ---
+
+	getGuildEmoji(guildId: string): Promise<CustomEmoji[]> {
+		return this.get(`/guilds/${guildId}/emoji`);
+	}
+
+	deleteGuildEmoji(guildId: string, emojiId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/emoji/${emojiId}`);
 	}
 
 	// --- Auth / Security ---
