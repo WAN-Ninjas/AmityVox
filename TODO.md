@@ -151,13 +151,13 @@
 - [x] Onboarding questionnaire flow — customizable questions that assign roles/channels
 - [x] Rules/ToS acceptance gate before participating (membership screening)
 - [x] Default channels configuration (which channels new members see first)
-- [ ] Server guide — curated walkthrough for new members
+- [x] Server guide — curated walkthrough for new members
 
 ### Server Discovery
 - [x] Public server directory (browse, search, filter)
 - [x] Category tags for servers (Gaming, Music, Education, Tech, etc.)
 - [x] Server preview page (description, member count, online count, featured channels) before joining
-- [ ] "Bump" system — servers can promote themselves periodically
+- [x] "Bump" system — servers can promote themselves periodically
 - [x] Discoverable toggle per guild in guild settings
 
 ### Scheduled Events
@@ -166,7 +166,7 @@
 - [x] RSVP / "Interested" tracking with count
 - [x] Event reminders via push notification (15 min, 1 hour before)
 - [x] Event listing in guild sidebar and dedicated events tab
-- [ ] Auto-cancel if event doesn't start within configurable window
+- [x] Auto-cancel if event doesn't start within configurable window
 
 ### Polls
 - [x] Native poll message type (not a bot — first-class support)
@@ -188,13 +188,13 @@
 - [x] Status expiry (don't clear, 30 min, 1 hour, 4 hours, today, custom)
 - [x] "About Me" section with markdown support on user profile
 - [x] Connected accounts display (GitHub, Spotify, Steam, etc.) — decorative, no OAuth needed
-- [ ] Activity status ("Playing X", "Listening to Y") via API for bots/integrations
+- [x] Activity status ("Playing X", "Listening to Y") via API for bots/integrations
 
 ### User Badges & Profile Customization
 - [x] Badge system — Admin, Moderator, Server Owner, Early Supporter, Bot, Verified
 - [x] Custom profile banner image (upload in settings)
 - [x] Profile accent color picker
-- [ ] User-level custom emoji (up to 10 personal emoji usable anywhere, a la Revolt)
+- [x] User-level custom emoji (up to 10 personal emoji usable anywhere, a la Revolt)
 - [x] Pronouns field on profile
 
 ### Saved Messages
@@ -355,10 +355,10 @@
 - [ ] Example plugins: welcome message, auto-role, leveling system, starboard
 
 ### Webhook Improvements
-- [ ] Webhook templates (pre-built formats for GitHub, GitLab, Jira, Sentry, etc.)
-- [ ] Webhook message formatting preview
-- [ ] Webhook execution logs (last 100 deliveries with status codes)
-- [ ] Incoming + Outgoing webhook types (outgoing: trigger on channel events, POST to external URL)
+- [x] Webhook templates (pre-built formats for GitHub, GitLab, Jira, Sentry, etc.)
+- [x] Webhook message formatting preview
+- [x] Webhook execution logs (last 100 deliveries with status codes)
+- [x] Incoming + Outgoing webhook types (outgoing: trigger on channel events, POST to external URL)
 
 ---
 
@@ -389,10 +389,10 @@
 - [ ] Cross-instance DMs (via federation)
 
 ### Data Portability
-- [ ] GDPR data export (download all your data as JSON/ZIP)
-- [ ] Account migration between instances (export + import profile, settings, relationships)
-- [ ] Message archive export (per-channel, as JSON or HTML)
-- [ ] Guild template export/import (clone guild structure including roles, channels, categories, permissions)
+- [x] GDPR data export (download all your data as JSON/ZIP)
+- [x] Account migration between instances (export + import profile, settings, relationships)
+- [x] Message archive export (per-channel, as JSON or HTML)
+- [x] Guild template export/import (clone guild structure including roles, channels, categories, permissions)
 
 ---
 
@@ -412,11 +412,11 @@
 - [ ] Message translation — click to translate a message (via LibreTranslate or similar self-hosted service)
 
 ### Channel Improvements
-- [ ] Channel templates — save channel configuration as reusable template
+- [x] Channel templates — save channel configuration as reusable template
 - [x] Channel archive — archive instead of delete (read-only, searchable, hidden from sidebar)
-- [ ] Read-only channels (announcement-style, only certain roles can post)
+- [x] Read-only channels (announcement-style, only certain roles can post)
 - [ ] Channel-specific custom emoji (emoji only available within that channel)
-- [ ] Default thread auto-archive duration per channel
+- [x] Default thread auto-archive duration per channel
 - [x] Channel clone — duplicate channel with all settings/permissions
 
 ### Navigation & UX
