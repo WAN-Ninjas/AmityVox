@@ -1,0 +1,42 @@
+{
+  "appId": "com.amityvox.app",
+  "appName": "AmityVox",
+  "webDir": "../web/build",
+  "bundledWebRuntime": false,
+  "server": {
+    "hostname": "app.amityvox.local",
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon_config_sample",
+      "iconColor": "#5865F2"
+    },
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#1e1f22",
+      "showSpinner": true,
+      "spinnerColor": "#5865F2"
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#1e1f22"
+    },
+    "Keyboard": {
+      "resize": "body",
+      "resizeOnFullScreen": true
+    }
+  },
+  "ios": {
+    "scheme": "AmityVox",
+    "contentInset": "always"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}

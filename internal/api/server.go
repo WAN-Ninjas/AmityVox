@@ -151,6 +151,9 @@ func (s *Server) registerRoutes() {
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
 
+	// Prometheus metrics endpoint.
+	s.Router.Get("/metrics", s.handleMetrics)
+
 	// API v1 routes.
 	s.Router.Route("/api/v1", func(r chi.Router) {
 		// Auth routes — public, no Bearer token required.
@@ -372,6 +375,10 @@ func (s *Server) registerRoutes() {
 				r.Post("/federation/peers", adminH.HandleAddFederationPeer)
 				r.Delete("/federation/peers/{peerID}", adminH.HandleRemoveFederationPeer)
 				r.Get("/stats", adminH.HandleGetStats)
+				r.Get("/users", adminH.HandleListUsers)
+				r.Post("/users/{userID}/suspend", adminH.HandleSuspendUser)
+				r.Post("/users/{userID}/unsuspend", adminH.HandleUnsuspendUser)
+				r.Post("/users/{userID}/set-admin", adminH.HandleSetAdmin)
 			})
 		})
 

@@ -339,3 +339,52 @@ export interface RegisterResponse {
 	token: string;
 	user: User;
 }
+
+// --- Notification Preferences ---
+
+export interface NotificationPreference {
+	user_id: string;
+	guild_id: string | null;
+	level: 'all' | 'mentions' | 'none';
+	suppress_everyone: boolean;
+	suppress_roles: boolean;
+	muted_until: string | null;
+}
+
+// --- Webhook ---
+
+export interface Webhook {
+	id: string;
+	guild_id: string;
+	channel_id: string;
+	creator_id: string | null;
+	name: string;
+	avatar_id: string | null;
+	token: string;
+	webhook_type: 'incoming' | 'outgoing';
+	outgoing_url: string | null;
+	created_at: string;
+}
+
+// --- User Settings (Privacy/Notification client prefs) ---
+
+export interface UserSettings {
+	desktop_notifications: boolean;
+	notification_sounds: boolean;
+	dm_privacy: 'everyone' | 'friends' | 'nobody';
+	friend_request_privacy: 'everyone' | 'mutual_guilds' | 'nobody';
+	[key: string]: unknown;
+}
+
+// --- Federation Peer ---
+
+export interface FederationPeer {
+	id: string;
+	domain: string;
+	name: string | null;
+	software: string | null;
+	software_version: string | null;
+	status: string;
+	last_seen_at: string | null;
+	created_at: string;
+}

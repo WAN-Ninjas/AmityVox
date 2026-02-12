@@ -2,7 +2,7 @@
 
 A self-hosted, federated, optionally-encrypted communication platform. Think Discord, but open source, federated, and designed to run on a Raspberry Pi.
 
-**License:** AGPL-3.0
+**Version:** v0.4.0 | **License:** AGPL-3.0
 
 ## Features
 
@@ -51,6 +51,31 @@ A self-hosted, federated, optionally-encrypted communication platform. Think Dis
 - SvelteKit 5 web client with TailwindCSS
 - Discord-like three-panel layout
 - Builds to 195KB static bundle served by Caddy
+- Full interactive UI: context menus, replies, reactions, edit/delete messages
+- Threaded conversations and message search
+- User popovers, DMs, and unread indicators
+- Pinned messages and typing indicators
+- Online/offline presence display
+- Image lightbox for media previews
+- Emoji picker and Giphy integration
+- Keyboard shortcuts for power users
+- Notification toasts for real-time feedback
+- Mobile responsive layout
+
+**Admin Dashboard**
+- Live instance statistics (users, messages, guilds, connections)
+- User management (search, suspend, grant/revoke admin)
+- Instance settings configuration
+- Federation peer management
+
+**Desktop & Mobile**
+- Tauri desktop app for Windows, macOS, and Linux
+- Capacitor mobile app for iOS and Android
+
+**Operations**
+- One-line installer script (`install.sh`) for quick deployment
+- Backup and restore scripts for data safety
+- Prometheus-compatible metrics endpoint (`/metrics`)
 
 ## Tech Stack
 
@@ -73,7 +98,13 @@ A self-hosted, federated, optionally-encrypted communication platform. Think Dis
 - [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) v2+
 - 2GB+ RAM (runs comfortably on Raspberry Pi 5 with 8GB)
 
-### 1. Clone and start
+### Option A: One-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/install.sh | bash
+```
+
+### Option B: Clone and start
 
 ```bash
 git clone https://github.com/WAN-Ninjas/AmityVox.git
@@ -148,6 +179,12 @@ make test-cover
 
 # Type-check frontend
 cd web && npm run check
+
+# Frontend unit tests
+cd web && npm test
+
+# Frontend E2E tests
+cd web && npx playwright test
 ```
 
 ## Docker Compose Services
@@ -240,14 +277,25 @@ amityvox/
 │   ├── voice/              # LiveKit voice integration
 │   └── workers/            # Background jobs (transcode, unfurl, automod, push)
 ├── web/                    # SvelteKit frontend
+│   └── src/lib/
+│       ├── components/     # UI components (chat, common, channels, encryption, guild)
+│       ├── stores/         # Svelte stores (state management)
+│       ├── api/            # API client modules
+│       └── types/          # TypeScript type definitions
 ├── bridges/
 │   ├── matrix/             # Matrix bridge (standalone binary)
 │   └── discord/            # Discord bridge (standalone binary)
+├── desktop/                # Tauri desktop app configuration (Windows, macOS, Linux)
+├── mobile/                 # Capacitor mobile app configuration (iOS, Android)
+├── scripts/                # Backup/restore and operational scripts
 ├── deploy/
 │   ├── docker/             # Dockerfile + docker-compose.yml
 │   └── caddy/              # Caddyfile
 ├── docs/
-│   └── architecture.md     # Master architecture specification
+│   ├── architecture.md     # Master architecture specification
+│   ├── deployment.md       # Deployment guide
+│   ├── giphy-setup.md      # Giphy integration setup
+│   └── ui-standards.md     # UI standards and conventions
 ├── amityvox.example.toml   # Configuration template
 ├── Makefile                # Build, test, deploy targets
 └── TODO.md                 # Development roadmap
@@ -255,7 +303,7 @@ amityvox/
 
 ## API Overview
 
-All endpoints under `/api/v1/`. Authentication via `Authorization: Bearer <token>`.
+138+ REST API endpoints across 15 resource groups, all under `/api/v1/`. Authentication via `Authorization: Bearer <token>`.
 
 Response format:
 ```json
@@ -275,6 +323,10 @@ Major endpoint groups:
 - `GET /channels/{id}/messages/{id}/reactions` — Reactions
 - `POST /voice/{channelId}/join` — Voice channels
 - `/ws` — WebSocket gateway
+- `GET /admin/stats` — Live instance statistics
+- `GET/PATCH /admin/users` — Admin user management
+- `GET/PATCH /admin/instance` — Instance settings
+- `GET /metrics` — Prometheus-compatible metrics endpoint
 
 See [`docs/architecture.md`](docs/architecture.md) for the complete API reference.
 
