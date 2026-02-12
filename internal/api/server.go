@@ -18,16 +18,20 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/amityvox/amityvox/internal/api/activities"
 	"github.com/amityvox/amityvox/internal/api/admin"
 	"github.com/amityvox/amityvox/internal/api/bookmarks"
 	"github.com/amityvox/amityvox/internal/api/bots"
 	"github.com/amityvox/amityvox/internal/api/channels"
+	"github.com/amityvox/amityvox/internal/api/experimental"
 	"github.com/amityvox/amityvox/internal/api/guildevents"
 	"github.com/amityvox/amityvox/internal/api/guilds"
+	"github.com/amityvox/amityvox/internal/api/integrations"
 	"github.com/amityvox/amityvox/internal/api/invites"
 	"github.com/amityvox/amityvox/internal/api/moderation"
 	"github.com/amityvox/amityvox/internal/api/onboarding"
 	"github.com/amityvox/amityvox/internal/api/polls"
+	"github.com/amityvox/amityvox/internal/api/social"
 	"github.com/amityvox/amityvox/internal/api/stickers"
 	"github.com/amityvox/amityvox/internal/api/themes"
 	"github.com/amityvox/amityvox/internal/api/users"
@@ -207,6 +211,26 @@ func (s *Server) registerRoutes() {
 		Logger: s.Logger,
 	}
 	widgetH := &widgets.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	experimentalH := &experimental.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	activityH := &activities.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	socialH := &social.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	integrationH := &integrations.Handler{
 		Pool:     s.DB.Pool,
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
@@ -617,6 +641,145 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{groupID}/channels/{channelID}", channelGroupH.HandleRemoveChannelFromGroup)
 			})
 
+			// Experimental features.
+			r.Route("/channels/{channelID}/experimental", func(r chi.Router) {
+				// Location sharing.
+				r.Post("/location", experimentalH.HandleShareLocation)
+				r.Patch("/location/{shareID}", experimentalH.HandleUpdateLiveLocation)
+				r.Delete("/location/{shareID}", experimentalH.HandleStopLiveLocation)
+				r.Get("/locations", experimentalH.HandleGetLocationShares)
+				// Message effects & super reactions.
+				r.Post("/messages/{messageID}/effects", experimentalH.HandleCreateMessageEffect)
+				r.Post("/messages/{messageID}/super-reactions", experimentalH.HandleAddSuperReaction)
+				r.Get("/messages/{messageID}/super-reactions", experimentalH.HandleGetSuperReactions)
+				// Message summaries.
+				r.Post("/summarize", experimentalH.HandleSummarizeMessages)
+				r.Get("/summaries", experimentalH.HandleGetSummaries)
+				// Voice transcription.
+				r.Get("/transcription/settings", experimentalH.HandleGetTranscriptionSettings)
+				r.Patch("/transcription/settings", experimentalH.HandleUpdateTranscriptionSettings)
+				r.Get("/transcriptions", experimentalH.HandleGetTranscriptions)
+				// Whiteboards.
+				r.Post("/whiteboards", experimentalH.HandleCreateWhiteboard)
+				r.Get("/whiteboards", experimentalH.HandleGetWhiteboards)
+				r.Patch("/whiteboards/{whiteboardID}", experimentalH.HandleUpdateWhiteboard)
+				r.Get("/whiteboards/{whiteboardID}", experimentalH.HandleGetWhiteboardState)
+				// Code snippets.
+				r.Post("/code-snippets", experimentalH.HandleCreateCodeSnippet)
+				r.Get("/code-snippets/{snippetID}", experimentalH.HandleGetCodeSnippet)
+				r.Post("/code-snippets/{snippetID}/run", experimentalH.HandleRunCodeSnippet)
+				// Video recordings.
+				r.Post("/recordings", experimentalH.HandleCreateVideoRecording)
+				r.Get("/recordings", experimentalH.HandleGetRecordings)
+				// Kanban boards.
+				r.Post("/kanban", experimentalH.HandleCreateKanbanBoard)
+				r.Get("/kanban/{boardID}", experimentalH.HandleGetKanbanBoard)
+				r.Post("/kanban/{boardID}/columns", experimentalH.HandleCreateKanbanColumn)
+				r.Post("/kanban/{boardID}/columns/{columnID}/cards", experimentalH.HandleCreateKanbanCard)
+				r.Patch("/kanban/{boardID}/cards/{cardID}/move", experimentalH.HandleMoveKanbanCard)
+				r.Delete("/kanban/{boardID}/cards/{cardID}", experimentalH.HandleDeleteKanbanCard)
+			})
+
+			// Activities and games.
+			r.Route("/activities", func(r chi.Router) {
+				r.Get("/", activityH.HandleListActivities)
+				r.Get("/{activityID}", activityH.HandleGetActivity)
+				r.Post("/", activityH.HandleCreateActivity)
+				r.Post("/{activityID}/rate", activityH.HandleRateActivity)
+				r.Post("/{activityID}/sessions", activityH.HandleStartActivitySession)
+				r.Get("/{activityID}/sessions/active", activityH.HandleGetActiveSession)
+				r.Post("/sessions/{sessionID}/join", activityH.HandleJoinActivitySession)
+				r.Post("/sessions/{sessionID}/leave", activityH.HandleLeaveActivitySession)
+				r.Post("/sessions/{sessionID}/end", activityH.HandleEndActivitySession)
+				r.Patch("/sessions/{sessionID}/state", activityH.HandleUpdateActivityState)
+			})
+			r.Route("/games", func(r chi.Router) {
+				r.Post("/", activityH.HandleCreateGame)
+				r.Post("/{gameSessionID}/join", activityH.HandleJoinGame)
+				r.Post("/{gameSessionID}/move", activityH.HandleGameMove)
+				r.Get("/{gameSessionID}", activityH.HandleGetGame)
+				r.Get("/leaderboard/{activityID}", activityH.HandleGetLeaderboard)
+			})
+			r.Route("/watch-together", func(r chi.Router) {
+				r.Post("/", activityH.HandleStartWatchTogether)
+				r.Post("/{sessionID}/sync", activityH.HandleSyncWatchTogether)
+			})
+			r.Route("/music-party", func(r chi.Router) {
+				r.Post("/", activityH.HandleStartMusicParty)
+				r.Post("/{sessionID}/queue", activityH.HandleAddToMusicQueue)
+			})
+
+			// Social and growth features.
+			r.Route("/guilds/{guildID}/insights", func(r chi.Router) {
+				r.Get("/", socialH.HandleGetInsights)
+			})
+			r.Route("/guilds/{guildID}/boosts", func(r chi.Router) {
+				r.Get("/", socialH.HandleGetBoosts)
+				r.Post("/", socialH.HandleCreateBoost)
+				r.Delete("/", socialH.HandleRemoveBoost)
+			})
+			r.Post("/guilds/{guildID}/vanity-claim", socialH.HandleClaimVanityURL)
+			r.Delete("/guilds/{guildID}/vanity-claim", socialH.HandleReleaseVanityURL)
+			r.Get("/guilds/{guildID}/vanity-check", socialH.HandleCheckVanityAvailability)
+			r.Get("/achievements", socialH.HandleGetAchievements)
+			r.Get("/users/{userID}/achievements", socialH.HandleGetUserAchievements)
+			r.Post("/users/@me/achievements/check", socialH.HandleCheckAchievements)
+			r.Route("/guilds/{guildID}/leveling", func(r chi.Router) {
+				r.Get("/", socialH.HandleGetLevelingConfig)
+				r.Patch("/", socialH.HandleUpdateLevelingConfig)
+				r.Post("/roles", socialH.HandleAddLevelRole)
+				r.Delete("/roles/{roleID}", socialH.HandleDeleteLevelRole)
+			})
+			r.Get("/guilds/{guildID}/leaderboard", socialH.HandleGetLeaderboard)
+			r.Get("/guilds/{guildID}/members/{memberID}/xp", socialH.HandleGetMemberXP)
+			r.Route("/guilds/{guildID}/starboard", func(r chi.Router) {
+				r.Get("/", socialH.HandleGetStarboardConfig)
+				r.Patch("/", socialH.HandleUpdateStarboardConfig)
+				r.Get("/entries", socialH.HandleGetStarboardEntries)
+			})
+			r.Route("/guilds/{guildID}/welcome", func(r chi.Router) {
+				r.Get("/", socialH.HandleGetWelcomeConfig)
+				r.Patch("/", socialH.HandleUpdateWelcomeConfig)
+			})
+			r.Route("/guilds/{guildID}/auto-roles", func(r chi.Router) {
+				r.Get("/", socialH.HandleGetAutoRoles)
+				r.Post("/", socialH.HandleCreateAutoRole)
+				r.Patch("/{ruleID}", socialH.HandleUpdateAutoRole)
+				r.Delete("/{ruleID}", socialH.HandleDeleteAutoRole)
+			})
+
+			// Integration routes.
+			r.Route("/guilds/{guildID}/integrations", func(r chi.Router) {
+				r.Get("/", integrationH.HandleListIntegrations)
+				r.Post("/", integrationH.HandleCreateIntegration)
+				r.Get("/log", integrationH.HandleGetIntegrationLog)
+				r.Get("/{integrationID}", integrationH.HandleGetIntegration)
+				r.Patch("/{integrationID}", integrationH.HandleUpdateIntegration)
+				r.Delete("/{integrationID}", integrationH.HandleDeleteIntegration)
+				r.Get("/{integrationID}/activitypub/follows", integrationH.HandleListActivityPubFollows)
+				r.Post("/{integrationID}/activitypub/follows", integrationH.HandleAddActivityPubFollow)
+				r.Delete("/{integrationID}/activitypub/follows/{followID}", integrationH.HandleRemoveActivityPubFollow)
+				r.Get("/{integrationID}/rss/feeds", integrationH.HandleListRSSFeeds)
+				r.Post("/{integrationID}/rss/feeds", integrationH.HandleAddRSSFeed)
+				r.Delete("/{integrationID}/rss/feeds/{feedID}", integrationH.HandleRemoveRSSFeed)
+				r.Get("/{integrationID}/calendar/connections", integrationH.HandleListCalendarConnections)
+				r.Post("/{integrationID}/calendar/connections", integrationH.HandleCreateCalendarConnection)
+				r.Delete("/{integrationID}/calendar/connections/{connectionID}", integrationH.HandleDeleteCalendarConnection)
+				r.Post("/{integrationID}/calendar/connections/{connectionID}/sync", integrationH.HandleSyncCalendar)
+				r.Get("/{integrationID}/email/gateway", integrationH.HandleGetEmailGateway)
+				r.Post("/{integrationID}/email/gateway", integrationH.HandleCreateEmailGateway)
+				r.Delete("/{integrationID}/email/gateway", integrationH.HandleDeleteEmailGateway)
+				r.Get("/{integrationID}/sms/bridge", integrationH.HandleGetSMSBridge)
+				r.Post("/{integrationID}/sms/bridge", integrationH.HandleCreateSMSBridge)
+				r.Delete("/{integrationID}/sms/bridge", integrationH.HandleDeleteSMSBridge)
+			})
+			r.Route("/guilds/{guildID}/bridge-connections", func(r chi.Router) {
+				r.Get("/", integrationH.HandleListBridgeConnections)
+				r.Post("/", integrationH.HandleCreateBridgeConnection)
+				r.Patch("/{connectionID}", integrationH.HandleUpdateBridgeConnection)
+				r.Delete("/{connectionID}", integrationH.HandleDeleteBridgeConnection)
+			})
+
 			// Invite routes.
 			r.Route("/invites", func(r chi.Router) {
 				r.Get("/{code}", inviteH.HandleGetInvite)
@@ -743,6 +906,39 @@ func (s *Server) registerRoutes() {
 				r.Post("/federation/profiles", adminH.HandleAddInstanceProfile)
 				r.Delete("/federation/profiles/{profileID}", adminH.HandleRemoveInstanceProfile)
 				r.Get("/federation/users/{instanceID}/{userID}", adminH.HandleGetFederatedUserProfile)
+
+				// Self-hosting setup and management.
+				r.Get("/setup/status", adminH.HandleGetSetupStatus)
+				r.Post("/setup/complete", adminH.HandleCompleteSetup)
+				r.Get("/updates", adminH.HandleCheckUpdates)
+				r.Post("/updates/latest", adminH.HandleSetLatestVersion)
+				r.Post("/updates/dismiss", adminH.HandleDismissUpdate)
+				r.Get("/updates/config", adminH.HandleGetUpdateConfig)
+				r.Patch("/updates/config", adminH.HandleUpdateUpdateConfig)
+				r.Get("/health/dashboard", adminH.HandleGetHealthDashboard)
+				r.Get("/health/history", adminH.HandleGetHealthHistory)
+				r.Get("/storage", adminH.HandleGetStorageDashboard)
+				r.Route("/retention", func(r chi.Router) {
+					r.Get("/", adminH.HandleGetRetentionPolicies)
+					r.Post("/", adminH.HandleCreateRetentionPolicy)
+					r.Patch("/{policyID}", adminH.HandleUpdateRetentionPolicy)
+					r.Delete("/{policyID}", adminH.HandleDeleteRetentionPolicy)
+					r.Post("/{policyID}/run", adminH.HandleRunRetentionPolicy)
+				})
+				r.Route("/domains", func(r chi.Router) {
+					r.Get("/", adminH.HandleGetCustomDomains)
+					r.Post("/", adminH.HandleCreateCustomDomain)
+					r.Post("/{domainID}/verify", adminH.HandleVerifyCustomDomain)
+					r.Delete("/{domainID}", adminH.HandleDeleteCustomDomain)
+				})
+				r.Route("/backups", func(r chi.Router) {
+					r.Get("/", adminH.HandleGetBackupSchedules)
+					r.Post("/", adminH.HandleCreateBackupSchedule)
+					r.Patch("/{scheduleID}", adminH.HandleUpdateBackupSchedule)
+					r.Delete("/{scheduleID}", adminH.HandleDeleteBackupSchedule)
+					r.Get("/{scheduleID}/history", adminH.HandleGetBackupHistory)
+					r.Post("/{scheduleID}/trigger", adminH.HandleTriggerBackup)
+				})
 
 				// Bridge management.
 				r.Route("/bridges", func(r chi.Router) {
