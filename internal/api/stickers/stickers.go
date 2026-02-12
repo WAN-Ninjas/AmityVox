@@ -425,6 +425,234 @@ func (h *Handler) HandleGetUserPacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, packs)
 }
 
+// --- Sticker Pack Sharing ---
+
+// HandleEnableSharing generates a share code for a sticker pack and enables sharing.
+// POST /api/v1/guilds/{guildID}/sticker-packs/{packID}/share
+func (h *Handler) HandleEnableSharing(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	packID := chi.URLParam(r, "packID")
+
+	if !h.hasManageEmojis(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		return
+	}
+
+	// Verify pack belongs to guild.
+	var exists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM sticker_packs WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2)`,
+		packID, guildID).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		return
+	}
+
+	// Check if the pack already has a share code.
+	var existingCode *string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT share_code FROM sticker_packs WHERE id = $1`, packID).Scan(&existingCode)
+	if existingCode != nil && *existingCode != "" {
+		// Already shared — return existing code.
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"pack_id":    packID,
+			"share_code": *existingCode,
+			"shared":     true,
+		})
+		return
+	}
+
+	// Generate a unique share code using a ULID.
+	shareCode := models.NewULID().String()
+	_, err := h.Pool.Exec(r.Context(),
+		`UPDATE sticker_packs SET share_code = $1, shared = true WHERE id = $2`,
+		shareCode, packID)
+	if err != nil {
+		h.Logger.Error("failed to enable sticker pack sharing", "error", err.Error())
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to enable sharing")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"pack_id":    packID,
+		"share_code": shareCode,
+		"shared":     true,
+	})
+}
+
+// HandleDisableSharing removes the share code from a sticker pack.
+// DELETE /api/v1/guilds/{guildID}/sticker-packs/{packID}/share
+func (h *Handler) HandleDisableSharing(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	packID := chi.URLParam(r, "packID")
+
+	if !h.hasManageEmojis(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE sticker_packs SET share_code = NULL, shared = false
+		 WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2`,
+		packID, guildID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to disable sharing")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetSharedPack returns a sticker pack by its share code, including all stickers.
+// GET /api/v1/stickers/shared/{shareCode}
+func (h *Handler) HandleGetSharedPack(w http.ResponseWriter, r *http.Request) {
+	shareCode := chi.URLParam(r, "shareCode")
+
+	// Fetch the pack by share code.
+	var id, name string
+	var desc *string
+	var ownerType, ownerID string
+	var createdAt time.Time
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT id, name, description, owner_type, owner_id, created_at
+		 FROM sticker_packs WHERE share_code = $1 AND shared = true`,
+		shareCode,
+	).Scan(&id, &name, &desc, &ownerType, &ownerID, &createdAt)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Shared sticker pack not found or sharing disabled")
+		return
+	}
+
+	// Fetch stickers in this pack.
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, name, description, tags, file_id, format, created_at
+		 FROM stickers WHERE pack_id = $1 ORDER BY created_at`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch stickers")
+		return
+	}
+	defer rows.Close()
+
+	var stickers []map[string]interface{}
+	for rows.Next() {
+		var sid, sname, fileID, format string
+		var sdesc, tags *string
+		var sCreatedAt time.Time
+		if err := rows.Scan(&sid, &sname, &sdesc, &tags, &fileID, &format, &sCreatedAt); err != nil {
+			continue
+		}
+		stickers = append(stickers, map[string]interface{}{
+			"id":          sid,
+			"name":        sname,
+			"description": sdesc,
+			"tags":        tags,
+			"file_id":     fileID,
+			"format":      format,
+			"created_at":  sCreatedAt,
+		})
+	}
+	if stickers == nil {
+		stickers = []map[string]interface{}{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":          id,
+		"name":        name,
+		"description": desc,
+		"owner_type":  ownerType,
+		"owner_id":    ownerID,
+		"share_code":  shareCode,
+		"stickers":    stickers,
+		"created_at":  createdAt,
+	})
+}
+
+// HandleClonePack clones a shared sticker pack into the current user's personal packs.
+// POST /api/v1/stickers/shared/{shareCode}/clone
+func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	shareCode := chi.URLParam(r, "shareCode")
+
+	// Fetch source pack.
+	var srcPackID, srcName string
+	var srcDesc *string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT id, name, description FROM sticker_packs WHERE share_code = $1 AND shared = true`,
+		shareCode,
+	).Scan(&srcPackID, &srcName, &srcDesc)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Shared sticker pack not found or sharing disabled")
+		return
+	}
+
+	// Limit user packs to 10 (allowing more for cloned packs than self-created).
+	var packCount int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM sticker_packs WHERE owner_type = 'user' AND owner_id = $1`, userID).Scan(&packCount)
+	if packCount >= 10 {
+		writeError(w, http.StatusBadRequest, "limit_reached", "You can have at most 10 personal sticker packs")
+		return
+	}
+
+	// Create the new pack.
+	newPackID := models.NewULID().String()
+	now := time.Now()
+	_, err = h.Pool.Exec(r.Context(),
+		`INSERT INTO sticker_packs (id, name, description, owner_type, owner_id, created_at)
+		 VALUES ($1, $2, $3, 'user', $4, $5)`,
+		newPackID, srcName, srcDesc, userID, now)
+	if err != nil {
+		h.Logger.Error("failed to clone sticker pack", "error", err.Error())
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to clone sticker pack")
+		return
+	}
+
+	// Copy stickers from source pack to new pack.
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT name, description, tags, file_id, format FROM stickers WHERE pack_id = $1`, srcPackID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read source stickers")
+		return
+	}
+	defer rows.Close()
+
+	var clonedCount int
+	for rows.Next() {
+		var sname, fileID, format string
+		var sdesc, tags *string
+		if err := rows.Scan(&sname, &sdesc, &tags, &fileID, &format); err != nil {
+			continue
+		}
+		stickerID := models.NewULID().String()
+		_, err := h.Pool.Exec(r.Context(),
+			`INSERT INTO stickers (id, pack_id, name, description, tags, file_id, format)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			stickerID, newPackID, sname, sdesc, tags, fileID, format)
+		if err != nil {
+			h.Logger.Warn("failed to clone sticker", "error", err.Error(), "name", sname)
+			continue
+		}
+		clonedCount++
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":             newPackID,
+		"name":           srcName,
+		"description":    srcDesc,
+		"owner_type":     "user",
+		"owner_id":       userID,
+		"cloned_from":    srcPackID,
+		"sticker_count":  clonedCount,
+		"created_at":     now,
+	})
+}
+
 // --- JSON helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

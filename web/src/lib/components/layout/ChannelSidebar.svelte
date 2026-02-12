@@ -11,6 +11,7 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
+	import ChannelGroups from '$components/layout/ChannelGroups.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 
 	let upcomingEvents = $state<GuildEvent[]>([]);
@@ -387,6 +388,9 @@
 					{/each}
 				{/if}
 			{/if}
+
+			<!-- User Channel Groups -->
+			<ChannelGroups />
 		{:else}
 			<!-- DM List (when no guild is selected) -->
 			<div class="mb-1 flex items-center justify-between px-1">
