@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"runtime"
 	"time"
 
@@ -987,4 +988,590 @@ func parseInt(s string) (int, error) {
 		v = v*10 + int(c-'0')
 	}
 	return v, nil
+}
+
+// =============================================================================
+// Rate Limit Handlers
+// =============================================================================
+
+// HandleGetRateLimitStats returns aggregated rate limit statistics.
+// GET /api/v1/admin/rate-limits/stats
+func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	type ipStat struct {
+		IPAddress     string `json:"ip_address"`
+		TotalRequests int64  `json:"total_requests"`
+		BlockCount    int64  `json:"block_count"`
+		LastSeen      string `json:"last_seen"`
+	}
+
+	// Top IPs by request count in the last 24 hours.
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT ip_address,
+		        SUM(requests_count) AS total_requests,
+		        COUNT(*) FILTER (WHERE blocked = true) AS block_count,
+		        MAX(created_at) AS last_seen
+		 FROM rate_limit_log
+		 WHERE created_at >= now() - INTERVAL '24 hours'
+		 GROUP BY ip_address
+		 ORDER BY total_requests DESC
+		 LIMIT 50`)
+	if err != nil {
+		h.Logger.Error("failed to query rate limit stats", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit stats")
+		return
+	}
+	defer rows.Close()
+
+	topIPs := make([]ipStat, 0)
+	for rows.Next() {
+		var s ipStat
+		var lastSeen time.Time
+		if err := rows.Scan(&s.IPAddress, &s.TotalRequests, &s.BlockCount, &lastSeen); err != nil {
+			continue
+		}
+		s.LastSeen = lastSeen.Format(time.RFC3339)
+		topIPs = append(topIPs, s)
+	}
+
+	// Summary counts.
+	var totalEntries, blockedEntries, uniqueIPs int64
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*), COUNT(*) FILTER (WHERE blocked = true), COUNT(DISTINCT ip_address)
+		 FROM rate_limit_log
+		 WHERE created_at >= now() - INTERVAL '24 hours'`).Scan(&totalEntries, &blockedEntries, &uniqueIPs)
+
+	// Current rate limit config.
+	var reqsPerWindow, windowSecs string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'rate_limit_requests_per_window'), '100')`).Scan(&reqsPerWindow)
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'rate_limit_window_seconds'), '60')`).Scan(&windowSecs)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"top_ips":                    topIPs,
+		"total_entries_24h":          totalEntries,
+		"blocked_entries_24h":        blockedEntries,
+		"unique_ips_24h":             uniqueIPs,
+		"requests_per_window":        reqsPerWindow,
+		"window_seconds":             windowSecs,
+	})
+}
+
+// HandleGetRateLimitLog returns paginated rate limit log entries.
+// GET /api/v1/admin/rate-limits/log
+func (h *Handler) HandleGetRateLimitLog(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := parseInt(l); err == nil && v > 0 && v <= 200 {
+			limit = v
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := parseInt(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	blockedOnly := r.URL.Query().Get("blocked") == "true"
+	ipFilter := r.URL.Query().Get("ip")
+
+	var rows pgx.Rows
+	var err error
+
+	if blockedOnly && ipFilter != "" {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT id, ip_address, endpoint, requests_count, window_start, blocked, created_at
+			 FROM rate_limit_log
+			 WHERE blocked = true AND ip_address = $1
+			 ORDER BY created_at DESC
+			 LIMIT $2 OFFSET $3`, ipFilter, limit, offset)
+	} else if blockedOnly {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT id, ip_address, endpoint, requests_count, window_start, blocked, created_at
+			 FROM rate_limit_log
+			 WHERE blocked = true
+			 ORDER BY created_at DESC
+			 LIMIT $1 OFFSET $2`, limit, offset)
+	} else if ipFilter != "" {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT id, ip_address, endpoint, requests_count, window_start, blocked, created_at
+			 FROM rate_limit_log
+			 WHERE ip_address = $1
+			 ORDER BY created_at DESC
+			 LIMIT $2 OFFSET $3`, ipFilter, limit, offset)
+	} else {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT id, ip_address, endpoint, requests_count, window_start, blocked, created_at
+			 FROM rate_limit_log
+			 ORDER BY created_at DESC
+			 LIMIT $1 OFFSET $2`, limit, offset)
+	}
+	if err != nil {
+		h.Logger.Error("failed to query rate limit log", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit log")
+		return
+	}
+	defer rows.Close()
+
+	type logEntry struct {
+		ID            string `json:"id"`
+		IPAddress     string `json:"ip_address"`
+		Endpoint      string `json:"endpoint"`
+		RequestsCount int    `json:"requests_count"`
+		WindowStart   string `json:"window_start"`
+		Blocked       bool   `json:"blocked"`
+		CreatedAt     string `json:"created_at"`
+	}
+
+	entries := make([]logEntry, 0)
+	for rows.Next() {
+		var e logEntry
+		var windowStart, createdAt time.Time
+		if err := rows.Scan(&e.ID, &e.IPAddress, &e.Endpoint, &e.RequestsCount,
+			&windowStart, &e.Blocked, &createdAt); err != nil {
+			continue
+		}
+		e.WindowStart = windowStart.Format(time.RFC3339)
+		e.CreatedAt = createdAt.Format(time.RFC3339)
+		entries = append(entries, e)
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// HandleUpdateRateLimitConfig updates rate limiting configuration.
+// PATCH /api/v1/admin/rate-limits/config
+func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		RequestsPerWindow *string `json:"requests_per_window"`
+		WindowSeconds     *string `json:"window_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.RequestsPerWindow != nil {
+		if v, err := parseInt(*req.RequestsPerWindow); err != nil || v < 1 || v > 100000 {
+			writeError(w, http.StatusBadRequest, "invalid_value", "requests_per_window must be between 1 and 100000")
+			return
+		}
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO instance_settings (key, value, updated_at) VALUES ('rate_limit_requests_per_window', $1, now())
+			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.RequestsPerWindow)
+	}
+
+	if req.WindowSeconds != nil {
+		if v, err := parseInt(*req.WindowSeconds); err != nil || v < 1 || v > 3600 {
+			writeError(w, http.StatusBadRequest, "invalid_value", "window_seconds must be between 1 and 3600")
+			return
+		}
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO instance_settings (key, value, updated_at) VALUES ('rate_limit_window_seconds', $1, now())
+			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.WindowSeconds)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// =============================================================================
+// Content Scan Handlers
+// =============================================================================
+
+// HandleGetContentScanRules returns all content scan rules.
+// GET /api/v1/admin/content-scan/rules
+func (h *Handler) HandleGetContentScanRules(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, name, pattern, action, target, enabled, created_at
+		 FROM content_scan_rules
+		 ORDER BY created_at DESC`)
+	if err != nil {
+		h.Logger.Error("failed to query content scan rules", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan rules")
+		return
+	}
+	defer rows.Close()
+
+	type rule struct {
+		ID        string    `json:"id"`
+		Name      string    `json:"name"`
+		Pattern   string    `json:"pattern"`
+		Action    string    `json:"action"`
+		Target    string    `json:"target"`
+		Enabled   bool      `json:"enabled"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	rules := make([]rule, 0)
+	for rows.Next() {
+		var r rule
+		if err := rows.Scan(&r.ID, &r.Name, &r.Pattern, &r.Action, &r.Target, &r.Enabled, &r.CreatedAt); err != nil {
+			continue
+		}
+		rules = append(rules, r)
+	}
+
+	writeJSON(w, http.StatusOK, rules)
+}
+
+// HandleCreateContentScanRule creates a new content scan rule.
+// POST /api/v1/admin/content-scan/rules
+func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		Name    string `json:"name"`
+		Pattern string `json:"pattern"`
+		Action  string `json:"action"`
+		Target  string `json:"target"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "missing_name", "Rule name is required")
+		return
+	}
+	if req.Pattern == "" {
+		writeError(w, http.StatusBadRequest, "missing_pattern", "Regex pattern is required")
+		return
+	}
+
+	// Validate the regex pattern.
+	if _, err := regexp.Compile(req.Pattern); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_pattern", "Invalid regex pattern: "+err.Error())
+		return
+	}
+
+	switch req.Action {
+	case "block", "flag", "log":
+		// valid
+	case "":
+		req.Action = "log"
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_action", "Action must be 'block', 'flag', or 'log'")
+		return
+	}
+
+	switch req.Target {
+	case "filename", "content_type", "text_content":
+		// valid
+	case "":
+		req.Target = "filename"
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_target", "Target must be 'filename', 'content_type', or 'text_content'")
+		return
+	}
+
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	ruleID := models.NewULID().String()
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO content_scan_rules (id, name, pattern, action, target, enabled)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		ruleID, req.Name, req.Pattern, req.Action, req.Target, enabled)
+	if err != nil {
+		h.Logger.Error("failed to create content scan rule", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create content scan rule")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":         ruleID,
+		"name":       req.Name,
+		"pattern":    req.Pattern,
+		"action":     req.Action,
+		"target":     req.Target,
+		"enabled":    enabled,
+		"created_at": time.Now().UTC(),
+	})
+}
+
+// HandleUpdateContentScanRule updates an existing content scan rule.
+// PATCH /api/v1/admin/content-scan/rules/{ruleID}
+func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	ruleID := chi.URLParam(r, "ruleID")
+
+	var req struct {
+		Name    *string `json:"name"`
+		Pattern *string `json:"pattern"`
+		Action  *string `json:"action"`
+		Target  *string `json:"target"`
+		Enabled *bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	// Validate pattern if provided.
+	if req.Pattern != nil {
+		if _, err := regexp.Compile(*req.Pattern); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_pattern", "Invalid regex pattern: "+err.Error())
+			return
+		}
+	}
+
+	// Validate action if provided.
+	if req.Action != nil {
+		switch *req.Action {
+		case "block", "flag", "log":
+			// valid
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_action", "Action must be 'block', 'flag', or 'log'")
+			return
+		}
+	}
+
+	// Validate target if provided.
+	if req.Target != nil {
+		switch *req.Target {
+		case "filename", "content_type", "text_content":
+			// valid
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_target", "Target must be 'filename', 'content_type', or 'text_content'")
+			return
+		}
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE content_scan_rules
+		 SET name = COALESCE($1, name),
+		     pattern = COALESCE($2, pattern),
+		     action = COALESCE($3, action),
+		     target = COALESCE($4, target),
+		     enabled = COALESCE($5, enabled)
+		 WHERE id = $6`,
+		req.Name, req.Pattern, req.Action, req.Target, req.Enabled, ruleID)
+	if err != nil {
+		h.Logger.Error("failed to update content scan rule", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update content scan rule")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Content scan rule not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// HandleDeleteContentScanRule deletes a content scan rule.
+// DELETE /api/v1/admin/content-scan/rules/{ruleID}
+func (h *Handler) HandleDeleteContentScanRule(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	ruleID := chi.URLParam(r, "ruleID")
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM content_scan_rules WHERE id = $1`, ruleID)
+	if err != nil {
+		h.Logger.Error("failed to delete content scan rule", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete content scan rule")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Content scan rule not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetContentScanLog returns paginated content scan log entries.
+// GET /api/v1/admin/content-scan/log
+func (h *Handler) HandleGetContentScanLog(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := parseInt(l); err == nil && v > 0 && v <= 200 {
+			limit = v
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := parseInt(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	ruleFilter := r.URL.Query().Get("rule_id")
+
+	var rows pgx.Rows
+	var err error
+
+	if ruleFilter != "" {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT cl.id, cl.rule_id, cl.user_id, cl.channel_id, cl.content_matched,
+			        cl.action_taken, cl.created_at, cr.name AS rule_name,
+			        u.username
+			 FROM content_scan_log cl
+			 JOIN content_scan_rules cr ON cr.id = cl.rule_id
+			 JOIN users u ON u.id = cl.user_id
+			 WHERE cl.rule_id = $1
+			 ORDER BY cl.created_at DESC
+			 LIMIT $2 OFFSET $3`, ruleFilter, limit, offset)
+	} else {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT cl.id, cl.rule_id, cl.user_id, cl.channel_id, cl.content_matched,
+			        cl.action_taken, cl.created_at, cr.name AS rule_name,
+			        u.username
+			 FROM content_scan_log cl
+			 JOIN content_scan_rules cr ON cr.id = cl.rule_id
+			 JOIN users u ON u.id = cl.user_id
+			 ORDER BY cl.created_at DESC
+			 LIMIT $1 OFFSET $2`, limit, offset)
+	}
+	if err != nil {
+		h.Logger.Error("failed to query content scan log", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan log")
+		return
+	}
+	defer rows.Close()
+
+	type logEntry struct {
+		ID             string    `json:"id"`
+		RuleID         string    `json:"rule_id"`
+		RuleName       string    `json:"rule_name"`
+		UserID         string    `json:"user_id"`
+		Username       string    `json:"username"`
+		ChannelID      string    `json:"channel_id"`
+		ContentMatched string    `json:"content_matched"`
+		ActionTaken    string    `json:"action_taken"`
+		CreatedAt      time.Time `json:"created_at"`
+	}
+
+	entries := make([]logEntry, 0)
+	for rows.Next() {
+		var e logEntry
+		if err := rows.Scan(&e.ID, &e.RuleID, &e.UserID, &e.ChannelID,
+			&e.ContentMatched, &e.ActionTaken, &e.CreatedAt, &e.RuleName, &e.Username); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// =============================================================================
+// CAPTCHA Handlers
+// =============================================================================
+
+// HandleGetCaptchaConfig returns current CAPTCHA configuration.
+// GET /api/v1/admin/captcha
+func (h *Handler) HandleGetCaptchaConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var provider, siteKey, secretKey string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'captcha_provider'), 'none')`).Scan(&provider)
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'captcha_site_key'), '')`).Scan(&siteKey)
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'captcha_secret_key'), '')`).Scan(&secretKey)
+
+	// Mask the secret key for display (show only last 4 chars).
+	maskedSecret := ""
+	if len(secretKey) > 4 {
+		maskedSecret = "****" + secretKey[len(secretKey)-4:]
+	} else if secretKey != "" {
+		maskedSecret = "****"
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"provider":   provider,
+		"site_key":   siteKey,
+		"secret_key": maskedSecret,
+	})
+}
+
+// HandleUpdateCaptchaConfig updates CAPTCHA settings.
+// PATCH /api/v1/admin/captcha
+func (h *Handler) HandleUpdateCaptchaConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		Provider  *string `json:"provider"`
+		SiteKey   *string `json:"site_key"`
+		SecretKey *string `json:"secret_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Provider != nil {
+		switch *req.Provider {
+		case "none", "hcaptcha", "recaptcha":
+			h.Pool.Exec(r.Context(),
+				`INSERT INTO instance_settings (key, value, updated_at) VALUES ('captcha_provider', $1, now())
+				 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.Provider)
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_provider", "Provider must be 'none', 'hcaptcha', or 'recaptcha'")
+			return
+		}
+	}
+
+	if req.SiteKey != nil {
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO instance_settings (key, value, updated_at) VALUES ('captcha_site_key', $1, now())
+			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.SiteKey)
+	}
+
+	if req.SecretKey != nil {
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO instance_settings (key, value, updated_at) VALUES ('captcha_secret_key', $1, now())
+			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.SecretKey)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

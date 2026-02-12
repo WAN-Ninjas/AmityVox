@@ -10,6 +10,8 @@
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
 	import AudioPlayer from '$components/chat/AudioPlayer.svelte';
 	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
+	import TranslateButton from '$components/chat/TranslateButton.svelte';
+	import CrossChannelQuote from '$components/chat/CrossChannelQuote.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
@@ -38,6 +40,9 @@
 	let showForward = $state(false);
 	let forwardTargetId = $state('');
 	let forwarding = $state(false);
+	let showQuoteInChannel = $state(false);
+	let quoteTargetChannelId = $state('');
+	let quotingInChannel = $state(false);
 
 	// --- Blocked user support ---
 	const isAuthorBlocked = $derived($blockedUserIds.has(message.author_id));
@@ -264,6 +269,30 @@
 		showForward = true;
 	}
 
+	function handleQuoteInChannel() {
+		contextMenu = null;
+		showQuoteInChannel = true;
+	}
+
+	async function submitQuoteInChannel() {
+		if (!quoteTargetChannelId.trim()) return;
+		quotingInChannel = true;
+		try {
+			await api.createMessage(quoteTargetChannelId.trim(), {
+				content: `> **Quoted from <#${message.channel_id}>:**\n> ${message.content?.slice(0, 500) ?? ''}\n\n`,
+				quote_message_id: message.id,
+				quote_channel_id: message.channel_id
+			});
+			addToast('Quote sent', 'success');
+			showQuoteInChannel = false;
+			quoteTargetChannelId = '';
+		} catch (err: any) {
+			addToast('Failed to send quote', 'error');
+		} finally {
+			quotingInChannel = false;
+		}
+	}
+
 	async function submitForward() {
 		if (!forwardTargetId.trim()) return;
 		forwarding = true;
@@ -411,6 +440,18 @@
 				<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
 					<MarkdownRenderer content={message.content} />
 				</div>
+				<TranslateButton channelId={message.channel_id} messageId={message.id} />
+			{/if}
+
+			<!-- Cross-channel quote embed -->
+			{#if message.embeds?.some(e => e.type === 'cross_channel_quote')}
+				{@const quoteEmbed = message.embeds.find(e => e.type === 'cross_channel_quote')}
+				{#if quoteEmbed?.quote_message_id && quoteEmbed?.quote_channel_id}
+					<CrossChannelQuote
+						quoteMessageId={quoteEmbed.quote_message_id}
+						quoteChannelId={quoteEmbed.quote_channel_id}
+					/>
+				{/if}
 			{/if}
 
 			<!-- Attachments -->
@@ -615,6 +656,9 @@
 		<ContextMenuItem label="Copy Message Link" onclick={handleCopyLink} />
 		<ContextMenuItem label="Bookmark" onclick={handleBookmark} />
 		<ContextMenuItem label="Forward" onclick={handleForward} />
+		{#if message.content}
+			<ContextMenuItem label="Quote in Channel" onclick={handleQuoteInChannel} />
+		{/if}
 		{#if isOwnMessage}
 			<ContextMenuDivider />
 			<ContextMenuItem label="Delete Message" danger onclick={handleDelete} />
@@ -677,6 +721,36 @@
 				<button class="btn-secondary" onclick={() => (showForward = false)}>Cancel</button>
 				<button class="btn-primary" onclick={submitForward} disabled={forwarding || !forwardTargetId.trim()}>
 					{forwarding ? 'Forwarding...' : 'Forward'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Quote in channel modal -->
+{#if showQuoteInChannel}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showQuoteInChannel = false)}>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="w-96 rounded-lg bg-bg-floating p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+			<h3 class="mb-4 text-lg font-semibold text-text-primary">Quote in Another Channel</h3>
+			<p class="mb-3 text-sm text-text-muted">
+				Enter the channel ID to send this quote to:
+			</p>
+			<div class="mb-3 rounded border-l-4 border-purple-500 bg-bg-secondary p-2 text-sm text-text-muted">
+				<div class="mb-1 text-xs font-medium text-text-primary">{displayName}</div>
+				{message.content?.slice(0, 150)}{(message.content?.length ?? 0) > 150 ? '...' : ''}
+			</div>
+			<input
+				type="text"
+				class="input mb-4 w-full"
+				bind:value={quoteTargetChannelId}
+				placeholder="Target channel ID"
+				onkeydown={(e) => e.key === 'Enter' && submitQuoteInChannel()}
+			/>
+			<div class="flex justify-end gap-2">
+				<button class="btn-secondary" onclick={() => (showQuoteInChannel = false)}>Cancel</button>
+				<button class="btn-primary" onclick={submitQuoteInChannel} disabled={quotingInChannel || !quoteTargetChannelId.trim()}>
+					{quotingInChannel ? 'Quoting...' : 'Send Quote'}
 				</button>
 			</div>
 		</div>

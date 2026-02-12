@@ -301,6 +301,7 @@ type Message struct {
 	EncryptionSessionID *string         `json:"encryption_session_id,omitempty"`
 	VoiceDurationMs     *int            `json:"voice_duration_ms,omitempty"`
 	VoiceWaveform       json.RawMessage `json:"voice_waveform,omitempty"`
+	Components          json.RawMessage `json:"components,omitempty"`
 	Attachments         []Attachment    `json:"attachments,omitempty"`
 	Embeds              []Embed         `json:"embeds,omitempty"`
 	CreatedAt           time.Time       `json:"created_at"`
@@ -719,3 +720,94 @@ const (
 	VerificationHigh    = 3 // Member 10+ minutes
 	VerificationHighest = 4 // Admin bypass only
 )
+
+// BotGuildPermission represents a bot's scoped permissions within a specific guild.
+// Scopes limit what API endpoints the bot can access and max_role_position
+// prevents the bot from managing roles above its assigned ceiling.
+// Corresponds to the bot_guild_permissions table.
+type BotGuildPermission struct {
+	BotID           string    `json:"bot_id"`
+	GuildID         string    `json:"guild_id"`
+	Scopes          []string  `json:"scopes"`
+	MaxRolePosition int       `json:"max_role_position"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// Bot permission scope constants.
+const (
+	BotScopeMessagesRead   = "messages.read"
+	BotScopeMessagesWrite  = "messages.write"
+	BotScopeMembersRead    = "members.read"
+	BotScopeChannelsManage = "channels.manage"
+	BotScopeRolesManage    = "roles.manage"
+	BotScopeWebhooksManage = "webhooks.manage"
+	BotScopeEventsManage   = "events.manage"
+)
+
+// ValidBotScopes is the set of recognized bot permission scopes.
+var ValidBotScopes = map[string]bool{
+	BotScopeMessagesRead:   true,
+	BotScopeMessagesWrite:  true,
+	BotScopeMembersRead:    true,
+	BotScopeChannelsManage: true,
+	BotScopeRolesManage:    true,
+	BotScopeWebhooksManage: true,
+	BotScopeEventsManage:   true,
+}
+
+// MessageComponent represents an interactive UI element attached to a message
+// (button, select menu, etc.). Corresponds to the message_components table.
+type MessageComponent struct {
+	ID            string          `json:"id"`
+	MessageID     string          `json:"message_id"`
+	ComponentType string          `json:"component_type"`
+	Style         *string         `json:"style,omitempty"`
+	Label         *string         `json:"label,omitempty"`
+	CustomID      *string         `json:"custom_id,omitempty"`
+	URL           *string         `json:"url,omitempty"`
+	Disabled      bool            `json:"disabled"`
+	Options       json.RawMessage `json:"options,omitempty"`
+	MinValues     *int            `json:"min_values,omitempty"`
+	MaxValues     *int            `json:"max_values,omitempty"`
+	Placeholder   *string         `json:"placeholder,omitempty"`
+	Position      int             `json:"position"`
+}
+
+// ComponentType constants for message_components.component_type.
+const (
+	ComponentTypeButton     = "button"
+	ComponentTypeSelectMenu = "select_menu"
+	ComponentTypeActionRow  = "action_row"
+)
+
+// BotPresence represents a bot's advertised status and activity.
+// Corresponds to the bot_presence table.
+type BotPresence struct {
+	BotID        string    `json:"bot_id"`
+	Status       string    `json:"status"`
+	ActivityType *string   `json:"activity_type,omitempty"`
+	ActivityName *string   `json:"activity_name,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// BotEventSubscription represents a per-guild webhook subscription that
+// delivers specified event types to a bot's endpoint.
+// Corresponds to the bot_event_subscriptions table.
+type BotEventSubscription struct {
+	ID         string    `json:"id"`
+	BotID      string    `json:"bot_id"`
+	GuildID    string    `json:"guild_id"`
+	EventTypes []string  `json:"event_types"`
+	WebhookURL string    `json:"webhook_url"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// BotRateLimit represents per-bot configurable request throttling.
+// Corresponds to the bot_rate_limits table.
+type BotRateLimit struct {
+	BotID             string    `json:"bot_id"`
+	RequestsPerSecond int       `json:"requests_per_second"`
+	Burst             int       `json:"burst"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}

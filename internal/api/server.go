@@ -29,6 +29,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/onboarding"
 	"github.com/amityvox/amityvox/internal/api/polls"
 	"github.com/amityvox/amityvox/internal/api/stickers"
+	"github.com/amityvox/amityvox/internal/api/themes"
 	"github.com/amityvox/amityvox/internal/api/users"
 	"github.com/amityvox/amityvox/internal/api/webhooks"
 	"github.com/amityvox/amityvox/internal/auth"
@@ -190,6 +191,20 @@ func (s *Server) registerRoutes() {
 		EventBus:    s.EventBus,
 		Logger:      s.Logger,
 	}
+	themeH := &themes.Handler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	channelEmojiH := &channels.EmojiHandler{
+		Pool:     s.DB.Pool,
+		EventBus: s.EventBus,
+		Logger:   s.Logger,
+	}
+	channelGroupH := &users.ChannelGroupHandler{
+		Pool:   s.DB.Pool,
+		Logger: s.Logger,
+	}
 
 	// Health check — outside versioned API prefix.
 	s.Router.Get("/health", s.handleHealthCheck)
@@ -274,7 +289,19 @@ func (s *Server) registerRoutes() {
 					r.Patch("/{commandID}", botH.HandleUpdateCommand)
 					r.Delete("/{commandID}", botH.HandleDeleteCommand)
 				})
+				r.Get("/guilds/{guildID}/permissions", botH.HandleGetBotGuildPermissions)
+				r.Put("/guilds/{guildID}/permissions", botH.HandleUpdateBotGuildPermissions)
+				r.Get("/presence", botH.HandleGetBotPresence)
+				r.Put("/presence", botH.HandleUpdateBotPresence)
+				r.Get("/rate-limit", botH.HandleGetBotRateLimit)
+				r.Put("/rate-limit", botH.HandleUpdateBotRateLimit)
+				r.Route("/subscriptions", func(r chi.Router) {
+					r.Post("/", botH.HandleCreateEventSubscription)
+					r.Get("/", botH.HandleListEventSubscriptions)
+					r.Delete("/{subscriptionID}", botH.HandleDeleteEventSubscription)
+				})
 			})
+			r.Post("/bots/interactions", botH.HandleComponentInteraction)
 
 			// Guild routes.
 			r.Route("/guilds", func(r chi.Router) {
@@ -436,6 +463,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/messages/{messageID}/threads", channelH.HandleCreateThread)
 				r.Post("/{channelID}/messages/{messageID}/report", modH.HandleReportMessage)
 				r.Post("/{channelID}/messages/{messageID}/report-admin", modH.HandleReportToAdmin)
+				r.Post("/{channelID}/messages/{messageID}/translate", channelH.HandleTranslateMessage)
 			r.Get("/{channelID}/threads", channelH.HandleGetThreads)
 				r.Post("/{channelID}/lock", modH.HandleLockChannel)
 				r.Post("/{channelID}/unlock", modH.HandleUnlockChannel)
@@ -449,6 +477,11 @@ func (s *Server) registerRoutes() {
 					r.Delete("/{templateID}", channelH.HandleDeleteChannelTemplate)
 					r.Post("/{templateID}/apply", channelH.HandleApplyChannelTemplate)
 				})
+
+				// Channel emoji routes.
+				r.Get("/{channelID}/emoji", channelEmojiH.HandleGetChannelEmoji)
+				r.Post("/{channelID}/emoji", channelEmojiH.HandleCreateChannelEmoji)
+				r.Delete("/{channelID}/emoji/{emojiID}", channelEmojiH.HandleDeleteChannelEmoji)
 
 				// Announcement channel follower routes.
 				r.Post("/{channelID}/followers", channelH.HandleFollowChannel)
@@ -499,6 +532,30 @@ func (s *Server) registerRoutes() {
 			r.Route("/stickers", func(r chi.Router) {
 				r.Get("/my-packs", stickerH.HandleGetUserPacks)
 				r.Post("/my-packs", stickerH.HandleCreateUserPack)
+				r.Post("/packs/{packID}/share", stickerH.HandleEnableSharing)
+				r.Delete("/packs/{packID}/share", stickerH.HandleDisableSharing)
+				r.Get("/shared/{shareCode}", stickerH.HandleGetSharedPack)
+				r.Post("/shared/{shareCode}/clone", stickerH.HandleClonePack)
+			})
+
+			// Theme gallery routes.
+			r.Route("/themes", func(r chi.Router) {
+				r.Get("/", themeH.HandleListSharedThemes)
+				r.Post("/", themeH.HandleShareTheme)
+				r.Get("/{shareCode}", themeH.HandleGetSharedTheme)
+				r.Put("/{themeID}/like", themeH.HandleLikeTheme)
+				r.Delete("/{themeID}/like", themeH.HandleUnlikeTheme)
+				r.Delete("/{themeID}", themeH.HandleDeleteSharedTheme)
+			})
+
+			// User channel groups.
+			r.Route("/channel-groups", func(r chi.Router) {
+				r.Get("/", channelGroupH.HandleGetChannelGroups)
+				r.Post("/", channelGroupH.HandleCreateChannelGroup)
+				r.Patch("/{groupID}", channelGroupH.HandleUpdateChannelGroup)
+				r.Delete("/{groupID}", channelGroupH.HandleDeleteChannelGroup)
+				r.Put("/{groupID}/channels/{channelID}", channelGroupH.HandleAddChannelToGroup)
+				r.Delete("/{groupID}/channels/{channelID}", channelGroupH.HandleRemoveChannelFromGroup)
 			})
 
 			// Invite routes.
@@ -595,6 +652,19 @@ func (s *Server) registerRoutes() {
 				r.Patch("/announcements/{announcementID}", adminH.HandleUpdateAnnouncement)
 				r.Delete("/announcements/{announcementID}", adminH.HandleDeleteAnnouncement)
 				r.Get("/reports", modH.HandleGetAdminReports)
+				r.Get("/bots", botH.HandleAdminListAllBots)
+				r.Get("/rate-limits/stats", adminH.HandleGetRateLimitStats)
+				r.Get("/rate-limits/log", adminH.HandleGetRateLimitLog)
+				r.Patch("/rate-limits", adminH.HandleUpdateRateLimitConfig)
+				r.Route("/content-scan", func(r chi.Router) {
+					r.Get("/rules", adminH.HandleGetContentScanRules)
+					r.Post("/rules", adminH.HandleCreateContentScanRule)
+					r.Patch("/rules/{ruleID}", adminH.HandleUpdateContentScanRule)
+					r.Delete("/rules/{ruleID}", adminH.HandleDeleteContentScanRule)
+					r.Get("/log", adminH.HandleGetContentScanLog)
+				})
+				r.Get("/captcha", adminH.HandleGetCaptchaConfig)
+				r.Patch("/captcha", adminH.HandleUpdateCaptchaConfig)
 			})
 		})
 
