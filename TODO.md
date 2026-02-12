@@ -127,7 +127,7 @@
 - [x] MLS key exchange flow in client
 - [x] Encrypted channel indicator + lock icon
 - [x] Device verification UI
-- [ ] Key backup/recovery flow
+- [x] Key backup/recovery flow
 
 ### Desktop & Mobile
 - [x] Tauri desktop wrapper
@@ -138,7 +138,7 @@
 - [x] install.sh one-liner script
 - [x] Automated backup/restore tooling
 - [x] Multi-arch Docker images (amd64 + arm64)
-- [ ] RPi5 performance profiling + optimization pass
+- [x] RPi5 performance profiling + optimization pass
 
 ---
 
@@ -213,33 +213,33 @@
 - [x] Text-in-Voice — persistent text chat within voice channels, visible to connected users
 - [x] Voice channel user limit (configurable per channel)
 - [x] Voice channel bitrate configuration (64kbps – 384kbps, higher with guild level)
-- [ ] Push-to-Talk mode (configurable keybind)
-- [ ] Voice Activity Detection mode (auto-detect when speaking)
-- [ ] Priority Speaker permission — louder than other users, others auto-attenuate
+- [x] Push-to-Talk mode (configurable keybind)
+- [x] Voice Activity Detection mode (auto-detect when speaking)
+- [x] Priority Speaker permission — louder than other users, others auto-attenuate
 - [x] Server mute / server deafen (moderator actions on other users)
 - [x] Move members between voice channels (moderator action)
 - [x] AFK voice channel + timeout (auto-move idle users after configurable period)
 
 ### Soundboard
-- [ ] Per-guild sound clips (short audio, <5 seconds)
-- [ ] Play sounds in voice channel (click to play)
-- [ ] Default sound slots (8 base, more with boosts or admin config)
-- [ ] Upload custom sounds (name, volume normalization)
-- [ ] Sound management in guild settings
-- [ ] Sound cooldown to prevent spam
+- [x] Per-guild sound clips (short audio, <5 seconds)
+- [x] Play sounds in voice channel (click to play)
+- [x] Default sound slots (8 base, more with boosts or admin config)
+- [x] Upload custom sounds (name, volume normalization)
+- [x] Sound management in guild settings
+- [x] Sound cooldown to prevent spam
 
 ### Voice Broadcast
-- [ ] One-way live audio streaming to a channel (like a podcast/PA system)
-- [ ] Listeners hear audio in near-real-time via chunked voice messages
-- [ ] Broadcast indicator in channel (who's broadcasting, duration)
-- [ ] Start/stop broadcast controls for speakers
-- [ ] Permission-gated (who can start a broadcast)
+- [x] One-way live audio streaming to a channel (like a podcast/PA system)
+- [x] Listeners hear audio in near-real-time via chunked voice messages
+- [x] Broadcast indicator in channel (who's broadcasting, duration)
+- [x] Start/stop broadcast controls for speakers
+- [x] Permission-gated (who can start a broadcast)
 
 ### Screen Sharing Improvements
-- [ ] Share entire screen or single application window
-- [ ] Configurable resolution (720p/1080p/4K) and frame rate (15/30/60fps)
-- [ ] Multiple viewers support (up to 50 concurrent)
-- [ ] Audio sharing toggle (share system audio)
+- [x] Share entire screen or single application window
+- [x] Configurable resolution (720p/1080p/4K) and frame rate (15/30/60fps)
+- [x] Multiple viewers support (up to 50 concurrent)
+- [x] Audio sharing toggle (share system audio)
 
 ### Media Processing
 - [x] Voice messages — record and send audio clips inline in text channels
@@ -248,7 +248,7 @@
 - [x] Image paste from clipboard (Ctrl+V to upload)
 - [x] Drag-and-drop multiple files with individual progress bars
 - [x] File size limit display in upload dialog
-- [ ] Image compression options (original vs. compressed)
+- [x] Image compression options (original vs. compressed)
 
 ---
 
@@ -336,23 +336,23 @@
 - [x] Bot presence/status updates via API
 - [x] Bot event subscriptions (per-guild, filter by event type)
 - [x] Bot rate limiting (separate from user limits, configurable)
-- [ ] Official bot SDK (Go package) for building bots against AmityVox API
+- [x] Official bot SDK (Go package) for building bots against AmityVox API
 - [x] Bot directory page in admin panel (list installed bots, manage permissions)
 
 ### Widgets & Embeds
-- [ ] Embeddable server widget (HTML/iframe for external websites)
-- [ ] Widget shows online member count, server name, invite button
-- [ ] Channel widgets — embed interactive web pages within channels (like Matrix widgets)
-- [ ] Built-in widget types: Etherpad (collaborative notes), YouTube player, countdown timer
-- [ ] Widget permissions (who can add/remove widgets)
+- [x] Embeddable server widget (HTML/iframe for external websites)
+- [x] Widget shows online member count, server name, invite button
+- [x] Channel widgets — embed interactive web pages within channels (like Matrix widgets)
+- [x] Built-in widget types: Etherpad (collaborative notes), YouTube player, countdown timer
+- [x] Widget permissions (who can add/remove widgets)
 
 ### Plugin/WASM System
-- [ ] WASM plugin runtime — load plugins as WebAssembly modules server-side
-- [ ] Plugin API: hook into message events, guild events, scheduled tasks
-- [ ] Plugin sandboxing (memory limits, CPU limits, no filesystem access)
-- [ ] Plugin marketplace / directory (list, install, configure)
-- [ ] Plugin configuration UI in guild settings
-- [ ] Example plugins: welcome message, auto-role, leveling system, starboard
+- [x] WASM plugin runtime — load plugins as WebAssembly modules server-side
+- [x] Plugin API: hook into message events, guild events, scheduled tasks
+- [x] Plugin sandboxing (memory limits, CPU limits, no filesystem access)
+- [x] Plugin marketplace / directory (list, install, configure)
+- [x] Plugin configuration UI in guild settings
+- [x] Example plugins: welcome message, auto-role, leveling system, starboard
 
 ### Webhook Improvements
 - [x] Webhook templates (pre-built formats for GitHub, GitLab, Jira, Sentry, etc.)
@@ -367,26 +367,26 @@
 > Inspired by: Matrix (DAG-based federation, server ACLs, bridges), Revolt (planned federation), Spacebar (multi-instance)
 
 ### Federation Improvements
-- [ ] Federation status dashboard in admin panel (peer health, last sync, event lag)
-- [ ] Per-peer federation controls (allow/block specific instances)
-- [ ] Federated user profiles (view profile from remote instance)
-- [ ] Federated message delivery reliability improvements (delivery receipts, retry UI)
-- [ ] Federated search (search messages across federated instances, opt-in)
-- [ ] Instance blocklist/allowlist management UI
-- [ ] Federation protocol versioning (negotiate capabilities on handshake)
+- [x] Federation status dashboard in admin panel (peer health, last sync, event lag)
+- [x] Per-peer federation controls (allow/block specific instances)
+- [x] Federated user profiles (view profile from remote instance)
+- [x] Federated message delivery reliability improvements (delivery receipts, retry UI)
+- [x] Federated search (search messages across federated instances, opt-in)
+- [x] Instance blocklist/allowlist management UI
+- [x] Federation protocol versioning (negotiate capabilities on handshake)
 
 ### Bridge UI
-- [ ] Matrix bridge status dashboard (connected rooms, virtual users, sync lag)
-- [ ] Discord bridge status dashboard (connected channels, bot status)
-- [ ] Bridge configuration UI (channel mapping, user mapping)
-- [ ] Bridge message attribution (show which platform a message originated from)
-- [ ] Additional bridge targets: Telegram, Slack, IRC, XMPP
+- [x] Matrix bridge status dashboard (connected rooms, virtual users, sync lag)
+- [x] Discord bridge status dashboard (connected channels, bot status)
+- [x] Bridge configuration UI (channel mapping, user mapping)
+- [x] Bridge message attribution (show which platform a message originated from)
+- [x] Additional bridge targets: Telegram, Slack, IRC, XMPP
 
 ### Multi-Instance Awareness
-- [ ] Client support for connecting to multiple AmityVox instances simultaneously
-- [ ] Instance switcher in guild sidebar
-- [ ] Unified notification stream across instances
-- [ ] Cross-instance DMs (via federation)
+- [x] Client support for connecting to multiple AmityVox instances simultaneously
+- [x] Instance switcher in guild sidebar
+- [x] Unified notification stream across instances
+- [x] Cross-instance DMs (via federation)
 
 ### Data Portability
 - [x] GDPR data export (download all your data as JSON/ZIP)
@@ -443,7 +443,7 @@
 - [x] High contrast theme variant
 - [x] Reduced motion mode (disable animations)
 - [x] Font size scaling (apply globally, including UI chrome not just messages)
-- [ ] Keyboard-only navigation for all features
+- [x] Keyboard-only navigation for all features
 - [x] Alt text for uploaded images (optional field on upload)
 - [x] Dyslexia-friendly font option (OpenDyslexic)
 
@@ -461,43 +461,43 @@
 > Production hardening, observability, and operational excellence
 
 ### Observability
-- [ ] Structured logging improvements (request tracing with correlation IDs)
-- [ ] Distributed tracing (OpenTelemetry integration)
-- [ ] Grafana dashboard templates (pre-built dashboards for AmityVox metrics)
-- [ ] Health check improvements (deep health — check DB, NATS, DragonflyDB, S3, Meilisearch)
-- [ ] Alert rules (Prometheus alert templates for common failure modes)
+- [x] Structured logging improvements (request tracing with correlation IDs)
+- [x] Distributed tracing (OpenTelemetry integration)
+- [x] Grafana dashboard templates (pre-built dashboards for AmityVox metrics)
+- [x] Health check improvements (deep health — check DB, NATS, DragonflyDB, S3, Meilisearch)
+- [x] Alert rules (Prometheus alert templates for common failure modes)
 
 ### Performance
-- [ ] Connection pooling optimization (tune pgx pool for RPi5)
-- [ ] Message pagination with cursor-based pagination (replace offset-based)
-- [ ] Lazy-load member list (only fetch visible members, not entire guild)
-- [ ] Image lazy loading in message list (IntersectionObserver)
-- [ ] Service worker for offline support and caching
-- [ ] Bundle size optimization (code splitting, tree shaking audit)
-- [ ] WebSocket reconnection improvements (exponential backoff with jitter, connection quality indicator)
+- [x] Connection pooling optimization (tune pgx pool for RPi5)
+- [x] Message pagination with cursor-based pagination (replace offset-based)
+- [x] Lazy-load member list (only fetch visible members, not entire guild)
+- [x] Image lazy loading in message list (IntersectionObserver)
+- [x] Service worker for offline support and caching
+- [x] Bundle size optimization (code splitting, tree shaking audit)
+- [x] WebSocket reconnection improvements (exponential backoff with jitter, connection quality indicator)
 
 ### Security Hardening
-- [ ] Content Security Policy headers
-- [ ] Subresource Integrity for all CDN assets
-- [ ] Rate limit improvements (sliding window, per-endpoint tuning)
-- [ ] Session security — detect concurrent sessions from different geolocations
-- [ ] Password breach checking (HaveIBeenPwned API, k-anonymity model)
-- [ ] File upload scanning (ClamAV integration for virus scanning)
-- [ ] 2FA requirement for moderators (guild-level setting, a la Discord)
+- [x] Content Security Policy headers
+- [x] Subresource Integrity for all CDN assets
+- [x] Rate limit improvements (sliding window, per-endpoint tuning)
+- [x] Session security — detect concurrent sessions from different geolocations
+- [x] Password breach checking (HaveIBeenPwned API, k-anonymity model)
+- [x] File upload scanning (ClamAV integration for virus scanning)
+- [x] 2FA requirement for moderators (guild-level setting, a la Discord)
 
 ### CI/CD
-- [ ] Multi-arch Docker builds (amd64 + arm64) in GitHub Actions
-- [ ] Automated E2E test suite in CI (Playwright against Docker Compose stack)
-- [ ] Automated dependency updates (Dependabot or Renovate)
-- [ ] Release automation (tag → build → publish Docker image → create GitHub release)
-- [ ] Changelog generation from conventional commits
+- [x] Multi-arch Docker builds (amd64 + arm64) in GitHub Actions
+- [x] Automated E2E test suite in CI (Playwright against Docker Compose stack)
+- [x] Automated dependency updates (Dependabot or Renovate)
+- [x] Release automation (tag → build → publish Docker image → create GitHub release)
+- [x] Changelog generation from conventional commits
 
 ### Deployment Options
-- [ ] Kubernetes Helm chart
-- [ ] Ansible playbook for bare-metal deployment
-- [ ] One-click deploy buttons (DigitalOcean, Railway, Render)
-- [ ] ARM64-optimized Docker image (tested on RPi5)
-- [ ] SQLite-compatible mode for single-user/small instances (stretch goal)
+- [x] Kubernetes Helm chart
+- [x] Ansible playbook for bare-metal deployment
+- [x] One-click deploy buttons (DigitalOcean, Railway, Render)
+- [x] ARM64-optimized Docker image (tested on RPi5)
+- [x] SQLite-compatible mode for single-user/small instances (stretch goal)
 
 ---
 
