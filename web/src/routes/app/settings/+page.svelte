@@ -11,6 +11,9 @@
 		dndSchedule,
 		dndManualOverride,
 		isDndActive,
+		notificationSoundsEnabled,
+		notificationSoundPreset,
+		notificationVolume,
 		addCustomTheme,
 		deleteCustomTheme,
 		activateCustomTheme,
@@ -22,6 +25,9 @@
 		clearCustomThemeColors,
 		saveDndSchedule,
 		saveDndManualOverride,
+		saveNotificationSoundsEnabled,
+		saveNotificationSoundPreset,
+		saveNotificationVolume,
 		syncSettingsToApi,
 		DEFAULT_THEME_COLORS,
 		THEME_COLOR_LABELS,
@@ -29,6 +35,7 @@
 		type CustomThemeColors,
 		type CustomTheme
 	} from '$lib/stores/settings';
+	import { SOUND_PRESETS, playNotificationSound } from '$lib/utils/sounds';
 
 	import type { User, BotToken, SlashCommand } from '$lib/types';
 
@@ -71,6 +78,8 @@
 	// --- Notifications tab state ---
 	let desktopNotifications = $state(true);
 	let notificationSounds = $state(true);
+	let soundPreset = $state('default');
+	let soundVolume = $state(80);
 	let notifLoading = $state(false);
 	let notifSuccess = $state('');
 
@@ -102,6 +111,8 @@
 	let showThemeEditor = $state(false);
 	let editorColors = $state<CustomThemeColors>({ ...DEFAULT_THEME_COLORS });
 	let editorThemeName = $state('');
+	let editorBasePreset = $state<ThemeName | ''>('');
+	let editingExistingTheme = $state(false);
 	let editorError = $state('');
 	let editorSuccess = $state('');
 	let showImportModal = $state(false);
@@ -345,6 +356,8 @@
 			const settings = await api.getUserSettings();
 			desktopNotifications = settings.desktop_notifications ?? true;
 			notificationSounds = settings.notification_sounds ?? true;
+			soundPreset = settings.notification_sound_preset ?? 'default';
+			soundVolume = settings.notification_volume ?? 80;
 			dmPrivacy = settings.dm_privacy ?? 'everyone';
 			friendRequestPrivacy = settings.friend_request_privacy ?? 'everyone';
 			nsfwContentFilter = settings.nsfw_content_filter ?? 'blur_all';
@@ -359,8 +372,19 @@
 		try {
 			await api.updateUserSettings({
 				desktop_notifications: desktopNotifications,
-				notification_sounds: notificationSounds
+				notification_sounds: notificationSounds,
+				notification_sound_preset: soundPreset,
+				notification_volume: soundVolume
 			});
+
+			// Update the global stores so the notifications store uses the new values.
+			notificationSoundsEnabled.set(notificationSounds);
+			notificationSoundPreset.set(soundPreset);
+			notificationVolume.set(soundVolume);
+			saveNotificationSoundsEnabled();
+			saveNotificationSoundPreset();
+			saveNotificationVolume();
+
 			notifSuccess = 'Notification preferences saved!';
 			setTimeout(() => (notifSuccess = ''), 3000);
 
@@ -471,9 +495,38 @@
 		// Initialize editor with the current CSS variable values.
 		editorColors = getCurrentThemeColors();
 		editorThemeName = '';
+		editorBasePreset = theme;
+		editingExistingTheme = false;
 		editorError = '';
 		editorSuccess = '';
 		showThemeEditor = true;
+	}
+
+	function handleBasePresetChange(preset: ThemeName) {
+		editorBasePreset = preset;
+		// Temporarily set the data-theme to read computed values, then restore.
+		const root = document.documentElement;
+		const currentThemeAttr = root.getAttribute('data-theme') || 'dark';
+		// Clear any custom inline styles first so we get the pure preset values.
+		clearCustomThemeColors();
+		root.setAttribute('data-theme', preset);
+		// Force style recalculation.
+		editorColors = getCurrentThemeColors();
+		// Restore original theme attribute.
+		root.setAttribute('data-theme', currentThemeAttr);
+		// Apply the new editor colors as live preview.
+		applyCustomThemeColors(editorColors);
+	}
+
+	function handleHexInput(key: keyof CustomThemeColors, value: string) {
+		// Normalize the hex input: add # if missing, validate format.
+		let hex = value.trim();
+		if (hex && !hex.startsWith('#')) {
+			hex = '#' + hex;
+		}
+		if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+			handleEditorColorChange(key, hex);
+		}
 	}
 
 	function handleEditorColorChange(key: keyof CustomThemeColors, value: string) {
@@ -506,12 +559,15 @@
 		activateCustomTheme(name);
 		syncSettingsToApi();
 
+		showThemeEditor = false;
+		editingExistingTheme = false;
 		editorSuccess = `Theme "${name}" saved and activated!`;
 		setTimeout(() => (editorSuccess = ''), 3000);
 	}
 
 	function cancelThemeEditor() {
 		showThemeEditor = false;
+		editingExistingTheme = false;
 		// Revert live preview: reapply the active custom theme or clear overrides.
 		if ($activeCustomThemeName) {
 			const active = $customThemes.find((t) => t.name === $activeCustomThemeName);
@@ -608,6 +664,8 @@
 	function editExistingTheme(themeObj: CustomTheme) {
 		editorColors = { ...themeObj.colors };
 		editorThemeName = themeObj.name;
+		editorBasePreset = '';
+		editingExistingTheme = true;
 		editorError = '';
 		editorSuccess = '';
 		showThemeEditor = true;
@@ -1140,6 +1198,44 @@
 							<input type="checkbox" bind:checked={notificationSounds} class="accent-brand-500" />
 							<span class="text-sm text-text-secondary">Enable notification sounds</span>
 						</label>
+
+						{#if notificationSounds}
+							<div class="mt-4 space-y-4 border-t border-bg-modifier pt-4">
+								<div>
+									<label for="sound-preset" class="mb-1 block text-xs font-medium text-text-secondary">Sound Preset</label>
+									<select
+										id="sound-preset"
+										bind:value={soundPreset}
+										class="w-full rounded bg-bg-tertiary px-3 py-2 text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-500"
+									>
+										{#each SOUND_PRESETS as preset}
+											<option value={preset.id}>{preset.name}</option>
+										{/each}
+									</select>
+								</div>
+
+								<div>
+									<label for="sound-volume" class="mb-1 block text-xs font-medium text-text-secondary">
+										Volume: {soundVolume}%
+									</label>
+									<input
+										id="sound-volume"
+										type="range"
+										min="0"
+										max="100"
+										bind:value={soundVolume}
+										class="w-full accent-brand-500"
+									/>
+								</div>
+
+								<button
+									class="rounded bg-bg-tertiary px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
+									onclick={() => playNotificationSound(soundPreset, soundVolume)}
+								>
+									Preview Sound
+								</button>
+							</div>
+						{/if}
 					</div>
 
 					<button class="btn-primary" onclick={saveNotifications} disabled={notifLoading}>
@@ -1544,7 +1640,9 @@
 						{#if showThemeEditor}
 							<div class="rounded-lg border-2 border-brand-500/30 bg-bg-secondary p-4">
 								<div class="flex items-center justify-between mb-4">
-									<h3 class="text-sm font-semibold text-text-primary">Theme Editor</h3>
+									<h3 class="text-sm font-semibold text-text-primary">
+										{editingExistingTheme ? 'Edit Theme' : 'Create Theme'}
+									</h3>
 									<button
 										class="rounded p-1 text-text-muted hover:bg-bg-modifier hover:text-text-primary"
 										onclick={cancelThemeEditor}
@@ -1575,27 +1673,61 @@
 									/>
 								</div>
 
+								<!-- Start from preset -->
+								{#if !editingExistingTheme}
+									<div class="mb-4">
+										<label for="basePreset" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+											Start From Preset
+										</label>
+										<select
+											id="basePreset"
+											class="input w-full"
+											value={editorBasePreset}
+											onchange={(e) => handleBasePresetChange((e.target as HTMLSelectElement).value as ThemeName)}
+										>
+											{#each themeOptions as opt (opt.id)}
+												<option value={opt.id}>{opt.label}</option>
+											{/each}
+										</select>
+										<p class="mt-1 text-2xs text-text-muted">
+											Pick a built-in theme to use as a starting point. You can change any color below.
+										</p>
+									</div>
+								{/if}
+
 								<!-- Color pickers grouped by category -->
 								{#each THEME_COLOR_GROUPS as group}
 									<div class="mb-4">
 										<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">{group.label}</h4>
 										<div class="grid grid-cols-1 gap-2">
 											{#each group.keys as key}
-												<div class="flex items-center gap-3 rounded bg-bg-primary p-2">
+												<div class="flex items-center gap-2 rounded bg-bg-primary p-2">
+													<!-- Color swatch preview -->
+													<div
+														class="h-8 w-8 shrink-0 rounded border border-bg-modifier"
+														style="background-color: {editorColors[key]}"
+													></div>
+													<!-- Label -->
+													<div class="flex-1 min-w-0">
+														<p class="text-xs font-medium text-text-primary">{THEME_COLOR_LABELS[key]}</p>
+													</div>
+													<!-- Hex input field -->
+													<input
+														type="text"
+														value={editorColors[key]}
+														oninput={(e) => handleHexInput(key, (e.target as HTMLInputElement).value)}
+														class="w-[5.5rem] shrink-0 rounded bg-bg-floating px-2 py-1 font-mono text-xs text-text-primary outline-none ring-1 ring-bg-modifier focus:ring-brand-500"
+														placeholder="#000000"
+														maxlength="7"
+													/>
+													<!-- Native color picker -->
 													<input
 														type="color"
 														value={editorColors[key]}
 														oninput={(e) => handleEditorColorChange(key, (e.target as HTMLInputElement).value)}
-														class="h-8 w-10 shrink-0 cursor-pointer rounded border border-bg-modifier bg-transparent"
+														class="h-8 w-8 shrink-0 cursor-pointer rounded border border-bg-modifier bg-transparent"
+														title="Pick color for {THEME_COLOR_LABELS[key]}"
 													/>
-													<div class="flex-1 min-w-0">
-														<p class="text-xs font-medium text-text-primary">{THEME_COLOR_LABELS[key]}</p>
-														<p class="text-2xs text-text-muted font-mono">{editorColors[key]}</p>
-													</div>
-													<div
-														class="h-6 w-12 shrink-0 rounded border border-bg-modifier"
-														style="background-color: {editorColors[key]}"
-													></div>
 												</div>
 											{/each}
 										</div>
@@ -1605,7 +1737,7 @@
 								<!-- Live preview card -->
 								<div class="mb-4">
 									<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Live Preview</h4>
-									<div class="overflow-hidden rounded-lg border border-bg-modifier">
+									<div class="overflow-hidden rounded-lg" style="border: 1px solid {editorColors['border-primary']}">
 										<div class="p-3" style="background-color: {editorColors['bg-tertiary']}">
 											<div class="flex items-center gap-2 mb-2">
 												<div class="h-4 w-4 rounded-full" style="background-color: {editorColors['brand-500']}"></div>
@@ -1613,22 +1745,44 @@
 											</div>
 											<div class="rounded p-2" style="background-color: {editorColors['bg-secondary']}">
 												<div class="flex items-start gap-2">
-													<div class="h-8 w-8 shrink-0 rounded-full" style="background-color: {editorColors['brand-500']}"></div>
+													<div class="relative h-8 w-8 shrink-0">
+														<div class="h-8 w-8 rounded-full" style="background-color: {editorColors['brand-500']}"></div>
+														<div class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2" style="background-color: {editorColors['status-online']}; border-color: {editorColors['bg-secondary']}"></div>
+													</div>
 													<div>
 														<span class="text-xs font-semibold" style="color: {editorColors['text-primary']}">User</span>
 														<span class="ml-1 text-2xs" style="color: {editorColors['text-muted']}">Today at 12:00</span>
 														<p class="text-xs mt-0.5" style="color: {editorColors['text-secondary']}">
-															This is a preview of how your theme looks. The colors update in real time as you adjust them.
+															This is a preview of how your theme looks. The colors update in real time.
 														</p>
 													</div>
 												</div>
 											</div>
-											<div class="mt-2 rounded p-2" style="background-color: {editorColors['bg-primary']}">
+											<div class="mt-2 rounded p-2" style="background-color: {editorColors['bg-primary']}; border: 1px solid {editorColors['border-primary']}">
 												<div class="flex items-center gap-2">
-													<span class="text-xs" style="color: {editorColors['text-muted']}">Message input area</span>
+													<span class="text-xs" style="color: {editorColors['text-muted']}">Type a message...</span>
 												</div>
 											</div>
-											<div class="mt-2 flex gap-2">
+											<!-- Status indicators row -->
+											<div class="mt-2 flex items-center gap-3">
+												<div class="flex items-center gap-1">
+													<div class="h-2.5 w-2.5 rounded-full" style="background-color: {editorColors['status-online']}"></div>
+													<span class="text-2xs" style="color: {editorColors['text-muted']}">Online</span>
+												</div>
+												<div class="flex items-center gap-1">
+													<div class="h-2.5 w-2.5 rounded-full" style="background-color: {editorColors['status-idle']}"></div>
+													<span class="text-2xs" style="color: {editorColors['text-muted']}">Idle</span>
+												</div>
+												<div class="flex items-center gap-1">
+													<div class="h-2.5 w-2.5 rounded-full" style="background-color: {editorColors['status-dnd']}"></div>
+													<span class="text-2xs" style="color: {editorColors['text-muted']}">DND</span>
+												</div>
+												<div class="flex items-center gap-1">
+													<div class="h-2.5 w-2.5 rounded-full" style="background-color: {editorColors['status-offline']}"></div>
+													<span class="text-2xs" style="color: {editorColors['text-muted']}">Offline</span>
+												</div>
+											</div>
+											<div class="mt-2 flex items-center gap-2">
 												<button class="rounded px-3 py-1 text-xs text-white" style="background-color: {editorColors['brand-500']}">
 													Button
 												</button>
@@ -1642,7 +1796,7 @@
 
 								<div class="flex gap-2">
 									<button class="btn-primary" onclick={saveCustomThemeFromEditor}>
-										Save Theme
+										{editingExistingTheme ? 'Save Changes' : 'Save Theme'}
 									</button>
 									<button class="btn-secondary" onclick={cancelThemeEditor}>
 										Cancel

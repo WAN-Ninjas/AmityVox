@@ -2,7 +2,8 @@
 
 import { writable, derived, get } from 'svelte/store';
 import { currentChannelId } from './channels';
-import { isDndActive } from './settings';
+import { isDndActive, notificationSoundsEnabled, notificationSoundPreset, notificationVolume } from './settings';
+import { playNotificationSound } from '$lib/utils/sounds';
 
 export type NotificationType = 'mention' | 'reply' | 'dm' | 'friend_request';
 
@@ -91,6 +92,11 @@ export function addNotification(notification: Omit<AppNotification, 'id' | 'read
 		lastNotificationSuppressed.set(true);
 		// Reset suppressed flag after a brief delay.
 		setTimeout(() => lastNotificationSuppressed.set(false), 2000);
+	} else if (get(notificationSoundsEnabled)) {
+		// Play notification sound when not in DND and sounds are enabled.
+		const preset = get(notificationSoundPreset);
+		const volume = get(notificationVolume);
+		playNotificationSound(preset, volume);
 	}
 
 	notificationMap.update((map) => {

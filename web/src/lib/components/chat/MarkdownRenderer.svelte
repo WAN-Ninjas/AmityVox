@@ -77,6 +77,30 @@
 			return addPlaceholder(renderMath(formula, false));
 		});
 
+		// --- Phase 1.5: Extract AmityVox internal message links ---
+		// Detect links to internal channels/messages and render as styled "Jump to message" links.
+		// Matches: /app/guilds/{id}/channels/{id} or full URLs containing that path.
+		// Also matches: /app/dms/{id}
+		const messageLinkPattern = /(https?:\/\/[^\s]*?)?(\/app\/guilds\/([^\s/]+)\/channels\/([^\s/#]+)(?:#([^\s]+))?)/g;
+		text = text.replace(messageLinkPattern, (_match, _protocol, fullPath, _guildId, _channelId, msgFragment) => {
+			const href = fullPath;
+			const label = msgFragment ? 'Jump to message' : 'Jump to channel';
+			const icon = '<svg style="display:inline;vertical-align:middle;width:14px;height:14px;margin-right:3px;" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>';
+			return addPlaceholder(
+				`<a href="${escapeHtml(href)}" class="inline-flex items-center gap-1 rounded bg-bg-modifier/50 px-1.5 py-0.5 text-xs text-text-link hover:underline hover:bg-bg-modifier">${icon}${escapeHtml(label)}</a>`
+			);
+		});
+
+		const dmLinkPattern = /(https?:\/\/[^\s]*?)?(\/app\/dms\/([^\s/#]+)(?:#([^\s]+))?)/g;
+		text = text.replace(dmLinkPattern, (_match, _protocol, fullPath, _channelId, msgFragment) => {
+			const href = fullPath;
+			const label = msgFragment ? 'Jump to message' : 'Jump to DM';
+			const icon = '<svg style="display:inline;vertical-align:middle;width:14px;height:14px;margin-right:3px;" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>';
+			return addPlaceholder(
+				`<a href="${escapeHtml(href)}" class="inline-flex items-center gap-1 rounded bg-bg-modifier/50 px-1.5 py-0.5 text-xs text-text-link hover:underline hover:bg-bg-modifier">${icon}${escapeHtml(label)}</a>`
+			);
+		});
+
 		// --- Phase 2: Escape HTML in the remaining text ---
 		text = escapeHtml(text);
 

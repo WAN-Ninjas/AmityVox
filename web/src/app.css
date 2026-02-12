@@ -26,6 +26,12 @@
 	--text-secondary: #b5bac1;
 	--text-muted: #949ba4;
 	--text-link: #00a8fc;
+	--status-online: #23a55a;
+	--status-idle: #f0b232;
+	--status-dnd: #f23f43;
+	--status-offline: #80848e;
+	--border-primary: #383a40;
+	--scrollbar-thumb: #1e1f22;
 }
 
 /* Light */
@@ -49,6 +55,12 @@
 	--text-secondary: #4e5058;
 	--text-muted: #6d6f78;
 	--text-link: #006ce7;
+	--status-online: #1f8b4c;
+	--status-idle: #d9980d;
+	--status-dnd: #d83c3e;
+	--status-offline: #747f8d;
+	--border-primary: #d4d7dc;
+	--scrollbar-thumb: #c1c3c7;
 }
 
 /* AMOLED */
@@ -72,6 +84,12 @@
 	--text-secondary: #b5bac1;
 	--text-muted: #949ba4;
 	--text-link: #00a8fc;
+	--status-online: #23a55a;
+	--status-idle: #f0b232;
+	--status-dnd: #f23f43;
+	--status-offline: #80848e;
+	--border-primary: #1a1a1a;
+	--scrollbar-thumb: #1a1a1a;
 }
 
 /* Nord */
@@ -95,6 +113,12 @@
 	--text-secondary: #d8dee9;
 	--text-muted: #a5b1c2;
 	--text-link: #88c0d0;
+	--status-online: #a3be8c;
+	--status-idle: #ebcb8b;
+	--status-dnd: #bf616a;
+	--status-offline: #4c566a;
+	--border-primary: #4c566a;
+	--scrollbar-thumb: #3b4252;
 }
 
 /* Dracula */
@@ -118,6 +142,12 @@
 	--text-secondary: #c5c8d6;
 	--text-muted: #6272a4;
 	--text-link: #8be9fd;
+	--status-online: #50fa7b;
+	--status-idle: #f1fa8c;
+	--status-dnd: #ff5555;
+	--status-offline: #6272a4;
+	--border-primary: #44475a;
+	--scrollbar-thumb: #44475a;
 }
 
 /* Catppuccin Mocha */
@@ -141,6 +171,12 @@
 	--text-secondary: #bac2de;
 	--text-muted: #6c7086;
 	--text-link: #89b4fa;
+	--status-online: #a6e3a1;
+	--status-idle: #f9e2af;
+	--status-dnd: #f38ba8;
+	--status-offline: #6c7086;
+	--border-primary: #45475a;
+	--scrollbar-thumb: #313244;
 }
 
 /* Solarized Dark */
@@ -164,6 +200,12 @@
 	--text-secondary: #eee8d5;
 	--text-muted: #839496;
 	--text-link: #268bd2;
+	--status-online: #859900;
+	--status-idle: #b58900;
+	--status-dnd: #dc322f;
+	--status-offline: #657b83;
+	--border-primary: #1c5566;
+	--scrollbar-thumb: #073642;
 }
 
 /* High Contrast — maximum readability */
@@ -187,12 +229,18 @@
 	--text-secondary: #e6e6e6;
 	--text-muted: #b3b3b3;
 	--text-link: #4d9cff;
+	--status-online: #00ff00;
+	--status-idle: #ffff00;
+	--status-dnd: #ff0000;
+	--status-offline: #808080;
+	--border-primary: #666666;
+	--scrollbar-thumb: #555555;
 }
 
 @layer base {
 	* {
 		scrollbar-width: thin;
-		scrollbar-color: var(--bg-primary) transparent;
+		scrollbar-color: var(--scrollbar-thumb) transparent;
 	}
 
 	::-webkit-scrollbar {
@@ -205,7 +253,7 @@
 	}
 
 	::-webkit-scrollbar-thumb {
-		background: var(--bg-primary);
+		background: var(--scrollbar-thumb);
 		border-radius: 4px;
 	}
 

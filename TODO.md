@@ -242,8 +242,8 @@
 - [ ] Audio sharing toggle (share system audio)
 
 ### Media Processing
-- [ ] Voice messages — record and send audio clips inline in text channels
-- [ ] Audio waveform visualization for voice messages
+- [x] Voice messages — record and send audio clips inline in text channels
+- [x] Audio waveform visualization for voice messages
 - [ ] Video player improvements — inline playback with controls, volume, fullscreen
 - [x] Image paste from clipboard (Ctrl+V to upload)
 - [x] Drag-and-drop multiple files with individual progress bars
@@ -328,16 +328,16 @@
 - [ ] Community theme gallery (share themes with other users via shareable links)
 
 ### Bot API & Framework
-- [ ] Bot account creation via admin panel or API
-- [ ] Bot token authentication (separate from user sessions)
+- [x] Bot account creation via admin panel or API
+- [x] Bot token authentication (separate from user sessions)
 - [ ] Bot permissions model (scoped to guilds, limited by role hierarchy)
-- [ ] Slash commands framework — register commands, receive interactions via HTTP webhook
+- [x] Slash commands framework — register commands, receive interactions via HTTP webhook
 - [ ] Message components — buttons, select menus, modals (for interactive bot messages)
 - [ ] Bot presence/status updates via API
 - [ ] Bot event subscriptions (per-guild, filter by event type)
 - [ ] Bot rate limiting (separate from user limits, configurable)
 - [ ] Official bot SDK (Go package) for building bots against AmityVox API
-- [ ] Bot directory page in admin panel (list installed bots, manage permissions)
+- [x] Bot directory page in admin panel (list installed bots, manage permissions)
 
 ### Widgets & Embeds
 - [ ] Embeddable server widget (HTML/iframe for external websites)

@@ -5,9 +5,9 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
-	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt, BanList, BanListEntry, BanListSubscription } from '$lib/types';
+	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt, BanList, BanListEntry, BanListSubscription, StickerPack, Sticker } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding' | 'ban-lists';
+	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'stickers' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding' | 'ban-lists';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -48,6 +48,19 @@
 	let emojiFile = $state<File | null>(null);
 	let emojiName = $state('');
 	let uploadingEmoji = $state(false);
+
+	// --- Stickers ---
+	let stickerPacks = $state<StickerPack[]>([]);
+	let stickersByPack = $state<Map<string, Sticker[]>>(new Map());
+	let loadingStickers = $state(false);
+	let expandedPackId = $state<string | null>(null);
+	let loadingPackStickers = $state(false);
+	let newPackName = $state('');
+	let newPackDescription = $state('');
+	let creatingPack = $state(false);
+	let newStickerName = $state('');
+	let newStickerFile = $state<File | null>(null);
+	let uploadingSticker = $state(false);
 
 	// --- Webhooks ---
 	let webhooks = $state<Webhook[]>([]);
@@ -177,6 +190,7 @@
 		if (currentTab === 'invites' && invites.length === 0) loadInvites(gId);
 		if (currentTab === 'bans' && bans.length === 0) loadBans(gId);
 		if (currentTab === 'emoji' && emoji.length === 0) loadEmoji(gId);
+		if (currentTab === 'stickers' && stickerPacks.length === 0) loadStickerPacks(gId);
 		if (currentTab === 'webhooks' && webhooks.length === 0) loadWebhooks(gId);
 		if (currentTab === 'audit' && auditLog.length === 0) loadAudit(gId);
 		if (currentTab === 'automod' && automodRules.length === 0) loadAutomod(gId);
@@ -828,6 +842,113 @@
 		}
 	}
 
+	// --- Sticker actions ---
+
+	async function loadStickerPacks(guildId: string) {
+		loadingStickers = true;
+		try { stickerPacks = await api.getGuildStickerPacks(guildId); } catch {}
+		finally { loadingStickers = false; }
+	}
+
+	async function loadPackStickersData(guildId: string, packId: string) {
+		loadingPackStickers = true;
+		try {
+			const stickers = await api.getPackStickers(guildId, packId);
+			stickersByPack = new Map([...stickersByPack, [packId, stickers]]);
+		} catch {
+			stickersByPack = new Map([...stickersByPack, [packId, []]]);
+		} finally {
+			loadingPackStickers = false;
+		}
+	}
+
+	async function handleCreateStickerPack() {
+		if (!$currentGuild || !newPackName.trim()) return;
+		creatingPack = true;
+		try {
+			const pack = await api.createGuildStickerPack($currentGuild.id, newPackName.trim(), newPackDescription.trim() || undefined);
+			stickerPacks = [...stickerPacks, pack];
+			newPackName = '';
+			newPackDescription = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to create sticker pack';
+		} finally {
+			creatingPack = false;
+		}
+	}
+
+	async function handleDeleteStickerPack(packId: string) {
+		if (!$currentGuild || !confirm('Delete this sticker pack and all its stickers?')) return;
+		try {
+			await api.deleteGuildStickerPack($currentGuild.id, packId);
+			stickerPacks = stickerPacks.filter(p => p.id !== packId);
+			stickersByPack = new Map([...stickersByPack].filter(([k]) => k !== packId));
+			if (expandedPackId === packId) expandedPackId = null;
+		} catch (err: any) {
+			error = err.message || 'Failed to delete sticker pack';
+		}
+	}
+
+	function toggleExpandPack(packId: string) {
+		if (expandedPackId === packId) {
+			expandedPackId = null;
+		} else {
+			expandedPackId = packId;
+			if ($currentGuild && !stickersByPack.has(packId)) {
+				loadPackStickersData($currentGuild.id, packId);
+			}
+		}
+	}
+
+	function handleStickerFileSelect(e: Event) {
+		const file = (e.target as HTMLInputElement).files?.[0];
+		if (!file?.type.startsWith('image/')) return;
+		newStickerFile = file;
+		if (!newStickerName) newStickerName = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 32);
+	}
+
+	async function handleUploadSticker(packId: string) {
+		if (!$currentGuild || !newStickerFile || !newStickerName.trim()) return;
+		uploadingSticker = true;
+		try {
+			// Upload the image file first.
+			const uploaded = await api.uploadFile(newStickerFile);
+			// Determine format from the file type.
+			let format = 'png';
+			if (newStickerFile.type === 'image/gif') format = 'gif';
+			else if (newStickerFile.type === 'image/apng') format = 'apng';
+			else if (newStickerFile.type === 'image/png') format = 'png';
+			// Add the sticker to the pack.
+			const sticker = await api.addStickerToGuildPack($currentGuild.id, packId, {
+				name: newStickerName.trim(),
+				file_id: uploaded.id,
+				format
+			});
+			const existing = stickersByPack.get(packId) ?? [];
+			stickersByPack = new Map([...stickersByPack, [packId, [...existing, sticker]]]);
+			// Update the pack sticker count.
+			stickerPacks = stickerPacks.map(p => p.id === packId ? { ...p, sticker_count: (p.sticker_count ?? 0) + 1 } : p);
+			newStickerName = '';
+			newStickerFile = null;
+		} catch (err: any) {
+			error = err.message || 'Failed to upload sticker';
+		} finally {
+			uploadingSticker = false;
+		}
+	}
+
+	async function handleDeleteSticker(packId: string, stickerId: string) {
+		if (!$currentGuild || !confirm('Delete this sticker?')) return;
+		try {
+			await api.deleteStickerFromGuildPack($currentGuild.id, packId, stickerId);
+			const existing = stickersByPack.get(packId) ?? [];
+			stickersByPack = new Map([...stickersByPack, [packId, existing.filter(s => s.id !== stickerId)]]);
+			stickerPacks = stickerPacks.map(p => p.id === packId ? { ...p, sticker_count: Math.max(0, (p.sticker_count ?? 1) - 1) } : p);
+		} catch (err: any) {
+			error = err.message || 'Failed to delete sticker';
+		}
+	}
+
 	// --- Webhook actions ---
 
 	async function handleCreateWebhook() {
@@ -1104,6 +1225,7 @@
 		{ id: 'invites', label: 'Invites' },
 		{ id: 'bans', label: 'Bans' },
 		{ id: 'emoji', label: 'Emoji' },
+		{ id: 'stickers', label: 'Stickers' },
 		{ id: 'webhooks', label: 'Webhooks' },
 		{ id: 'audit', label: 'Audit Log' },
 		{ id: 'automod', label: 'AutoMod' },
@@ -1539,6 +1661,123 @@
 								>
 									Delete
 								</button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+			<!-- ==================== STICKERS ==================== -->
+			{:else if currentTab === 'stickers'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Sticker Packs</h1>
+
+				<!-- Create pack form -->
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Sticker Pack</h3>
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Pack Name</label>
+						<input type="text" class="input w-full" bind:value={newPackName} placeholder="My Stickers" maxlength="50" />
+					</div>
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Description (optional)</label>
+						<input type="text" class="input w-full" bind:value={newPackDescription} placeholder="A collection of custom stickers" maxlength="200" />
+					</div>
+					<button class="btn-primary" onclick={handleCreateStickerPack} disabled={creatingPack || !newPackName.trim()}>
+						{creatingPack ? 'Creating...' : 'Create Pack'}
+					</button>
+				</div>
+
+				{#if loadingStickers}
+					<p class="text-sm text-text-muted">Loading sticker packs...</p>
+				{:else if stickerPacks.length === 0}
+					<p class="text-sm text-text-muted">No sticker packs yet. Create one above!</p>
+				{:else}
+					<div class="space-y-3">
+						{#each stickerPacks as pack (pack.id)}
+							<div class="rounded-lg bg-bg-secondary">
+								<!-- Pack header -->
+								<div class="flex items-center gap-3 p-4">
+									<button
+										class="flex flex-1 items-center gap-3 text-left"
+										onclick={() => toggleExpandPack(pack.id)}
+									>
+										<svg
+											class="h-4 w-4 shrink-0 text-text-muted transition-transform {expandedPackId === pack.id ? 'rotate-90' : ''}"
+											fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+										>
+											<path d="M9 5l7 7-7 7" />
+										</svg>
+										<div>
+											<span class="text-sm font-medium text-text-primary">{pack.name}</span>
+											{#if pack.description}
+												<span class="ml-2 text-xs text-text-muted">{pack.description}</span>
+											{/if}
+										</div>
+										<span class="ml-auto text-xs text-text-muted">{pack.sticker_count ?? 0} sticker{(pack.sticker_count ?? 0) !== 1 ? 's' : ''}</span>
+									</button>
+									<button
+										class="text-xs text-red-400 hover:text-red-300"
+										onclick={() => handleDeleteStickerPack(pack.id)}
+									>
+										Delete
+									</button>
+								</div>
+
+								<!-- Expanded pack contents -->
+								{#if expandedPackId === pack.id}
+									<div class="border-t border-bg-modifier p-4">
+										<!-- Upload sticker form -->
+										<div class="mb-4 rounded bg-bg-primary p-3">
+											<h4 class="mb-2 text-xs font-semibold text-text-muted">Add Sticker</h4>
+											<div class="mb-2 flex gap-3">
+												<div>
+													<label class="mb-1 block text-2xs font-bold uppercase tracking-wide text-text-muted">Image</label>
+													<input type="file" accept="image/png,image/gif,image/apng,image/webp" onchange={handleStickerFileSelect} class="text-xs text-text-muted" />
+												</div>
+												<div class="flex-1">
+													<label class="mb-1 block text-2xs font-bold uppercase tracking-wide text-text-muted">Name</label>
+													<input type="text" class="input w-full text-sm" bind:value={newStickerName} placeholder="sticker_name" maxlength="32" />
+												</div>
+											</div>
+											<button
+												class="btn-primary text-xs"
+												onclick={() => handleUploadSticker(pack.id)}
+												disabled={uploadingSticker || !newStickerFile || !newStickerName.trim()}
+											>
+												{uploadingSticker ? 'Uploading...' : 'Add Sticker'}
+											</button>
+										</div>
+
+										<!-- Sticker grid -->
+										{#if loadingPackStickers}
+											<p class="text-xs text-text-muted">Loading stickers...</p>
+										{:else}
+											{@const packStickers = stickersByPack.get(pack.id) ?? []}
+											{#if packStickers.length === 0}
+												<p class="text-xs text-text-muted">No stickers in this pack yet.</p>
+											{:else}
+												<div class="grid grid-cols-4 gap-3">
+													{#each packStickers as sticker (sticker.id)}
+														<div class="flex flex-col items-center gap-1 rounded-lg bg-bg-primary p-3">
+															<img
+																src="/api/v1/files/{sticker.file_id}"
+																alt={sticker.name}
+																class="h-12 w-12 object-contain"
+																loading="lazy"
+															/>
+															<span class="max-w-full truncate text-xs text-text-muted">{sticker.name}</span>
+															<button
+																class="text-2xs text-red-400 hover:text-red-300"
+																onclick={() => handleDeleteSticker(pack.id, sticker.id)}
+															>
+																Delete
+															</button>
+														</div>
+													{/each}
+												</div>
+											{/if}
+										{/if}
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>

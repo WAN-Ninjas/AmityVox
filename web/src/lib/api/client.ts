@@ -48,7 +48,9 @@ import type {
 	BanListSubscription,
 	ChannelFollower,
 	BotToken,
-	SlashCommand
+	SlashCommand,
+	StickerPack,
+	Sticker
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -804,8 +806,11 @@ class ApiClient {
 
 	// --- Bookmarks ---
 
-	createBookmark(messageId: string, note?: string): Promise<MessageBookmark> {
-		return this.put(`/messages/${messageId}/bookmark`, note ? { note } : undefined);
+	createBookmark(messageId: string, note?: string, reminderAt?: string): Promise<MessageBookmark> {
+		const body: Record<string, string> = {};
+		if (note) body.note = note;
+		if (reminderAt) body.reminder_at = reminderAt;
+		return this.put(`/messages/${messageId}/bookmark`, Object.keys(body).length > 0 ? body : undefined);
 	}
 
 	deleteBookmark(messageId: string): Promise<void> {
@@ -1115,6 +1120,40 @@ class ApiClient {
 
 	deleteBotCommand(botId: string, commandId: string): Promise<void> {
 		return this.del(`/bots/${botId}/commands/${commandId}`);
+	}
+
+	// --- Sticker Packs ---
+
+	getGuildStickerPacks(guildId: string): Promise<StickerPack[]> {
+		return this.get(`/guilds/${guildId}/sticker-packs`);
+	}
+
+	createGuildStickerPack(guildId: string, name: string, description?: string): Promise<StickerPack> {
+		return this.post(`/guilds/${guildId}/sticker-packs`, { name, description });
+	}
+
+	deleteGuildStickerPack(guildId: string, packId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/sticker-packs/${packId}`);
+	}
+
+	getPackStickers(guildId: string, packId: string): Promise<Sticker[]> {
+		return this.get(`/guilds/${guildId}/sticker-packs/${packId}/stickers`);
+	}
+
+	addStickerToGuildPack(guildId: string, packId: string, data: { name: string; file_id: string; format: string; description?: string; tags?: string }): Promise<Sticker> {
+		return this.post(`/guilds/${guildId}/sticker-packs/${packId}/stickers`, data);
+	}
+
+	deleteStickerFromGuildPack(guildId: string, packId: string, stickerId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/sticker-packs/${packId}/stickers/${stickerId}`);
+	}
+
+	getUserStickerPacks(): Promise<StickerPack[]> {
+		return this.get('/stickers/my-packs');
+	}
+
+	createUserStickerPack(name: string, description?: string): Promise<StickerPack> {
+		return this.post('/stickers/my-packs', { name, description });
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -42,7 +43,8 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // --- Request types ---
 
 type createBookmarkRequest struct {
-	Note *string `json:"note"`
+	Note       *string `json:"note"`
+	ReminderAt *string `json:"reminder_at"`
 }
 
 // HandleCreateBookmark creates or updates a bookmark on a message.
@@ -66,6 +68,21 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse reminder_at if provided.
+	var reminderAt *time.Time
+	if req.ReminderAt != nil && *req.ReminderAt != "" {
+		t, err := time.Parse(time.RFC3339, *req.ReminderAt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_reminder_at", "Invalid reminder_at format; use RFC3339")
+			return
+		}
+		if t.Before(time.Now()) {
+			writeError(w, http.StatusBadRequest, "invalid_reminder_at", "Reminder time must be in the future")
+			return
+		}
+		reminderAt = &t
+	}
+
 	// Verify the message exists.
 	var exists bool
 	err := h.Pool.QueryRow(r.Context(),
@@ -85,13 +102,14 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 	// Upsert the bookmark.
 	var bookmark models.MessageBookmark
 	err = h.Pool.QueryRow(r.Context(),
-		`INSERT INTO message_bookmarks (user_id, message_id, note, created_at)
-		 VALUES ($1, $2, $3, now())
-		 ON CONFLICT (user_id, message_id) DO UPDATE SET note = $3
-		 RETURNING user_id, message_id, note, created_at`,
-		userID, messageID, req.Note,
+		`INSERT INTO message_bookmarks (user_id, message_id, note, reminder_at, reminded, created_at)
+		 VALUES ($1, $2, $3, $4, false, now())
+		 ON CONFLICT (user_id, message_id) DO UPDATE SET note = $3, reminder_at = $4, reminded = false
+		 RETURNING user_id, message_id, note, reminder_at, reminded, created_at`,
+		userID, messageID, req.Note, reminderAt,
 	).Scan(
-		&bookmark.UserID, &bookmark.MessageID, &bookmark.Note, &bookmark.CreatedAt,
+		&bookmark.UserID, &bookmark.MessageID, &bookmark.Note,
+		&bookmark.ReminderAt, &bookmark.Reminded, &bookmark.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create bookmark",
@@ -153,7 +171,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 
 	if before != "" {
 		rows, err = h.Pool.Query(r.Context(),
-			`SELECT b.user_id, b.message_id, b.note, b.created_at,
+			`SELECT b.user_id, b.message_id, b.note, b.reminder_at, b.reminded, b.created_at,
 			        m.id, m.channel_id, m.author_id, m.content, m.message_type, m.created_at,
 			        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
 			        u.status_text, u.status_emoji, u.status_presence, u.bio, u.flags, u.created_at
@@ -170,7 +188,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 		)
 	} else {
 		rows, err = h.Pool.Query(r.Context(),
-			`SELECT b.user_id, b.message_id, b.note, b.created_at,
+			`SELECT b.user_id, b.message_id, b.note, b.reminder_at, b.reminded, b.created_at,
 			        m.id, m.channel_id, m.author_id, m.content, m.message_type, m.created_at,
 			        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
 			        u.status_text, u.status_emoji, u.status_presence, u.bio, u.flags, u.created_at
@@ -200,7 +218,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 		var author models.User
 
 		if err := rows.Scan(
-			&b.UserID, &b.MessageID, &b.Note, &b.CreatedAt,
+			&b.UserID, &b.MessageID, &b.Note, &b.ReminderAt, &b.Reminded, &b.CreatedAt,
 			&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.MessageType, &msg.CreatedAt,
 			&author.ID, &author.InstanceID, &author.Username, &author.DisplayName, &author.AvatarID,
 			&author.StatusText, &author.StatusEmoji, &author.StatusPresence, &author.Bio, &author.Flags, &author.CreatedAt,
