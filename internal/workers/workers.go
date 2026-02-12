@@ -80,6 +80,7 @@ func (m *Manager) Start(ctx context.Context) {
 	if m.notifications != nil && m.notifications.Enabled() {
 		m.startNotificationWorker(ctx)
 		m.startEventReminderWorker(ctx)
+		m.startBookmarkReminderWorker(ctx)
 		m.startPeriodic(ctx, "push-sub-cleanup", 24*time.Hour, m.cleanStalePushSubscriptions)
 	}
 

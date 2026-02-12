@@ -570,11 +570,13 @@ type PollOption struct {
 
 // MessageBookmark represents a user's bookmark on a message. Corresponds to the message_bookmarks table.
 type MessageBookmark struct {
-	UserID    string    `json:"user_id"`
-	MessageID string    `json:"message_id"`
-	Note      *string   `json:"note,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	Message   *Message  `json:"message,omitempty"` // Populated on list
+	UserID     string     `json:"user_id"`
+	MessageID  string     `json:"message_id"`
+	Note       *string    `json:"note,omitempty"`
+	ReminderAt *time.Time `json:"reminder_at"`
+	Reminded   bool       `json:"reminded"`
+	CreatedAt  time.Time  `json:"created_at"`
+	Message    *Message   `json:"message,omitempty"` // Populated on list
 }
 
 // GuildEvent represents a scheduled event in a guild. Corresponds to the guild_events table.

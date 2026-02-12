@@ -73,6 +73,14 @@
 
 	const isOwnMessage = $derived($currentUser?.id === message.author_id);
 
+	// Detect sticker-like messages: no text content with a single image attachment.
+	const isStickerMessage = $derived(
+		!message.content?.trim() &&
+		message.attachments?.length === 1 &&
+		message.attachments[0].content_type?.startsWith('image/') &&
+		message.message_type === 'default'
+	);
+
 	const isAuthorTimedOut = $derived.by(() => {
 		const until = $memberTimeouts.get(message.author_id);
 		if (!until) return false;
@@ -238,6 +246,16 @@
 		attachmentContextMenu = null;
 		navigator.clipboard.writeText(`${window.location.origin}/api/v1/files/${attachment.id}`);
 		addToast('URL copied', 'info');
+	}
+
+	async function handleBookmark() {
+		contextMenu = null;
+		try {
+			await api.createBookmark(message.id);
+			addToast('Message bookmarked', 'success');
+		} catch (err: any) {
+			addToast('Failed to bookmark message', 'error');
+		}
 	}
 
 	function handleForward() {
@@ -418,6 +436,15 @@
 										</span>
 									</div>
 								</div>
+							{:else if isStickerMessage}
+								<img
+									src="/api/v1/files/{attachment.id}"
+									alt={attachment.filename}
+									class="h-40 w-40 object-contain cursor-pointer hover:scale-105 transition-transform"
+									loading="lazy"
+									onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
+									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
+								/>
 							{:else}
 								<img
 									src="/api/v1/files/{attachment.id}"
@@ -582,6 +609,7 @@
 			<ContextMenuItem label="View Thread" onclick={handleViewThread} />
 		{/if}
 		<ContextMenuItem label="Copy Message Link" onclick={handleCopyLink} />
+		<ContextMenuItem label="Bookmark" onclick={handleBookmark} />
 		<ContextMenuItem label="Forward" onclick={handleForward} />
 		{#if isOwnMessage}
 			<ContextMenuDivider />

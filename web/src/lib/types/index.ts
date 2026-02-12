@@ -378,6 +378,8 @@ export interface MessageBookmark {
 	user_id: string;
 	message_id: string;
 	note: string | null;
+	reminder_at: string | null;
+	reminded: boolean;
 	created_at: string;
 	message?: Message;
 }
@@ -609,6 +611,8 @@ export interface Webhook {
 export interface UserSettings {
 	desktop_notifications: boolean;
 	notification_sounds: boolean;
+	notification_sound_preset?: string; // 'default' | 'chime' | 'bell' | 'pop' | 'none'
+	notification_volume?: number; // 0-100, default 80
 	dm_privacy: 'everyone' | 'friends' | 'nobody';
 	friend_request_privacy: 'everyone' | 'mutual_guilds' | 'nobody';
 	nsfw_content_filter?: 'blur_all' | 'blur_suspicious' | 'show_all';
@@ -697,6 +701,31 @@ export interface BanListSubscription {
 	list_id: string;
 	list_name: string;
 	auto_ban: boolean;
+	created_at: string;
+}
+
+// --- Sticker Packs ---
+
+export interface StickerPack {
+	id: string;
+	name: string;
+	description: string | null;
+	cover_sticker_id: string | null;
+	owner_type: 'guild' | 'user' | 'system';
+	owner_id: string;
+	public: boolean;
+	sticker_count: number;
+	created_at: string;
+}
+
+export interface Sticker {
+	id: string;
+	pack_id: string;
+	name: string;
+	description: string | null;
+	tags: string | null;
+	file_id: string;
+	format: 'png' | 'apng' | 'gif' | 'lottie';
 	created_at: string;
 }
 

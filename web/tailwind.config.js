@@ -32,10 +32,10 @@ export default {
 					link: 'var(--text-link)'
 				},
 				status: {
-					online: '#23a55a',
-					idle: '#f0b232',
-					dnd: '#f23f43',
-					offline: '#80848e'
+					online: 'var(--status-online)',
+					idle: 'var(--status-idle)',
+					dnd: 'var(--status-dnd)',
+					offline: 'var(--status-offline)'
 				}
 			},
 			fontSize: {

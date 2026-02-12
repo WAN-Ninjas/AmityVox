@@ -19,6 +19,12 @@ export interface CustomThemeColors {
 	'text-secondary': string;
 	'text-muted': string;
 	'text-link': string;
+	'status-online': string;
+	'status-idle': string;
+	'status-dnd': string;
+	'status-offline': string;
+	'border-primary': string;
+	'scrollbar-thumb': string;
 }
 
 export interface CustomTheme {
@@ -65,7 +71,13 @@ export const DEFAULT_THEME_COLORS: CustomThemeColors = {
 	'text-primary': '#f2f3f5',
 	'text-secondary': '#b5bac1',
 	'text-muted': '#949ba4',
-	'text-link': '#00a8fc'
+	'text-link': '#00a8fc',
+	'status-online': '#23a55a',
+	'status-idle': '#f0b232',
+	'status-dnd': '#f23f43',
+	'status-offline': '#80848e',
+	'border-primary': '#383a40',
+	'scrollbar-thumb': '#1e1f22'
 };
 
 // Color definitions for the editor UI labels.
@@ -81,7 +93,13 @@ export const THEME_COLOR_LABELS: Record<keyof CustomThemeColors, string> = {
 	'text-primary': 'Text Primary',
 	'text-secondary': 'Text Secondary',
 	'text-muted': 'Text Muted',
-	'text-link': 'Text Link'
+	'text-link': 'Text Link',
+	'status-online': 'Online',
+	'status-idle': 'Idle',
+	'status-dnd': 'Do Not Disturb',
+	'status-offline': 'Offline',
+	'border-primary': 'Border Primary',
+	'scrollbar-thumb': 'Scrollbar Thumb'
 };
 
 // Color groupings for the editor UI.
@@ -97,8 +115,21 @@ export const THEME_COLOR_GROUPS = [
 	{
 		label: 'Text',
 		keys: ['text-primary', 'text-secondary', 'text-muted', 'text-link'] as (keyof CustomThemeColors)[]
+	},
+	{
+		label: 'Status',
+		keys: ['status-online', 'status-idle', 'status-dnd', 'status-offline'] as (keyof CustomThemeColors)[]
+	},
+	{
+		label: 'UI Elements',
+		keys: ['border-primary', 'scrollbar-thumb'] as (keyof CustomThemeColors)[]
 	}
 ];
+
+// --- Notification Sound Defaults ---
+
+const DEFAULT_SOUND_PRESET = 'default';
+const DEFAULT_SOUND_VOLUME = 80;
 
 // --- Stores ---
 
@@ -106,6 +137,9 @@ export const customThemes = writable<CustomTheme[]>([]);
 export const activeCustomThemeName = writable<string | null>(null);
 export const dndSchedule = writable<DndSchedule>(DEFAULT_DND_SCHEDULE);
 export const dndManualOverride = writable<boolean>(false);
+export const notificationSoundsEnabled = writable<boolean>(true);
+export const notificationSoundPreset = writable<string>(DEFAULT_SOUND_PRESET);
+export const notificationVolume = writable<number>(DEFAULT_SOUND_VOLUME);
 
 // Whether DND is currently active (either by schedule or manual toggle).
 export const isDndActive = derived(
@@ -165,13 +199,17 @@ export function getCurrentThemeColors(): CustomThemeColors {
 // --- Persistence ---
 
 export function loadSettings() {
-	// Load custom themes
+	// Load custom themes, filling in any missing color keys with defaults.
 	try {
 		const stored = localStorage.getItem('av-custom-themes');
 		if (stored) {
 			const parsed = JSON.parse(stored);
 			if (Array.isArray(parsed)) {
-				customThemes.set(parsed);
+				const migrated = parsed.map((t: CustomTheme) => ({
+					...t,
+					colors: { ...DEFAULT_THEME_COLORS, ...t.colors }
+				}));
+				customThemes.set(migrated);
 			}
 		}
 	} catch {
@@ -196,6 +234,23 @@ export function loadSettings() {
 	// Load manual DND override
 	dndManualOverride.set(localStorage.getItem('av-dnd-manual') === 'true');
 
+	// Load notification sound preferences
+	const storedSoundsEnabled = localStorage.getItem('av-sounds-enabled');
+	if (storedSoundsEnabled !== null) {
+		notificationSoundsEnabled.set(storedSoundsEnabled !== 'false');
+	}
+	const storedPreset = localStorage.getItem('av-sound-preset');
+	if (storedPreset) {
+		notificationSoundPreset.set(storedPreset);
+	}
+	const storedVolume = localStorage.getItem('av-sound-volume');
+	if (storedVolume) {
+		const vol = parseInt(storedVolume, 10);
+		if (!isNaN(vol) && vol >= 0 && vol <= 100) {
+			notificationVolume.set(vol);
+		}
+	}
+
 	// Apply active custom theme if one is selected
 	if (activeTheme) {
 		const themes = get(customThemes);
@@ -209,6 +264,21 @@ export function loadSettings() {
 export function saveCustomThemes() {
 	const themes = get(customThemes);
 	localStorage.setItem('av-custom-themes', JSON.stringify(themes));
+}
+
+export function saveNotificationSoundsEnabled() {
+	const enabled = get(notificationSoundsEnabled);
+	localStorage.setItem('av-sounds-enabled', String(enabled));
+}
+
+export function saveNotificationSoundPreset() {
+	const preset = get(notificationSoundPreset);
+	localStorage.setItem('av-sound-preset', preset);
+}
+
+export function saveNotificationVolume() {
+	const vol = get(notificationVolume);
+	localStorage.setItem('av-sound-volume', String(vol));
 }
 
 export function saveDndSchedule() {
@@ -279,20 +349,25 @@ export function importTheme(jsonStr: string): CustomTheme {
 		throw new Error('Theme must have a colors object.');
 	}
 
-	// Validate all required color keys are present.
-	for (const key of Object.keys(DEFAULT_THEME_COLORS)) {
-		if (typeof parsed.colors[key] !== 'string') {
-			throw new Error(`Missing or invalid color: ${key}`);
-		}
-		// Validate it looks like a hex color.
-		if (!/^#[0-9a-fA-F]{6}$/.test(parsed.colors[key])) {
+	// Validate present color keys have valid hex format.
+	// Missing keys will be filled from defaults for backward compatibility.
+	for (const key of Object.keys(parsed.colors)) {
+		if (typeof parsed.colors[key] === 'string' && !/^#[0-9a-fA-F]{6}$/.test(parsed.colors[key])) {
 			throw new Error(`Invalid hex color for ${key}: ${parsed.colors[key]}`);
+		}
+	}
+
+	// Merge with defaults so older theme exports (missing new keys) still work.
+	const colors: CustomThemeColors = { ...DEFAULT_THEME_COLORS };
+	for (const key of Object.keys(DEFAULT_THEME_COLORS) as (keyof CustomThemeColors)[]) {
+		if (typeof parsed.colors[key] === 'string' && /^#[0-9a-fA-F]{6}$/.test(parsed.colors[key])) {
+			colors[key] = parsed.colors[key];
 		}
 	}
 
 	return {
 		name: parsed.name,
-		colors: parsed.colors,
+		colors,
 		createdAt: new Date().toISOString()
 	};
 }
@@ -304,11 +379,15 @@ export async function syncSettingsToApi() {
 		const schedule = get(dndSchedule);
 		const themes = get(customThemes);
 		const activeTheme = get(activeCustomThemeName);
+		const soundPreset = get(notificationSoundPreset);
+		const soundVolume = get(notificationVolume);
 
 		await api.updateUserSettings({
 			dnd_schedule: schedule,
 			custom_themes: themes,
-			active_custom_theme: activeTheme
+			active_custom_theme: activeTheme,
+			notification_sound_preset: soundPreset,
+			notification_volume: soundVolume
 		} as any);
 	} catch {
 		// Silently fail -- localStorage is the primary store.
@@ -337,6 +416,21 @@ export async function loadSettingsFromApi() {
 			const name = settings.active_custom_theme as unknown as string;
 			activeCustomThemeName.set(name);
 			localStorage.setItem('av-active-custom-theme', name);
+		}
+
+		if (settings.notification_sounds !== undefined) {
+			notificationSoundsEnabled.set(settings.notification_sounds);
+			saveNotificationSoundsEnabled();
+		}
+
+		if (settings.notification_sound_preset) {
+			notificationSoundPreset.set(settings.notification_sound_preset);
+			saveNotificationSoundPreset();
+		}
+
+		if (settings.notification_volume !== undefined && settings.notification_volume !== null) {
+			notificationVolume.set(settings.notification_volume);
+			saveNotificationVolume();
 		}
 	} catch {
 		// Use localStorage values if API fails.

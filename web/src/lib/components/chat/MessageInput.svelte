@@ -9,13 +9,16 @@
 	import { addToast } from '$lib/stores/toast';
 	import EmojiPicker from '$components/common/EmojiPicker.svelte';
 	import GiphyPicker from '$components/common/GiphyPicker.svelte';
+	import StickerPicker from '$components/common/StickerPicker.svelte';
 	import VoiceMessageRecorder from '$components/chat/VoiceMessageRecorder.svelte';
+	import type { Sticker } from '$lib/types';
 
 	let content = $state('');
 	let inputEl: HTMLTextAreaElement;
 	let typingTimeout: ReturnType<typeof setTimeout> | null = null;
 	let showEmojiPicker = $state(false);
 	let showGiphyPicker = $state(false);
+	let showStickerPicker = $state(false);
 	let silentMode = $state(false);
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
@@ -188,6 +191,14 @@
 				showEmojiPicker = false;
 				return;
 			}
+			if (showStickerPicker) {
+				showStickerPicker = false;
+				return;
+			}
+			if (showGiphyPicker) {
+				showGiphyPicker = false;
+				return;
+			}
 			if (isEditing) {
 				cancelEdit();
 				content = '';
@@ -344,6 +355,19 @@
 			appendMessage(sent);
 		} catch (e) {
 			addToast('Failed to send GIF', 'error');
+		}
+	}
+
+	async function sendSticker(sticker: Sticker) {
+		showStickerPicker = false;
+		const channelId = $currentChannelId;
+		if (!channelId) return;
+		try {
+			// Send the sticker as a message with the sticker image file as an attachment.
+			const sent = await api.sendMessage(channelId, '', { attachment_ids: [sticker.file_id] });
+			appendMessage(sent);
+		} catch (e) {
+			addToast('Failed to send sticker', 'error');
 		}
 	}
 
@@ -559,6 +583,7 @@
 								showSchedulePicker = !showSchedulePicker;
 								showEmojiPicker = false;
 								showGiphyPicker = false;
+								showStickerPicker = false;
 							}}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -603,14 +628,33 @@
 						<button
 							class="text-text-muted hover:text-text-primary"
 							title="GIF"
-							onclick={() => { showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showSchedulePicker = false; }}
+							onclick={() => { showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+								<path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2 2v8a2 2 0 002 2z" />
 							</svg>
 						</button>
 						{#if showGiphyPicker}
 							<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Sticker picker button -->
+				{#if !isEditing}
+					<div class="relative self-center">
+						<button
+							class="text-text-muted hover:text-text-primary"
+							title="Stickers"
+							onclick={() => { showStickerPicker = !showStickerPicker; showEmojiPicker = false; showGiphyPicker = false; showSchedulePicker = false; }}
+						>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+								<path d="M15 2v5a2 2 0 002 2h5" />
+							</svg>
+						</button>
+						{#if showStickerPicker}
+							<StickerPicker onselect={sendSticker} onclose={() => (showStickerPicker = false)} />
 						{/if}
 					</div>
 				{/if}
@@ -621,7 +665,7 @@
 						<button
 							class="text-text-muted hover:text-text-primary"
 							title="Emoji"
-							onclick={() => { showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showSchedulePicker = false; }}
+							onclick={() => { showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 								<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -642,6 +686,7 @@
 							showVoiceRecorder = true;
 							showEmojiPicker = false;
 							showGiphyPicker = false;
+							showStickerPicker = false;
 							showSchedulePicker = false;
 						}}
 					>
