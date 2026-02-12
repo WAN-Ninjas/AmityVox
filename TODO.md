@@ -75,18 +75,19 @@
 ### Sprint 2: DMs, Unread Indicators, Pinned Messages
 > Goal: Users can DM each other, see what's unread, and pin important messages.
 
-- [ ] **DM conversations** — Sidebar "Direct Messages" section below guilds. Show list of DM conversations with avatars. "New Message" button to start DM. GET/POST `/api/v1/users/@me/channels`.
-- [ ] **Unread indicators** — Bold channel name + numeric badge for unread messages. Track last-read message position per channel. PUT `/api/v1/channels/{id}/ack` when channel is viewed and scrolled to bottom.
-- [ ] **Unread badge on guilds** — White dot on guild icon sidebar if any channel within has unreads. Mention count badge if @mentioned.
-- [ ] **User popover** — Click username in chat or member list: avatar, display name, bio, role list, "Message" button (opens/creates DM), "Add Friend" button.
-- [ ] **Pinned messages panel** — Pin icon in channel header shows pin count. Click opens slide-out panel with pinned messages. GET `/api/v1/channels/{id}/pins`. Jump to message on click.
-- [ ] **Channel topic** — Show channel topic below name in header. Truncate with ellipsis, click to expand full topic.
-- [ ] **Typing indicators** — "User is typing..." animated dots at bottom of message list. Multiple users: "User1 and User2 are typing..." / "Several people are typing...". Uses existing WebSocket OpTyping.
-- [ ] **Online/offline presence** — Green (online), yellow (idle), red (DnD), gray (offline) dot on avatars. Uses existing presence system backend.
+- [x] **DM conversations** — Sidebar "Direct Messages" section below guilds. Show list of DM conversations with avatars. "New Message" button to start DM. GET/POST `/api/v1/users/@me/channels`.
+- [x] **Unread indicators** — Bold channel name + numeric badge for unread messages. Track last-read message position per channel. PUT `/api/v1/channels/{id}/ack` when channel is viewed and scrolled to bottom.
+- [x] **Unread badge on guilds** — White dot on guild icon sidebar if any channel within has unreads. Mention count badge if @mentioned.
+- [x] **User popover** — Click username in chat or member list: avatar, display name, bio, role list, "Message" button (opens/creates DM), "Add Friend" button.
+- [x] **Pinned messages panel** — Pin icon in channel header shows pin count. Click opens slide-out panel with pinned messages. GET `/api/v1/channels/{id}/pins`. Jump to message on click.
+- [x] **Channel topic** — Show channel topic below name in header. Truncate with ellipsis, click to expand full topic.
+- [x] **Typing indicators** — "User is typing..." animated dots at bottom of message list. Multiple users: "User1 and User2 are typing..." / "Several people are typing...". Uses existing WebSocket OpTyping.
+- [x] **Online/offline presence** — Green (online), yellow (idle), red (DnD), gray (offline) dot on avatars. Uses existing presence system backend.
 
 **Sprint 2 Tests:**
-- [ ] DMList unit test: render, create DM
-- [ ] unreads store unit test: increment, reset, ack
+- [x] DMs store unit test: add, remove, update, sort (6 tests)
+- [x] unreads store unit test: increment, clear, total (5 tests)
+- [x] presence store unit test: update, remove, derived (6 tests)
 - [ ] UserPopover unit test: render, actions
 - [ ] PinnedMessages unit test: render, jump
 - [ ] E2E: create DM, send DM, check unread badge

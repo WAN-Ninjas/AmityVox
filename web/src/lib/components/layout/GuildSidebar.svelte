@@ -1,8 +1,21 @@
 <script lang="ts">
 	import { guildList, currentGuildId, setGuild } from '$lib/stores/guilds';
+	import { channels } from '$lib/stores/channels';
+	import { unreadCounts } from '$lib/stores/unreads';
 	import Avatar from '$components/common/Avatar.svelte';
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
 	import { goto } from '$app/navigation';
+
+	// Check if any channel in a guild has unreads.
+	function guildHasUnreads(guildId: string): boolean {
+		for (const [channelId, count] of $unreadCounts) {
+			if (count > 0) {
+				const ch = $channels.get(channelId);
+				if (ch && ch.guild_id === guildId) return true;
+			}
+		}
+		return false;
+	}
 
 	let showCreateModal = $state(false);
 
@@ -51,6 +64,8 @@
 			<!-- Active indicator -->
 			{#if $currentGuildId === guild.id}
 				<div class="absolute -left-1 h-10 w-1 rounded-r-full bg-text-primary"></div>
+			{:else if guildHasUnreads(guild.id)}
+				<div class="absolute -left-1 h-2 w-1 rounded-r-full bg-text-primary"></div>
 			{/if}
 		</button>
 	{/each}

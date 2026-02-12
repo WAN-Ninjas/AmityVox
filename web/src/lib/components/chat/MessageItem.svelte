@@ -4,8 +4,10 @@
 	import ContextMenu from '$components/common/ContextMenu.svelte';
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
+	import UserPopover from '$components/common/UserPopover.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
+	import { presenceMap } from '$lib/stores/presence';
 	import { startReply, startEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentChannelId } from '$lib/stores/channels';
@@ -21,6 +23,9 @@
 	let contextMenu = $state<{ x: number; y: number } | null>(null);
 	let attachmentContextMenu = $state<{ x: number; y: number; attachment: any } | null>(null);
 	let showQuickReactions = $state(false);
+	let userPopover = $state<{ x: number; y: number } | null>(null);
+
+	const authorPresence = $derived($presenceMap.get(message.author_id) ?? undefined);
 
 	const isOwnMessage = $derived($currentUser?.id === message.author_id);
 
@@ -185,15 +190,17 @@
 			<span class="hidden text-2xs text-text-muted group-hover:inline" title={fullDateTime}>{timestamp}</span>
 		</div>
 	{:else}
-		<div class="mt-0.5 shrink-0">
-			<Avatar name={displayName} size="md" />
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="mt-0.5 shrink-0 cursor-pointer" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>
+			<Avatar name={displayName} size="md" status={authorPresence} />
 		</div>
 	{/if}
 
 	<div class="min-w-0 flex-1" class:mt-3={repliedMessage && !isCompact}>
 		{#if !isCompact}
 			<div class="flex items-baseline gap-2">
-				<span class="font-medium text-text-primary hover:underline">{displayName}</span>
+				<button class="font-medium text-text-primary hover:underline" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
 				<time class="text-xs text-text-muted" title={fullDateTime}>{relativeTime}</time>
 				{#if message.pinned}
 					<span class="text-2xs text-yellow-500" title="Pinned">📌</span>
@@ -358,4 +365,14 @@
 		<ContextMenuItem label="Open in New Tab" onclick={() => openAttachmentInTab(attachmentContextMenu?.attachment)} />
 		<ContextMenuItem label="Copy URL" onclick={() => copyAttachmentUrl(attachmentContextMenu?.attachment)} />
 	</ContextMenu>
+{/if}
+
+<!-- User popover -->
+{#if userPopover}
+	<UserPopover
+		userId={message.author_id}
+		x={userPopover.x}
+		y={userPopover.y}
+		onclose={() => (userPopover = null)}
+	/>
 {/if}

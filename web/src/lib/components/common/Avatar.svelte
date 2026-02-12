@@ -37,7 +37,7 @@
 		</div>
 	{/if}
 
-	{#if status && status !== 'offline'}
+	{#if status}
 		<span
 			class="absolute bottom-0 right-0 block h-3 w-3 rounded-full ring-2 ring-bg-secondary {statusColors[
 				status

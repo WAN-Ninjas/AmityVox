@@ -5,6 +5,8 @@
 	import { api } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { presenceMap } from '$lib/stores/presence';
+	import { addDMChannel } from '$lib/stores/dms';
+	import { goto } from '$app/navigation';
 
 	let members = $state<GuildMember[]>([]);
 	let visible = $state(true);
@@ -81,8 +83,9 @@
 	async function startDM(member: GuildMember) {
 		try {
 			const channel = await api.createDM(member.user_id);
-			// Navigate to DM - for now just close menu
+			addDMChannel(channel);
 			closeContextMenu();
+			goto(`/app/dms/${channel.id}`);
 		} catch (err: any) {
 			alert(err.message || 'Failed to create DM');
 			closeContextMenu();
@@ -111,7 +114,7 @@
 						<Avatar
 							name={getMemberName(member)}
 							size="sm"
-							status="online"
+							status={$presenceMap.get(member.user_id) ?? 'online'}
 						/>
 						<span class="truncate text-sm text-text-secondary">
 							{getMemberName(member)}
@@ -132,6 +135,7 @@
 						<Avatar
 							name={getMemberName(member)}
 							size="sm"
+							status="offline"
 						/>
 						<span class="truncate text-sm text-text-secondary">
 							{getMemberName(member)}
