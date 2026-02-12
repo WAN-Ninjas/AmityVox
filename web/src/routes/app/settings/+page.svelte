@@ -4,8 +4,9 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
+	import type { Session } from '$lib/types';
 
-	type Tab = 'account' | 'privacy' | 'notifications' | 'appearance' | 'sessions';
+	type Tab = 'account' | 'security' | 'appearance';
 	let currentTab = $state<Tab>('account');
 
 	// --- Account tab state ---
@@ -15,13 +16,37 @@
 	let saving = $state(false);
 	let error = $state('');
 	let success = $state('');
+	let avatarFile = $state<File | null>(null);
+	let avatarPreview = $state<string | null>(null);
+
+	// --- Security tab state ---
+	let currentPassword = $state('');
+	let newPassword = $state('');
+	let confirmPassword = $state('');
+	let changingPassword = $state(false);
+	let passwordError = $state('');
+	let passwordSuccess = $state('');
+
+	// --- 2FA state ---
+	let totpSecret = $state('');
+	let totpQrUrl = $state('');
+	let totpCode = $state('');
+	let backupCodes = $state<string[]>([]);
+	let enablingTotp = $state(false);
+	let verifyingTotp = $state(false);
+	let totpError = $state('');
+	let totpStep = $state<'idle' | 'setup' | 'verify' | 'done'>('idle');
+
+	// --- Sessions state ---
+	let sessions = $state<Session[]>([]);
+	let loadingSessions = $state(false);
+	let revokingSession = $state<string | null>(null);
 
 	// --- Appearance tab state ---
 	let theme = $state<'dark' | 'light'>('dark');
 	let fontSize = $state(16);
 	let compactMode = $state(false);
 
-	// Load initial values once on mount, not reactively.
 	onMount(() => {
 		if ($currentUser) {
 			displayName = $currentUser.display_name ?? '';
@@ -34,25 +59,159 @@
 		compactMode = localStorage.getItem('av-compact') === 'true';
 	});
 
-	async function handleSave() {
+	// --- Account actions ---
+
+	async function handleSaveProfile() {
 		saving = true;
 		error = '';
 		success = '';
 
 		try {
-			const updated = await api.updateMe({
+			// Upload avatar if selected.
+			let avatarId: string | undefined;
+			if (avatarFile) {
+				const uploaded = await api.uploadFile(avatarFile);
+				avatarId = uploaded.id;
+			}
+
+			const payload: Record<string, unknown> = {
 				display_name: displayName || undefined,
 				bio: bio || undefined,
 				status_text: statusText || undefined
-			} as any);
+			};
+			if (avatarId) payload.avatar_id = avatarId;
+
+			const updated = await api.updateMe(payload as any);
 			currentUser.set(updated);
+			avatarFile = null;
+			avatarPreview = null;
 			success = 'Profile updated!';
+			setTimeout(() => (success = ''), 3000);
 		} catch (err: any) {
 			error = err.message || 'Failed to save';
 		} finally {
 			saving = false;
 		}
 	}
+
+	function handleAvatarSelect(e: Event) {
+		const target = e.target as HTMLInputElement;
+		const file = target.files?.[0];
+		if (!file) return;
+		if (!file.type.startsWith('image/')) {
+			error = 'Please select an image file.';
+			return;
+		}
+		avatarFile = file;
+		avatarPreview = URL.createObjectURL(file);
+	}
+
+	// --- Security actions ---
+
+	async function handleChangePassword() {
+		if (newPassword !== confirmPassword) {
+			passwordError = 'Passwords do not match.';
+			return;
+		}
+		if (newPassword.length < 8) {
+			passwordError = 'Password must be at least 8 characters.';
+			return;
+		}
+
+		changingPassword = true;
+		passwordError = '';
+		passwordSuccess = '';
+
+		try {
+			await api.changePassword(currentPassword, newPassword);
+			currentPassword = '';
+			newPassword = '';
+			confirmPassword = '';
+			passwordSuccess = 'Password changed successfully!';
+			setTimeout(() => (passwordSuccess = ''), 3000);
+		} catch (err: any) {
+			passwordError = err.message || 'Failed to change password';
+		} finally {
+			changingPassword = false;
+		}
+	}
+
+	async function handleEnableTotp() {
+		enablingTotp = true;
+		totpError = '';
+		try {
+			const result = await api.enableTOTP();
+			totpSecret = result.secret;
+			totpQrUrl = result.qr_url;
+			totpStep = 'setup';
+		} catch (err: any) {
+			totpError = err.message || 'Failed to enable 2FA';
+		} finally {
+			enablingTotp = false;
+		}
+	}
+
+	async function handleVerifyTotp() {
+		if (totpCode.length !== 6) {
+			totpError = 'Enter a 6-digit code.';
+			return;
+		}
+		verifyingTotp = true;
+		totpError = '';
+		try {
+			const result = await api.verifyTOTP(totpCode);
+			backupCodes = result.backup_codes;
+			totpStep = 'done';
+			totpCode = '';
+		} catch (err: any) {
+			totpError = err.message || 'Invalid code';
+		} finally {
+			verifyingTotp = false;
+		}
+	}
+
+	function resetTotpFlow() {
+		totpStep = 'idle';
+		totpSecret = '';
+		totpQrUrl = '';
+		totpCode = '';
+		backupCodes = [];
+		totpError = '';
+	}
+
+	// --- Sessions ---
+
+	async function loadSessions() {
+		loadingSessions = true;
+		try {
+			sessions = await api.getSessions();
+		} catch {
+			sessions = [];
+		} finally {
+			loadingSessions = false;
+		}
+	}
+
+	async function revokeSession(sessionId: string) {
+		revokingSession = sessionId;
+		try {
+			await api.deleteSession(sessionId);
+			sessions = sessions.filter((s) => s.id !== sessionId);
+		} catch (err: any) {
+			alert(err.message || 'Failed to revoke session');
+		} finally {
+			revokingSession = null;
+		}
+	}
+
+	// Load sessions when switching to security tab.
+	$effect(() => {
+		if (currentTab === 'security') {
+			loadSessions();
+		}
+	});
+
+	// --- Appearance ---
 
 	function saveAppearance() {
 		localStorage.setItem('av-theme', theme);
@@ -70,16 +229,26 @@
 
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'account', label: 'My Account' },
-		{ id: 'privacy', label: 'Privacy & Safety' },
-		{ id: 'notifications', label: 'Notifications' },
-		{ id: 'appearance', label: 'Appearance' },
-		{ id: 'sessions', label: 'Sessions' }
+		{ id: 'security', label: 'Security' },
+		{ id: 'appearance', label: 'Appearance' }
 	];
 
 	function themeButtonClass(t: 'dark' | 'light'): string {
 		const base = 'rounded-lg border-2 px-4 py-2 text-sm transition-colors';
 		if (theme === t) return `${base} border-brand-500 bg-brand-500/10 text-text-primary`;
 		return `${base} border-bg-modifier text-text-muted`;
+	}
+
+	function formatSessionTime(iso: string): string {
+		return new Date(iso).toLocaleString();
+	}
+
+	function parseUserAgent(ua: string): string {
+		if (ua.includes('Firefox')) return 'Firefox';
+		if (ua.includes('Chrome')) return 'Chrome';
+		if (ua.includes('Safari')) return 'Safari';
+		if (ua.includes('Edge')) return 'Edge';
+		return 'Unknown Browser';
 	}
 </script>
 
@@ -95,12 +264,7 @@
 			{#each tabs as tab (tab.id)}
 				<li>
 					<button
-						class="w-full rounded px-2 py-1.5 text-left text-sm transition-colors"
-						class:bg-bg-modifier={currentTab === tab.id}
-						class:text-text-primary={currentTab === tab.id}
-						class:text-text-muted={currentTab !== tab.id}
-						class:hover:bg-bg-modifier={currentTab !== tab.id}
-						class:hover:text-text-secondary={currentTab !== tab.id}
+						class="w-full rounded px-2 py-1.5 text-left text-sm transition-colors {currentTab === tab.id ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 						onclick={() => (currentTab = tab.id)}
 					>
 						{tab.label}
@@ -136,6 +300,7 @@
 				<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{success}</div>
 			{/if}
 
+			<!-- ==================== MY ACCOUNT ==================== -->
 			{#if currentTab === 'account'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">My Account</h1>
 
@@ -143,11 +308,21 @@
 					<!-- Profile card -->
 					<div class="mb-8 rounded-lg bg-bg-secondary p-6">
 						<div class="flex items-center gap-4">
-							<Avatar
-								name={$currentUser.display_name ?? $currentUser.username}
-								size="lg"
-								status={$currentUser.status_presence}
-							/>
+							<div class="relative">
+								<Avatar
+									name={$currentUser.display_name ?? $currentUser.username}
+									src={avatarPreview ?? ($currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null)}
+									size="lg"
+									status={$currentUser.status_presence}
+								/>
+								<label class="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity hover:opacity-100">
+									<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+										<circle cx="12" cy="13" r="3" />
+									</svg>
+									<input type="file" accept="image/*" class="hidden" onchange={handleAvatarSelect} />
+								</label>
+							</div>
 							<div>
 								<h2 class="text-lg font-semibold text-text-primary">
 									{$currentUser.display_name ?? $currentUser.username}
@@ -181,80 +356,171 @@
 						<textarea id="bio" bind:value={bio} class="input w-full" rows="3" maxlength="190"></textarea>
 					</div>
 
-					<button class="btn-primary" onclick={handleSave} disabled={saving}>
+					<button class="btn-primary" onclick={handleSaveProfile} disabled={saving}>
 						{saving ? 'Saving...' : 'Save Changes'}
 					</button>
 				{/if}
 
-			{:else if currentTab === 'privacy'}
-				<h1 class="mb-6 text-xl font-bold text-text-primary">Privacy & Safety</h1>
+			<!-- ==================== SECURITY ==================== -->
+			{:else if currentTab === 'security'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Security</h1>
 
-				<div class="space-y-6">
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<h3 class="mb-1 text-sm font-semibold text-text-primary">Direct Messages</h3>
-						<p class="mb-3 text-xs text-text-muted">Control who can send you direct messages.</p>
-						<label class="flex items-center gap-2">
-							<input type="checkbox" checked class="accent-brand-500" />
-							<span class="text-sm text-text-secondary">Allow DMs from guild members</span>
+				<!-- Password Change -->
+				<div class="mb-8 rounded-lg bg-bg-secondary p-6">
+					<h3 class="mb-4 text-sm font-semibold text-text-primary">Change Password</h3>
+
+					{#if passwordError}
+						<div class="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{passwordError}</div>
+					{/if}
+					{#if passwordSuccess}
+						<div class="mb-3 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{passwordSuccess}</div>
+					{/if}
+
+					<div class="mb-3">
+						<label for="curPw" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+							Current Password
 						</label>
+						<input id="curPw" type="password" bind:value={currentPassword} class="input w-full" />
 					</div>
-
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<h3 class="mb-1 text-sm font-semibold text-text-primary">Friend Requests</h3>
-						<p class="mb-3 text-xs text-text-muted">Control who can send you friend requests.</p>
-						<label class="flex items-center gap-2">
-							<input type="checkbox" checked class="accent-brand-500" />
-							<span class="text-sm text-text-secondary">Allow friend requests from everyone</span>
+					<div class="mb-3">
+						<label for="newPw" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+							New Password
 						</label>
+						<input id="newPw" type="password" bind:value={newPassword} class="input w-full" />
 					</div>
-
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<h3 class="mb-1 text-sm font-semibold text-text-primary">Blocked Users</h3>
-						<p class="text-sm text-text-muted">You haven't blocked anyone.</p>
+					<div class="mb-4">
+						<label for="confirmPw" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+							Confirm New Password
+						</label>
+						<input id="confirmPw" type="password" bind:value={confirmPassword} class="input w-full" />
 					</div>
+					<button
+						class="btn-primary"
+						onclick={handleChangePassword}
+						disabled={changingPassword || !currentPassword || !newPassword || !confirmPassword}
+					>
+						{changingPassword ? 'Changing...' : 'Change Password'}
+					</button>
 				</div>
 
-			{:else if currentTab === 'notifications'}
-				<h1 class="mb-6 text-xl font-bold text-text-primary">Notifications</h1>
+				<!-- Two-Factor Authentication -->
+				<div class="mb-8 rounded-lg bg-bg-secondary p-6">
+					<h3 class="mb-2 text-sm font-semibold text-text-primary">Two-Factor Authentication</h3>
+					<p class="mb-4 text-xs text-text-muted">
+						Add an extra layer of security with a TOTP authenticator app.
+					</p>
 
-				<div class="space-y-6">
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<h3 class="mb-1 text-sm font-semibold text-text-primary">Desktop Notifications</h3>
-						<p class="mb-3 text-xs text-text-muted">Control browser notification preferences.</p>
-						<label class="flex items-center gap-2">
-							<input type="checkbox" class="accent-brand-500" />
-							<span class="text-sm text-text-secondary">Enable desktop notifications</span>
-						</label>
-					</div>
+					{#if totpError}
+						<div class="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{totpError}</div>
+					{/if}
 
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<h3 class="mb-1 text-sm font-semibold text-text-primary">Message Notifications</h3>
-						<p class="mb-3 text-xs text-text-muted">Choose when to be notified about messages.</p>
-						<div class="space-y-2">
-							<label class="flex items-center gap-2">
-								<input type="radio" name="msgNotif" value="all" checked class="accent-brand-500" />
-								<span class="text-sm text-text-secondary">All messages</span>
-							</label>
-							<label class="flex items-center gap-2">
-								<input type="radio" name="msgNotif" value="mentions" class="accent-brand-500" />
-								<span class="text-sm text-text-secondary">Only mentions</span>
-							</label>
-							<label class="flex items-center gap-2">
-								<input type="radio" name="msgNotif" value="none" class="accent-brand-500" />
-								<span class="text-sm text-text-secondary">Nothing</span>
-							</label>
+					{#if totpStep === 'idle'}
+						<button class="btn-primary" onclick={handleEnableTotp} disabled={enablingTotp}>
+							{enablingTotp ? 'Setting up...' : 'Enable 2FA'}
+						</button>
+					{:else if totpStep === 'setup'}
+						<div class="space-y-4">
+							<p class="text-sm text-text-secondary">
+								Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.):
+							</p>
+							{#if totpQrUrl}
+								<div class="flex justify-center rounded bg-white p-4">
+									<img src={totpQrUrl} alt="2FA QR Code" class="h-48 w-48" />
+								</div>
+							{/if}
+							<div class="rounded bg-bg-primary p-3">
+								<p class="mb-1 text-xs font-bold uppercase tracking-wide text-text-muted">Manual entry code:</p>
+								<code class="break-all text-sm text-text-primary">{totpSecret}</code>
+							</div>
+							<div>
+								<label for="totpCode" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+									Enter 6-digit verification code
+								</label>
+								<input
+									id="totpCode"
+									type="text"
+									inputmode="numeric"
+									maxlength="6"
+									bind:value={totpCode}
+									class="input w-40"
+									placeholder="000000"
+									onkeydown={(e) => e.key === 'Enter' && handleVerifyTotp()}
+								/>
+							</div>
+							<div class="flex gap-2">
+								<button class="btn-primary" onclick={handleVerifyTotp} disabled={verifyingTotp || totpCode.length !== 6}>
+									{verifyingTotp ? 'Verifying...' : 'Verify & Enable'}
+								</button>
+								<button class="btn-secondary" onclick={resetTotpFlow}>Cancel</button>
+							</div>
 						</div>
-					</div>
-
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<h3 class="mb-1 text-sm font-semibold text-text-primary">Sounds</h3>
-						<label class="flex items-center gap-2">
-							<input type="checkbox" checked class="accent-brand-500" />
-							<span class="text-sm text-text-secondary">Play notification sounds</span>
-						</label>
-					</div>
+					{:else if totpStep === 'done'}
+						<div class="space-y-4">
+							<div class="rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">
+								Two-factor authentication has been enabled!
+							</div>
+							{#if backupCodes.length > 0}
+								<div class="rounded bg-bg-primary p-4">
+									<p class="mb-2 text-sm font-semibold text-text-primary">Backup Codes</p>
+									<p class="mb-3 text-xs text-text-muted">
+										Save these codes in a safe place. Each can be used once if you lose access to your authenticator.
+									</p>
+									<div class="grid grid-cols-2 gap-2">
+										{#each backupCodes as code}
+											<code class="rounded bg-bg-secondary px-2 py-1 text-center text-sm text-text-primary">{code}</code>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							<button class="btn-secondary" onclick={resetTotpFlow}>Done</button>
+						</div>
+					{/if}
 				</div>
 
+				<!-- Active Sessions -->
+				<div class="rounded-lg bg-bg-secondary p-6">
+					<h3 class="mb-4 text-sm font-semibold text-text-primary">Active Sessions</h3>
+
+					{#if loadingSessions}
+						<div class="flex items-center gap-2 py-4">
+							<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+							<span class="text-sm text-text-muted">Loading sessions...</span>
+						</div>
+					{:else if sessions.length === 0}
+						<p class="text-sm text-text-muted">No sessions found.</p>
+					{:else}
+						<div class="space-y-3">
+							{#each sessions as session (session.id)}
+								<div class="flex items-center justify-between rounded bg-bg-primary p-3">
+									<div>
+										<div class="flex items-center gap-2">
+											<span class="text-sm font-medium text-text-primary">
+												{parseUserAgent(session.user_agent)}
+											</span>
+											{#if session.current}
+												<span class="rounded bg-green-500/10 px-1.5 py-0.5 text-2xs font-bold text-green-400">Current</span>
+											{/if}
+										</div>
+										<p class="text-xs text-text-muted">
+											{session.ip_address} &middot; Last active {formatSessionTime(session.last_active_at)}
+										</p>
+									</div>
+									{#if !session.current}
+										<button
+											class="text-xs text-red-400 hover:text-red-300"
+											onclick={() => revokeSession(session.id)}
+											disabled={revokingSession === session.id}
+										>
+											{revokingSession === session.id ? 'Revoking...' : 'Revoke'}
+										</button>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+			<!-- ==================== APPEARANCE ==================== -->
 			{:else if currentTab === 'appearance'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Appearance</h1>
 
@@ -298,25 +564,6 @@
 					</div>
 
 					<button class="btn-primary" onclick={saveAppearance}>Save Appearance</button>
-				</div>
-
-			{:else if currentTab === 'sessions'}
-				<h1 class="mb-6 text-xl font-bold text-text-primary">Sessions</h1>
-
-				<div class="space-y-4">
-					<div class="rounded-lg bg-bg-secondary p-4">
-						<div class="flex items-center justify-between">
-							<div>
-								<h3 class="text-sm font-semibold text-text-primary">Current Session</h3>
-								<p class="text-xs text-text-muted">This device &middot; Active now</p>
-							</div>
-							<span class="rounded bg-green-500/10 px-2 py-0.5 text-xs text-green-400">Active</span>
-						</div>
-					</div>
-
-					<p class="text-sm text-text-muted">
-						Session management (view and revoke other sessions) will be available in a future update.
-					</p>
 				</div>
 			{/if}
 		</div>

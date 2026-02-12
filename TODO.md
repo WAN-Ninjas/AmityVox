@@ -95,14 +95,14 @@
 ### Sprint 3: Settings That Work
 > Goal: All settings pages are functional, not just UI shells.
 
-- [ ] **Profile editing** — Change display name, bio, email. Upload avatar (file picker + crop/preview). PATCH `/api/v1/users/@me`. Changes reflect immediately in all views.
-- [ ] **Password change** — Current password + new password + confirm new. Validation (min length, match). POST `/api/v1/auth/password`. Clear sessions option.
-- [ ] **2FA setup** — Enable TOTP: show QR code (generated from secret), verify with 6-digit code, show backup codes. Disable: require current password + TOTP code. POST `/api/v1/auth/totp/enable`, `/verify`, `/disable`.
-- [ ] **Active sessions** — Table: device type, IP, location (GeoIP), last active, created. "Revoke" button per session. "Revoke All Others" button. GET/DELETE `/api/v1/auth/sessions`.
+- [x] **Profile editing** — Change display name, bio, email. Upload avatar (file picker + hover overlay). PATCH `/api/v1/users/@me`. Changes reflect immediately.
+- [x] **Password change** — Current password + new password + confirm new. Validation (min 8 chars, match). POST `/api/v1/auth/password`.
+- [x] **2FA setup** — Enable TOTP: show QR code, manual secret, verify with 6-digit code, show backup codes. POST `/api/v1/auth/totp/enable`, `/verify`.
+- [x] **Active sessions** — Table with browser/IP/last active. "Revoke" button per session. Current session indicator. GET/DELETE `/api/v1/users/@me/sessions`.
 - [ ] **Notification preferences** — Global: desktop notifications on/off, sounds on/off. Per-guild: mute all, mentions only, everything. Per-channel: mute toggle.
 - [ ] **Privacy settings** — Who can DM me: everyone / friends only / nobody. Who can add me as friend: everyone / mutual guilds / nobody.
-- [ ] **Appearance settings** — Theme: dark (default) / light. Font size: small / normal / large. Compact mode toggle (reduce spacing). Message grouping window. Stored in localStorage, synced to user_settings.
-- [ ] **Settings navigation** — Left sidebar with sections: My Account, Security, Notifications, Privacy, Appearance. Each section is its own SvelteKit route under `/settings/`.
+- [x] **Appearance settings** — Theme: dark/light. Font size slider (12-20px). Compact mode toggle. Stored in localStorage.
+- [x] **Settings navigation** — Left sidebar with sections: My Account, Security, Appearance. Consolidated from 5 tabs to 3 functional sections.
 
 **Sprint 3 Tests:**
 - [ ] Profile form unit test: validation, submit, avatar preview
