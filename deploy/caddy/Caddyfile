@@ -1,13 +1,13 @@
-# AmityVox Caddyfile — reverse proxy configuration.
-# When a domain is configured, Caddy automatically provisions TLS certificates.
-# For local development, use localhost or the :80 block.
-#
-# To use with a real domain, replace the site address below:
-#   chat.example.com {
-#       ...
-#   }
+amityvox.chat {
+	# Security headers applied to all responses.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+	}
 
-:80 {
 	# Reverse proxy API requests to AmityVox core.
 	handle /api/* {
 		reverse_proxy amityvox:8080
@@ -34,7 +34,6 @@
 	}
 
 	# Serve static web client files.
-	# In production, mount the built SvelteKit output to /srv.
 	handle {
 		root * /srv
 		try_files {path} /index.html

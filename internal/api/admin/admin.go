@@ -51,16 +51,17 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-// isAdmin checks whether the requesting user has the is_admin flag.
+// isAdmin checks whether the requesting user has the admin flag set in the
+// users.flags bitfield.
 func (h *Handler) isAdmin(r *http.Request) bool {
 	userID := auth.UserIDFromContext(r.Context())
-	var isAdmin bool
+	var flags int
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT is_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin)
+		`SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
 	if err != nil {
 		return false
 	}
-	return isAdmin
+	return flags&models.UserFlagAdmin != 0
 }
 
 // HandleGetInstance handles GET /api/v1/admin/instance.

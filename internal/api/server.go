@@ -312,6 +312,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/files/upload", stubHandler("upload_file"))
 			}
 
+
 			// MLS encryption delivery service routes.
 			if s.Encryption != nil {
 				r.Route("/encryption", func(r chi.Router) {
@@ -365,6 +366,11 @@ func (s *Server) registerRoutes() {
 				r.Get("/stats", adminH.HandleGetStats)
 			})
 		})
+
+		// File serving — public, no auth required (used by <img> tags).
+		if s.Media != nil {
+			r.Get("/files/{fileID}", s.Media.HandleGetFile)
+		}
 
 		// Webhook execution — uses token auth, no Bearer token needed.
 		r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
@@ -421,7 +427,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusCreated, map[string]interface{}{
-		"user":  user,
+		"user":  user.ToSelf(),
 		"token": session.ID,
 	})
 }
@@ -451,7 +457,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"user":  user,
+		"user":  user.ToSelf(),
 		"token": session.ID,
 	})
 }
@@ -686,7 +692,11 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-Request-ID")
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				// Only set Allow-Credentials when using explicit origins, not wildcard.
+				isWildcard := len(origins) == 1 && origins[0] == "*"
+				if !isWildcard {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
 				w.Header().Set("Access-Control-Max-Age", "86400")
 			}
 

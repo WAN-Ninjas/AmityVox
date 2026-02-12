@@ -5,6 +5,7 @@
 package webhooks
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -56,8 +57,8 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Constant-time token comparison for security.
-	if wh.Token != token {
+	// Constant-time token comparison to prevent timing attacks.
+	if subtle.ConstantTimeCompare([]byte(wh.Token), []byte(token)) != 1 {
 		writeError(w, http.StatusUnauthorized, "invalid_token", "Invalid webhook token")
 		return
 	}
