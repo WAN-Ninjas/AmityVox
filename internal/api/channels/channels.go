@@ -1557,7 +1557,7 @@ func (h *Handler) getMessage(ctx context.Context, channelID, messageID string) (
 func (h *Handler) loadAttachments(ctx context.Context, messageID string) []models.Attachment {
 	rows, err := h.Pool.Query(ctx,
 		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
-		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, created_at
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, alt_text, created_at
 		 FROM attachments WHERE message_id = $1
 		 ORDER BY created_at`,
 		messageID,
@@ -1572,7 +1572,7 @@ func (h *Handler) loadAttachments(ctx context.Context, messageID string) []model
 		var a models.Attachment
 		if err := rows.Scan(
 			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
-			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.CreatedAt,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.AltText, &a.CreatedAt,
 		); err != nil {
 			return nil
 		}
@@ -1673,7 +1673,7 @@ func (h *Handler) enrichMessagesWithAttachments(ctx context.Context, messages []
 
 	rows, err := h.Pool.Query(ctx,
 		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
-		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, created_at
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, alt_text, created_at
 		 FROM attachments WHERE message_id = ANY($1)
 		 ORDER BY created_at`, msgIDs)
 	if err != nil {
@@ -1686,7 +1686,7 @@ func (h *Handler) enrichMessagesWithAttachments(ctx context.Context, messages []
 		var a models.Attachment
 		if err := rows.Scan(
 			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
-			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.CreatedAt,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.AltText, &a.CreatedAt,
 		); err != nil {
 			continue
 		}

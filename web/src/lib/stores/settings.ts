@@ -131,6 +131,46 @@ export const THEME_COLOR_GROUPS = [
 const DEFAULT_SOUND_PRESET = 'default';
 const DEFAULT_SOUND_VOLUME = 80;
 
+// --- Custom CSS ---
+
+const CUSTOM_CSS_MAX_LENGTH = 10000;
+const CUSTOM_CSS_STORAGE_KEY = 'amityvox_custom_css';
+
+// Sanitize custom CSS to prevent XSS attacks.
+export function sanitizeCustomCss(css: string): string {
+	let sanitized = css;
+	// Strip dangerous patterns (case-insensitive).
+	sanitized = sanitized.replace(/<script/gi, '');
+	sanitized = sanitized.replace(/javascript:/gi, '');
+	sanitized = sanitized.replace(/expression\(/gi, '');
+	sanitized = sanitized.replace(/@import\s+url\(/gi, '');
+	// Enforce max length.
+	if (sanitized.length > CUSTOM_CSS_MAX_LENGTH) {
+		sanitized = sanitized.slice(0, CUSTOM_CSS_MAX_LENGTH);
+	}
+	return sanitized;
+}
+
+// Apply custom CSS by injecting/updating a <style> element in document.head.
+function applyCustomCssToDocument(css: string) {
+	if (typeof document === 'undefined') return;
+	const id = 'amityvox-custom-css';
+	let styleEl = document.getElementById(id) as HTMLStyleElement | null;
+	if (!css) {
+		// Remove the style element if CSS is empty.
+		if (styleEl) {
+			styleEl.remove();
+		}
+		return;
+	}
+	if (!styleEl) {
+		styleEl = document.createElement('style');
+		styleEl.id = id;
+		document.head.appendChild(styleEl);
+	}
+	styleEl.textContent = sanitizeCustomCss(css);
+}
+
 // --- Stores ---
 
 export const customThemes = writable<CustomTheme[]>([]);
@@ -140,6 +180,7 @@ export const dndManualOverride = writable<boolean>(false);
 export const notificationSoundsEnabled = writable<boolean>(true);
 export const notificationSoundPreset = writable<string>(DEFAULT_SOUND_PRESET);
 export const notificationVolume = writable<number>(DEFAULT_SOUND_VOLUME);
+export const customCss = writable<string>('');
 
 // Whether DND is currently active (either by schedule or manual toggle).
 export const isDndActive = derived(
@@ -251,6 +292,17 @@ export function loadSettings() {
 		}
 	}
 
+	// Load custom CSS
+	try {
+		const storedCss = localStorage.getItem(CUSTOM_CSS_STORAGE_KEY);
+		if (storedCss) {
+			customCss.set(storedCss);
+			applyCustomCssToDocument(storedCss);
+		}
+	} catch {
+		// Ignore read errors.
+	}
+
 	// Apply active custom theme if one is selected
 	if (activeTheme) {
 		const themes = get(customThemes);
@@ -279,6 +331,19 @@ export function saveNotificationSoundPreset() {
 export function saveNotificationVolume() {
 	const vol = get(notificationVolume);
 	localStorage.setItem('av-sound-volume', String(vol));
+}
+
+export function saveCustomCss(css: string) {
+	const sanitized = sanitizeCustomCss(css);
+	customCss.set(sanitized);
+	localStorage.setItem(CUSTOM_CSS_STORAGE_KEY, sanitized);
+	applyCustomCssToDocument(sanitized);
+}
+
+export function clearCustomCss() {
+	customCss.set('');
+	localStorage.removeItem(CUSTOM_CSS_STORAGE_KEY);
+	applyCustomCssToDocument('');
 }
 
 export function saveDndSchedule() {
@@ -381,13 +446,15 @@ export async function syncSettingsToApi() {
 		const activeTheme = get(activeCustomThemeName);
 		const soundPreset = get(notificationSoundPreset);
 		const soundVolume = get(notificationVolume);
+		const css = get(customCss);
 
 		await api.updateUserSettings({
 			dnd_schedule: schedule,
 			custom_themes: themes,
 			active_custom_theme: activeTheme,
 			notification_sound_preset: soundPreset,
-			notification_volume: soundVolume
+			notification_volume: soundVolume,
+			custom_css: css || undefined
 		} as any);
 	} catch {
 		// Silently fail -- localStorage is the primary store.
@@ -431,6 +498,11 @@ export async function loadSettingsFromApi() {
 		if (settings.notification_volume !== undefined && settings.notification_volume !== null) {
 			notificationVolume.set(settings.notification_volume);
 			saveNotificationVolume();
+		}
+
+		if (settings.custom_css !== undefined && settings.custom_css !== null) {
+			const css = settings.custom_css as string;
+			saveCustomCss(css);
 		}
 	} catch {
 		// Use localStorage values if API fails.

@@ -4,6 +4,8 @@
 	import { currentChannelId } from '$lib/stores/channels';
 	import { messagesByChannel, loadMessages, isLoadingMessages } from '$lib/stores/messages';
 	import { unreadCounts, getLastReadId } from '$lib/stores/unreads';
+	import { api } from '$lib/api/client';
+	import { addToast } from '$lib/stores/toast';
 	import MessageItem from './MessageItem.svelte';
 
 	interface Props {
@@ -15,12 +17,105 @@
 	let messagesContainer: HTMLDivElement;
 	let shouldAutoScroll = $state(true);
 
+	// --- Bulk Selection Mode ---
+	let selectionMode = $state(false);
+	let selectedMessages = $state<Set<string>>(new Set());
+	let bulkDeleting = $state(false);
+	let showBulkConfirm = $state(false);
+	let lastSelectedIndex = $state<number | null>(null);
+
+	function toggleSelectionMode() {
+		selectionMode = !selectionMode;
+		if (!selectionMode) {
+			selectedMessages = new Set();
+			lastSelectedIndex = null;
+		}
+	}
+
+	function toggleMessageSelection(messageId: string, index: number, shiftKey: boolean) {
+		const newSet = new Set(selectedMessages);
+
+		if (shiftKey && lastSelectedIndex !== null) {
+			// Shift+click: select range
+			const start = Math.min(lastSelectedIndex, index);
+			const end = Math.max(lastSelectedIndex, index);
+			for (let i = start; i <= end; i++) {
+				if (messages[i]) {
+					newSet.add(messages[i].id);
+				}
+			}
+		} else {
+			if (newSet.has(messageId)) {
+				newSet.delete(messageId);
+			} else {
+				newSet.add(messageId);
+			}
+		}
+
+		selectedMessages = newSet;
+		lastSelectedIndex = index;
+	}
+
+	async function handleBulkDelete() {
+		const channelId = $currentChannelId;
+		if (!channelId || selectedMessages.size === 0) return;
+
+		bulkDeleting = true;
+		try {
+			const ids = Array.from(selectedMessages);
+			await api.bulkDeleteMessages(channelId, ids);
+			addToast(`Deleted ${ids.length} message${ids.length !== 1 ? 's' : ''}`, 'success');
+			selectedMessages = new Set();
+			selectionMode = false;
+			lastSelectedIndex = null;
+		} catch (err: any) {
+			addToast(err.message || 'Failed to delete messages', 'error');
+		} finally {
+			bulkDeleting = false;
+			showBulkConfirm = false;
+		}
+	}
+
+	async function handleBulkPin() {
+		const channelId = $currentChannelId;
+		if (!channelId || selectedMessages.size === 0) return;
+
+		let pinned = 0;
+		for (const msgId of selectedMessages) {
+			try {
+				await api.pinMessage(channelId, msgId);
+				pinned++;
+			} catch {
+				// skip already pinned or errors
+			}
+		}
+		addToast(`Pinned ${pinned} message${pinned !== 1 ? 's' : ''}`, 'success');
+		selectedMessages = new Set();
+		selectionMode = false;
+		lastSelectedIndex = null;
+	}
+
+	function cancelSelection() {
+		selectionMode = false;
+		selectedMessages = new Set();
+		lastSelectedIndex = null;
+		showBulkConfirm = false;
+	}
+
 	// Load messages when channel changes.
 	$effect(() => {
 		const channelId = $currentChannelId;
 		if (channelId) {
 			loadMessages(channelId);
 		}
+	});
+
+	// Exit selection mode when channel changes.
+	$effect(() => {
+		const _channelId = $currentChannelId;
+		selectionMode = false;
+		selectedMessages = new Set();
+		lastSelectedIndex = null;
 	});
 
 	const messages = $derived.by(() => {
@@ -195,6 +290,24 @@
 </script>
 
 <div class="relative flex-1 overflow-hidden">
+	<!-- Selection mode toggle bar -->
+	<div class="absolute right-4 top-2 z-10">
+		<button
+			class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectionMode ? 'bg-brand-500 text-white' : 'bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-bg-modifier'}"
+			onclick={toggleSelectionMode}
+			title={selectionMode ? 'Exit selection mode' : 'Select messages'}
+		>
+			{#if selectionMode}
+				Exit Selection
+			{:else}
+				<svg class="inline-block h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+				</svg>
+				Select
+			{/if}
+		</button>
+	</div>
+
 	<!-- Jump to Unread banner -->
 	{#if showJumpToUnread}
 		<button
@@ -238,19 +351,106 @@
 						<div class="h-px flex-1 bg-bg-modifier"></div>
 					</div>
 				{/if}
-				<MessageItem
-					message={msg}
-					isCompact={isCompact(msg, i)}
-					onscrollto={scrollToMessage}
-					{onopenthread}
-				/>
+				{#if selectionMode}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						class="flex items-start gap-0 cursor-pointer transition-colors {selectedMessages.has(msg.id) ? 'bg-brand-500/10' : 'hover:bg-bg-modifier/20'}"
+						onclick={(e) => toggleMessageSelection(msg.id, i, e.shiftKey)}
+					>
+						<div class="flex shrink-0 items-center justify-center w-10 pt-3">
+							<div
+								class="flex h-5 w-5 items-center justify-center rounded border-2 transition-colors {selectedMessages.has(msg.id) ? 'border-brand-500 bg-brand-500' : 'border-text-muted'}"
+							>
+								{#if selectedMessages.has(msg.id)}
+									<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+										<path d="M5 13l4 4L19 7" />
+									</svg>
+								{/if}
+							</div>
+						</div>
+						<div class="flex-1 min-w-0">
+							<MessageItem
+								message={msg}
+								isCompact={isCompact(msg, i)}
+								onscrollto={scrollToMessage}
+								{onopenthread}
+							/>
+						</div>
+					</div>
+				{:else}
+					<MessageItem
+						message={msg}
+						isCompact={isCompact(msg, i)}
+						onscrollto={scrollToMessage}
+						{onopenthread}
+					/>
+				{/if}
 			{/each}
 		</div>
 	{/if}
 	</div>
 
+	<!-- Bulk selection action bar -->
+	{#if selectionMode && selectedMessages.size > 0}
+		<div class="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-xl bg-bg-floating px-5 py-3 shadow-xl border border-bg-modifier">
+			<span class="text-sm font-medium text-text-primary">
+				{selectedMessages.size} selected
+			</span>
+			<div class="h-5 w-px bg-bg-modifier"></div>
+			<button
+				class="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-500/20"
+				onclick={() => (showBulkConfirm = true)}
+				disabled={bulkDeleting}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+				</svg>
+				Delete
+			</button>
+			<button
+				class="flex items-center gap-1.5 rounded-lg bg-yellow-500/10 px-3 py-1.5 text-sm font-medium text-yellow-400 transition-colors hover:bg-yellow-500/20"
+				onclick={handleBulkPin}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+				</svg>
+				Pin
+			</button>
+			<button
+				class="rounded-lg px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:text-text-primary hover:bg-bg-modifier"
+				onclick={cancelSelection}
+			>
+				Cancel
+			</button>
+		</div>
+	{/if}
+
+	<!-- Bulk delete confirmation dialog -->
+	{#if showBulkConfirm}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showBulkConfirm = false)}>
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="w-96 rounded-lg bg-bg-floating p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+				<h3 class="mb-2 text-lg font-semibold text-text-primary">Delete Messages</h3>
+				<p class="mb-4 text-sm text-text-secondary">
+					Are you sure you want to delete {selectedMessages.size} message{selectedMessages.size !== 1 ? 's' : ''}? This action cannot be undone.
+				</p>
+				<div class="flex justify-end gap-2">
+					<button class="btn-secondary" onclick={() => (showBulkConfirm = false)}>Cancel</button>
+					<button
+						class="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+						onclick={handleBulkDelete}
+						disabled={bulkDeleting}
+					>
+						{bulkDeleting ? 'Deleting...' : `Delete ${selectedMessages.size} Message${selectedMessages.size !== 1 ? 's' : ''}`}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
 	<!-- Scroll to bottom button -->
-	{#if !shouldAutoScroll}
+	{#if !shouldAutoScroll && !selectionMode}
 		<button
 			class="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full bg-bg-floating px-4 py-2 text-sm font-medium text-text-primary shadow-lg transition-all hover:bg-bg-modifier"
 			onclick={scrollToBottom}

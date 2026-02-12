@@ -2369,6 +2369,128 @@ func (h *Handler) HandleGuildPrune(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"pruned": pruned})
 }
 
+// HandleCloneChannel clones a channel within a guild, copying its settings but
+// not its messages. Optionally accepts a new name; defaults to "<original>-copy".
+// POST /api/v1/guilds/{guildID}/channels/{channelID}/clone
+func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	// Fetch the original channel.
+	var orig models.Channel
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
+		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
+		 FROM channels WHERE id = $1 AND guild_id = $2`,
+		channelID, guildID,
+	).Scan(
+		&orig.ID, &orig.GuildID, &orig.CategoryID, &orig.ChannelType, &orig.Name,
+		&orig.Topic, &orig.Position, &orig.SlowmodeSeconds, &orig.NSFW, &orig.Encrypted,
+		&orig.LastMessageID, &orig.OwnerID, &orig.DefaultPermissions,
+		&orig.UserLimit, &orig.Bitrate,
+		&orig.Locked, &orig.LockedBy, &orig.LockedAt, &orig.Archived, &orig.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found in this guild")
+			return
+		}
+		h.Logger.Error("failed to fetch channel for clone", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch channel")
+		return
+	}
+
+	// Parse optional name from request body.
+	var req struct {
+		Name *string `json:"name"`
+	}
+	// Body is optional; ignore decode errors for empty body.
+	json.NewDecoder(r.Body).Decode(&req)
+
+	newName := ""
+	if req.Name != nil && *req.Name != "" {
+		newName = *req.Name
+	} else if orig.Name != nil {
+		newName = *orig.Name + "-copy"
+	} else {
+		newName = "cloned-channel"
+	}
+
+	if len(newName) > 100 {
+		newName = newName[:100]
+	}
+
+	newID := models.NewULID().String()
+
+	// Copy permission overwrites from the original channel.
+	type permOverwrite struct {
+		TargetType       string
+		TargetID         string
+		PermissionsAllow int64
+		PermissionsDeny  int64
+	}
+	var overwrites []permOverwrite
+	permRows, permErr := h.Pool.Query(r.Context(),
+		`SELECT target_type, target_id, permissions_allow, permissions_deny
+		 FROM channel_permissions WHERE channel_id = $1`,
+		channelID,
+	)
+	if permErr == nil {
+		for permRows.Next() {
+			var po permOverwrite
+			if scanErr := permRows.Scan(&po.TargetType, &po.TargetID, &po.PermissionsAllow, &po.PermissionsDeny); scanErr == nil {
+				overwrites = append(overwrites, po)
+			}
+		}
+		permRows.Close()
+	}
+
+	// Insert the cloned channel.
+	var cloned models.Channel
+	err = h.Pool.QueryRow(r.Context(),
+		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position,
+		                       slowmode_seconds, nsfw, encrypted, user_limit, bitrate, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10, $11, now())
+		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
+		newID, guildID, orig.CategoryID, orig.ChannelType, newName, orig.Topic,
+		orig.Position+1, orig.SlowmodeSeconds, orig.NSFW, orig.UserLimit, orig.Bitrate,
+	).Scan(
+		&cloned.ID, &cloned.GuildID, &cloned.CategoryID, &cloned.ChannelType, &cloned.Name,
+		&cloned.Topic, &cloned.Position, &cloned.SlowmodeSeconds, &cloned.NSFW, &cloned.Encrypted,
+		&cloned.LastMessageID, &cloned.OwnerID, &cloned.DefaultPermissions,
+		&cloned.UserLimit, &cloned.Bitrate,
+		&cloned.Locked, &cloned.LockedBy, &cloned.LockedAt, &cloned.Archived, &cloned.CreatedAt,
+	)
+	if err != nil {
+		h.Logger.Error("failed to clone channel", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to clone channel")
+		return
+	}
+
+	// Insert permission overwrites for the new channel (after channel exists).
+	for _, po := range overwrites {
+		h.Pool.Exec(r.Context(),
+			`INSERT INTO channel_permissions (channel_id, target_type, target_id, permissions_allow, permissions_deny)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			newID, po.TargetType, po.TargetID, po.PermissionsAllow, po.PermissionsDeny,
+		)
+	}
+
+	h.logAudit(r.Context(), guildID, userID, "channel_clone", "channel", newID, nil)
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", cloned)
+
+	writeJSON(w, http.StatusCreated, cloned)
+}
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

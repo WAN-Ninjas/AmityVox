@@ -8,6 +8,7 @@
 	import {
 		customThemes,
 		activeCustomThemeName,
+		customCss,
 		dndSchedule,
 		dndManualOverride,
 		isDndActive,
@@ -28,6 +29,8 @@
 		saveNotificationSoundsEnabled,
 		saveNotificationSoundPreset,
 		saveNotificationVolume,
+		saveCustomCss,
+		clearCustomCss,
 		syncSettingsToApi,
 		DEFAULT_THEME_COLORS,
 		THEME_COLOR_LABELS,
@@ -120,6 +123,11 @@
 	let importError = $state('');
 	let importFileInput: HTMLInputElement;
 
+	// --- Custom CSS state ---
+	let customCssText = $state('');
+	let customCssSuccess = $state('');
+	const customCssMaxLength = 10000;
+
 	// --- Connected Accounts state ---
 	interface ConnectedAccounts {
 		github: string;
@@ -179,6 +187,9 @@
 		dndStartMinute = schedule.startMinute;
 		dndEndHour = schedule.endHour;
 		dndEndMinute = schedule.endMinute;
+
+		// Load custom CSS from store.
+		customCssText = $customCss;
 
 		// Load connected accounts from localStorage.
 		try {
@@ -677,6 +688,23 @@
 		localStorage.setItem('av-connected-accounts', JSON.stringify(connectedAccounts));
 		connectedAccountsSuccess = 'Connected accounts saved!';
 		setTimeout(() => (connectedAccountsSuccess = ''), 3000);
+	}
+
+	// --- Custom CSS ---
+
+	function handleSaveCustomCss() {
+		saveCustomCss(customCssText);
+		syncSettingsToApi();
+		customCssSuccess = 'Custom CSS applied!';
+		setTimeout(() => (customCssSuccess = ''), 3000);
+	}
+
+	function handleClearCustomCss() {
+		customCssText = '';
+		clearCustomCss();
+		syncSettingsToApi();
+		customCssSuccess = 'Custom CSS cleared.';
+		setTimeout(() => (customCssSuccess = ''), 3000);
 	}
 
 	// --- Bots actions ---
@@ -1944,6 +1972,51 @@
 						<button class="btn-primary mt-4" onclick={saveConnectedAccounts}>
 							Save Connected Accounts
 						</button>
+					</div>
+
+					<!-- ==================== CUSTOM CSS ==================== -->
+					<div class="mt-8 border-t border-bg-modifier pt-6">
+						<h2 class="mb-2 text-lg font-bold text-text-primary">Custom CSS</h2>
+						<p class="mb-1 text-xs text-text-muted">
+							Advanced feature. Incorrect CSS may break the interface. Use at your own risk.
+						</p>
+						<p class="mb-4 text-xs text-text-muted">
+							Paste custom CSS below to customize the app beyond the built-in theme options.
+						</p>
+
+						{#if customCssSuccess}
+							<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{customCssSuccess}</div>
+						{/if}
+
+						<div class="rounded-lg bg-bg-secondary p-4">
+							<textarea
+								bind:value={customCssText}
+								class="w-full rounded border border-bg-modifier bg-bg-floating px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-none focus:border-brand-500"
+								rows="10"
+								placeholder={".my-class {\n  color: red;\n}"}
+								maxlength={customCssMaxLength}
+							></textarea>
+							<div class="mt-2 flex items-center justify-between">
+								<span class="text-2xs text-text-muted">
+									{customCssText.length} / {customCssMaxLength} characters
+								</span>
+								<div class="flex gap-2">
+									<button
+										class="btn-secondary text-xs"
+										onclick={handleClearCustomCss}
+										disabled={!customCssText && !$customCss}
+									>
+										Clear
+									</button>
+									<button
+										class="btn-primary text-xs"
+										onclick={handleSaveCustomCss}
+									>
+										Save Custom CSS
+									</button>
+								</div>
+							</div>
+						</div>
 					</div>
 				</div>
 

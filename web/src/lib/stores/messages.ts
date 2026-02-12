@@ -67,6 +67,19 @@ export function removeMessage(channelId: string, messageId: string) {
 	});
 }
 
+export function removeMessages(channelId: string, messageIds: string[]) {
+	messagesByChannel.update((map) => {
+		const existing = map.get(channelId);
+		if (!existing) return map;
+		const idSet = new Set(messageIds);
+		map.set(
+			channelId,
+			existing.filter((m) => !idSet.has(m.id))
+		);
+		return new Map(map);
+	});
+}
+
 export function clearChannelMessages(channelId: string) {
 	messagesByChannel.update((map) => {
 		map.delete(channelId);

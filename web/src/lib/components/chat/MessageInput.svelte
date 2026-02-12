@@ -26,6 +26,7 @@
 
 	// --- File attachment state ---
 	let pendingFiles = $state<File[]>([]);
+	let pendingAltTexts = $state<Record<number, string>>({});
 	let uploading = $state(false);
 
 	// Default max upload size in bytes (25 MB). This could be overridden by instance config.
@@ -52,10 +53,20 @@
 
 	function removePendingFile(index: number) {
 		pendingFiles = pendingFiles.filter((_, i) => i !== index);
+		// Re-index alt texts after removal.
+		const newAlts: Record<number, string> = {};
+		let j = 0;
+		for (let i = 0; i < pendingFiles.length + 1; i++) {
+			if (i === index) continue;
+			if (pendingAltTexts[i]) newAlts[j] = pendingAltTexts[i];
+			j++;
+		}
+		pendingAltTexts = newAlts;
 	}
 
 	function clearPendingFiles() {
 		pendingFiles = [];
+		pendingAltTexts = {};
 	}
 
 	// When entering edit mode, populate the input with the message content.
@@ -268,8 +279,10 @@
 		uploading = true;
 		try {
 			const ids: string[] = [];
-			for (const file of pendingFiles) {
-				const uploaded = await api.uploadFile(file);
+			for (let i = 0; i < pendingFiles.length; i++) {
+				const file = pendingFiles[i];
+				const altText = pendingAltTexts[i]?.trim() || undefined;
+				const uploaded = await api.uploadFile(file, altText);
 				ids.push(uploaded.id);
 			}
 			const msg = content.trim();
@@ -278,6 +291,7 @@
 			content = '';
 			if (inputEl) inputEl.style.height = 'auto';
 			pendingFiles = [];
+			pendingAltTexts = {};
 		} catch (err) {
 			addToast('Upload failed', 'error');
 		} finally {
@@ -487,29 +501,43 @@
 				<div class="space-y-1.5">
 					{#each pendingFiles as file, i (file.name + i)}
 						{@const overLimit = isFileOverLimit(file)}
-						<div class="flex items-center gap-2 rounded px-2 py-1.5 {overLimit ? 'bg-red-500/10' : 'bg-bg-primary'}">
-							<svg class="h-4 w-4 shrink-0 {overLimit ? 'text-red-400' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-								<polyline points="14 2 14 8 20 8" />
-							</svg>
-							<span class="flex-1 truncate text-xs {overLimit ? 'text-red-400' : 'text-text-primary'}">
-								{file.name}
-							</span>
-							<span class="shrink-0 text-2xs {overLimit ? 'font-semibold text-red-400' : 'text-text-muted'}">
-								{formatFileSize(file.size)}
-								{#if overLimit}
-									-- exceeds limit
-								{/if}
-							</span>
-							<button
-								class="shrink-0 text-text-muted hover:text-text-primary"
-								onclick={() => removePendingFile(i)}
-								title="Remove file"
-							>
-								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-									<path d="M6 18L18 6M6 6l12 12" />
+						{@const isImage = file.type.startsWith('image/')}
+						<div class="rounded {overLimit ? 'bg-red-500/10' : 'bg-bg-primary'}">
+							<div class="flex items-center gap-2 px-2 py-1.5">
+								<svg class="h-4 w-4 shrink-0 {overLimit ? 'text-red-400' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+									<polyline points="14 2 14 8 20 8" />
 								</svg>
-							</button>
+								<span class="flex-1 truncate text-xs {overLimit ? 'text-red-400' : 'text-text-primary'}">
+									{file.name}
+								</span>
+								<span class="shrink-0 text-2xs {overLimit ? 'font-semibold text-red-400' : 'text-text-muted'}">
+									{formatFileSize(file.size)}
+									{#if overLimit}
+										-- exceeds limit
+									{/if}
+								</span>
+								<button
+									class="shrink-0 text-text-muted hover:text-text-primary"
+									onclick={() => removePendingFile(i)}
+									title="Remove file"
+								>
+									<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M6 18L18 6M6 6l12 12" />
+									</svg>
+								</button>
+							</div>
+							{#if isImage}
+								<div class="px-2 pb-1.5">
+									<input
+										type="text"
+										class="w-full rounded border border-bg-floating bg-bg-secondary px-2 py-1 text-2xs text-text-primary outline-none placeholder:text-text-muted focus:border-text-link"
+										placeholder="Alt text (describe this image for accessibility)"
+										value={pendingAltTexts[i] ?? ''}
+										oninput={(e) => { pendingAltTexts = { ...pendingAltTexts, [i]: (e.target as HTMLInputElement).value }; }}
+									/>
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>

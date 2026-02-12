@@ -9,6 +9,7 @@
 	import EditHistoryModal from '$components/chat/EditHistoryModal.svelte';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
 	import AudioPlayer from '$components/chat/AudioPlayer.svelte';
+	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
@@ -425,7 +426,7 @@
 								>
 									<img
 										src="/api/v1/files/{attachment.id}"
-										alt={attachment.filename}
+										alt={attachment.alt_text || attachment.filename}
 										class="max-h-80 max-w-md rounded transition-[filter]"
 										style="filter: blur(20px);"
 										loading="lazy"
@@ -439,21 +440,26 @@
 							{:else if isStickerMessage}
 								<img
 									src="/api/v1/files/{attachment.id}"
-									alt={attachment.filename}
+									alt={attachment.alt_text || attachment.filename}
 									class="h-40 w-40 object-contain cursor-pointer hover:scale-105 transition-transform"
 									loading="lazy"
 									onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
 									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
 								/>
 							{:else}
-								<img
-									src="/api/v1/files/{attachment.id}"
-									alt={attachment.filename}
-									class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
-									loading="lazy"
-									onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
-									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-								/>
+								<div class="inline-flex flex-col">
+									<img
+										src="/api/v1/files/{attachment.id}"
+										alt={attachment.alt_text || attachment.filename}
+										class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
+										loading="lazy"
+										onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
+										oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
+									/>
+									{#if attachment.alt_text}
+										<span class="mt-0.5 max-w-md text-2xs text-text-muted">{attachment.alt_text}</span>
+									{/if}
+								</div>
 							{/if}
 						{:else if attachment.content_type?.startsWith('audio/')}
 							<AudioPlayer
@@ -462,14 +468,12 @@
 								durationMs={message.voice_duration_ms}
 							/>
 						{:else if attachment.content_type?.startsWith('video/')}
-							<video
+							<VideoPlayer
 								src="/api/v1/files/{attachment.id}"
-								controls
-								class="max-h-80 max-w-md rounded"
-								preload="metadata"
-							>
-								<track kind="captions" />
-							</video>
+								width={attachment.width ?? undefined}
+								height={attachment.height ?? undefined}
+								filename={attachment.filename}
+							/>
 						{:else}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<a
