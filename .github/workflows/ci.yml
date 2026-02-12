@@ -160,7 +160,7 @@ jobs:
           tags: |
             type=sha,prefix=
             type=raw,value=latest
-            type=raw,value=v0.4.0
+            type=semver,pattern=v{{version}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -172,7 +172,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=v0.4.0
+            VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha

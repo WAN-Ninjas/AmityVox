@@ -40,7 +40,9 @@ import type {
 	InstanceBan,
 	RegistrationSettings,
 	RegistrationToken,
-	Announcement
+	Announcement,
+	OnboardingConfig,
+	OnboardingPrompt
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -955,6 +957,36 @@ class ApiClient {
 
 	removeRole(guildId: string, memberId: string, roleId: string): Promise<void> {
 		return this.del(`/guilds/${guildId}/members/${memberId}/roles/${roleId}`);
+	}
+
+	// --- Onboarding ---
+
+	getOnboarding(guildId: string): Promise<OnboardingConfig> {
+		return this.get(`/guilds/${guildId}/onboarding`);
+	}
+
+	updateOnboarding(guildId: string, data: Partial<OnboardingConfig>): Promise<OnboardingConfig> {
+		return this.put(`/guilds/${guildId}/onboarding`, data);
+	}
+
+	createOnboardingPrompt(guildId: string, data: { title: string; required?: boolean; single_select?: boolean; options: { label: string; description?: string; emoji?: string; role_ids?: string[]; channel_ids?: string[] }[] }): Promise<OnboardingPrompt> {
+		return this.post(`/guilds/${guildId}/onboarding/prompts`, data);
+	}
+
+	updateOnboardingPrompt(guildId: string, promptId: string, data: Partial<OnboardingPrompt>): Promise<void> {
+		return this.put(`/guilds/${guildId}/onboarding/prompts/${promptId}`, data);
+	}
+
+	deleteOnboardingPrompt(guildId: string, promptId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/onboarding/prompts/${promptId}`);
+	}
+
+	completeOnboarding(guildId: string, responses: Record<string, string[]>): Promise<void> {
+		return this.post(`/guilds/${guildId}/onboarding/complete`, { prompt_responses: responses });
+	}
+
+	getOnboardingStatus(guildId: string): Promise<{ completed: boolean }> {
+		return this.get(`/guilds/${guildId}/onboarding/status`);
 	}
 }
 

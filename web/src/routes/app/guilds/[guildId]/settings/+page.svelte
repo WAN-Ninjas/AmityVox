@@ -5,9 +5,9 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
-	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig } from '$lib/types';
+	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid';
+	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -102,6 +102,30 @@
 	let loadingRaid = $state(false);
 	let savingRaid = $state(false);
 
+	// --- Onboarding ---
+	let onboardingConfig = $state<OnboardingConfig | null>(null);
+	let loadingOnboarding = $state(false);
+	let savingOnboarding = $state(false);
+	let onboardingChannels = $state<Channel[]>([]);
+	let onboardingRoles = $state<Role[]>([]);
+	let newRuleText = $state('');
+	let newPromptTitle = $state('');
+	let newPromptRequired = $state(false);
+	let newPromptSingleSelect = $state(false);
+	let creatingPrompt = $state(false);
+	// Editing prompt inline
+	let editingPromptId = $state<string | null>(null);
+	let editingPromptTitle = $state('');
+	let editingPromptRequired = $state(false);
+	let editingPromptSingleSelect = $state(false);
+	// Adding option to a prompt
+	let addingOptionToPromptId = $state<string | null>(null);
+	let newOptionLabel = $state('');
+	let newOptionDescription = $state('');
+	let newOptionEmoji = $state('');
+	let newOptionRoleIds = $state<string[]>([]);
+	let newOptionChannelIds = $state<string[]>([]);
+
 	const isOwner = $derived($currentGuild?.owner_id === $currentUser?.id);
 
 	$effect(() => {
@@ -127,6 +151,7 @@
 		if (currentTab === 'automod' && automodRules.length === 0) loadAutomod(gId);
 		if (currentTab === 'moderation' && reports.length === 0) loadReports(gId);
 		if (currentTab === 'raid' && !raidConfig) loadRaid(gId);
+		if (currentTab === 'onboarding' && !onboardingConfig) loadOnboarding(gId);
 	});
 
 	// --- Data loading ---
@@ -204,6 +229,229 @@
 		loadingRaid = true;
 		try { raidConfig = await api.getRaidConfig(guildId); } catch {}
 		finally { loadingRaid = false; }
+	}
+
+	async function loadOnboarding(guildId: string) {
+		loadingOnboarding = true;
+		try {
+			const [config, guildChannels, guildRoles] = await Promise.all([
+				api.getOnboarding(guildId),
+				api.getGuildChannels(guildId),
+				api.getRoles(guildId)
+			]);
+			onboardingConfig = config;
+			onboardingChannels = guildChannels;
+			onboardingRoles = guildRoles;
+		} catch {
+			// Onboarding may not exist yet; initialize defaults.
+			onboardingConfig = { enabled: false, welcome_message: '', rules: [], default_channel_ids: [], prompts: [] };
+			try {
+				onboardingChannels = await api.getGuildChannels(guildId);
+				onboardingRoles = await api.getRoles(guildId);
+			} catch {}
+		}
+		finally { loadingOnboarding = false; }
+	}
+
+	// --- Onboarding actions ---
+
+	async function handleSaveOnboarding() {
+		if (!$currentGuild || !onboardingConfig) return;
+		savingOnboarding = true;
+		error = '';
+		try {
+			onboardingConfig = await api.updateOnboarding($currentGuild.id, {
+				enabled: onboardingConfig.enabled,
+				welcome_message: onboardingConfig.welcome_message,
+				rules: onboardingConfig.rules,
+				default_channel_ids: onboardingConfig.default_channel_ids
+			});
+			success = 'Onboarding settings saved!';
+			setTimeout(() => (success = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to save onboarding';
+		} finally {
+			savingOnboarding = false;
+		}
+	}
+
+	function addOnboardingRule() {
+		if (!onboardingConfig || !newRuleText.trim()) return;
+		onboardingConfig = { ...onboardingConfig, rules: [...onboardingConfig.rules, newRuleText.trim()] };
+		newRuleText = '';
+	}
+
+	function removeOnboardingRule(index: number) {
+		if (!onboardingConfig) return;
+		onboardingConfig = { ...onboardingConfig, rules: onboardingConfig.rules.filter((_, i) => i !== index) };
+	}
+
+	function moveOnboardingRule(index: number, direction: 'up' | 'down') {
+		if (!onboardingConfig) return;
+		const rules = [...onboardingConfig.rules];
+		const newIndex = direction === 'up' ? index - 1 : index + 1;
+		if (newIndex < 0 || newIndex >= rules.length) return;
+		[rules[index], rules[newIndex]] = [rules[newIndex], rules[index]];
+		onboardingConfig = { ...onboardingConfig, rules };
+	}
+
+	function toggleDefaultChannel(channelId: string) {
+		if (!onboardingConfig) return;
+		const ids = onboardingConfig.default_channel_ids;
+		if (ids.includes(channelId)) {
+			onboardingConfig = { ...onboardingConfig, default_channel_ids: ids.filter((id) => id !== channelId) };
+		} else {
+			onboardingConfig = { ...onboardingConfig, default_channel_ids: [...ids, channelId] };
+		}
+	}
+
+	async function handleCreatePrompt() {
+		if (!$currentGuild || !newPromptTitle.trim()) return;
+		creatingPrompt = true;
+		error = '';
+		try {
+			const prompt = await api.createOnboardingPrompt($currentGuild.id, {
+				title: newPromptTitle.trim(),
+				required: newPromptRequired,
+				single_select: newPromptSingleSelect,
+				options: []
+			});
+			if (onboardingConfig) {
+				onboardingConfig = { ...onboardingConfig, prompts: [...onboardingConfig.prompts, prompt] };
+			}
+			newPromptTitle = '';
+			newPromptRequired = false;
+			newPromptSingleSelect = false;
+		} catch (err: any) {
+			error = err.message || 'Failed to create prompt';
+		} finally {
+			creatingPrompt = false;
+		}
+	}
+
+	function startEditingPrompt(prompt: OnboardingPrompt) {
+		editingPromptId = prompt.id;
+		editingPromptTitle = prompt.title;
+		editingPromptRequired = prompt.required;
+		editingPromptSingleSelect = prompt.single_select;
+	}
+
+	function cancelEditingPrompt() {
+		editingPromptId = null;
+		editingPromptTitle = '';
+	}
+
+	async function handleSavePrompt() {
+		if (!$currentGuild || !editingPromptId || !editingPromptTitle.trim()) return;
+		error = '';
+		try {
+			await api.updateOnboardingPrompt($currentGuild.id, editingPromptId, {
+				title: editingPromptTitle.trim(),
+				required: editingPromptRequired,
+				single_select: editingPromptSingleSelect
+			});
+			if (onboardingConfig) {
+				onboardingConfig = {
+					...onboardingConfig,
+					prompts: onboardingConfig.prompts.map((p) =>
+						p.id === editingPromptId
+							? { ...p, title: editingPromptTitle.trim(), required: editingPromptRequired, single_select: editingPromptSingleSelect }
+							: p
+					)
+				};
+			}
+			editingPromptId = null;
+			editingPromptTitle = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to update prompt';
+		}
+	}
+
+	async function handleDeletePrompt(promptId: string) {
+		if (!$currentGuild || !confirm('Delete this onboarding prompt?')) return;
+		error = '';
+		try {
+			await api.deleteOnboardingPrompt($currentGuild.id, promptId);
+			if (onboardingConfig) {
+				onboardingConfig = { ...onboardingConfig, prompts: onboardingConfig.prompts.filter((p) => p.id !== promptId) };
+			}
+			if (editingPromptId === promptId) editingPromptId = null;
+			if (addingOptionToPromptId === promptId) addingOptionToPromptId = null;
+		} catch (err: any) {
+			error = err.message || 'Failed to delete prompt';
+		}
+	}
+
+	function startAddingOption(promptId: string) {
+		addingOptionToPromptId = promptId;
+		newOptionLabel = '';
+		newOptionDescription = '';
+		newOptionEmoji = '';
+		newOptionRoleIds = [];
+		newOptionChannelIds = [];
+	}
+
+	function cancelAddingOption() {
+		addingOptionToPromptId = null;
+		newOptionLabel = '';
+		newOptionDescription = '';
+		newOptionEmoji = '';
+		newOptionRoleIds = [];
+		newOptionChannelIds = [];
+	}
+
+	async function handleAddOption() {
+		if (!$currentGuild || !addingOptionToPromptId || !newOptionLabel.trim()) return;
+		error = '';
+		try {
+			// We update the prompt with the new option appended. The API will handle creating the option.
+			const prompt = onboardingConfig?.prompts.find((p) => p.id === addingOptionToPromptId);
+			if (!prompt) return;
+			const newOptions = [
+				...prompt.options.map((o) => ({ label: o.label, description: o.description, emoji: o.emoji, role_ids: o.role_ids, channel_ids: o.channel_ids })),
+				{
+					label: newOptionLabel.trim(),
+					description: newOptionDescription.trim() || undefined,
+					emoji: newOptionEmoji.trim() || undefined,
+					role_ids: newOptionRoleIds,
+					channel_ids: newOptionChannelIds
+				}
+			];
+			await api.updateOnboardingPrompt($currentGuild.id, addingOptionToPromptId, { options: newOptions as any });
+			// Reload onboarding to get server-generated option IDs.
+			await loadOnboarding($currentGuild.id);
+			cancelAddingOption();
+			success = 'Option added!';
+			setTimeout(() => (success = ''), 2000);
+		} catch (err: any) {
+			error = err.message || 'Failed to add option';
+		}
+	}
+
+	async function handleRemoveOption(promptId: string, optionId: string) {
+		if (!$currentGuild || !onboardingConfig) return;
+		error = '';
+		try {
+			const prompt = onboardingConfig.prompts.find((p) => p.id === promptId);
+			if (!prompt) return;
+			const newOptions = prompt.options
+				.filter((o) => o.id !== optionId)
+				.map((o) => ({ label: o.label, description: o.description, emoji: o.emoji, role_ids: o.role_ids, channel_ids: o.channel_ids }));
+			await api.updateOnboardingPrompt($currentGuild.id, promptId, { options: newOptions as any });
+			await loadOnboarding($currentGuild.id);
+		} catch (err: any) {
+			error = err.message || 'Failed to remove option';
+		}
+	}
+
+	function getOnboardingChannelName(channelId: string): string {
+		const ch = onboardingChannels.find((c) => c.id === channelId);
+		return ch?.name ?? channelId.slice(0, 8) + '...';
+	}
+
+	function getOnboardingRoleName(roleId: string): string {
+		const r = onboardingRoles.find((role) => role.id === roleId);
+		return r?.name ?? roleId.slice(0, 8) + '...';
 	}
 
 	// --- Overview actions ---
@@ -594,7 +842,8 @@
 		{ id: 'audit', label: 'Audit Log' },
 		{ id: 'automod', label: 'AutoMod' },
 		{ id: 'moderation', label: 'Moderation' },
-		{ id: 'raid', label: 'Raid Protection' }
+		{ id: 'raid', label: 'Raid Protection' },
+		{ id: 'onboarding', label: 'Onboarding' }
 	];
 
 	const expiryOptions = [
@@ -1468,6 +1717,354 @@
 						<button class="btn-primary" onclick={handleSaveRaid} disabled={savingRaid}>
 							{savingRaid ? 'Saving...' : 'Save Raid Settings'}
 						</button>
+					</div>
+				{/if}
+
+			<!-- ==================== ONBOARDING ==================== -->
+			{:else if currentTab === 'onboarding'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Onboarding</h1>
+				<p class="mb-6 text-sm text-text-muted">
+					Configure the onboarding flow that new members see when they join your server. You can set a welcome message, rules, and custom prompts to personalize their experience.
+				</p>
+
+				{#if loadingOnboarding}
+					<p class="text-sm text-text-muted">Loading onboarding configuration...</p>
+				{:else if onboardingConfig}
+					<!-- Enable/Disable Toggle -->
+					<label class="mb-6 flex items-center gap-3">
+						<input type="checkbox" bind:checked={onboardingConfig.enabled} class="rounded" />
+						<div>
+							<span class="text-sm font-medium text-text-primary">Enable Onboarding</span>
+							<p class="text-xs text-text-muted">When enabled, new members will see the onboarding flow after joining</p>
+						</div>
+					</label>
+
+					<!-- Welcome Message -->
+					<div class="mb-6">
+						<label for="onboardingWelcome" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Welcome Message</label>
+						<textarea
+							id="onboardingWelcome"
+							bind:value={onboardingConfig.welcome_message}
+							class="input w-full"
+							rows="3"
+							maxlength="2000"
+							placeholder="Write a welcome message for new members..."
+						></textarea>
+					</div>
+
+					<!-- Rules -->
+					<div class="mb-6">
+						<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Server Rules</label>
+						<p class="mb-2 text-xs text-text-muted">New members must accept these rules during onboarding.</p>
+
+						{#if onboardingConfig.rules.length > 0}
+							<div class="mb-3 space-y-2">
+								{#each onboardingConfig.rules as rule, i}
+									<div class="flex items-center gap-2 rounded-lg bg-bg-primary p-2.5">
+										<span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-600/20 text-xs font-bold text-brand-400">
+											{i + 1}
+										</span>
+										<span class="min-w-0 flex-1 text-sm text-text-primary">{rule}</span>
+										<div class="flex shrink-0 items-center gap-1">
+											{#if i > 0}
+												<button
+													class="text-text-muted hover:text-text-primary"
+													onclick={() => moveOnboardingRule(i, 'up')}
+													title="Move up"
+												>
+													<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6" /></svg>
+												</button>
+											{/if}
+											{#if i < onboardingConfig.rules.length - 1}
+												<button
+													class="text-text-muted hover:text-text-primary"
+													onclick={() => moveOnboardingRule(i, 'down')}
+													title="Move down"
+												>
+													<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+												</button>
+											{/if}
+											<button
+												class="text-red-400 hover:text-red-300"
+												onclick={() => removeOnboardingRule(i)}
+												title="Remove rule"
+											>
+												<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" /></svg>
+											</button>
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<div class="flex gap-2">
+							<input
+								type="text"
+								class="input flex-1"
+								bind:value={newRuleText}
+								placeholder="Add a rule..."
+								maxlength="500"
+								onkeydown={(e) => e.key === 'Enter' && addOnboardingRule()}
+							/>
+							<button class="btn-primary" onclick={addOnboardingRule} disabled={!newRuleText.trim()}>
+								Add
+							</button>
+						</div>
+					</div>
+
+					<!-- Default Channels -->
+					<div class="mb-6">
+						<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Default Channels</label>
+						<p class="mb-2 text-xs text-text-muted">Channels that new members are automatically added to after onboarding.</p>
+						{#if onboardingChannels.length === 0}
+							<p class="text-xs text-text-muted">No channels available.</p>
+						{:else}
+							<div class="flex flex-wrap gap-1.5">
+								{#each onboardingChannels.filter((c) => c.channel_type === 'text' || c.channel_type === 'announcement') as channel (channel.id)}
+									<button
+										type="button"
+										class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors {onboardingConfig.default_channel_ids.includes(channel.id)
+											? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40'
+											: 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary hover:text-text-secondary'}"
+										onclick={() => toggleDefaultChannel(channel.id)}
+									>
+										<span class="text-text-muted">#</span>
+										{channel.name ?? 'unnamed'}
+										{#if onboardingConfig.default_channel_ids.includes(channel.id)}
+											<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+
+					<button class="btn-primary mb-8" onclick={handleSaveOnboarding} disabled={savingOnboarding}>
+						{savingOnboarding ? 'Saving...' : 'Save Onboarding Settings'}
+					</button>
+
+					<!-- Prompts Section -->
+					<div class="border-t border-bg-modifier pt-6">
+						<h2 class="mb-2 text-lg font-semibold text-text-primary">Prompts</h2>
+						<p class="mb-4 text-sm text-text-muted">
+							Prompts let new members customize their experience by choosing roles and channels. Each prompt is shown as a separate step during onboarding.
+						</p>
+
+						<!-- Create Prompt -->
+						<div class="mb-6 rounded-lg bg-bg-primary p-4">
+							<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Prompt</h3>
+							<div class="mb-3">
+								<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Title</label>
+								<input
+									type="text"
+									class="input w-full"
+									bind:value={newPromptTitle}
+									placeholder="What are you interested in?"
+									maxlength="200"
+								/>
+							</div>
+							<div class="mb-3 flex gap-4">
+								<label class="flex items-center gap-2 text-sm text-text-muted">
+									<input type="checkbox" bind:checked={newPromptRequired} class="rounded" />
+									Required
+								</label>
+								<label class="flex items-center gap-2 text-sm text-text-muted">
+									<input type="checkbox" bind:checked={newPromptSingleSelect} class="rounded" />
+									Single select
+								</label>
+							</div>
+							<button class="btn-primary" onclick={handleCreatePrompt} disabled={creatingPrompt || !newPromptTitle.trim()}>
+								{creatingPrompt ? 'Creating...' : 'Create Prompt'}
+							</button>
+						</div>
+
+						<!-- Existing Prompts -->
+						{#if onboardingConfig.prompts.length === 0}
+							<p class="text-sm text-text-muted">No prompts configured yet. Create one above to get started.</p>
+						{:else}
+							<div class="space-y-4">
+								{#each onboardingConfig.prompts.slice().sort((a, b) => a.position - b.position) as prompt (prompt.id)}
+									<div class="rounded-lg bg-bg-primary p-4">
+										<!-- Prompt Header -->
+										{#if editingPromptId === prompt.id}
+											<div class="mb-3">
+												<input
+													type="text"
+													class="input mb-2 w-full"
+													bind:value={editingPromptTitle}
+													onkeydown={(e) => e.key === 'Enter' && handleSavePrompt()}
+												/>
+												<div class="mb-2 flex gap-4">
+													<label class="flex items-center gap-2 text-sm text-text-muted">
+														<input type="checkbox" bind:checked={editingPromptRequired} class="rounded" />
+														Required
+													</label>
+													<label class="flex items-center gap-2 text-sm text-text-muted">
+														<input type="checkbox" bind:checked={editingPromptSingleSelect} class="rounded" />
+														Single select
+													</label>
+												</div>
+												<div class="flex gap-2">
+													<button class="btn-primary text-xs" onclick={handleSavePrompt}>Save</button>
+													<button class="btn-secondary text-xs" onclick={cancelEditingPrompt}>Cancel</button>
+												</div>
+											</div>
+										{:else}
+											<div class="mb-3 flex items-center justify-between">
+												<div>
+													<h3 class="text-sm font-semibold text-text-primary">{prompt.title}</h3>
+													<div class="mt-0.5 flex gap-2 text-xs text-text-muted">
+														{#if prompt.required}
+															<span class="rounded bg-brand-500/15 px-1.5 py-0.5 text-brand-400">Required</span>
+														{/if}
+														<span class="rounded bg-bg-modifier px-1.5 py-0.5">{prompt.single_select ? 'Single select' : 'Multi select'}</span>
+														<span class="rounded bg-bg-modifier px-1.5 py-0.5">Pos: {prompt.position}</span>
+													</div>
+												</div>
+												<div class="flex items-center gap-2">
+													<button
+														class="text-xs text-brand-400 hover:text-brand-300"
+														onclick={() => startEditingPrompt(prompt)}
+													>
+														Edit
+													</button>
+													<button
+														class="text-xs text-red-400 hover:text-red-300"
+														onclick={() => handleDeletePrompt(prompt.id)}
+													>
+														Delete
+													</button>
+												</div>
+											</div>
+										{/if}
+
+										<!-- Options -->
+										<div class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Options ({prompt.options.length})</div>
+										{#if prompt.options.length > 0}
+											<div class="mb-3 space-y-1.5">
+												{#each prompt.options as option (option.id)}
+													<div class="flex items-center justify-between rounded-md bg-bg-secondary p-2.5">
+														<div class="min-w-0 flex-1">
+															<div class="flex items-center gap-2">
+																{#if option.emoji}
+																	<span>{option.emoji}</span>
+																{/if}
+																<span class="text-sm font-medium text-text-primary">{option.label}</span>
+															</div>
+															{#if option.description}
+																<p class="mt-0.5 text-xs text-text-muted">{option.description}</p>
+															{/if}
+															<div class="mt-1 flex flex-wrap gap-1">
+																{#each option.role_ids as roleId}
+																	<span class="rounded-full bg-brand-500/10 px-1.5 py-0.5 text-2xs text-brand-400">
+																		@{getOnboardingRoleName(roleId)}
+																	</span>
+																{/each}
+																{#each option.channel_ids as channelId}
+																	<span class="rounded-full bg-bg-modifier px-1.5 py-0.5 text-2xs text-text-muted">
+																		#{getOnboardingChannelName(channelId)}
+																	</span>
+																{/each}
+															</div>
+														</div>
+														<button
+															class="shrink-0 text-xs text-red-400 hover:text-red-300"
+															onclick={() => handleRemoveOption(prompt.id, option.id)}
+														>
+															Remove
+														</button>
+													</div>
+												{/each}
+											</div>
+										{:else}
+											<p class="mb-3 text-xs text-text-muted">No options yet. Add one below.</p>
+										{/if}
+
+										<!-- Add Option Form -->
+										{#if addingOptionToPromptId === prompt.id}
+											<div class="rounded-md border border-bg-modifier bg-bg-secondary p-3">
+												<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">New Option</h4>
+												<div class="mb-2 grid grid-cols-2 gap-2">
+													<div>
+														<label class="mb-1 block text-xs text-text-muted">Label</label>
+														<input type="text" class="input w-full" bind:value={newOptionLabel} placeholder="Option label" maxlength="100" />
+													</div>
+													<div>
+														<label class="mb-1 block text-xs text-text-muted">Emoji (optional)</label>
+														<input type="text" class="input w-full" bind:value={newOptionEmoji} placeholder="e.g. a single emoji" maxlength="4" />
+													</div>
+												</div>
+												<div class="mb-2">
+													<label class="mb-1 block text-xs text-text-muted">Description (optional)</label>
+													<input type="text" class="input w-full" bind:value={newOptionDescription} placeholder="Short description" maxlength="200" />
+												</div>
+
+												<!-- Role assignment -->
+												<div class="mb-2">
+													<label class="mb-1 block text-xs text-text-muted">Assign Roles</label>
+													<div class="flex flex-wrap gap-1">
+														{#each onboardingRoles as role (role.id)}
+															<button
+																type="button"
+																class="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors {newOptionRoleIds.includes(role.id)
+																	? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40'
+																	: 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary'}"
+																onclick={() => {
+																	newOptionRoleIds = newOptionRoleIds.includes(role.id)
+																		? newOptionRoleIds.filter((id) => id !== role.id)
+																		: [...newOptionRoleIds, role.id];
+																}}
+															>
+																<span class="h-2 w-2 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></span>
+																{role.name}
+															</button>
+														{/each}
+													</div>
+												</div>
+
+												<!-- Channel assignment -->
+												<div class="mb-3">
+													<label class="mb-1 block text-xs text-text-muted">Grant Channel Access</label>
+													<div class="flex flex-wrap gap-1">
+														{#each onboardingChannels.filter((c) => c.channel_type === 'text' || c.channel_type === 'announcement') as channel (channel.id)}
+															<button
+																type="button"
+																class="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors {newOptionChannelIds.includes(channel.id)
+																	? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/40'
+																	: 'bg-bg-modifier text-text-muted hover:bg-bg-tertiary'}"
+																onclick={() => {
+																	newOptionChannelIds = newOptionChannelIds.includes(channel.id)
+																		? newOptionChannelIds.filter((id) => id !== channel.id)
+																		: [...newOptionChannelIds, channel.id];
+																}}
+															>
+																# {channel.name ?? 'unnamed'}
+															</button>
+														{/each}
+													</div>
+												</div>
+
+												<div class="flex gap-2">
+													<button class="btn-primary text-xs" onclick={handleAddOption} disabled={!newOptionLabel.trim()}>
+														Add Option
+													</button>
+													<button class="btn-secondary text-xs" onclick={cancelAddingOption}>
+														Cancel
+													</button>
+												</div>
+											</div>
+										{:else}
+											<button
+												class="text-xs text-brand-400 hover:text-brand-300"
+												onclick={() => startAddingOption(prompt.id)}
+											>
+												+ Add option
+											</button>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				{/if}
 			{/if}
