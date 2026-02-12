@@ -136,6 +136,7 @@ export interface Attachment {
 	s3_bucket: string;
 	s3_key: string;
 	blurhash: string | null;
+	alt_text?: string;
 	created_at: string;
 }
 
@@ -629,6 +630,7 @@ export interface UserSettings {
 		createdAt: string;
 	}>;
 	active_custom_theme?: string | null;
+	custom_css?: string;
 	[key: string]: unknown;
 }
 

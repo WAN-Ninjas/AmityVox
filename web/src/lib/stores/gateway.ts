@@ -6,7 +6,7 @@ import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
 import { loadGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
 import { updateChannel, removeChannel, channels as channelsStore } from './channels';
-import { appendMessage, updateMessage, removeMessage } from './messages';
+import { appendMessage, updateMessage, removeMessage, removeMessages } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
@@ -125,6 +125,12 @@ export function connectGateway(token: string) {
 				removeMessage(
 					(data as { channel_id: string }).channel_id,
 					(data as { id: string }).id
+				);
+				break;
+			case 'MESSAGE_DELETE_BULK':
+				removeMessages(
+					(data as { channel_id: string }).channel_id,
+					(data as { message_ids: string[] }).message_ids
 				);
 				break;
 

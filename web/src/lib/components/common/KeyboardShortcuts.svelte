@@ -6,9 +6,10 @@
 	interface Props {
 		onToggleSearch?: () => void;
 		onToggleMembers?: () => void;
+		onToggleQuickSwitcher?: () => void;
 	}
 
-	let { onToggleSearch, onToggleMembers }: Props = $props();
+	let { onToggleSearch, onToggleMembers, onToggleQuickSwitcher }: Props = $props();
 	let showHelp = $state(false);
 
 	function handleGlobalKeydown(e: KeyboardEvent) {
@@ -20,6 +21,13 @@
 		if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
 			e.preventDefault();
 			onToggleSearch?.();
+			return;
+		}
+
+		// Ctrl+G or Cmd+G: toggle quick switcher
+		if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+			e.preventDefault();
+			onToggleQuickSwitcher?.();
 			return;
 		}
 
@@ -54,6 +62,7 @@
 
 	const shortcuts = [
 		{ keys: 'Ctrl+K', description: 'Open command palette' },
+		{ keys: 'Ctrl+G', description: 'Quick switcher (jump to channel/guild)' },
 		{ keys: 'Ctrl+Shift+M', description: 'Mark all as read' },
 		{ keys: 'Ctrl+Shift+U', description: 'Toggle member list' },
 		{ keys: 'Ctrl+,', description: 'Open settings' },

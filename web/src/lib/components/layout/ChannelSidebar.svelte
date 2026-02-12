@@ -9,6 +9,7 @@
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 
@@ -16,6 +17,39 @@
 
 	// Archived channels
 	let showArchived = $state(false);
+
+	// Collapsible sidebar sections -- persisted to localStorage.
+	const COLLAPSED_STORAGE_KEY = 'amityvox_collapsed_categories';
+	let collapsedSections = $state<Set<string>>(new Set());
+
+	onMount(() => {
+		try {
+			const stored = localStorage.getItem(COLLAPSED_STORAGE_KEY);
+			if (stored) {
+				const parsed = JSON.parse(stored);
+				if (Array.isArray(parsed)) {
+					collapsedSections = new Set(parsed);
+				}
+			}
+		} catch {
+			// Ignore malformed JSON.
+		}
+	});
+
+	function toggleSection(sectionId: string) {
+		const next = new Set(collapsedSections);
+		if (next.has(sectionId)) {
+			next.delete(sectionId);
+		} else {
+			next.add(sectionId);
+		}
+		collapsedSections = next;
+		localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...next]));
+	}
+
+	function isSectionCollapsed(sectionId: string): boolean {
+		return collapsedSections.has(sectionId);
+	}
 
 	const activeTextChannels = $derived($textChannels.filter(c => !c.archived));
 	const activeVoiceChannels = $derived($voiceChannels.filter(c => !c.archived));
@@ -220,7 +254,19 @@
 			<!-- Text Channels -->
 			{#if activeTextChannels.length > 0 || $currentGuild}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4 first:pt-0">
-					<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Text Channels</h3>
+					<button
+						class="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						onclick={() => toggleSection('text-channels')}
+						title={isSectionCollapsed('text-channels') ? 'Expand Text Channels' : 'Collapse Text Channels'}
+					>
+						<svg
+							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('text-channels') ? '-rotate-90' : ''}"
+							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+						>
+							<path d="M19 9l-7 7-7-7" />
+						</svg>
+						Text Channels
+					</button>
 					<button
 						class="text-text-muted hover:text-text-primary"
 						onclick={() => { newChannelType = 'text'; showCreateChannel = true; channelError = ''; }}
@@ -231,33 +277,47 @@
 						</svg>
 					</button>
 				</div>
-				{#each activeTextChannels as channel (channel.id)}
-					{@const unread = $unreadCounts.get(channel.id) ?? 0}
-					{@const mentions = $mentionCounts.get(channel.id) ?? 0}
-					<button
-						class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
-						onclick={() => handleChannelClick(channel.id)}
-						oncontextmenu={(e) => openContextMenu(e, channel)}
-					>
-						<span class="text-lg leading-none">#</span>
-						<span class="flex-1 truncate">{channel.name}</span>
-						{#if mentions > 0 && $currentChannelId !== channel.id}
-							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{mentions} mention{mentions !== 1 ? 's' : ''}">
-								@{mentions > 99 ? '99+' : mentions}
-							</span>
-						{:else if unread > 0 && $currentChannelId !== channel.id}
-							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
-								{unread > 99 ? '99+' : unread}
-							</span>
-						{/if}
-					</button>
-				{/each}
+				{#if !isSectionCollapsed('text-channels')}
+					{#each activeTextChannels as channel (channel.id)}
+						{@const unread = $unreadCounts.get(channel.id) ?? 0}
+						{@const mentions = $mentionCounts.get(channel.id) ?? 0}
+						<button
+							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+							onclick={() => handleChannelClick(channel.id)}
+							oncontextmenu={(e) => openContextMenu(e, channel)}
+						>
+							<span class="text-lg leading-none">#</span>
+							<span class="flex-1 truncate">{channel.name}</span>
+							{#if mentions > 0 && $currentChannelId !== channel.id}
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{mentions} mention{mentions !== 1 ? 's' : ''}">
+									@{mentions > 99 ? '99+' : mentions}
+								</span>
+							{:else if unread > 0 && $currentChannelId !== channel.id}
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
+									{unread > 99 ? '99+' : unread}
+								</span>
+							{/if}
+						</button>
+					{/each}
+				{/if}
 			{/if}
 
 			<!-- Voice Channels -->
 			{#if activeVoiceChannels.length > 0 || $currentGuild}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4">
-					<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Voice Channels</h3>
+					<button
+						class="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						onclick={() => toggleSection('voice-channels')}
+						title={isSectionCollapsed('voice-channels') ? 'Expand Voice Channels' : 'Collapse Voice Channels'}
+					>
+						<svg
+							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('voice-channels') ? '-rotate-90' : ''}"
+							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+						>
+							<path d="M19 9l-7 7-7-7" />
+						</svg>
+						Voice Channels
+					</button>
 					<button
 						class="text-text-muted hover:text-text-primary"
 						onclick={() => { newChannelType = 'voice'; showCreateChannel = true; channelError = ''; }}
@@ -268,24 +328,38 @@
 						</svg>
 					</button>
 				</div>
-				{#each activeVoiceChannels as channel (channel.id)}
-					<button
-						class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
-						onclick={() => handleChannelClick(channel.id)}
-						oncontextmenu={(e) => openContextMenu(e, channel)}
-					>
-						<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-							<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
-						</svg>
-						<span class="truncate">{channel.name}</span>
-					</button>
-				{/each}
+				{#if !isSectionCollapsed('voice-channels')}
+					{#each activeVoiceChannels as channel (channel.id)}
+						<button
+							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+							onclick={() => handleChannelClick(channel.id)}
+							oncontextmenu={(e) => openContextMenu(e, channel)}
+						>
+							<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+								<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
+							</svg>
+							<span class="truncate">{channel.name}</span>
+						</button>
+					{/each}
+				{/if}
 			{/if}
 
 			<!-- Upcoming Events -->
 			{#if upcomingEvents.length > 0}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4">
-					<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Upcoming Events</h3>
+					<button
+						class="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						onclick={() => toggleSection('upcoming-events')}
+						title={isSectionCollapsed('upcoming-events') ? 'Expand Upcoming Events' : 'Collapse Upcoming Events'}
+					>
+						<svg
+							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('upcoming-events') ? '-rotate-90' : ''}"
+							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+						>
+							<path d="M19 9l-7 7-7-7" />
+						</svg>
+						Upcoming Events
+					</button>
 					<button
 						class="text-text-muted hover:text-text-primary"
 						onclick={() => goto(`/app/guilds/${$currentGuildId}/events`)}
@@ -296,20 +370,22 @@
 						</svg>
 					</button>
 				</div>
-				{#each upcomingEvents as event (event.id)}
-					<button
-						class="mb-0.5 flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
-						onclick={() => goto(`/app/guilds/${$currentGuildId}/events`)}
-					>
-						<svg class="mt-0.5 h-4 w-4 shrink-0 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-						</svg>
-						<div class="min-w-0 flex-1">
-							<span class="block truncate text-xs font-medium text-text-primary">{event.name}</span>
-							<span class="text-2xs text-text-muted">{formatEventDate(event.scheduled_start)}</span>
-						</div>
-					</button>
-				{/each}
+				{#if !isSectionCollapsed('upcoming-events')}
+					{#each upcomingEvents as event (event.id)}
+						<button
+							class="mb-0.5 flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+							onclick={() => goto(`/app/guilds/${$currentGuildId}/events`)}
+						>
+							<svg class="mt-0.5 h-4 w-4 shrink-0 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+							</svg>
+							<div class="min-w-0 flex-1">
+								<span class="block truncate text-xs font-medium text-text-primary">{event.name}</span>
+								<span class="text-2xs text-text-muted">{formatEventDate(event.scheduled_start)}</span>
+							</div>
+						</button>
+					{/each}
+				{/if}
 			{/if}
 		{:else}
 			<!-- DM List (when no guild is selected) -->
@@ -326,33 +402,47 @@
 			</div>
 
 			<div class="mb-1 flex items-center justify-between px-1 pt-2">
-				<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Direct Messages</h3>
+				<button
+					class="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+					onclick={() => toggleSection('dm-list')}
+					title={isSectionCollapsed('dm-list') ? 'Expand Direct Messages' : 'Collapse Direct Messages'}
+				>
+					<svg
+						class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('dm-list') ? '-rotate-90' : ''}"
+						fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+					>
+						<path d="M19 9l-7 7-7-7" />
+					</svg>
+					Direct Messages
+				</button>
 			</div>
 
-			{#if $dmList.length === 0}
-				<p class="px-2 py-2 text-xs text-text-muted">No conversations yet.</p>
-			{:else}
-				{#each $dmList as dm (dm.id)}
-					{@const dmUnread = $unreadCounts.get(dm.id) ?? 0}
-					{@const dmMentions = $mentionCounts.get(dm.id) ?? 0}
-					{@const dmName = dm.name ?? 'Direct Message'}
-					<button
-						class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
-						onclick={() => goto(`/app/dms/${dm.id}`)}
-					>
-						<Avatar name={dmName} size="sm" status={dm.owner_id ? ($presenceMap.get(dm.owner_id) ?? undefined) : undefined} />
-						<span class="flex-1 truncate">{dmName}</span>
-						{#if dmMentions > 0}
-							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{dmMentions} mention{dmMentions !== 1 ? 's' : ''}">
-								@{dmMentions > 99 ? '99+' : dmMentions}
-							</span>
-						{:else if dmUnread > 0}
-							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
-								{dmUnread > 99 ? '99+' : dmUnread}
-							</span>
-						{/if}
-					</button>
-				{/each}
+			{#if !isSectionCollapsed('dm-list')}
+				{#if $dmList.length === 0}
+					<p class="px-2 py-2 text-xs text-text-muted">No conversations yet.</p>
+				{:else}
+					{#each $dmList as dm (dm.id)}
+						{@const dmUnread = $unreadCounts.get(dm.id) ?? 0}
+						{@const dmMentions = $mentionCounts.get(dm.id) ?? 0}
+						{@const dmName = dm.name ?? 'Direct Message'}
+						<button
+							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+							onclick={() => goto(`/app/dms/${dm.id}`)}
+						>
+							<Avatar name={dmName} size="sm" status={dm.owner_id ? ($presenceMap.get(dm.owner_id) ?? undefined) : undefined} />
+							<span class="flex-1 truncate">{dmName}</span>
+							{#if dmMentions > 0}
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{dmMentions} mention{dmMentions !== 1 ? 's' : ''}">
+									@{dmMentions > 99 ? '99+' : dmMentions}
+								</span>
+							{:else if dmUnread > 0}
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
+									{dmUnread > 99 ? '99+' : dmUnread}
+								</span>
+							{/if}
+						</button>
+					{/each}
+				{/if}
 			{/if}
 		{/if}
 	</div>

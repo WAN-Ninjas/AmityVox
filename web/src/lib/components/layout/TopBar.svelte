@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { currentChannel } from '$lib/stores/channels';
 	import { currentGuild } from '$lib/stores/guilds';
+	import { canGoBack, canGoForward, goBack, goForward } from '$lib/stores/navigation';
 	import SearchModal from '$components/chat/SearchModal.svelte';
 
 	interface Props {
@@ -26,6 +27,30 @@
 <svelte:document onkeydown={handleKeydown} />
 
 <header class="flex h-12 items-center border-b border-bg-floating bg-bg-tertiary px-4">
+	<!-- Back/Forward navigation buttons -->
+	<div class="mr-2 flex items-center gap-0.5">
+		<button
+			class="rounded p-1 transition-colors {$canGoBack ? 'text-text-muted hover:text-text-primary' : 'cursor-default text-text-muted/30'}"
+			onclick={() => goBack()}
+			disabled={!$canGoBack}
+			title="Go back"
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+				<path d="M15 19l-7-7 7-7" />
+			</svg>
+		</button>
+		<button
+			class="rounded p-1 transition-colors {$canGoForward ? 'text-text-muted hover:text-text-primary' : 'cursor-default text-text-muted/30'}"
+			onclick={() => goForward()}
+			disabled={!$canGoForward}
+			title="Go forward"
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+				<path d="M9 5l7 7-7 7" />
+			</svg>
+		</button>
+	</div>
+
 	{#if $currentChannel}
 		<div class="flex min-w-0 flex-1 items-center gap-2">
 			{#if $currentChannel.channel_type === 'text' || $currentChannel.channel_type === 'announcement'}

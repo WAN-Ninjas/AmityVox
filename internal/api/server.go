@@ -283,6 +283,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{guildID}/channels", guildH.HandleGetGuildChannels)
 				r.Patch("/{guildID}/channels", guildH.HandleReorderGuildChannels)
 				r.Post("/{guildID}/channels", guildH.HandleCreateGuildChannel)
+				r.Post("/{guildID}/channels/{channelID}/clone", guildH.HandleCloneChannel)
 				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
 				r.Get("/{guildID}/members/search", guildH.HandleSearchGuildMembers)
 				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)

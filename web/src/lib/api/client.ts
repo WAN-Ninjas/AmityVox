@@ -221,6 +221,10 @@ class ApiClient {
 		return this.del(`/channels/${channelId}`);
 	}
 
+	cloneChannel(guildId: string, channelId: string, name?: string): Promise<Channel> {
+		return this.post(`/guilds/${guildId}/channels/${channelId}/clone`, name ? { name } : {});
+	}
+
 	// --- Messages ---
 
 	getMessages(channelId: string, params?: { before?: string; after?: string; limit?: number }): Promise<Message[]> {
@@ -256,6 +260,10 @@ class ApiClient {
 
 	deleteMessage(channelId: string, messageId: string): Promise<void> {
 		return this.del(`/channels/${channelId}/messages/${messageId}`);
+	}
+
+	bulkDeleteMessages(channelId: string, messageIds: string[]): Promise<void> {
+		return this.post(`/channels/${channelId}/messages/bulk-delete`, { message_ids: messageIds });
 	}
 
 	// --- Pins ---
@@ -449,9 +457,12 @@ class ApiClient {
 
 	// --- File Upload ---
 
-	async uploadFile(file: File): Promise<{ id: string; url: string }> {
+	async uploadFile(file: File, altText?: string): Promise<{ id: string; url: string }> {
 		const formData = new FormData();
 		formData.append('file', file);
+		if (altText) {
+			formData.append('alt_text', altText);
+		}
 
 		const headers: Record<string, string> = {};
 		const token = this.getToken();

@@ -139,6 +139,9 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Read optional alt text for accessibility.
+	altText := r.FormValue("alt_text")
+
 	// Read entire file into memory for processing.
 	fileData, err := io.ReadAll(file)
 	if err != nil {
@@ -205,11 +208,15 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Record in database.
 	now := time.Now().UTC()
+	var altTextPtr *string
+	if altText != "" {
+		altTextPtr = &altText
+	}
 	_, err = s.pool.Exec(r.Context(),
-		`INSERT INTO attachments (id, uploader_id, filename, content_type, size_bytes, width, height, blurhash, s3_bucket, s3_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		`INSERT INTO attachments (id, uploader_id, filename, content_type, size_bytes, width, height, blurhash, s3_bucket, s3_key, alt_text, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		attachmentID, userID, header.Filename, contentType, uploadSize,
-		width, height, bhash, s.bucket, s3Key, now,
+		width, height, bhash, s.bucket, s3Key, altTextPtr, now,
 	)
 	if err != nil {
 		s.logger.Error("failed to record file in database",
@@ -236,6 +243,7 @@ func (s *Service) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		Blurhash:    bhash,
 		S3Bucket:    s.bucket,
 		S3Key:       s3Key,
+		AltText:     altTextPtr,
 		CreatedAt:   now,
 	}
 

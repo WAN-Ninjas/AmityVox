@@ -359,6 +359,7 @@ type Attachment struct {
 	S3Bucket        string    `json:"s3_bucket"`
 	S3Key           string    `json:"s3_key"`
 	Blurhash        *string   `json:"blurhash,omitempty"`
+	AltText         *string   `json:"alt_text,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 

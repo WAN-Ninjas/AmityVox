@@ -1,17 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import type { Snippet } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { initAuth, currentUser, isLoading } from '$lib/stores/auth';
 	import { connectGateway, disconnectGateway } from '$lib/stores/gateway';
 	import { loadSettings, startDndChecker, stopDndChecker, loadSettingsFromApi } from '$lib/stores/settings';
 	import { loadBlockedUsers } from '$lib/stores/blocked';
+	import { pushChannel, setCurrentUrl } from '$lib/stores/navigation';
 	import GuildSidebar from '$components/layout/GuildSidebar.svelte';
 	import ChannelSidebar from '$components/layout/ChannelSidebar.svelte';
 	import ToastContainer from '$components/common/ToastContainer.svelte';
 	import KeyboardShortcuts from '$components/common/KeyboardShortcuts.svelte';
 	import CommandPalette from '$components/common/CommandPalette.svelte';
+	import QuickSwitcher from '$components/common/QuickSwitcher.svelte';
 	import NotificationCenter from '$components/common/NotificationCenter.svelte';
 	import AnnouncementBanner from '$components/common/AnnouncementBanner.svelte';
 
@@ -22,7 +25,23 @@
 	let { children }: Props = $props();
 	let mobileSidebarOpen = $state(false);
 	let commandPaletteOpen = $state(false);
+	let quickSwitcherOpen = $state(false);
 	let notificationCenterOpen = $state(false);
+
+	// Track route changes for navigation history.
+	$effect(() => {
+		const url = $page.url.pathname;
+		const params = $page.params;
+
+		// Detect channel navigation and record it.
+		if (params.channelId) {
+			const guildId = params.guildId ?? null;
+			pushChannel(guildId, params.channelId);
+		} else if (url.includes('/app/')) {
+			// Non-channel pages: just set current URL without pushing to recent channels.
+			setCurrentUrl(url);
+		}
+	});
 
 	onMount(() => {
 		// Load settings from localStorage immediately.
@@ -56,14 +75,19 @@
 		commandPaletteOpen = !commandPaletteOpen;
 	}
 
+	function toggleQuickSwitcher() {
+		quickSwitcherOpen = !quickSwitcherOpen;
+	}
+
 	function toggleNotificationCenter() {
 		notificationCenterOpen = !notificationCenterOpen;
 	}
 </script>
 
-<KeyboardShortcuts onToggleSearch={toggleCommandPalette} />
+<KeyboardShortcuts onToggleSearch={toggleCommandPalette} onToggleQuickSwitcher={toggleQuickSwitcher} />
 <ToastContainer />
 <CommandPalette bind:open={commandPaletteOpen} />
+<QuickSwitcher bind:open={quickSwitcherOpen} />
 <NotificationCenter bind:open={notificationCenterOpen} />
 
 {#if $isLoading}
