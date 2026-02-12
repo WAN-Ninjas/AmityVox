@@ -305,12 +305,12 @@
 
 ### Instance-Wide Moderation (Admin)
 - [x] Instance-wide user ban (not just per-guild)
-- [ ] IP-based rate limiting visibility in admin panel
+- [x] IP-based rate limiting visibility in admin panel
 - [x] Registration controls (open, invite-only via registration tokens, closed)
 - [x] Registration token generation and management UI
 - [x] Instance announcement system (broadcast message to all users)
-- [ ] Content scanning / data loss prevention (configurable regex patterns on uploads)
-- [ ] CAPTCHA on registration (configurable: none, hCaptcha, reCAPTCHA)
+- [x] Content scanning / data loss prevention (configurable regex patterns on uploads)
+- [x] CAPTCHA on registration (configurable: none, hCaptcha, reCAPTCHA)
 
 ---
 
@@ -325,17 +325,17 @@
 - [x] Import/export themes as JSON files
 - [x] Per-user theme selection (stored in user settings, synced across devices)
 - [x] Custom CSS injection (advanced mode — paste raw CSS, sandboxed to prevent XSS)
-- [ ] Community theme gallery (share themes with other users via shareable links)
+- [x] Community theme gallery (share themes with other users via shareable links)
 
 ### Bot API & Framework
 - [x] Bot account creation via admin panel or API
 - [x] Bot token authentication (separate from user sessions)
-- [ ] Bot permissions model (scoped to guilds, limited by role hierarchy)
+- [x] Bot permissions model (scoped to guilds, limited by role hierarchy)
 - [x] Slash commands framework — register commands, receive interactions via HTTP webhook
-- [ ] Message components — buttons, select menus, modals (for interactive bot messages)
-- [ ] Bot presence/status updates via API
-- [ ] Bot event subscriptions (per-guild, filter by event type)
-- [ ] Bot rate limiting (separate from user limits, configurable)
+- [x] Message components — buttons, select menus, modals (for interactive bot messages)
+- [x] Bot presence/status updates via API
+- [x] Bot event subscriptions (per-guild, filter by event type)
+- [x] Bot rate limiting (separate from user limits, configurable)
 - [ ] Official bot SDK (Go package) for building bots against AmityVox API
 - [x] Bot directory page in admin panel (list installed bots, manage permissions)
 
@@ -405,24 +405,24 @@
 - [x] Message bookmarks/reminders — save any message with optional reminder time
 - [x] Bulk message operations — select multiple messages, bulk delete/move/pin
 - [x] Message link previews — pasting an AmityVox message link shows inline embed of that message
-- [ ] Quoted replies with message preview for cross-channel replies
+- [x] Quoted replies with message preview for cross-channel replies
 - [x] Silent messages — send without triggering notifications (prefix with @silent or toggle)
 - [x] Slow mode bypass for specific roles
 - [x] LaTeX/KaTeX math rendering (`$$formula$$` renders inline math)
-- [ ] Message translation — click to translate a message (via LibreTranslate or similar self-hosted service)
+- [x] Message translation — click to translate a message (via LibreTranslate or similar self-hosted service)
 
 ### Channel Improvements
 - [x] Channel templates — save channel configuration as reusable template
 - [x] Channel archive — archive instead of delete (read-only, searchable, hidden from sidebar)
 - [x] Read-only channels (announcement-style, only certain roles can post)
-- [ ] Channel-specific custom emoji (emoji only available within that channel)
+- [x] Channel-specific custom emoji (emoji only available within that channel)
 - [x] Default thread auto-archive duration per channel
 - [x] Channel clone — duplicate channel with all settings/permissions
 
 ### Navigation & UX
 - [x] Command palette (Ctrl+K) — unified search for channels, users, messages, settings, actions
 - [x] Quick switcher — type channel/guild name to jump instantly
-- [ ] Channel groups — custom grouping beyond categories (user-side organization)
+- [x] Channel groups — custom grouping beyond categories (user-side organization)
 - [x] Collapsible sidebar sections (DMs, each guild's categories)
 - [x] Mark all as read (per guild or global)
 - [x] Jump to unread — button that scrolls to first unread message
@@ -435,7 +435,7 @@
 - [x] Notification grouping (group by channel/guild)
 - [x] Notification sounds — custom sounds per notification type
 - [x] Do Not Disturb scheduling (auto-enable DND during certain hours)
-- [ ] Per-thread notification settings
+- [x] Per-thread notification settings
 - [x] Mention highlights in channel list (show which channels have mentions vs just unreads)
 
 ### Accessibility
@@ -452,7 +452,7 @@
 - [x] Sticker picker in message input (separate tab from emoji)
 - [x] Guild sticker packs (custom stickers per server)
 - [x] User sticker packs (personal stickers usable anywhere)
-- [ ] Sticker pack sharing — share pack via link (needs shareable link generation)
+- [x] Sticker pack sharing — share pack via link (needs shareable link generation)
 
 ---
 
