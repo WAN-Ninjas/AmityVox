@@ -251,6 +251,25 @@ export interface InstanceInfo {
 	created_at: string;
 }
 
+// --- Read State ---
+
+export interface ReadState {
+	channel_id: string;
+	last_message_id: string | null;
+	mention_count: number;
+}
+
+// --- Relationship (Friend/Block) ---
+
+export interface Relationship {
+	id: string;
+	user_id: string;
+	target_id: string;
+	type: 'friend' | 'blocked' | 'pending_incoming' | 'pending_outgoing';
+	created_at: string;
+	user?: User;
+}
+
 // --- API Response Types ---
 
 export interface ApiResponse<T> {

@@ -9,6 +9,8 @@ import { updateChannel, removeChannel } from './channels';
 import { appendMessage, updateMessage, removeMessage } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
+import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
+import { incrementUnread, loadReadState } from './unreads';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent } from '$lib/types';
 
 export const gatewayConnected = writable(false);
@@ -27,6 +29,8 @@ export function connectGateway(token: string) {
 				currentUser.set(ready.user);
 				gatewayConnected.set(true);
 				loadGuilds();
+				loadDMs();
+				loadReadState();
 				updatePresence(ready.user.id, 'online');
 				client?.updatePresence('online');
 				break;
@@ -54,17 +58,36 @@ export function connectGateway(token: string) {
 
 			// --- Channel events ---
 			case 'CHANNEL_CREATE':
-			case 'CHANNEL_UPDATE':
-				updateChannel(data as Channel);
+			case 'CHANNEL_UPDATE': {
+				const ch = data as Channel;
+				updateChannel(ch);
+				// Also track DM channels.
+				if (ch.channel_type === 'dm' || ch.channel_type === 'group') {
+					addDMChannel(ch);
+				}
 				break;
-			case 'CHANNEL_DELETE':
-				removeChannel((data as { id: string }).id);
+			}
+			case 'CHANNEL_DELETE': {
+				const deleted = data as { id: string };
+				removeChannel(deleted.id);
+				removeDMChannel(deleted.id);
 				break;
+			}
 
 			// --- Message events ---
-			case 'MESSAGE_CREATE':
-				appendMessage(data as Message);
+			case 'MESSAGE_CREATE': {
+				const msg = data as Message;
+				appendMessage(msg);
+				// Track unreads for messages not from self.
+				let selfId: string | undefined;
+				currentUser.subscribe((u) => (selfId = u?.id ?? undefined))();
+				if (msg.author_id !== selfId) {
+					const isMention = msg.mention_everyone ||
+						(selfId ? msg.mention_user_ids?.includes(selfId) : false);
+					incrementUnread(msg.channel_id, isMention);
+				}
 				break;
+			}
 			case 'MESSAGE_UPDATE':
 				updateMessage(data as Message);
 				break;

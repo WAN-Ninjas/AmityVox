@@ -9,6 +9,8 @@ import type {
 	GuildMember,
 	Role,
 	Invite,
+	ReadState,
+	Relationship,
 	LoginResponse,
 	RegisterResponse,
 	ApiResponse,
@@ -206,12 +208,48 @@ class ApiClient {
 
 	// --- Pins ---
 
+	getPins(channelId: string): Promise<Message[]> {
+		return this.get(`/channels/${channelId}/pins`);
+	}
+
 	pinMessage(channelId: string, messageId: string): Promise<void> {
 		return this.put(`/channels/${channelId}/pins/${messageId}`);
 	}
 
 	unpinMessage(channelId: string, messageId: string): Promise<void> {
 		return this.del(`/channels/${channelId}/pins/${messageId}`);
+	}
+
+	// --- Read State ---
+
+	getReadState(): Promise<ReadState[]> {
+		return this.get('/users/@me/read-state');
+	}
+
+	ackChannel(channelId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/ack`);
+	}
+
+	// --- Friends ---
+
+	getFriends(): Promise<Relationship[]> {
+		return this.get('/users/@me/relationships');
+	}
+
+	addFriend(userId: string): Promise<Relationship> {
+		return this.put(`/users/${userId}/friend`);
+	}
+
+	removeFriend(userId: string): Promise<void> {
+		return this.del(`/users/${userId}/friend`);
+	}
+
+	blockUser(userId: string): Promise<void> {
+		return this.put(`/users/${userId}/block`);
+	}
+
+	unblockUser(userId: string): Promise<void> {
+		return this.del(`/users/${userId}/block`);
 	}
 
 	// --- Reactions ---

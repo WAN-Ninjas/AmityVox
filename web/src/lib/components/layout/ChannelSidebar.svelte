@@ -5,6 +5,8 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import { presenceMap } from '$lib/stores/presence';
+	import { dmList } from '$lib/stores/dms';
+	import { unreadCounts } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import InviteModal from '$components/guild/InviteModal.svelte';
@@ -156,18 +158,19 @@
 					</button>
 				</div>
 				{#each $textChannels as channel (channel.id)}
+					{@const unread = $unreadCounts.get(channel.id) ?? 0}
 					<button
-						class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors"
-						class:bg-bg-modifier={$currentChannelId === channel.id}
-						class:text-text-primary={$currentChannelId === channel.id}
-						class:text-text-muted={$currentChannelId !== channel.id}
-						class:hover:bg-bg-modifier={$currentChannelId !== channel.id}
-						class:hover:text-text-secondary={$currentChannelId !== channel.id}
+						class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 						onclick={() => handleChannelClick(channel.id)}
 						oncontextmenu={(e) => openContextMenu(e, channel.id, channel.name ?? '')}
 					>
 						<span class="text-lg leading-none">#</span>
-						<span class="truncate">{channel.name}</span>
+						<span class="flex-1 truncate">{channel.name}</span>
+						{#if unread > 0 && $currentChannelId !== channel.id}
+							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+								{unread > 99 ? '99+' : unread}
+							</span>
+						{/if}
 					</button>
 				{/each}
 			{/if}
@@ -196,6 +199,44 @@
 							<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
 						</svg>
 						<span class="truncate">{channel.name}</span>
+					</button>
+				{/each}
+			{/if}
+		{:else}
+			<!-- DM List (when no guild is selected) -->
+			<div class="mb-1 flex items-center justify-between px-1">
+				<button
+					class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+					onclick={() => goto('/app/friends')}
+				>
+					<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+					</svg>
+					<span>Friends</span>
+				</button>
+			</div>
+
+			<div class="mb-1 flex items-center justify-between px-1 pt-2">
+				<h3 class="text-2xs font-bold uppercase tracking-wide text-text-muted">Direct Messages</h3>
+			</div>
+
+			{#if $dmList.length === 0}
+				<p class="px-2 py-2 text-xs text-text-muted">No conversations yet.</p>
+			{:else}
+				{#each $dmList as dm (dm.id)}
+					{@const dmUnread = $unreadCounts.get(dm.id) ?? 0}
+					{@const dmName = dm.name ?? 'Direct Message'}
+					<button
+						class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+						onclick={() => goto(`/app/dms/${dm.id}`)}
+					>
+						<Avatar name={dmName} size="sm" status={dm.owner_id ? ($presenceMap.get(dm.owner_id) ?? undefined) : undefined} />
+						<span class="flex-1 truncate">{dmName}</span>
+						{#if dmUnread > 0}
+							<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+								{dmUnread > 99 ? '99+' : dmUnread}
+							</span>
+						{/if}
 					</button>
 				{/each}
 			{/if}

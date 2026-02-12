@@ -5,22 +5,32 @@
 
 	interface Props {
 		onToggleMembers?: () => void;
+		onTogglePins?: () => void;
+		showPins?: boolean;
 	}
 
-	let { onToggleMembers }: Props = $props();
+	let { onToggleMembers, onTogglePins, showPins = false }: Props = $props();
 	let showSearch = $state(false);
+	let topicExpanded = $state(false);
 </script>
 
 <header class="flex h-12 items-center border-b border-bg-floating bg-bg-tertiary px-4">
 	{#if $currentChannel}
-		<div class="flex items-center gap-2">
+		<div class="flex min-w-0 flex-1 items-center gap-2">
 			{#if $currentChannel.channel_type === 'text' || $currentChannel.channel_type === 'announcement'}
 				<span class="text-lg text-text-muted">#</span>
 			{/if}
-			<h1 class="font-semibold text-text-primary">{$currentChannel.name ?? 'Unknown Channel'}</h1>
+			<h1 class="shrink-0 font-semibold text-text-primary">{$currentChannel.name ?? 'Unknown Channel'}</h1>
 			{#if $currentChannel.topic}
-				<span class="mx-2 text-text-muted">|</span>
-				<span class="truncate text-sm text-text-muted">{$currentChannel.topic}</span>
+				<span class="mx-1 text-text-muted">|</span>
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<span
+					class="min-w-0 cursor-pointer text-sm text-text-muted {topicExpanded ? '' : 'truncate'}"
+					onclick={() => (topicExpanded = !topicExpanded)}
+					title={topicExpanded ? 'Click to collapse' : $currentChannel.topic}
+				>
+					{$currentChannel.topic}
+				</span>
 			{/if}
 		</div>
 	{:else if $currentGuild}
@@ -29,11 +39,24 @@
 		<h1 class="font-semibold text-text-primary">Home</h1>
 	{/if}
 
-	<div class="ml-auto flex items-center gap-3">
+	<div class="ml-auto flex items-center gap-1">
+		<!-- Pinned messages toggle -->
+		{#if $currentChannel}
+			<button
+				class="rounded p-1.5 transition-colors {showPins ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
+				onclick={onTogglePins}
+				title="Pinned Messages"
+			>
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+				</svg>
+			</button>
+		{/if}
+
 		<!-- Member toggle -->
 		{#if $currentGuild}
 			<button
-				class="text-text-muted transition-colors hover:text-text-primary"
+				class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
 				onclick={onToggleMembers}
 				title="Toggle Member List"
 			>
@@ -45,7 +68,7 @@
 
 		<!-- Search -->
 		<button
-			class="text-text-muted transition-colors hover:text-text-primary"
+			class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
 			title="Search"
 			onclick={() => (showSearch = true)}
 		>
