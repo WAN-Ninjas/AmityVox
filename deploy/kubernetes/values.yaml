@@ -1,0 +1,246 @@
+# AmityVox Helm Chart — Default Values
+# Override these in your values.yaml for your deployment.
+
+# -- Number of AmityVox API replicas
+replicaCount: 1
+
+image:
+  repository: ghcr.io/amityvox/amityvox
+  pullPolicy: IfNotPresent
+  # -- Override the image tag (defaults to Chart.appVersion)
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# -- Pod-level annotations
+podAnnotations: {}
+
+# -- Pod-level security context
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+
+# -- Container-level security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# -- AmityVox configuration (maps to amityvox.toml)
+config:
+  instance:
+    domain: "amityvox.example.com"
+    name: "AmityVox"
+    description: "A self-hosted communication platform"
+    federationMode: "closed"
+
+  database:
+    # -- Use external URL or the bundled PostgreSQL subchart
+    url: ""
+    maxConnections: 25
+
+  nats:
+    url: ""
+
+  cache:
+    url: ""
+
+  storage:
+    type: "s3"
+    endpoint: ""
+    bucket: "amityvox"
+    accessKey: ""
+    secretKey: ""
+    region: "us-east-1"
+    useSSL: true
+
+  livekit:
+    url: ""
+    apiKey: ""
+    apiSecret: ""
+
+  search:
+    enabled: true
+    url: ""
+    apiKey: ""
+
+  auth:
+    sessionDuration: "720h"
+    registrationEnabled: true
+    inviteOnly: false
+    requireEmail: false
+
+  http:
+    listen: "0.0.0.0:8080"
+    corsOrigins:
+      - "*"
+
+  websocket:
+    listen: "0.0.0.0:8081"
+    heartbeatInterval: "30s"
+    heartbeatTimeout: "90s"
+
+  logging:
+    level: "info"
+    format: "json"
+
+  metrics:
+    enabled: true
+    listen: "0.0.0.0:9090"
+
+# -- Existing secret name containing sensitive config values
+# The secret should have keys: database-url, nats-url, cache-url,
+# storage-access-key, storage-secret-key, livekit-api-key, livekit-api-secret
+existingSecret: ""
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  wsPort: 8081
+  metricsPort: 9090
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/proxy-body-size: 500m
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts:
+    - host: amityvox.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: amityvox-tls
+  #    hosts:
+  #      - amityvox.example.com
+
+resources:
+  # -- Tuned for Raspberry Pi 5 with 8GB RAM
+  limits:
+    cpu: "2"
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# -- Liveness probe configuration
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+
+# -- Readiness probe configuration
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+
+# -- Startup probe for slow-starting instances
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  failureThreshold: 30
+  periodSeconds: 5
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# -- Additional environment variables
+extraEnv: []
+
+# -- Additional volumes
+extraVolumes: []
+
+# -- Additional volume mounts
+extraVolumeMounts: []
+
+# -- ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# -- NetworkPolicy
+networkPolicy:
+  enabled: false
+
+# -- Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# --- Subchart toggles ---
+
+postgresql:
+  enabled: true
+  auth:
+    username: amityvox
+    password: ""
+    database: amityvox
+    existingSecret: ""
+  primary:
+    persistence:
+      size: 10Gi
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        memory: 128Mi
+
+nats:
+  enabled: true
+  nats:
+    jetstream:
+      enabled: true
+      memStorage:
+        size: 128Mi
+      fileStorage:
+        size: 1Gi
+
+redis:
+  enabled: true
+  architecture: standalone
+  master:
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        memory: 64Mi
+
+meilisearch:
+  enabled: true
+  persistence:
+    size: 5Gi

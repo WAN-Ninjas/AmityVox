@@ -1,0 +1,163 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "amityvox.fullname" . }}
+  labels:
+    {{- include "amityvox.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "amityvox.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "amityvox.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "amityvox.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --config
+            - /etc/amityvox/amityvox.toml
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: ws
+              containerPort: 8081
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            {{- $secretName := default (printf "%s-secret" (include "amityvox.fullname" .)) .Values.existingSecret }}
+            - name: AMITYVOX_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: database-url
+            - name: AMITYVOX_NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: nats-url
+            - name: AMITYVOX_CACHE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: cache-url
+            - name: AMITYVOX_STORAGE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: storage-endpoint
+                  optional: true
+            - name: AMITYVOX_STORAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: storage-access-key
+                  optional: true
+            - name: AMITYVOX_STORAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: storage-secret-key
+                  optional: true
+            - name: AMITYVOX_LIVEKIT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: livekit-url
+                  optional: true
+            - name: AMITYVOX_LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: livekit-api-key
+                  optional: true
+            - name: AMITYVOX_LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: livekit-api-secret
+                  optional: true
+            - name: AMITYVOX_SEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: search-url
+                  optional: true
+            - name: AMITYVOX_SEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: search-api-key
+                  optional: true
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              {{- if .value }}
+              value: {{ .value | quote }}
+              {{- else if .valueFrom }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- end }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/amityvox
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "amityvox.fullname" . }}-config
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

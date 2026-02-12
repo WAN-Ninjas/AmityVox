@@ -1,0 +1,255 @@
+---
+# AmityVox Bare-Metal Deployment Playbook
+# Deploys AmityVox and all dependencies via Docker Compose on a single server.
+#
+# Requirements:
+#   - Target server running Ubuntu 22.04+ / Debian 12+ / Rocky Linux 9+
+#   - SSH access with sudo privileges
+#   - Domain pointed to server IP (for TLS via Caddy)
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbook.yml
+#
+# Variables (set in inventory or --extra-vars):
+#   amityvox_domain: "amityvox.example.com"
+#   amityvox_version: "latest"
+#   amityvox_admin_username: "admin"
+#   amityvox_admin_password: (required, no default)
+#   amityvox_db_password: (auto-generated if not set)
+
+- name: Deploy AmityVox
+  hosts: amityvox
+  become: true
+  vars:
+    amityvox_domain: "amityvox.example.com"
+    amityvox_version: "latest"
+    amityvox_admin_username: "admin"
+    amityvox_db_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+    amityvox_nats_enabled: true
+    amityvox_install_dir: "/opt/amityvox"
+    amityvox_data_dir: "/var/lib/amityvox"
+    amityvox_user: "amityvox"
+    amityvox_group: "amityvox"
+    docker_compose_version: "2.32.0"
+
+  tasks:
+    # ============================================================
+    # System Preparation
+    # ============================================================
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Install required packages
+      package:
+        name:
+          - curl
+          - gnupg
+          - ca-certificates
+          - lsb-release
+          - python3-pip
+        state: present
+
+    # ============================================================
+    # Docker Installation
+    # ============================================================
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Install Docker via official script
+      shell: curl -fsSL https://get.docker.com | bash
+      when: docker_check.rc != 0
+      args:
+        creates: /usr/bin/docker
+
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    # ============================================================
+    # User & Directory Setup
+    # ============================================================
+    - name: Create amityvox system user
+      user:
+        name: "{{ amityvox_user }}"
+        group: docker
+        system: true
+        shell: /usr/sbin/nologin
+        home: "{{ amityvox_install_dir }}"
+        create_home: false
+
+    - name: Create directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ amityvox_user }}"
+        group: docker
+        mode: "0750"
+      loop:
+        - "{{ amityvox_install_dir }}"
+        - "{{ amityvox_data_dir }}"
+        - "{{ amityvox_data_dir }}/postgres"
+        - "{{ amityvox_data_dir }}/nats"
+        - "{{ amityvox_data_dir }}/dragonfly"
+        - "{{ amityvox_data_dir }}/garage"
+        - "{{ amityvox_data_dir }}/meilisearch"
+        - "{{ amityvox_data_dir }}/caddy"
+        - "{{ amityvox_data_dir }}/livekit"
+
+    # ============================================================
+    # Configuration Files
+    # ============================================================
+    - name: Deploy docker-compose.yml
+      template:
+        src: docker-compose.yml.j2
+        dest: "{{ amityvox_install_dir }}/docker-compose.yml"
+        owner: "{{ amityvox_user }}"
+        group: docker
+        mode: "0640"
+      notify: Restart AmityVox
+
+    - name: Deploy amityvox.toml
+      template:
+        src: amityvox.toml.j2
+        dest: "{{ amityvox_install_dir }}/amityvox.toml"
+        owner: "{{ amityvox_user }}"
+        group: docker
+        mode: "0600"
+      notify: Restart AmityVox
+
+    - name: Deploy Caddyfile
+      template:
+        src: Caddyfile.j2
+        dest: "{{ amityvox_install_dir }}/Caddyfile"
+        owner: "{{ amityvox_user }}"
+        group: docker
+        mode: "0640"
+      notify: Restart AmityVox
+
+    - name: Deploy .env file
+      template:
+        src: env.j2
+        dest: "{{ amityvox_install_dir }}/.env"
+        owner: "{{ amityvox_user }}"
+        group: docker
+        mode: "0600"
+      notify: Restart AmityVox
+
+    # ============================================================
+    # Pull & Start Services
+    # ============================================================
+    - name: Pull Docker images
+      command: docker compose pull
+      args:
+        chdir: "{{ amityvox_install_dir }}"
+      changed_when: true
+
+    - name: Start AmityVox services
+      command: docker compose up -d
+      args:
+        chdir: "{{ amityvox_install_dir }}"
+      changed_when: true
+
+    - name: Wait for AmityVox to be healthy
+      uri:
+        url: "http://localhost:8080/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      until: health_check.status == 200
+      retries: 30
+      delay: 5
+
+    # ============================================================
+    # Firewall Configuration
+    # ============================================================
+    - name: Allow HTTP/HTTPS through firewall (ufw)
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "80"
+        - "443"
+      when: ansible_os_family == "Debian"
+      ignore_errors: true
+
+    # ============================================================
+    # Systemd Service (for auto-restart)
+    # ============================================================
+    - name: Create systemd service for AmityVox
+      copy:
+        dest: /etc/systemd/system/amityvox.service
+        content: |
+          [Unit]
+          Description=AmityVox Communication Platform
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          User=root
+          WorkingDirectory={{ amityvox_install_dir }}
+          ExecStart=/usr/bin/docker compose up -d
+          ExecStop=/usr/bin/docker compose down
+          ExecReload=/usr/bin/docker compose restart
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: "0644"
+      notify: Reload systemd
+
+    - name: Enable AmityVox systemd service
+      service:
+        name: amityvox
+        enabled: true
+
+    # ============================================================
+    # Backup Cron Job
+    # ============================================================
+    - name: Create backup script
+      copy:
+        dest: "{{ amityvox_install_dir }}/backup.sh"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          BACKUP_DIR="{{ amityvox_data_dir }}/backups"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          mkdir -p "$BACKUP_DIR"
+
+          # Dump PostgreSQL
+          docker compose -f {{ amityvox_install_dir }}/docker-compose.yml exec -T postgres \
+            pg_dump -U amityvox amityvox | gzip > "$BACKUP_DIR/db_${TIMESTAMP}.sql.gz"
+
+          # Rotate backups (keep last 7)
+          ls -t "$BACKUP_DIR"/db_*.sql.gz | tail -n +8 | xargs -r rm
+
+          echo "Backup completed: db_${TIMESTAMP}.sql.gz"
+        mode: "0750"
+        owner: "{{ amityvox_user }}"
+
+    - name: Schedule daily backup
+      cron:
+        name: "AmityVox daily backup"
+        minute: "0"
+        hour: "3"
+        job: "{{ amityvox_install_dir }}/backup.sh >> /var/log/amityvox-backup.log 2>&1"
+        user: root
+
+  handlers:
+    - name: Restart AmityVox
+      command: docker compose restart
+      args:
+        chdir: "{{ amityvox_install_dir }}"
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
