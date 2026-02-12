@@ -9,7 +9,7 @@
 		onclose?: () => void;
 	}
 
-	let { open = false, onclose }: Props = $props();
+	let { open = $bindable(false), onclose }: Props = $props();
 
 	let invite = $state<Invite | null>(null);
 	let loading = $state(false);

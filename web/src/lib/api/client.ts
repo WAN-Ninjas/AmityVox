@@ -20,7 +20,12 @@ import type {
 	ApiResponse,
 	ApiError,
 	AdminStats,
-	InstanceInfo
+	InstanceInfo,
+	NotificationPreference,
+	Webhook,
+	UserSettings,
+	Category,
+	FederationPeer
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -471,11 +476,206 @@ class ApiClient {
 	}
 
 	getAdminInstance(): Promise<InstanceInfo> {
-		return this.patch('/admin/instance');
+		return this.get('/admin/instance');
 	}
 
 	updateAdminInstance(data: { name?: string; description?: string; federation_mode?: string }): Promise<InstanceInfo> {
 		return this.patch('/admin/instance', data);
+	}
+
+	// --- Admin Users ---
+
+	getAdminUsers(params?: { limit?: number; offset?: number; query?: string }): Promise<User[]> {
+		const q = new URLSearchParams();
+		if (params?.limit) q.set('limit', String(params.limit));
+		if (params?.offset) q.set('offset', String(params.offset));
+		if (params?.query) q.set('q', params.query);
+		const qs = q.toString();
+		return this.get(`/admin/users${qs ? '?' + qs : ''}`);
+	}
+
+	suspendUser(userId: string): Promise<void> {
+		return this.post(`/admin/users/${userId}/suspend`);
+	}
+
+	unsuspendUser(userId: string): Promise<void> {
+		return this.post(`/admin/users/${userId}/unsuspend`);
+	}
+
+	setAdmin(userId: string, isAdmin: boolean): Promise<void> {
+		return this.post(`/admin/users/${userId}/set-admin`, { admin: isAdmin });
+	}
+
+	// --- Admin Federation ---
+
+	getFederationPeers(): Promise<FederationPeer[]> {
+		return this.get('/admin/federation/peers');
+	}
+
+	addFederationPeer(domain: string): Promise<FederationPeer> {
+		return this.post('/admin/federation/peers', { domain });
+	}
+
+	removeFederationPeer(peerId: string): Promise<void> {
+		return this.del(`/admin/federation/peers/${peerId}`);
+	}
+
+	// --- Notification Preferences ---
+
+	getNotificationPreferences(guildId?: string): Promise<NotificationPreference> {
+		const qs = guildId ? `?guild_id=${guildId}` : '';
+		return this.get(`/notifications/preferences${qs}`);
+	}
+
+	updateNotificationPreferences(data: Partial<NotificationPreference>): Promise<NotificationPreference> {
+		return this.patch('/notifications/preferences', data);
+	}
+
+	// --- User Settings (privacy/prefs) ---
+
+	getUserSettings(): Promise<UserSettings> {
+		return this.get('/users/@me/settings');
+	}
+
+	updateUserSettings(data: Partial<UserSettings>): Promise<UserSettings> {
+		return this.patch('/users/@me/settings', data);
+	}
+
+	// --- Webhooks ---
+
+	getGuildWebhooks(guildId: string): Promise<Webhook[]> {
+		return this.get(`/guilds/${guildId}/webhooks`);
+	}
+
+	getChannelWebhooks(channelId: string): Promise<Webhook[]> {
+		return this.get(`/channels/${channelId}/webhooks`);
+	}
+
+	createWebhook(guildId: string, data: { name: string; channel_id: string }): Promise<Webhook> {
+		return this.post(`/guilds/${guildId}/webhooks`, data);
+	}
+
+	updateWebhook(guildId: string, webhookId: string, data: { name?: string; avatar_id?: string; channel_id?: string }): Promise<Webhook> {
+		return this.patch(`/guilds/${guildId}/webhooks/${webhookId}`, data);
+	}
+
+	deleteWebhook(guildId: string, webhookId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/webhooks/${webhookId}`);
+	}
+
+	// --- Categories ---
+
+	getCategories(guildId: string): Promise<Category[]> {
+		return this.get(`/guilds/${guildId}/categories`);
+	}
+
+	createCategory(guildId: string, name: string): Promise<Category> {
+		return this.post(`/guilds/${guildId}/categories`, { name });
+	}
+
+	updateCategory(guildId: string, categoryId: string, data: { name?: string; position?: number }): Promise<Category> {
+		return this.patch(`/guilds/${guildId}/categories/${categoryId}`, data);
+	}
+
+	deleteCategory(guildId: string, categoryId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/categories/${categoryId}`);
+	}
+
+	// --- Message Forwarding ---
+
+	forwardMessage(channelId: string, messageId: string, targetChannelId: string): Promise<Message> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/crosspost`, { target_channel_id: targetChannelId });
+	}
+
+	// --- Emoji Upload ---
+
+	async uploadEmoji(guildId: string, name: string, file: File): Promise<CustomEmoji> {
+		const formData = new FormData();
+		formData.append('file', file);
+		formData.append('name', name);
+
+		const headers: Record<string, string> = {};
+		const token = this.getToken();
+		if (token) headers['Authorization'] = `Bearer ${token}`;
+
+		const res = await fetch(`${API_BASE}/guilds/${guildId}/emoji`, {
+			method: 'POST',
+			headers,
+			body: formData
+		});
+
+		const json = await res.json();
+		if (!res.ok) {
+			const err = json as ApiError;
+			throw new ApiRequestError(err.error?.message || 'Upload failed', 'upload_failed', res.status);
+		}
+		return (json as ApiResponse<CustomEmoji>).data;
+	}
+
+	// --- Encryption/MLS ---
+
+	uploadKeyPackage(keyPackage: string): Promise<{ id: string }> {
+		return this.post('/encryption/key-packages', { key_package: keyPackage });
+	}
+
+	getKeyPackages(userId: string): Promise<{ id: string; key_package: string }[]> {
+		return this.get(`/encryption/key-packages/${userId}`);
+	}
+
+	claimKeyPackage(userId: string): Promise<{ id: string; key_package: string }> {
+		return this.post(`/encryption/key-packages/${userId}/claim`);
+	}
+
+	getWelcomeMessages(): Promise<{ id: string; channel_id: string; sender_id: string; data: string; created_at: string }[]> {
+		return this.get('/encryption/welcome');
+	}
+
+	sendWelcome(channelId: string, userId: string, data: string): Promise<void> {
+		return this.post(`/encryption/channels/${channelId}/welcome`, { user_id: userId, data });
+	}
+
+	getGroupState(channelId: string): Promise<{ epoch: number; state: string }> {
+		return this.get(`/encryption/channels/${channelId}/group-state`);
+	}
+
+	updateGroupState(channelId: string, epoch: number, state: string): Promise<void> {
+		return this.put(`/encryption/channels/${channelId}/group-state`, { epoch, state });
+	}
+
+	// --- Push Notifications ---
+
+	getVapidKey(): Promise<{ public_key: string }> {
+		return this.get('/notifications/vapid-key');
+	}
+
+	subscribePush(subscription: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<{ id: string }> {
+		return this.post('/notifications/subscriptions', subscription);
+	}
+
+	getPushSubscriptions(): Promise<{ id: string; endpoint: string; created_at: string }[]> {
+		return this.get('/notifications/subscriptions');
+	}
+
+	deletePushSubscription(subscriptionId: string): Promise<void> {
+		return this.del(`/notifications/subscriptions/${subscriptionId}`);
+	}
+
+	// --- Role Updates ---
+
+	updateRole(guildId: string, roleId: string, data: Partial<Role>): Promise<Role> {
+		return this.patch(`/guilds/${guildId}/roles/${roleId}`, data);
+	}
+
+	deleteRole(guildId: string, roleId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/roles/${roleId}`);
+	}
+
+	assignRole(guildId: string, memberId: string, roleId: string): Promise<void> {
+		return this.put(`/guilds/${guildId}/members/${memberId}/roles/${roleId}`);
+	}
+
+	removeRole(guildId: string, memberId: string, roleId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/members/${memberId}/roles/${roleId}`);
 	}
 }
 

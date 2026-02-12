@@ -12,7 +12,7 @@
 		onclose?: () => void;
 	}
 
-	let { open = false, onclose }: Props = $props();
+	let { open = $bindable(false), onclose }: Props = $props();
 
 	let query = $state('');
 	let results = $state<Message[]>([]);

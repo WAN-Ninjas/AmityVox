@@ -5,9 +5,9 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
-	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji } from '$lib/types';
+	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'invites' | 'bans' | 'emoji' | 'audit';
+	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'webhooks' | 'audit';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -40,6 +40,24 @@
 	// --- Emoji ---
 	let emoji = $state<CustomEmoji[]>([]);
 	let loadingEmoji = $state(false);
+	let emojiFile = $state<File | null>(null);
+	let emojiName = $state('');
+	let uploadingEmoji = $state(false);
+
+	// --- Webhooks ---
+	let webhooks = $state<Webhook[]>([]);
+	let loadingWebhooks = $state(false);
+	let newWebhookName = $state('');
+	let newWebhookChannel = $state('');
+	let creatingWebhook = $state(false);
+
+	// --- Categories ---
+	let categories = $state<Category[]>([]);
+	let loadingCategories = $state(false);
+	let newCategoryName = $state('');
+	let creatingCategory = $state(false);
+	let editingCategoryId = $state<string | null>(null);
+	let editingCategoryName = $state('');
 
 	// --- Audit Log ---
 	let auditLog = $state<AuditLogEntry[]>([]);
@@ -59,9 +77,11 @@
 		if (!$currentGuild) return;
 		const gId = $currentGuild.id;
 		if (currentTab === 'roles' && roles.length === 0) loadRoles(gId);
+		if (currentTab === 'categories' && categories.length === 0) loadCategories(gId);
 		if (currentTab === 'invites' && invites.length === 0) loadInvites(gId);
 		if (currentTab === 'bans' && bans.length === 0) loadBans(gId);
 		if (currentTab === 'emoji' && emoji.length === 0) loadEmoji(gId);
+		if (currentTab === 'webhooks' && webhooks.length === 0) loadWebhooks(gId);
 		if (currentTab === 'audit' && auditLog.length === 0) loadAudit(gId);
 	});
 
@@ -89,6 +109,18 @@
 		loadingEmoji = true;
 		try { emoji = await api.getGuildEmoji(guildId); } catch {}
 		finally { loadingEmoji = false; }
+	}
+
+	async function loadWebhooks(guildId: string) {
+		loadingWebhooks = true;
+		try { webhooks = await api.getGuildWebhooks(guildId); } catch {}
+		finally { loadingWebhooks = false; }
+	}
+
+	async function loadCategories(guildId: string) {
+		loadingCategories = true;
+		try { categories = await api.getCategories(guildId); } catch {}
+		finally { loadingCategories = false; }
 	}
 
 	async function loadAudit(guildId: string) {
@@ -224,14 +256,126 @@
 		}
 	}
 
+	// --- Emoji upload ---
+
+	function handleEmojiFileSelect(e: Event) {
+		const file = (e.target as HTMLInputElement).files?.[0];
+		if (!file?.type.startsWith('image/')) return;
+		emojiFile = file;
+		if (!emojiName) emojiName = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 32);
+	}
+
+	async function handleUploadEmoji() {
+		if (!$currentGuild || !emojiFile || !emojiName.trim()) return;
+		uploadingEmoji = true;
+		try {
+			const newEmoji = await api.uploadEmoji($currentGuild.id, emojiName.trim(), emojiFile);
+			emoji = [...emoji, newEmoji];
+			emojiFile = null;
+			emojiName = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to upload emoji';
+		} finally {
+			uploadingEmoji = false;
+		}
+	}
+
+	// --- Webhook actions ---
+
+	async function handleCreateWebhook() {
+		if (!$currentGuild || !newWebhookName.trim() || !newWebhookChannel) return;
+		creatingWebhook = true;
+		try {
+			const webhook = await api.createWebhook($currentGuild.id, {
+				name: newWebhookName.trim(),
+				channel_id: newWebhookChannel
+			});
+			webhooks = [...webhooks, webhook];
+			newWebhookName = '';
+			newWebhookChannel = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to create webhook';
+		} finally {
+			creatingWebhook = false;
+		}
+	}
+
+	async function handleDeleteWebhook(webhookId: string) {
+		if (!$currentGuild || !confirm('Delete this webhook?')) return;
+		try {
+			await api.deleteWebhook($currentGuild.id, webhookId);
+			webhooks = webhooks.filter((w) => w.id !== webhookId);
+		} catch (err: any) {
+			error = err.message || 'Failed to delete webhook';
+		}
+	}
+
+	function copyWebhookUrl(webhook: Webhook) {
+		navigator.clipboard.writeText(`${window.location.origin}/api/v1/webhooks/${webhook.id}/${webhook.token}`);
+		success = 'Webhook URL copied!';
+		setTimeout(() => (success = ''), 2000);
+	}
+
+	// --- Category actions ---
+
+	async function handleCreateCategory() {
+		if (!$currentGuild || !newCategoryName.trim()) return;
+		creatingCategory = true;
+		try {
+			const cat = await api.createCategory($currentGuild.id, newCategoryName.trim());
+			categories = [...categories, cat];
+			newCategoryName = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to create category';
+		} finally {
+			creatingCategory = false;
+		}
+	}
+
+	async function handleRenameCategory() {
+		if (!$currentGuild || !editingCategoryId || !editingCategoryName.trim()) return;
+		try {
+			const updated = await api.updateCategory($currentGuild.id, editingCategoryId, { name: editingCategoryName.trim() });
+			categories = categories.map((c) => (c.id === editingCategoryId ? updated : c));
+			editingCategoryId = null;
+			editingCategoryName = '';
+		} catch (err: any) {
+			error = err.message || 'Failed to rename category';
+		}
+	}
+
+	async function handleDeleteCategory(categoryId: string) {
+		if (!$currentGuild || !confirm('Delete this category? Channels in it will become uncategorized.')) return;
+		try {
+			await api.deleteCategory($currentGuild.id, categoryId);
+			categories = categories.filter((c) => c.id !== categoryId);
+		} catch (err: any) {
+			error = err.message || 'Failed to delete category';
+		}
+	}
+
+	// --- Role actions (edit/delete) ---
+
+	async function handleDeleteRole(roleId: string) {
+		if (!$currentGuild || !confirm('Delete this role?')) return;
+		try {
+			await api.deleteRole($currentGuild.id, roleId);
+			roles = roles.filter((r) => r.id !== roleId);
+		} catch (err: any) {
+			error = err.message || 'Failed to delete role';
+		}
+	}
+
 	// --- Helpers ---
 
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'overview', label: 'Overview' },
 		{ id: 'roles', label: 'Roles' },
+		{ id: 'categories', label: 'Categories' },
 		{ id: 'invites', label: 'Invites' },
 		{ id: 'bans', label: 'Bans' },
 		{ id: 'emoji', label: 'Emoji' },
+		{ id: 'webhooks', label: 'Webhooks' },
 		{ id: 'audit', label: 'Audit Log' }
 	];
 
@@ -403,7 +547,76 @@
 									{#if role.hoist}<span class="rounded bg-bg-modifier px-1.5 py-0.5">Hoisted</span>{/if}
 									{#if role.mentionable}<span class="rounded bg-bg-modifier px-1.5 py-0.5">Mentionable</span>{/if}
 									<span>Pos: {role.position}</span>
+									<button
+										class="text-red-400 hover:text-red-300"
+										onclick={() => handleDeleteRole(role.id)}
+										title="Delete role"
+									>
+										<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+										</svg>
+									</button>
 								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+			<!-- ==================== CATEGORIES ==================== -->
+			{:else if currentTab === 'categories'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Channel Categories</h1>
+
+				<div class="mb-6 flex gap-2">
+					<input
+						type="text" class="input flex-1" placeholder="New category name..."
+						bind:value={newCategoryName} maxlength="100"
+						onkeydown={(e) => e.key === 'Enter' && handleCreateCategory()}
+					/>
+					<button class="btn-primary" onclick={handleCreateCategory} disabled={creatingCategory || !newCategoryName.trim()}>
+						{creatingCategory ? 'Creating...' : 'Create Category'}
+					</button>
+				</div>
+
+				{#if loadingCategories}
+					<p class="text-sm text-text-muted">Loading categories...</p>
+				{:else if categories.length === 0}
+					<p class="text-sm text-text-muted">No categories yet. Channels will appear uncategorized.</p>
+				{:else}
+					<div class="space-y-2">
+						{#each categories as cat (cat.id)}
+							<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
+								{#if editingCategoryId === cat.id}
+									<div class="flex flex-1 items-center gap-2">
+										<input
+											type="text" class="input flex-1" bind:value={editingCategoryName}
+											onkeydown={(e) => e.key === 'Enter' && handleRenameCategory()}
+										/>
+										<button class="btn-primary text-xs" onclick={handleRenameCategory}>Save</button>
+										<button class="btn-secondary text-xs" onclick={() => (editingCategoryId = null)}>Cancel</button>
+									</div>
+								{:else}
+									<div class="flex items-center gap-3">
+										<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+										</svg>
+										<span class="text-sm font-medium text-text-primary">{cat.name}</span>
+									</div>
+									<div class="flex items-center gap-2">
+										<span class="text-xs text-text-muted">Pos: {cat.position}</span>
+										<button
+											class="text-xs text-brand-400 hover:text-brand-300"
+											onclick={() => { editingCategoryId = cat.id; editingCategoryName = cat.name; }}
+										>
+											Rename
+										</button>
+										<button
+											class="text-xs text-red-400 hover:text-red-300"
+											onclick={() => handleDeleteCategory(cat.id)}
+										>
+											Delete
+										</button>
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -506,13 +719,28 @@
 			{:else if currentTab === 'emoji'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Custom Emoji</h1>
 
+				<!-- Upload form -->
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h3 class="mb-3 text-sm font-semibold text-text-primary">Upload Emoji</h3>
+					<div class="mb-3 flex gap-3">
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Image</label>
+							<input type="file" accept="image/png,image/gif,image/jpeg,image/webp" onchange={handleEmojiFileSelect} class="text-sm text-text-muted" />
+						</div>
+						<div class="flex-1">
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
+							<input type="text" class="input w-full" bind:value={emojiName} placeholder="emoji_name" maxlength="32" pattern="[a-zA-Z0-9_]+" />
+						</div>
+					</div>
+					<button class="btn-primary" onclick={handleUploadEmoji} disabled={uploadingEmoji || !emojiFile || !emojiName.trim()}>
+						{uploadingEmoji ? 'Uploading...' : 'Upload Emoji'}
+					</button>
+				</div>
+
 				{#if loadingEmoji}
 					<p class="text-sm text-text-muted">Loading emoji...</p>
 				{:else if emoji.length === 0}
-					<div class="rounded-lg bg-bg-secondary p-6 text-center">
-						<p class="text-sm text-text-muted">No custom emoji yet.</p>
-						<p class="mt-1 text-xs text-text-muted">Emoji upload will be available soon.</p>
-					</div>
+					<p class="text-sm text-text-muted">No custom emoji yet. Upload one above!</p>
 				{:else}
 					<div class="grid grid-cols-4 gap-3">
 						{#each emoji as e (e.id)}
@@ -525,6 +753,65 @@
 								>
 									Delete
 								</button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+			<!-- ==================== WEBHOOKS ==================== -->
+			{:else if currentTab === 'webhooks'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Webhooks</h1>
+
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Webhook</h3>
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
+						<input type="text" class="input w-full" bind:value={newWebhookName} placeholder="Webhook name" maxlength="80" />
+					</div>
+					<div class="mb-3">
+						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel ID</label>
+						<input type="text" class="input w-full" bind:value={newWebhookChannel} placeholder="Channel ID to post in" />
+					</div>
+					<button class="btn-primary" onclick={handleCreateWebhook} disabled={creatingWebhook || !newWebhookName.trim() || !newWebhookChannel}>
+						{creatingWebhook ? 'Creating...' : 'Create Webhook'}
+					</button>
+				</div>
+
+				{#if loadingWebhooks}
+					<p class="text-sm text-text-muted">Loading webhooks...</p>
+				{:else if webhooks.length === 0}
+					<p class="text-sm text-text-muted">No webhooks yet.</p>
+				{:else}
+					<div class="space-y-2">
+						{#each webhooks as wh (wh.id)}
+							<div class="rounded-lg bg-bg-secondary p-3">
+								<div class="flex items-center justify-between">
+									<div>
+										<span class="text-sm font-medium text-text-primary">{wh.name}</span>
+										<p class="text-xs text-text-muted">
+											Type: {wh.webhook_type} &middot; Channel: {wh.channel_id.slice(0, 8)}...
+										</p>
+									</div>
+									<div class="flex items-center gap-2">
+										<button
+											class="text-xs text-brand-400 hover:text-brand-300"
+											onclick={() => copyWebhookUrl(wh)}
+										>
+											Copy URL
+										</button>
+										<button
+											class="text-xs text-red-400 hover:text-red-300"
+											onclick={() => handleDeleteWebhook(wh.id)}
+										>
+											Delete
+										</button>
+									</div>
+								</div>
+								<div class="mt-2 rounded bg-bg-primary p-2">
+									<code class="break-all text-2xs text-text-muted">
+										{window.location.origin}/api/v1/webhooks/{wh.id}/{wh.token}
+									</code>
+								</div>
 							</div>
 						{/each}
 					</div>

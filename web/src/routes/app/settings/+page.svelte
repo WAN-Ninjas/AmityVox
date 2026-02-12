@@ -6,7 +6,7 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import type { Session } from '$lib/types';
 
-	type Tab = 'account' | 'security' | 'appearance';
+	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance';
 	let currentTab = $state<Tab>('account');
 
 	// --- Account tab state ---
@@ -41,6 +41,18 @@
 	let sessions = $state<Session[]>([]);
 	let loadingSessions = $state(false);
 	let revokingSession = $state<string | null>(null);
+
+	// --- Notifications tab state ---
+	let desktopNotifications = $state(true);
+	let notificationSounds = $state(true);
+	let notifLoading = $state(false);
+	let notifSuccess = $state('');
+
+	// --- Privacy tab state ---
+	let dmPrivacy = $state<'everyone' | 'friends' | 'nobody'>('everyone');
+	let friendRequestPrivacy = $state<'everyone' | 'mutual_guilds' | 'nobody'>('everyone');
+	let privacyLoading = $state(false);
+	let privacySuccess = $state('');
 
 	// --- Appearance tab state ---
 	let theme = $state<'dark' | 'light'>('dark');
@@ -211,6 +223,64 @@
 		}
 	});
 
+	// Load settings when switching to notifications/privacy tabs.
+	$effect(() => {
+		if (currentTab === 'notifications' || currentTab === 'privacy') {
+			loadUserSettings();
+		}
+	});
+
+	async function loadUserSettings() {
+		try {
+			const settings = await api.getUserSettings();
+			desktopNotifications = settings.desktop_notifications ?? true;
+			notificationSounds = settings.notification_sounds ?? true;
+			dmPrivacy = settings.dm_privacy ?? 'everyone';
+			friendRequestPrivacy = settings.friend_request_privacy ?? 'everyone';
+		} catch {
+			// Use defaults if settings don't exist yet.
+		}
+	}
+
+	async function saveNotifications() {
+		notifLoading = true;
+		notifSuccess = '';
+		try {
+			await api.updateUserSettings({
+				desktop_notifications: desktopNotifications,
+				notification_sounds: notificationSounds
+			});
+			notifSuccess = 'Notification preferences saved!';
+			setTimeout(() => (notifSuccess = ''), 3000);
+
+			// Request browser notification permission if enabling desktop notifications.
+			if (desktopNotifications && 'Notification' in window && Notification.permission === 'default') {
+				await Notification.requestPermission();
+			}
+		} catch (err: any) {
+			error = err.message || 'Failed to save';
+		} finally {
+			notifLoading = false;
+		}
+	}
+
+	async function savePrivacy() {
+		privacyLoading = true;
+		privacySuccess = '';
+		try {
+			await api.updateUserSettings({
+				dm_privacy: dmPrivacy,
+				friend_request_privacy: friendRequestPrivacy
+			});
+			privacySuccess = 'Privacy settings saved!';
+			setTimeout(() => (privacySuccess = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to save';
+		} finally {
+			privacyLoading = false;
+		}
+	}
+
 	// --- Appearance ---
 
 	function saveAppearance() {
@@ -230,6 +300,8 @@
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'account', label: 'My Account' },
 		{ id: 'security', label: 'Security' },
+		{ id: 'notifications', label: 'Notifications' },
+		{ id: 'privacy', label: 'Privacy' },
 		{ id: 'appearance', label: 'Appearance' }
 	];
 
@@ -518,6 +590,95 @@
 							{/each}
 						</div>
 					{/if}
+				</div>
+
+			<!-- ==================== NOTIFICATIONS ==================== -->
+			{:else if currentTab === 'notifications'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Notifications</h1>
+
+				{#if notifSuccess}
+					<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{notifSuccess}</div>
+				{/if}
+
+				<div class="space-y-6">
+					<div class="rounded-lg bg-bg-secondary p-4">
+						<h3 class="mb-1 text-sm font-semibold text-text-primary">Desktop Notifications</h3>
+						<p class="mb-3 text-xs text-text-muted">Show browser notifications for new messages and mentions.</p>
+						<label class="flex items-center gap-2">
+							<input type="checkbox" bind:checked={desktopNotifications} class="accent-brand-500" />
+							<span class="text-sm text-text-secondary">Enable desktop notifications</span>
+						</label>
+						{#if 'Notification' in globalThis && Notification.permission === 'denied'}
+							<p class="mt-2 text-xs text-red-400">
+								Browser notifications are blocked. Please allow notifications in your browser settings.
+							</p>
+						{/if}
+					</div>
+
+					<div class="rounded-lg bg-bg-secondary p-4">
+						<h3 class="mb-1 text-sm font-semibold text-text-primary">Notification Sounds</h3>
+						<p class="mb-3 text-xs text-text-muted">Play a sound when you receive a notification.</p>
+						<label class="flex items-center gap-2">
+							<input type="checkbox" bind:checked={notificationSounds} class="accent-brand-500" />
+							<span class="text-sm text-text-secondary">Enable notification sounds</span>
+						</label>
+					</div>
+
+					<button class="btn-primary" onclick={saveNotifications} disabled={notifLoading}>
+						{notifLoading ? 'Saving...' : 'Save Notification Preferences'}
+					</button>
+				</div>
+
+			<!-- ==================== PRIVACY ==================== -->
+			{:else if currentTab === 'privacy'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Privacy</h1>
+
+				{#if privacySuccess}
+					<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{privacySuccess}</div>
+				{/if}
+
+				<div class="space-y-6">
+					<div class="rounded-lg bg-bg-secondary p-4">
+						<h3 class="mb-1 text-sm font-semibold text-text-primary">Direct Messages</h3>
+						<p class="mb-3 text-xs text-text-muted">Control who can send you direct messages.</p>
+						<div class="space-y-2">
+							<label class="flex items-center gap-2">
+								<input type="radio" name="dmPrivacy" value="everyone" bind:group={dmPrivacy} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Everyone</span>
+							</label>
+							<label class="flex items-center gap-2">
+								<input type="radio" name="dmPrivacy" value="friends" bind:group={dmPrivacy} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Friends only</span>
+							</label>
+							<label class="flex items-center gap-2">
+								<input type="radio" name="dmPrivacy" value="nobody" bind:group={dmPrivacy} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Nobody</span>
+							</label>
+						</div>
+					</div>
+
+					<div class="rounded-lg bg-bg-secondary p-4">
+						<h3 class="mb-1 text-sm font-semibold text-text-primary">Friend Requests</h3>
+						<p class="mb-3 text-xs text-text-muted">Control who can send you friend requests.</p>
+						<div class="space-y-2">
+							<label class="flex items-center gap-2">
+								<input type="radio" name="friendPrivacy" value="everyone" bind:group={friendRequestPrivacy} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Everyone</span>
+							</label>
+							<label class="flex items-center gap-2">
+								<input type="radio" name="friendPrivacy" value="mutual_guilds" bind:group={friendRequestPrivacy} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">People in mutual guilds</span>
+							</label>
+							<label class="flex items-center gap-2">
+								<input type="radio" name="friendPrivacy" value="nobody" bind:group={friendRequestPrivacy} class="accent-brand-500" />
+								<span class="text-sm text-text-secondary">Nobody</span>
+							</label>
+						</div>
+					</div>
+
+					<button class="btn-primary" onclick={savePrivacy} disabled={privacyLoading}>
+						{privacyLoading ? 'Saving...' : 'Save Privacy Settings'}
+					</button>
 				</div>
 
 			<!-- ==================== APPEARANCE ==================== -->

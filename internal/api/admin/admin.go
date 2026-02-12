@@ -338,3 +338,143 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, s)
 }
+
+// HandleListUsers handles GET /api/v1/admin/users.
+func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	q := r.URL.Query().Get("q")
+	limit := 50
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := parseInt(l); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := parseInt(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	var rows pgx.Rows
+	var err error
+	if q != "" {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT id, instance_id, username, display_name, avatar_id, status_text,
+			        status_presence, bio, bot_owner_id, email, flags, created_at
+			 FROM users
+			 WHERE username ILIKE '%' || $1 || '%' OR display_name ILIKE '%' || $1 || '%'
+			 ORDER BY created_at DESC
+			 LIMIT $2 OFFSET $3`, q, limit, offset)
+	} else {
+		rows, err = h.Pool.Query(r.Context(),
+			`SELECT id, instance_id, username, display_name, avatar_id, status_text,
+			        status_presence, bio, bot_owner_id, email, flags, created_at
+			 FROM users
+			 ORDER BY created_at DESC
+			 LIMIT $1 OFFSET $2`, limit, offset)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list users")
+		return
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusPresence, &u.Bio, &u.BotOwnerID,
+			&u.Email, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			continue
+		}
+		users = append(users, u)
+	}
+	if users == nil {
+		users = []models.User{}
+	}
+
+	writeJSON(w, http.StatusOK, users)
+}
+
+// HandleSuspendUser handles POST /api/v1/admin/users/{userID}/suspend.
+func (h *Handler) HandleSuspendUser(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	userID := chi.URLParam(r, "userID")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagSuspended, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to suspend user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "suspended"})
+}
+
+// HandleUnsuspendUser handles POST /api/v1/admin/users/{userID}/unsuspend.
+func (h *Handler) HandleUnsuspendUser(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	userID := chi.URLParam(r, "userID")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagSuspended, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unsuspend user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unsuspended"})
+}
+
+// HandleSetAdmin handles POST /api/v1/admin/users/{userID}/set-admin.
+func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	userID := chi.URLParam(r, "userID")
+
+	var req struct {
+		Admin bool `json:"admin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var err error
+	if req.Admin {
+		_, err = h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagAdmin, userID)
+	} else {
+		_, err = h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagAdmin, userID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update admin status")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"admin": req.Admin})
+}
+
+func parseInt(s string) (int, error) {
+	var v int
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, json.Unmarshal(nil, nil)
+		}
+		v = v*10 + int(c-'0')
+	}
+	return v, nil
+}

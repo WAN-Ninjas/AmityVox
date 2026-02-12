@@ -9,7 +9,7 @@
 		onclose?: () => void;
 	}
 
-	let { open = false, onclose }: Props = $props();
+	let { open = $bindable(false), onclose }: Props = $props();
 
 	let mode = $state<'create' | 'join'>('create');
 	let guildName = $state('');

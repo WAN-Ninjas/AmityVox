@@ -8,15 +8,16 @@ import {
 	startEdit,
 	cancelEdit
 } from '../messageInteraction';
+import type { Message } from '$lib/types';
 
-function createMockMessage(overrides?: Record<string, unknown>) {
+function createMockMessage(overrides?: Partial<Message>): Message {
 	return {
 		id: crypto.randomUUID(),
 		channel_id: 'ch-1',
 		author_id: 'user-1',
 		content: 'Test message',
-		message_type: 'default' as const,
 		nonce: null,
+		message_type: 'default',
 		edited_at: null,
 		flags: 0,
 		reply_to_ids: [],
@@ -48,54 +49,59 @@ describe('messageInteraction store', () => {
 		expect(get(editingMessage)).toBeNull();
 	});
 
-	it('startReply sets replyingTo and clears editing', () => {
-		const msg = createMockMessage();
-		editingMessage.set(createMockMessage()); // set editing first
-		startReply(msg as any);
+	it('startReply sets replyingTo and clears editingMessage', () => {
+		const msg = createMockMessage({ id: 'reply-target' });
+		startReply(msg);
 
-		expect(get(replyingTo)?.id).toBe(msg.id);
+		expect(get(replyingTo)?.id).toBe('reply-target');
 		expect(get(editingMessage)).toBeNull();
+	});
+
+	it('startEdit sets editingMessage and clears replyingTo', () => {
+		const msg = createMockMessage({ id: 'edit-target' });
+		startEdit(msg);
+
+		expect(get(editingMessage)?.id).toBe('edit-target');
+		expect(get(replyingTo)).toBeNull();
 	});
 
 	it('cancelReply clears replyingTo', () => {
 		const msg = createMockMessage();
-		startReply(msg as any);
+		startReply(msg);
 		cancelReply();
 
 		expect(get(replyingTo)).toBeNull();
 	});
 
-	it('startEdit sets editingMessage and clears reply', () => {
-		const msg = createMockMessage();
-		replyingTo.set(createMockMessage() as any); // set reply first
-		startEdit(msg as any);
-
-		expect(get(editingMessage)?.id).toBe(msg.id);
-		expect(get(replyingTo)).toBeNull();
-	});
-
 	it('cancelEdit clears editingMessage', () => {
 		const msg = createMockMessage();
-		startEdit(msg as any);
+		startEdit(msg);
 		cancelEdit();
 
 		expect(get(editingMessage)).toBeNull();
 	});
 
-	it('startReply and startEdit are mutually exclusive', () => {
-		const msg1 = createMockMessage({ id: 'reply-msg' });
-		const msg2 = createMockMessage({ id: 'edit-msg' });
+	it('starting reply cancels edit (mutual exclusivity)', () => {
+		const editMsg = createMockMessage({ id: 'edit-msg' });
+		const replyMsg = createMockMessage({ id: 'reply-msg' });
 
-		startReply(msg1 as any);
+		startEdit(editMsg);
+		expect(get(editingMessage)?.id).toBe('edit-msg');
+
+		startReply(replyMsg);
 		expect(get(replyingTo)?.id).toBe('reply-msg');
 		expect(get(editingMessage)).toBeNull();
+	});
 
-		startEdit(msg2 as any);
+	it('starting edit cancels reply (mutual exclusivity)', () => {
+		const replyMsg = createMockMessage({ id: 'reply-msg' });
+		const editMsg = createMockMessage({ id: 'edit-msg' });
+
+		startReply(replyMsg);
+		expect(get(replyingTo)?.id).toBe('reply-msg');
+
+		startEdit(editMsg);
 		expect(get(editingMessage)?.id).toBe('edit-msg');
 		expect(get(replyingTo)).toBeNull();
-
-		startReply(msg1 as any);
-		expect(get(replyingTo)?.id).toBe('reply-msg');
-		expect(get(editingMessage)).toBeNull();
 	});
 });

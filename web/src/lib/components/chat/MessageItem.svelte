@@ -31,6 +31,9 @@
 	let userPopover = $state<{ x: number; y: number } | null>(null);
 	let lightboxSrc = $state<string | null>(null);
 	let showEditHistory = $state(false);
+	let showForward = $state(false);
+	let forwardTargetId = $state('');
+	let forwarding = $state(false);
 
 	const authorPresence = $derived($presenceMap.get(message.author_id) ?? undefined);
 
@@ -195,6 +198,26 @@
 		attachmentContextMenu = null;
 		navigator.clipboard.writeText(`${window.location.origin}/api/v1/files/${attachment.id}`);
 		addToast('URL copied', 'info');
+	}
+
+	function handleForward() {
+		contextMenu = null;
+		showForward = true;
+	}
+
+	async function submitForward() {
+		if (!forwardTargetId.trim()) return;
+		forwarding = true;
+		try {
+			await api.forwardMessage(message.channel_id, message.id, forwardTargetId.trim());
+			addToast('Message forwarded', 'success');
+			showForward = false;
+			forwardTargetId = '';
+		} catch (err: any) {
+			addToast('Failed to forward message', 'error');
+		} finally {
+			forwarding = false;
+		}
 	}
 </script>
 
@@ -428,6 +451,7 @@
 			<ContextMenuItem label="View Thread" onclick={handleViewThread} />
 		{/if}
 		<ContextMenuItem label="Copy Message Link" onclick={handleCopyLink} />
+		<ContextMenuItem label="Forward" onclick={handleForward} />
 		{#if isOwnMessage}
 			<ContextMenuDivider />
 			<ContextMenuItem label="Delete Message" danger onclick={handleDelete} />
@@ -466,3 +490,32 @@
 	messageId={message.id}
 	onclose={() => (showEditHistory = false)}
 />
+
+<!-- Forward message modal -->
+{#if showForward}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showForward = false)}>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="w-96 rounded-lg bg-bg-floating p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+			<h3 class="mb-4 text-lg font-semibold text-text-primary">Forward Message</h3>
+			<p class="mb-3 text-sm text-text-muted">
+				Enter the channel ID to forward this message to:
+			</p>
+			<div class="mb-3 rounded bg-bg-secondary p-2 text-sm text-text-muted">
+				{message.content?.slice(0, 100)}{(message.content?.length ?? 0) > 100 ? '...' : ''}
+			</div>
+			<input
+				type="text"
+				class="input mb-4 w-full"
+				bind:value={forwardTargetId}
+				placeholder="Target channel ID"
+				onkeydown={(e) => e.key === 'Enter' && submitForward()}
+			/>
+			<div class="flex justify-end gap-2">
+				<button class="btn-secondary" onclick={() => (showForward = false)}>Cancel</button>
+				<button class="btn-primary" onclick={submitForward} disabled={forwarding || !forwardTargetId.trim()}>
+					{forwarding ? 'Forwarding...' : 'Forward'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
