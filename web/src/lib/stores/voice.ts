@@ -429,6 +429,8 @@ function handleTrackSubscribed(
 	if (track.kind === Track.Kind.Video) {
 		const isScreenShare = publication.source === Track.Source.ScreenShare;
 		const videoEl = track.attach() as HTMLVideoElement;
+		videoEl.autoplay = true;
+		videoEl.playsInline = true;
 		videoEl.style.width = '100%';
 		videoEl.style.height = '100%';
 		videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';
@@ -485,6 +487,8 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 	const isScreenShare = publication.source === Track.Source.ScreenShare;
 
 	const videoEl = track.attach() as HTMLVideoElement;
+	videoEl.autoplay = true;
+	videoEl.playsInline = true;
 	videoEl.style.width = '100%';
 	videoEl.style.height = '100%';
 	videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';

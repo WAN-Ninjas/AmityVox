@@ -12,7 +12,7 @@
 
 	let { trackInfo, participant, focused = false, onclick }: Props = $props();
 
-	let videoContainer: HTMLDivElement;
+	let videoContainer = $state<HTMLDivElement | undefined>(undefined);
 
 	$effect(() => {
 		if (!videoContainer) return;
