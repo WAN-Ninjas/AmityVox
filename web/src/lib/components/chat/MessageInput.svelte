@@ -652,15 +652,13 @@
 
 				<!-- GIF picker button -->
 				{#if !isEditing}
-					<div class="relative self-center">
+					<div class="giphy-picker relative self-center">
 						<button
-							class="text-text-muted hover:text-text-primary"
+							class="rounded border border-text-muted px-1 py-0.5 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
 							title="GIF"
-							onclick={() => { showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
+							onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-							</svg>
+							GIF
 						</button>
 						{#if showGiphyPicker}
 							<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
@@ -670,11 +668,11 @@
 
 				<!-- Sticker picker button -->
 				{#if !isEditing}
-					<div class="relative self-center">
+					<div class="sticker-picker relative self-center">
 						<button
 							class="text-text-muted hover:text-text-primary"
 							title="Stickers"
-							onclick={() => { showStickerPicker = !showStickerPicker; showEmojiPicker = false; showGiphyPicker = false; showSchedulePicker = false; }}
+							onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showEmojiPicker = false; showGiphyPicker = false; showSchedulePicker = false; }}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 								<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -689,11 +687,11 @@
 
 				<!-- Emoji picker button -->
 				{#if !isEditing}
-					<div class="relative self-center">
+					<div class="emoji-picker relative self-center">
 						<button
 							class="text-text-muted hover:text-text-primary"
 							title="Emoji"
-							onclick={() => { showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
+							onclick={(e) => { e.stopPropagation(); showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 								<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
