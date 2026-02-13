@@ -141,7 +141,7 @@
 			<h3 class="text-lg font-bold text-text-primary">
 				{user.display_name ?? user.username}
 			</h3>
-			<p class="text-sm text-text-muted">{user.username}</p>
+			<p class="text-sm text-text-muted">{user.handle ?? '@' + user.username}</p>
 
 			<!-- Status -->
 			<div class="mt-2 flex items-center gap-1.5">

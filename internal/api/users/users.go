@@ -21,9 +21,11 @@ import (
 
 // Handler implements user-related REST API endpoints.
 type Handler struct {
-	Pool     *pgxpool.Pool
-	EventBus *events.Bus
-	Logger   *slog.Logger
+	Pool           *pgxpool.Pool
+	EventBus       *events.Bus
+	InstanceID     string
+	InstanceDomain string
+	Logger         *slog.Logger
 }
 
 // updateSelfRequest is the JSON body for PATCH /users/@me.
@@ -149,6 +151,7 @@ func (h *Handler) HandleGetUser(w http.ResponseWriter, r *http.Request) {
 
 	// Strip private fields for non-self lookups.
 	user.Email = nil
+	h.computeHandle(r.Context(), user)
 
 	writeJSON(w, http.StatusOK, user)
 }
@@ -1079,7 +1082,98 @@ func (h *Handler) HandleGetMutualGuilds(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, guilds)
 }
 
+// HandleGetRelationships returns all relationships (friends, pending, blocked)
+// for the authenticated user.
+// GET /api/v1/users/@me/relationships
+func (h *Handler) HandleGetRelationships(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT ur.user_id || ':' || ur.target_id, ur.user_id, ur.target_id, ur.status, ur.created_at,
+		        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns,
+		        u.bot_owner_id, u.flags, u.created_at,
+		        i.domain
+		 FROM user_relationships ur
+		 JOIN users u ON u.id = ur.target_id
+		 LEFT JOIN instances i ON i.id = u.instance_id
+		 WHERE ur.user_id = $1
+		 ORDER BY ur.created_at DESC`,
+		userID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to get relationships", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get relationships")
+		return
+	}
+	defer rows.Close()
+
+	type relationshipResponse struct {
+		ID        string       `json:"id"`
+		UserID    string       `json:"user_id"`
+		TargetID  string       `json:"target_id"`
+		Status    string       `json:"type"`
+		CreatedAt time.Time    `json:"created_at"`
+		User      *models.User `json:"user,omitempty"`
+	}
+
+	relationships := make([]relationshipResponse, 0)
+	for rows.Next() {
+		var rel relationshipResponse
+		var u models.User
+		var instanceDomain *string
+		if err := rows.Scan(
+			&rel.ID, &rel.UserID, &rel.TargetID, &rel.Status, &rel.CreatedAt,
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
+			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
+			&instanceDomain,
+		); err != nil {
+			h.Logger.Error("failed to scan relationship", slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read relationships")
+			return
+		}
+		// Compute handle inline to avoid N+1 queries.
+		if u.InstanceID == h.InstanceID || instanceDomain == nil || *instanceDomain == "" {
+			u.Handle = "@" + u.Username
+		} else {
+			u.Handle = "@" + u.Username + "@" + *instanceDomain
+		}
+		rel.User = &u
+		relationships = append(relationships, rel)
+	}
+	if err := rows.Err(); err != nil {
+		h.Logger.Error("error iterating relationships", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read relationships")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, relationships)
+}
+
 // --- Internal helpers ---
+
+// computeHandle sets the Handle field on a User based on whether the user is
+// local or remote. Local users get @username, remote users get @username@domain.
+// WARNING: This issues a DB query per call. Do not call in a loop — use a JOIN
+// to batch-resolve instance domains when handling multiple users (see HandleGetRelationships).
+func (h *Handler) computeHandle(ctx context.Context, user *models.User) {
+	if user.InstanceID == h.InstanceID {
+		user.Handle = "@" + user.Username
+		return
+	}
+	// Remote user — look up the instance domain.
+	var domain string
+	err := h.Pool.QueryRow(ctx,
+		`SELECT domain FROM instances WHERE id = $1`, user.InstanceID).Scan(&domain)
+	if err != nil {
+		user.Handle = "@" + user.Username
+		return
+	}
+	user.Handle = "@" + user.Username + "@" + domain
+}
 
 func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, error) {
 	var user models.User

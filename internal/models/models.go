@@ -41,6 +41,7 @@ type User struct {
 	TOTPSecret     *string   `json:"-"`
 	Email          *string   `json:"-"`
 	Flags          int       `json:"flags"`
+	Handle         string    `json:"handle,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
