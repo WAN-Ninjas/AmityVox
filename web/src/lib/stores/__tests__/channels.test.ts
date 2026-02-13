@@ -37,6 +37,12 @@ function createMockChannel(overrides?: Partial<Channel>): Channel {
 		encrypted: false,
 		last_message_id: null,
 		owner_id: null,
+		user_limit: 0,
+		bitrate: 0,
+		locked: false,
+		locked_by: null,
+		locked_at: null,
+		archived: false,
 		created_at: new Date().toISOString(),
 		...overrides
 	};

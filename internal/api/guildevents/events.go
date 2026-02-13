@@ -132,11 +132,7 @@ func (h *Handler) isCreatorOrAdmin(ctx context.Context, guildID, userID, creator
 	// Check if instance admin.
 	var flags int
 	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
-	if flags&models.UserFlagAdmin != 0 {
-		return true
-	}
-
-	return false
+	return flags&models.UserFlagAdmin != 0
 }
 
 // HandleCreateEvent creates a new scheduled event in a guild.

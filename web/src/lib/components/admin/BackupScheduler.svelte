@@ -404,9 +404,8 @@
 			<div class="flex items-center justify-between mb-4">
 				<h3 class="text-sm font-semibold text-text-secondary">
 					Backup History
-					{@const sched = schedules.find(s => s.id === historyScheduleId)}
-					{#if sched}
-						- {sched.name}
+					{#if schedules.find(s => s.id === historyScheduleId)}
+						- {schedules.find(s => s.id === historyScheduleId)?.name}
 					{/if}
 				</h3>
 				<button class="text-xs text-text-muted hover:text-text-secondary" onclick={() => { historyScheduleId = ''; history = []; }}>

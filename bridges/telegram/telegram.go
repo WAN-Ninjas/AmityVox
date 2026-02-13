@@ -232,7 +232,7 @@ func (b *Bridge) getUpdates(ctx context.Context) ([]TelegramUpdate, error) {
 	}
 
 	if !result.OK {
-		return nil, fmt.Errorf("Telegram API returned ok=false")
+		return nil, fmt.Errorf("telegram API returned ok=false")
 	}
 
 	return result.Result, nil
@@ -332,6 +332,8 @@ func (b *Bridge) listenAmityVox(ctx context.Context) {
 }
 
 // sendTelegramMessage sends a text message to a Telegram chat via the Bot API.
+//
+//nolint:unused // bridge skeleton — called when AmityVox→Telegram relay is implemented
 func (b *Bridge) sendTelegramMessage(ctx context.Context, chatID int64, text string) error {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.cfg.TelegramToken)
 
@@ -356,13 +358,15 @@ func (b *Bridge) sendTelegramMessage(ctx context.Context, chatID int64, text str
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Telegram API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("telegram API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
 }
 
 // sendTelegramTyping sends a typing action to a Telegram chat.
+//
+//nolint:unused // bridge skeleton — called when typing relay is implemented
 func (b *Bridge) sendTelegramTyping(ctx context.Context, chatID int64) error {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendChatAction", b.cfg.TelegramToken)
 
@@ -423,6 +427,7 @@ func (b *Bridge) MapChannel(channelID string, chatID int64) {
 	b.chatToChannel[chatID] = channelID
 }
 
+//nolint:unused // bridge skeleton — used when AmityVox→Telegram relay is implemented
 func (b *Bridge) channelToChatID(channelID string) int64 {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

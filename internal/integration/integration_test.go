@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -631,9 +630,3 @@ func TestAutomodRuleCRUD(t *testing.T) {
 	testPool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 }
 
-// helperParseJSON parses a JSON response body.
-func helperParseJSON(body string) map[string]interface{} {
-	var result map[string]interface{}
-	json.NewDecoder(strings.NewReader(body)).Decode(&result)
-	return result
-}
