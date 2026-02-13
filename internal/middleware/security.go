@@ -142,9 +142,12 @@ func (bc *BreachChecker) IsBreached(ctx context.Context, password string) (int, 
 		return 0, nil
 	}
 
-	// Compute SHA-1 hash of the password.
-	hash := sha1.New()
-	hash.Write([]byte(password))
+	// SHA-1 is required by the HaveIBeenPwned k-anonymity API protocol.
+	// This is NOT used for password storage (Argon2id handles that).
+	// Only the first 5 hex chars of the SHA-1 hash are sent to the API;
+	// the full hash is compared locally against the returned suffix list.
+	hash := sha1.New()                 //nolint:gosec // HIBP protocol requires SHA-1
+	hash.Write([]byte(password))       // codeql[go/weak-sensitive-data-hashing]: Required by HIBP k-anonymity protocol
 	hashHex := strings.ToUpper(hex.EncodeToString(hash.Sum(nil)))
 
 	prefix := hashHex[:5]

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	"image/draw"
 	_ "image/gif"
 	"image/jpeg"
 	"image/png"
@@ -22,8 +21,8 @@ import (
 	"time"
 
 	"github.com/buckket/go-blurhash"
-	"github.com/disintegration/imaging"
 	"github.com/go-chi/chi/v5"
+	xdraw "golang.org/x/image/draw"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -295,16 +294,34 @@ func (s *Service) processImage(data []byte, contentType string) imageResult {
 	return result
 }
 
+// resizeWidth scales an image to the given width, preserving aspect ratio,
+// using high-quality CatmullRom interpolation.
+func resizeWidth(src image.Image, width int) image.Image {
+	bounds := src.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	if srcW == 0 || width <= 0 {
+		return src
+	}
+	height := (srcH * width) / srcW
+	if height == 0 {
+		height = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, bounds, xdraw.Over, nil)
+	return dst
+}
+
 // ComputeBlurhash generates a blurhash string from an image.
 // Uses 4x3 components for a good balance of quality and string length.
 func ComputeBlurhash(img image.Image) string {
 	// Downscale to 64px wide for fast blurhash computation.
-	small := imaging.Resize(img, 64, 0, imaging.Lanczos)
+	small := resizeWidth(img, 64)
 
 	// Convert to NRGBA for consistent pixel access.
 	bounds := small.Bounds()
 	nrgba := image.NewNRGBA(bounds)
-	draw.Draw(nrgba, bounds, small, bounds.Min, draw.Src)
+	xdraw.Draw(nrgba, bounds, small, bounds.Min, xdraw.Src)
 
 	hash, err := blurhash.Encode(4, 3, nrgba)
 	if err != nil {
@@ -355,7 +372,7 @@ func (s *Service) generateThumbnails(ctx context.Context, data []byte, attachmen
 			continue
 		}
 
-		thumb := imaging.Resize(img, size, 0, imaging.Lanczos)
+		thumb := resizeWidth(img, size)
 
 		var buf bytes.Buffer
 		if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: 85}); err != nil {
