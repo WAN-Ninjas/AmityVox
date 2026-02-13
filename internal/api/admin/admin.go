@@ -980,6 +980,249 @@ func (h *Handler) HandleDeleteAnnouncement(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// =============================================================================
+// Guild Admin Handlers
+// =============================================================================
+
+// HandleListGuilds returns all guilds with owner info and stats.
+// GET /api/v1/admin/guilds
+func (h *Handler) HandleListGuilds(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	q := r.URL.Query().Get("q")
+	limit := 50
+	offset := 0
+	sort := r.URL.Query().Get("sort") // name, members, created_at
+	if sort == "" {
+		sort = "created_at"
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := parseInt(l); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := parseInt(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	// Validate sort column.
+	orderBy := "g.created_at DESC"
+	switch sort {
+	case "name":
+		orderBy = "g.name ASC"
+	case "members":
+		orderBy = "member_count DESC"
+	case "created_at":
+		orderBy = "g.created_at DESC"
+	}
+
+	type guildRow struct {
+		models.Guild
+		OwnerName    string `json:"owner_name"`
+		ChannelCount int    `json:"channel_count"`
+		RoleCount    int    `json:"role_count"`
+	}
+
+	var baseQuery string
+	if q != "" {
+		baseQuery = fmt.Sprintf(`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description,
+		        g.icon_id, g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
+		        g.preferred_locale, g.max_members, g.vanity_url, g.verification_level, g.tags,
+		        g.created_at,
+		        COALESCE(u.username, 'unknown') AS owner_name,
+		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count,
+		        (SELECT COUNT(*) FROM channels c WHERE c.guild_id = g.id) AS channel_count,
+		        (SELECT COUNT(*) FROM roles r WHERE r.guild_id = g.id) AS role_count
+		 FROM guilds g
+		 LEFT JOIN users u ON u.id = g.owner_id
+		 WHERE g.name ILIKE '%%' || $1 || '%%' OR COALESCE(g.description, '') ILIKE '%%' || $1 || '%%'
+		 ORDER BY %s
+		 LIMIT $2 OFFSET $3`, orderBy)
+	} else {
+		baseQuery = fmt.Sprintf(`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description,
+		        g.icon_id, g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
+		        g.preferred_locale, g.max_members, g.vanity_url, g.verification_level, g.tags,
+		        g.created_at,
+		        COALESCE(u.username, 'unknown') AS owner_name,
+		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count,
+		        (SELECT COUNT(*) FROM channels c WHERE c.guild_id = g.id) AS channel_count,
+		        (SELECT COUNT(*) FROM roles r WHERE r.guild_id = g.id) AS role_count
+		 FROM guilds g
+		 LEFT JOIN users u ON u.id = g.owner_id
+		 ORDER BY %s
+		 LIMIT $1 OFFSET $2`, orderBy)
+	}
+
+	var rows pgx.Rows
+	var err error
+	if q != "" {
+		rows, err = h.Pool.Query(r.Context(), baseQuery, q, limit, offset)
+	} else {
+		rows, err = h.Pool.Query(r.Context(), baseQuery, limit, offset)
+	}
+	if err != nil {
+		h.Logger.Error("failed to list guilds", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list guilds")
+		return
+	}
+	defer rows.Close()
+
+	guilds := make([]guildRow, 0)
+	for rows.Next() {
+		var g guildRow
+		if err := rows.Scan(
+			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description,
+			&g.IconID, &g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
+			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel, &g.Tags,
+			&g.CreatedAt,
+			&g.OwnerName, &g.MemberCount, &g.ChannelCount, &g.RoleCount,
+		); err != nil {
+			continue
+		}
+		guilds = append(guilds, g)
+	}
+
+	writeJSON(w, http.StatusOK, guilds)
+}
+
+// HandleGetGuildDetails returns detailed info for a single guild (admin view).
+// GET /api/v1/admin/guilds/{guildID}
+func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+
+	type guildDetail struct {
+		models.Guild
+		OwnerName      string `json:"owner_name"`
+		ChannelCount   int    `json:"channel_count"`
+		RoleCount      int    `json:"role_count"`
+		EmojiCount     int    `json:"emoji_count"`
+		InviteCount    int    `json:"invite_count"`
+		MessageCount   int64  `json:"message_count"`
+		MessagesToday  int64  `json:"messages_today"`
+		BanCount       int    `json:"ban_count"`
+	}
+
+	var g guildDetail
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description,
+		        g.icon_id, g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
+		        g.preferred_locale, g.max_members, g.vanity_url, g.verification_level, g.tags,
+		        g.created_at,
+		        COALESCE(u.username, 'unknown') AS owner_name,
+		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count,
+		        (SELECT COUNT(*) FROM channels c WHERE c.guild_id = g.id) AS channel_count,
+		        (SELECT COUNT(*) FROM roles r WHERE r.guild_id = g.id) AS role_count,
+		        (SELECT COUNT(*) FROM guild_emoji ge WHERE ge.guild_id = g.id) AS emoji_count,
+		        (SELECT COUNT(*) FROM invites i WHERE i.guild_id = g.id AND (i.expires_at IS NULL OR i.expires_at > now())) AS invite_count,
+		        (SELECT COUNT(*) FROM messages m JOIN channels c2 ON c2.id = m.channel_id WHERE c2.guild_id = g.id) AS message_count,
+		        (SELECT COUNT(*) FROM messages m2 JOIN channels c3 ON c3.id = m2.channel_id WHERE c3.guild_id = g.id AND m2.created_at >= CURRENT_DATE) AS messages_today,
+		        (SELECT COUNT(*) FROM guild_bans gb WHERE gb.guild_id = g.id) AS ban_count
+		 FROM guilds g
+		 LEFT JOIN users u ON u.id = g.owner_id
+		 WHERE g.id = $1`, guildID,
+	).Scan(
+		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description,
+		&g.IconID, &g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
+		&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel, &g.Tags,
+		&g.CreatedAt,
+		&g.OwnerName, &g.MemberCount, &g.ChannelCount, &g.RoleCount,
+		&g.EmojiCount, &g.InviteCount, &g.MessageCount, &g.MessagesToday, &g.BanCount,
+	)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusNotFound, "not_found", "Guild not found")
+		return
+	}
+	if err != nil {
+		h.Logger.Error("failed to get guild details", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild details")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, g)
+}
+
+// HandleAdminDeleteGuild forcefully deletes a guild (admin action).
+// DELETE /api/v1/admin/guilds/{guildID}
+func (h *Handler) HandleAdminDeleteGuild(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+
+	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM guilds WHERE id = $1`, guildID)
+	if err != nil {
+		h.Logger.Error("failed to delete guild", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete guild")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Guild not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// HandleGetUserGuilds returns all guilds a specific user is a member of (admin view).
+// GET /api/v1/admin/users/{userID}/guilds
+func (h *Handler) HandleGetUserGuilds(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	userID := chi.URLParam(r, "userID")
+
+	type userGuild struct {
+		GuildID     string    `json:"guild_id"`
+		GuildName   string    `json:"guild_name"`
+		IconID      *string   `json:"icon_id,omitempty"`
+		OwnerID     string    `json:"owner_id"`
+		IsOwner     bool      `json:"is_owner"`
+		MemberCount int       `json:"member_count"`
+		JoinedAt    time.Time `json:"joined_at"`
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT g.id, g.name, g.icon_id, g.owner_id, g.owner_id = $1 AS is_owner,
+		        (SELECT COUNT(*) FROM guild_members gm2 WHERE gm2.guild_id = g.id) AS member_count,
+		        gm.joined_at
+		 FROM guild_members gm
+		 JOIN guilds g ON g.id = gm.guild_id
+		 WHERE gm.user_id = $1
+		 ORDER BY gm.joined_at DESC`, userID)
+	if err != nil {
+		h.Logger.Error("failed to get user guilds", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user guilds")
+		return
+	}
+	defer rows.Close()
+
+	guilds := make([]userGuild, 0)
+	for rows.Next() {
+		var g userGuild
+		if err := rows.Scan(&g.GuildID, &g.GuildName, &g.IconID, &g.OwnerID,
+			&g.IsOwner, &g.MemberCount, &g.JoinedAt); err != nil {
+			continue
+		}
+		guilds = append(guilds, g)
+	}
+
+	writeJSON(w, http.StatusOK, guilds)
+}
+
 func parseInt(s string) (int, error) {
 	var v int
 	for _, c := range s {
