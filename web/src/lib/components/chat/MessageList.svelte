@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import type { Message, Channel } from '$lib/types';
 	import { currentChannelId } from '$lib/stores/channels';
 	import { messagesByChannel, loadMessages, isLoadingMessages } from '$lib/stores/messages';
@@ -249,15 +249,19 @@
 	let newMessageCount = $state(0);
 
 	// Track new messages arriving while not auto-scrolling.
+	// Use untrack for the write to avoid $effect re-triggering on newMessageCount.
+	let prevMessageLen = 0;
 	$effect(() => {
 		const len = messages.length;
-		if (len > 0 && !shouldAutoScroll) {
-			// This fires when messages array changes length.
-			newMessageCount++;
-		}
-		if (shouldAutoScroll) {
-			newMessageCount = 0;
-		}
+		const scrolling = shouldAutoScroll;
+		untrack(() => {
+			if (scrolling) {
+				newMessageCount = 0;
+			} else if (len > prevMessageLen && prevMessageLen > 0) {
+				newMessageCount += len - prevMessageLen;
+			}
+			prevMessageLen = len;
+		});
 	});
 
 	function scrollToFirstUnread() {

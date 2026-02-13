@@ -74,8 +74,32 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 		s.Logger.Error("failed to ensure voice room", "error", err.Error())
 	}
 
+	// Fetch user profile for LiveKit participant metadata.
+	var username string
+	var displayName, avatarID *string
+	err = s.DB.Pool.QueryRow(r.Context(),
+		`SELECT username, display_name, avatar_id FROM users WHERE id = $1`, userID,
+	).Scan(&username, &displayName, &avatarID)
+	if err != nil {
+		s.Logger.Error("failed to fetch user for voice metadata", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch user")
+		return
+	}
+
+	metaMap := map[string]interface{}{
+		"userId":   userID,
+		"username": username,
+	}
+	if displayName != nil {
+		metaMap["displayName"] = *displayName
+	}
+	if avatarID != nil {
+		metaMap["avatarId"] = *avatarID
+	}
+	metaBytes, _ := json.Marshal(metaMap)
+
 	// Generate LiveKit token.
-	token, err := s.Voice.GenerateToken(userID, channelID, canSpeak, true, canSpeak)
+	token, err := s.Voice.GenerateToken(userID, channelID, canSpeak, true, canSpeak, string(metaBytes))
 	if err != nil {
 		s.Logger.Error("failed to generate voice token", "error", err.Error())
 		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate voice token")
@@ -89,18 +113,31 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Voice.UpdateVoiceState(userID, gID, channelID, false, false)
 
-	// Publish VOICE_STATE_UPDATE event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	// Publish VOICE_STATE_UPDATE event with user info for other clients.
+	voiceEvent := map[string]interface{}{
 		"user_id":    userID,
 		"guild_id":   gID,
 		"channel_id": channelID,
+		"username":   username,
 		"self_mute":  false,
 		"self_deaf":  false,
-	})
+		"action":     "join",
+	}
+	if displayName != nil {
+		voiceEvent["display_name"] = *displayName
+	}
+	if avatarID != nil {
+		voiceEvent["avatar_id"] = *avatarID
+	}
+	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", voiceEvent)
 
+	livekitURL := s.Config.LiveKit.PublicURL
+	if livekitURL == "" {
+		livekitURL = s.Config.LiveKit.URL
+	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"token":      token,
-		"url":        s.Config.LiveKit.URL,
+		"url":        livekitURL,
 		"channel_id": channelID,
 	})
 }
@@ -368,16 +405,20 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 
 	// Generate a new token for the target channel so the client can reconnect.
 	canSpeak := checkGuildPerm(r.Context(), s.DB.Pool, *guildID, targetUserID, permissions.Speak)
-	token, err := s.Voice.GenerateToken(targetUserID, req.TargetChannelID, canSpeak, true, canSpeak)
+	token, err := s.Voice.GenerateToken(targetUserID, req.TargetChannelID, canSpeak, true, canSpeak, "")
 	if err != nil {
 		s.Logger.Error("failed to generate move token", "error", err.Error())
 		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate voice token for move")
 		return
 	}
 
+	moveURL := s.Config.LiveKit.PublicURL
+	if moveURL == "" {
+		moveURL = s.Config.LiveKit.URL
+	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"token":      token,
-		"url":        s.Config.LiveKit.URL,
+		"url":        moveURL,
 		"channel_id": req.TargetChannelID,
 	})
 }
@@ -1247,15 +1288,19 @@ func (s *Server) handleStartScreenShare(w http.ResponseWriter, r *http.Request) 
 
 	// Generate a LiveKit token with screen share publish permission.
 	canPublish := true
-	token, err := s.Voice.GenerateToken(userID, channelID, canPublish, true, canPublish)
+	token, err := s.Voice.GenerateToken(userID, channelID, canPublish, true, canPublish, "")
 	if err != nil {
 		s.Logger.Error("failed to generate screen share token", "error", err.Error())
 	}
 
+	screenShareURL := s.Config.LiveKit.PublicURL
+	if screenShareURL == "" {
+		screenShareURL = s.Config.LiveKit.URL
+	}
 	WriteJSON(w, http.StatusCreated, map[string]interface{}{
-		"session":    session,
-		"token":      token,
-		"livekit_url": s.Config.LiveKit.URL,
+		"session":     session,
+		"token":       token,
+		"livekit_url": screenShareURL,
 	})
 }
 

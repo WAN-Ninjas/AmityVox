@@ -41,6 +41,8 @@ services:
       AMITYVOX_AUTH_WEBAUTHN_RP_DISPLAY_NAME: "${AMITYVOX_INSTANCE_NAME:-AmityVox}"
       AMITYVOX_AUTH_WEBAUTHN_RP_ID: "${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
       AMITYVOX_AUTH_WEBAUTHN_RP_ORIGINS: "https://${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
+      AMITYVOX_TRANSLATION_ENABLED: "true"
+      AMITYVOX_TRANSLATION_API_URL: "http://libretranslate:5000"
     depends_on:
       postgresql:
         condition: service_healthy
@@ -48,6 +50,8 @@ services:
         condition: service_started
       dragonflydb:
         condition: service_healthy
+      libretranslate:
+        condition: service_started
     networks:
       - amityvox
 
@@ -143,7 +147,10 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881"
-      - "7882:7882/udp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ../../deploy/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    command: ["--config", "/etc/livekit.yaml"]
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret}"
     networks:
@@ -168,6 +175,27 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    networks:
+      - amityvox
+
+  # ============================================================
+  # LibreTranslate — self-hosted translation API
+  # ============================================================
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: amityvox-libretranslate
+    restart: unless-stopped
+    environment:
+      LT_LOAD_ONLY: "${LT_LOAD_ONLY:-en,es,fr,de,it,pt,ru,ja,ko,zh,ar,hi,nl,pl,tr,uk}"
+      LT_DISABLE_WEB_UI: "true"
+    volumes:
+      - libretranslate_data:/home/libretranslate/.local
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/languages"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     networks:
       - amityvox
 
@@ -227,6 +255,7 @@ services:
       - amityvox
 
 volumes:
+  libretranslate_data:
   web_build:
   postgres_data:
   nats_data:

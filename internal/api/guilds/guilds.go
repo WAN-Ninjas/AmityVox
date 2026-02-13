@@ -493,7 +493,12 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "channel_create", "channel", channelID, nil)
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+	channelData, _ := json.Marshal(channel)
+	h.EventBus.Publish(r.Context(), events.SubjectChannelCreate, events.Event{
+		Type:    "CHANNEL_CREATE",
+		GuildID: guildID,
+		Data:    channelData,
+	})
 
 	writeJSON(w, http.StatusCreated, channel)
 }

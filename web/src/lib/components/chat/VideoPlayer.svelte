@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+
 	interface Props {
 		src: string;
 		poster?: string;
@@ -11,7 +13,8 @@
 
 	let videoEl: HTMLVideoElement;
 	let containerEl: HTMLDivElement;
-	let playing = $state(false);
+	let progressEl: HTMLDivElement;
+	let paused = $state(true);
 	let currentTime = $state(0);
 	let duration = $state(0);
 	let volume = $state(1);
@@ -19,46 +22,86 @@
 	let isFullscreen = $state(false);
 	let showControls = $state(true);
 	let controlsTimeout: ReturnType<typeof setTimeout> | null = null;
-	let seeking = $state(false);
+	let seeking = false;
+	let hasPlayed = $state(false);
 
 	const progress = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
 
+	// Attach all media event listeners via onMount — zero reactive tracking.
+	onMount(() => {
+		const el = videoEl;
+		if (!el) return;
+
+		const handlePlay = () => {
+			paused = false;
+			hasPlayed = true;
+			startControlsTimer();
+		};
+		const handlePause = () => {
+			paused = true;
+			showControls = true;
+			clearControlsTimer();
+		};
+		const handleTimeUpdate = () => {
+			if (!seeking) currentTime = el.currentTime;
+		};
+		const handleDurationChange = () => {
+			if (isFinite(el.duration)) duration = el.duration;
+		};
+		const handleVolumeChange = () => {
+			volume = el.volume;
+			muted = el.muted;
+		};
+		const handleEnded = () => {
+			paused = true;
+			hasPlayed = false;
+			currentTime = 0;
+			showControls = true;
+			clearControlsTimer();
+		};
+
+		el.addEventListener('play', handlePlay);
+		el.addEventListener('pause', handlePause);
+		el.addEventListener('timeupdate', handleTimeUpdate);
+		el.addEventListener('durationchange', handleDurationChange);
+		el.addEventListener('loadedmetadata', handleDurationChange);
+		el.addEventListener('volumechange', handleVolumeChange);
+		el.addEventListener('ended', handleEnded);
+
+		return () => {
+			el.removeEventListener('play', handlePlay);
+			el.removeEventListener('pause', handlePause);
+			el.removeEventListener('timeupdate', handleTimeUpdate);
+			el.removeEventListener('durationchange', handleDurationChange);
+			el.removeEventListener('loadedmetadata', handleDurationChange);
+			el.removeEventListener('volumechange', handleVolumeChange);
+			el.removeEventListener('ended', handleEnded);
+		};
+	});
+
 	function togglePlay() {
 		if (!videoEl) return;
-		if (playing) {
-			videoEl.pause();
+		if (videoEl.paused) {
+			videoEl.play().catch(() => {});
 		} else {
-			videoEl.play();
+			videoEl.pause();
 		}
 	}
 
-	function handleTimeUpdate() {
-		if (!seeking) {
-			currentTime = videoEl.currentTime;
-		}
-	}
-
-	function handleLoadedMetadata() {
-		duration = videoEl.duration;
-	}
-
-	function handleEnded() {
-		playing = false;
-		currentTime = 0;
-	}
-
-	function seekTo(e: MouseEvent) {
-		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const pct = (e.clientX - rect.left) / rect.width;
-		if (videoEl && duration > 0) {
-			videoEl.currentTime = Math.max(0, Math.min(pct * duration, duration));
-		}
+	function seekTo(clientX: number) {
+		if (!progressEl || !videoEl || duration <= 0) return;
+		const rect = progressEl.getBoundingClientRect();
+		const pct = (clientX - rect.left) / rect.width;
+		const t = Math.max(0, Math.min(pct * duration, duration));
+		videoEl.currentTime = t;
+		currentTime = t;
 	}
 
 	function handleProgressMouseDown(e: MouseEvent) {
+		e.stopPropagation();
 		seeking = true;
-		seekTo(e);
-		const handleMove = (ev: MouseEvent) => seekTo(ev);
+		seekTo(e.clientX);
+		const handleMove = (ev: MouseEvent) => seekTo(ev.clientX);
 		const handleUp = () => {
 			seeking = false;
 			window.removeEventListener('mousemove', handleMove);
@@ -68,22 +111,24 @@
 		window.addEventListener('mouseup', handleUp);
 	}
 
-	function handleVolumeChange(e: Event) {
+	function handleVolumeInput(e: Event) {
+		e.stopPropagation();
 		const input = e.target as HTMLInputElement;
-		volume = parseFloat(input.value);
+		const v = parseFloat(input.value);
 		if (videoEl) {
-			videoEl.volume = volume;
-			muted = volume === 0;
+			videoEl.volume = v;
+			videoEl.muted = v === 0;
 		}
 	}
 
-	function toggleMute() {
+	function toggleMute(e: MouseEvent) {
+		e.stopPropagation();
 		if (!videoEl) return;
-		muted = !muted;
-		videoEl.muted = muted;
+		videoEl.muted = !videoEl.muted;
 	}
 
-	function toggleFullscreen() {
+	function toggleFullscreen(e: MouseEvent) {
+		e.stopPropagation();
 		if (!containerEl) return;
 		if (!document.fullscreenElement) {
 			containerEl.requestFullscreen().then(() => {
@@ -96,34 +141,37 @@
 		}
 	}
 
-	function handleMouseEnter() {
-		showControls = true;
-		resetControlsTimeout();
-	}
-
-	function handleMouseMove() {
-		showControls = true;
-		resetControlsTimeout();
-	}
-
-	function handleMouseLeave() {
-		if (playing) {
-			controlsTimeout = setTimeout(() => {
-				showControls = false;
-			}, 2000);
-		}
-	}
-
-	function resetControlsTimeout() {
+	function clearControlsTimer() {
 		if (controlsTimeout) {
 			clearTimeout(controlsTimeout);
 			controlsTimeout = null;
 		}
-		if (playing) {
-			controlsTimeout = setTimeout(() => {
-				showControls = false;
-			}, 2000);
-		}
+	}
+
+	function startControlsTimer() {
+		clearControlsTimer();
+		controlsTimeout = setTimeout(() => {
+			if (!paused) showControls = false;
+		}, 2000);
+	}
+
+	function handleMouseEnter() {
+		showControls = true;
+		if (!paused) startControlsTimer();
+	}
+
+	function handleMouseMove() {
+		showControls = true;
+		if (!paused) startControlsTimer();
+	}
+
+	function handleMouseLeave() {
+		if (!paused) startControlsTimer();
+	}
+
+	function handlePlayPauseClick(e: MouseEvent) {
+		e.stopPropagation();
+		togglePlay();
 	}
 
 	function formatTime(seconds: number): string {
@@ -157,38 +205,42 @@
 		{width}
 		{height}
 		preload="metadata"
-		class="max-h-96 max-w-lg cursor-pointer {isFullscreen ? 'max-h-full max-w-full w-full h-full object-contain' : ''}"
-		onclick={togglePlay}
-		ontimeupdate={handleTimeUpdate}
-		onloadedmetadata={handleLoadedMetadata}
-		onended={handleEnded}
-		onplay={() => { playing = true; resetControlsTimeout(); }}
-		onpause={() => { playing = false; showControls = true; }}
+		class="max-h-96 max-w-lg {isFullscreen ? 'max-h-full max-w-full w-full h-full object-contain' : ''}"
 	></video>
 
-	<!-- Play overlay (shown when paused and no controls visible, or at start) -->
-	{#if !playing && currentTime === 0}
-		<div
-			class="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/30"
-			onclick={togglePlay}
+	<!-- Transparent click overlay for play/pause toggle (above video, below controls) -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="absolute inset-0 z-[1] cursor-pointer"
+		onclick={handlePlayPauseClick}
+	></div>
+
+	<!-- Play overlay (shown when paused and video hasn't started yet) -->
+	{#if paused && !hasPlayed}
+		<button
+			class="absolute inset-0 z-[2] flex cursor-pointer items-center justify-center bg-black/30"
+			onclick={handlePlayPauseClick}
 		>
 			<div class="flex h-14 w-14 items-center justify-center rounded-full bg-bg-secondary/80 shadow-lg">
 				<svg class="ml-1 h-7 w-7 text-text-primary" fill="currentColor" viewBox="0 0 24 24">
 					<path d="M8 5v14l11-7z" />
 				</svg>
 			</div>
-		</div>
+		</button>
 	{/if}
 
 	<!-- Custom controls overlay -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
-		class="absolute inset-x-0 bottom-0 flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-6 transition-opacity duration-200"
+		class="absolute inset-x-0 bottom-0 z-[3] flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-6 transition-opacity duration-200"
 		class:opacity-0={!showControls}
 		class:pointer-events-none={!showControls}
+		onclick={(e) => e.stopPropagation()}
 	>
 		<!-- Progress bar -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
+			bind:this={progressEl}
 			class="group/progress relative h-1 w-full cursor-pointer rounded-full bg-white/20 hover:h-1.5"
 			onmousedown={handleProgressMouseDown}
 		>
@@ -207,10 +259,10 @@
 			<!-- Play/Pause -->
 			<button
 				class="shrink-0 text-white hover:text-brand-400"
-				onclick={togglePlay}
-				title={playing ? 'Pause' : 'Play'}
+				onclick={handlePlayPauseClick}
+				title={paused ? 'Play' : 'Pause'}
 			>
-				{#if playing}
+				{#if !paused}
 					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
 						<path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
 					</svg>
@@ -246,13 +298,15 @@
 						</svg>
 					{/if}
 				</button>
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<input
 					type="range"
 					min="0"
 					max="1"
 					step="0.05"
 					value={muted ? 0 : volume}
-					oninput={handleVolumeChange}
+					oninput={handleVolumeInput}
+					onclick={(e) => e.stopPropagation()}
 					class="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/20 accent-brand-500 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
 				/>
 			</div>
@@ -278,7 +332,7 @@
 
 	<!-- Filename tooltip (shown on hover at top) -->
 	<div
-		class="absolute inset-x-0 top-0 truncate bg-gradient-to-b from-black/60 to-transparent px-3 py-2 text-2xs text-white/70 transition-opacity duration-200"
+		class="absolute inset-x-0 top-0 z-[3] truncate bg-gradient-to-b from-black/60 to-transparent px-3 py-2 text-2xs text-white/70 transition-opacity duration-200"
 		class:opacity-0={!showControls}
 		class:pointer-events-none={!showControls}
 	>

@@ -8,6 +8,7 @@ import {
 	Track,
 	ConnectionState,
 	type RemoteParticipant,
+	type RemoteTrack,
 	type LocalParticipant,
 	type RemoteTrackPublication,
 	type Participant
@@ -33,6 +34,10 @@ export const voiceState = writable<VoiceConnectionState>('disconnected');
 export const selfMute = writable(false);
 export const selfDeaf = writable(false);
 export const voiceParticipants = writable<Map<string, VoiceParticipant>>(new Map());
+
+// Screen share: holds the HTMLVideoElement when a remote participant is sharing their screen.
+export const screenShareElement = writable<HTMLVideoElement | null>(null);
+export const screenShareUserId = writable<string | null>(null);
 
 // Derived
 export const isVoiceConnected = derived(voiceState, ($s) => $s === 'connected');
@@ -78,6 +83,7 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
 		room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
 		room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+		room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
 		room.on(RoomEvent.ActiveSpeakersChanged, handleActiveSpeakersChanged);
 		room.on(RoomEvent.Disconnected, handleDisconnected);
 		room.on(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
@@ -247,6 +253,11 @@ function cleanup() {
 		room.disconnect();
 		room = null;
 	}
+	// Remove all attached audio elements.
+	if (audioContainer) {
+		audioContainer.remove();
+		audioContainer = null;
+	}
 	voiceState.set('disconnected');
 	voiceChannelId.set(null);
 	voiceGuildId.set(null);
@@ -254,6 +265,8 @@ function cleanup() {
 	selfMute.set(false);
 	selfDeaf.set(false);
 	voiceParticipants.set(new Map());
+	screenShareElement.set(null);
+	screenShareUserId.set(null);
 }
 
 function addLocalParticipant(participant: LocalParticipant) {
@@ -339,14 +352,45 @@ function handleParticipantDisconnected(participant: RemoteParticipant) {
 	});
 }
 
+// Container for remote audio elements so they play through speakers.
+let audioContainer: HTMLDivElement | null = null;
+
+function getAudioContainer(): HTMLDivElement {
+	if (!audioContainer) {
+		audioContainer = document.createElement('div');
+		audioContainer.id = 'livekit-audio';
+		audioContainer.style.display = 'none';
+		document.body.appendChild(audioContainer);
+	}
+	return audioContainer;
+}
+
 function handleTrackSubscribed(
-	_track: any,
-	_publication: RemoteTrackPublication,
+	track: RemoteTrack,
+	publication: RemoteTrackPublication,
 	participant: RemoteParticipant
 ) {
-	// When we subscribe to a track, update the participant's mute state
 	const metadata = parseMetadata(participant.metadata);
 	const userId = metadata.userId ?? participant.identity;
+
+	// Attach audio tracks to the DOM so they actually play.
+	if (track.kind === Track.Kind.Audio) {
+		const el = track.attach();
+		el.id = `audio-${participant.identity}`;
+		getAudioContainer().appendChild(el);
+	}
+
+	// Attach screen share video tracks to a store so the UI can display them.
+	if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+		const videoEl = track.attach() as HTMLVideoElement;
+		videoEl.style.width = '100%';
+		videoEl.style.height = '100%';
+		videoEl.style.objectFit = 'contain';
+		screenShareElement.set(videoEl);
+		screenShareUserId.set(userId);
+	}
+
+	// Update the participant's mute state.
 	voiceParticipants.update((map) => {
 		const existing = map.get(userId);
 		if (!existing) return map;
@@ -357,6 +401,20 @@ function handleTrackSubscribed(
 		});
 		return next;
 	});
+}
+
+function handleTrackUnsubscribed(
+	track: RemoteTrack,
+	publication: RemoteTrackPublication,
+	_participant: RemoteParticipant
+) {
+	// Clean up screen share when track is unsubscribed.
+	if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+		screenShareElement.set(null);
+		screenShareUserId.set(null);
+	}
+	// Detach all media elements for this track.
+	track.detach().forEach((el) => el.remove());
 }
 
 function handleActiveSpeakersChanged(speakers: Participant[]) {

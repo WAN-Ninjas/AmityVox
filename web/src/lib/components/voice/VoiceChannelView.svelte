@@ -11,6 +11,8 @@
 		leaveVoice,
 		toggleMute,
 		toggleDeafen,
+		screenShareElement,
+		screenShareUserId,
 		type VoiceParticipant
 	} from '$lib/stores/voice';
 	import { addToast } from '$lib/stores/toast';
@@ -28,14 +30,29 @@
 
 	let { channelId, guildId }: Props = $props();
 
+	import { onMount } from 'svelte';
+
 	let joining = $state(false);
 	let showSettings = $state(false);
 	let showSoundboard = $state(false);
 	let showScreenShare = $state(false);
 	let textCollapsed = $state(false);
+	let screenShareContainer: HTMLDivElement;
 
 	const connected = $derived($voiceState === 'connected');
 	const connecting = $derived($voiceState === 'connecting');
+
+	// Attach/detach the screen share video element when it changes.
+	$effect(() => {
+		const videoEl = $screenShareElement;
+		const container = screenShareContainer;
+		if (!container) return;
+		// Clear previous content
+		container.innerHTML = '';
+		if (videoEl) {
+			container.appendChild(videoEl);
+		}
+	});
 
 	async function handleJoin() {
 		joining = true;
@@ -132,7 +149,26 @@
 				</div>
 			</div>
 		{:else}
-			<!-- Connected state: Participant grid -->
+			<!-- Connected state: Screen share + Participant grid -->
+
+			<!-- Screen share video (always in DOM for bind:this, hidden when inactive) -->
+			<div class="flex flex-col border-b border-bg-floating bg-black" class:hidden={!$screenShareElement}>
+				<div class="flex items-center gap-2 bg-bg-secondary px-3 py-1.5">
+					<span class="h-2 w-2 animate-pulse rounded-full bg-brand-500"></span>
+					<span class="text-xs font-medium text-text-secondary">
+						{#each $participantList.filter(p => p.userId === $screenShareUserId) as sharer}
+							{sharer.displayName ?? sharer.username} is sharing their screen
+						{:else}
+							Screen share active
+						{/each}
+					</span>
+				</div>
+				<div
+					bind:this={screenShareContainer}
+					class="flex max-h-[60vh] min-h-[200px] items-center justify-center bg-black"
+				></div>
+			</div>
+
 			<div class="flex-1 overflow-y-auto p-4">
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
 					{#each $participantList as participant (participant.userId)}
