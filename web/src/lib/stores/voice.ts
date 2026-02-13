@@ -432,9 +432,6 @@ function handleTrackSubscribed(
 		videoEl.autoplay = true;
 		videoEl.playsInline = true;
 		videoEl.muted = true; // Audio comes via separate audio track
-		videoEl.style.width = '100%';
-		videoEl.style.height = '100%';
-		videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';
 		const info: VideoTrackInfo = {
 			trackSid: track.sid,
 			userId,
@@ -491,9 +488,6 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 	videoEl.autoplay = true;
 	videoEl.playsInline = true;
 	videoEl.muted = true; // Audio comes via separate audio track
-	videoEl.style.width = '100%';
-	videoEl.style.height = '100%';
-	videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';
 
 	const info: VideoTrackInfo = {
 		trackSid: track.sid,

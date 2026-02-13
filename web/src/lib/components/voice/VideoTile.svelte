@@ -28,11 +28,11 @@
 
 <button
 	type="button"
-	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {focused ? 'aspect-video' : 'aspect-[4/3]'} {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''} {onclick ? 'cursor-pointer' : 'cursor-default'}"
+	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''} {onclick ? 'cursor-pointer' : 'cursor-default'}"
 	{onclick}
 >
 	{#if trackInfo}
-		<div bind:this={videoContainer} class="absolute inset-0 flex items-center justify-center [&>video]:h-full [&>video]:w-full"></div>
+		<div bind:this={videoContainer} class="absolute inset-0 flex items-center justify-center [&>video]:max-h-full [&>video]:max-w-full [&>video]:object-contain"></div>
 	{:else}
 		<div class="flex items-center justify-center">
 			<Avatar
