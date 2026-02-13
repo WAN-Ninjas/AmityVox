@@ -191,7 +191,7 @@ services:
     volumes:
       - libretranslate_data:/home/libretranslate/.local
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/languages"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/languages')"]
       interval: 30s
       timeout: 10s
       retries: 5
