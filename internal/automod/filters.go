@@ -111,7 +111,7 @@ func checkRegexFilter(content string, cfg RuleConfig) (bool, string) {
 // --- Invite Filter ---
 
 // Common invite patterns: discord.gg/xxx, invite.gg/xxx, amityvox.example/invite/xxx
-var inviteRegex = regexp.MustCompile(`(?i)(?:discord\.gg|discordapp\.com/invite|invite\.gg|amityvox\.[a-z]+/invite)/([A-Za-z0-9_-]+)`)
+var inviteRegex = regexp.MustCompile(`(?i)(?:^|[^a-zA-Z0-9])(?:discord\.gg|discordapp\.com/invite|invite\.gg|amityvox\.[a-z]+/invite)/([A-Za-z0-9_-]+)`)
 
 // checkInviteFilter detects invite links in the message.
 func checkInviteFilter(content string, cfg RuleConfig, _ string) (bool, string) {

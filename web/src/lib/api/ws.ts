@@ -146,6 +146,14 @@ export class GatewayClient {
 		this.stopHeartbeat();
 		this.heartbeatAcked = true;
 
+		// Validate server-provided interval is within safe bounds (15s–120s).
+		// Use a hardcoded default for out-of-range values to prevent resource
+		// exhaustion from a malicious or misconfigured server.
+		const DEFAULT_HEARTBEAT_MS = 41_250;
+		const safeInterval = (Number.isFinite(intervalMs) && intervalMs >= 15_000 && intervalMs <= 120_000)
+			? intervalMs
+			: DEFAULT_HEARTBEAT_MS;
+
 		this.heartbeatInterval = setInterval(() => {
 			if (!this.heartbeatAcked) {
 				this.ws?.close();
@@ -153,7 +161,7 @@ export class GatewayClient {
 			}
 			this.heartbeatAcked = false;
 			this.send({ op: GatewayOp.Heartbeat });
-		}, intervalMs);
+		}, safeInterval);
 	}
 
 	private stopHeartbeat() {
