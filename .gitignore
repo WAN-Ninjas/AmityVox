@@ -12,6 +12,8 @@
 coverage.html
 coverage.txt
 
+KICKOFF_PROMPT.md
+
 # IDE and editor
 .vscode/
 .idea/
