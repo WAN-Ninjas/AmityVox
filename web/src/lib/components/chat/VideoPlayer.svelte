@@ -55,6 +55,7 @@
 		const handleEnded = () => {
 			paused = true;
 			hasPlayed = false;
+			if (el) el.currentTime = 0;
 			currentTime = 0;
 			showControls = true;
 			clearControlsTimer();

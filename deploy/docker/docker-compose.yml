@@ -51,7 +51,7 @@ services:
       dragonflydb:
         condition: service_healthy
       libretranslate:
-        condition: service_started
+        condition: service_healthy
     networks:
       - amityvox
 
@@ -182,7 +182,7 @@ services:
   # LibreTranslate — self-hosted translation API
   # ============================================================
   libretranslate:
-    image: libretranslate/libretranslate:latest
+    image: libretranslate/libretranslate:${LIBRETRANSLATE_TAG:-v1.8.4}
     container_name: amityvox-libretranslate
     restart: unless-stopped
     environment:

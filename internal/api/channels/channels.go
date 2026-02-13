@@ -264,9 +264,10 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		guildID = *channel.GuildID
 	}
 	h.EventBus.Publish(r.Context(), events.SubjectChannelUpdate, events.Event{
-		Type:    "CHANNEL_UPDATE",
-		GuildID: guildID,
-		Data:    mustMarshal(channel),
+		Type:      "CHANNEL_UPDATE",
+		GuildID:   guildID,
+		ChannelID: channelID,
+		Data:      mustMarshal(channel),
 	})
 
 	writeJSON(w, http.StatusOK, channel)
@@ -285,7 +286,9 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch guild_id BEFORE deleting so we can route the event to guild members.
 	var guildID *string
-	h.Pool.QueryRow(r.Context(), `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if err := h.Pool.QueryRow(r.Context(), `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID); err != nil && err != pgx.ErrNoRows {
+		h.Logger.Warn("failed to fetch guild_id before channel delete", slog.String("channel_id", channelID), slog.String("error", err.Error()))
+	}
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channels WHERE id = $1`, channelID)
 	if err != nil {
@@ -302,9 +305,10 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		deleteGuildID = *guildID
 	}
 	h.EventBus.Publish(r.Context(), events.SubjectChannelDelete, events.Event{
-		Type:    "CHANNEL_DELETE",
-		GuildID: deleteGuildID,
-		Data:    mustMarshal(map[string]string{"id": channelID, "guild_id": deleteGuildID}),
+		Type:      "CHANNEL_DELETE",
+		GuildID:   deleteGuildID,
+		ChannelID: channelID,
+		Data:      mustMarshal(map[string]string{"id": channelID, "guild_id": deleteGuildID}),
 	})
 
 	w.WriteHeader(http.StatusNoContent)

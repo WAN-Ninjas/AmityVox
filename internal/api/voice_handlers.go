@@ -24,6 +24,15 @@ func newVoiceULID() string {
 	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
 }
 
+// liveKitPublicURL returns the browser-facing LiveKit URL, falling back to the
+// internal URL if no public URL is configured.
+func (s *Server) liveKitPublicURL() string {
+	if s.Config.LiveKit.PublicURL != "" {
+		return s.Config.LiveKit.PublicURL
+	}
+	return s.Config.LiveKit.URL
+}
+
 // handleVoiceJoin generates a LiveKit token for a user to join a voice channel.
 // POST /api/v1/voice/{channelID}/join
 func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
@@ -131,13 +140,9 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", voiceEvent)
 
-	livekitURL := s.Config.LiveKit.PublicURL
-	if livekitURL == "" {
-		livekitURL = s.Config.LiveKit.URL
-	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"token":      token,
-		"url":        livekitURL,
+		"url":        s.liveKitPublicURL(),
 		"channel_id": channelID,
 	})
 }
@@ -412,13 +417,9 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	moveURL := s.Config.LiveKit.PublicURL
-	if moveURL == "" {
-		moveURL = s.Config.LiveKit.URL
-	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"token":      token,
-		"url":        moveURL,
+		"url":        s.liveKitPublicURL(),
 		"channel_id": req.TargetChannelID,
 	})
 }
@@ -1293,14 +1294,10 @@ func (s *Server) handleStartScreenShare(w http.ResponseWriter, r *http.Request) 
 		s.Logger.Error("failed to generate screen share token", "error", err.Error())
 	}
 
-	screenShareURL := s.Config.LiveKit.PublicURL
-	if screenShareURL == "" {
-		screenShareURL = s.Config.LiveKit.URL
-	}
 	WriteJSON(w, http.StatusCreated, map[string]interface{}{
-		"session":     session,
-		"token":       token,
-		"livekit_url": screenShareURL,
+		"session": session,
+		"token":   token,
+		"url":     s.liveKitPublicURL(),
 	})
 }
 
