@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
 	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore } from '$lib/stores/channels';
+	import { channelVoiceUsers } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
@@ -12,6 +13,7 @@
 	import { onMount } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 	import ChannelGroups from '$components/layout/ChannelGroups.svelte';
+	import VoiceConnectionBar from '$components/layout/VoiceConnectionBar.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 
 	let upcomingEvents = $state<GuildEvent[]>([]);
@@ -331,16 +333,46 @@
 				</div>
 				{#if !isSectionCollapsed('voice-channels')}
 					{#each activeVoiceChannels as channel (channel.id)}
+						{@const voiceUsers = $channelVoiceUsers.get(channel.id)}
 						<button
-							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => handleChannelClick(channel.id)}
 							oncontextmenu={(e) => openContextMenu(e, channel)}
 						>
 							<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
 								<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
 							</svg>
-							<span class="truncate">{channel.name}</span>
+							<span class="flex-1 truncate">{channel.name}</span>
+							{#if voiceUsers && voiceUsers.size > 0}
+								<span class="text-2xs text-green-400">{voiceUsers.size}</span>
+							{/if}
 						</button>
+						{#if voiceUsers && voiceUsers.size > 0}
+							<div class="mb-1 ml-3 space-y-0.5 border-l border-bg-floating pl-3">
+								{#each [...voiceUsers.values()] as participant (participant.userId)}
+									<div class="flex items-center gap-1.5 py-0.5">
+										<div class="relative">
+											<Avatar name={participant.displayName ?? participant.username} size="sm" />
+											{#if participant.speaking}
+												<span class="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg-secondary bg-green-500"></span>
+											{/if}
+										</div>
+										<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
+										{#if participant.muted}
+											<svg class="h-3 w-3 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+												<path d="M19 19L5 5m14 0v8a3 3 0 01-5.12 2.12M12 19v2m-4-4h8" />
+											</svg>
+										{/if}
+										{#if participant.deafened}
+											<svg class="h-3 w-3 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+												<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+												<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+											</svg>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
 					{/each}
 				{/if}
 			{/if}
@@ -450,6 +482,9 @@
 			{/if}
 		{/if}
 	</div>
+
+	<!-- Voice connection bar (above user panel) -->
+	<VoiceConnectionBar />
 
 	<!-- User panel (bottom) -->
 	{#if $currentUser}
