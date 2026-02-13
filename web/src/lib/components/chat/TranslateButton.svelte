@@ -36,17 +36,14 @@
 	];
 
 	// Load user's preferred language from localStorage.
-	let preferredLang = $state('en');
-	$effect(() => {
+	function getStoredLang(): string {
 		try {
-			const stored = localStorage.getItem('av-translate-lang');
-			if (stored) {
-				preferredLang = stored;
-			}
+			return localStorage.getItem('av-translate-lang') ?? 'en';
 		} catch {
-			// Use default.
+			return 'en';
 		}
-	});
+	}
+	let preferredLang = $state(getStoredLang());
 
 	async function translate(lang?: string) {
 		const target = lang ?? preferredLang;

@@ -522,6 +522,10 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages/${messageId}/edits`);
 	}
 
+	translateMessage(channelId: string, messageId: string, targetLang: string): Promise<{ message_id: string; source_lang: string; target_lang: string; translated_text: string; cached: boolean }> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/translate`, { target_lang: targetLang });
+	}
+
 	// --- User Notes ---
 
 	getUserNote(userId: string): Promise<{ target_id: string; note: string }> {
