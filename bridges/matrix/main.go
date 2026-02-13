@@ -280,6 +280,8 @@ func (b *Bridge) listenAmityVox(ctx context.Context) {
 }
 
 // sendMatrixMessage sends a message to a Matrix room via the CS API.
+//
+//nolint:unused // bridge skeleton — called when AmityVox→Matrix relay is implemented
 func (b *Bridge) sendMatrixMessage(ctx context.Context, roomID, senderID, body string) error {
 	txnID := fmt.Sprintf("amityvox_%d", time.Now().UnixNano())
 	url := fmt.Sprintf("%s/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
@@ -316,7 +318,7 @@ func (b *Bridge) sendMatrixMessage(ctx context.Context, roomID, senderID, body s
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Matrix API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("matrix API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -332,6 +334,7 @@ func (b *Bridge) MapChannel(channelID, roomID string) {
 	b.roomToChannel[roomID] = channelID
 }
 
+//nolint:unused // bridge skeleton — used when AmityVox→Matrix relay is implemented
 func (b *Bridge) channelToRoomID(channelID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

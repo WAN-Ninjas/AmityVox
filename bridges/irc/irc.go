@@ -369,6 +369,8 @@ func (b *Bridge) listenAmityVox(ctx context.Context) {
 }
 
 // sendIRCMessage sends a PRIVMSG to an IRC channel.
+//
+//nolint:unused // bridge skeleton — called when AmityVox→IRC relay is implemented
 func (b *Bridge) sendIRCMessage(ircChannel, sender, text string) error {
 	// IRC messages have a 512-byte limit per line. Split long messages.
 	maxLen := 400 // Leave room for PRIVMSG overhead.
@@ -471,6 +473,7 @@ func (b *Bridge) MapChannel(channelID, ircChannel string) {
 	b.ircToChannel[ircChannel] = channelID
 }
 
+//nolint:unused // bridge skeleton — used when AmityVox→IRC relay is implemented
 func (b *Bridge) channelToIRCChannel(channelID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

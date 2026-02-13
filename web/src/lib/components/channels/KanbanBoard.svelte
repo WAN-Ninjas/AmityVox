@@ -82,11 +82,7 @@
 		creating = true;
 		error = '';
 		try {
-			const result = await api.request<BoardData>(
-				'POST',
-				`/channels/${channelId}/experimental/kanban`,
-				{ name: boardName, description: boardDescription }
-			);
+			const result = await api.createKanbanBoard<BoardData>(channelId, { name: boardName, description: boardDescription });
 			if (result) {
 				boardId = result.id;
 				showCreateForm = false;
@@ -104,10 +100,7 @@
 		loading = true;
 		error = '';
 		try {
-			const data = await api.request<BoardData>(
-				'GET',
-				`/channels/${channelId}/experimental/kanban/${boardId}`
-			);
+			const data = await api.getKanbanBoard<BoardData>(channelId, boardId);
 			if (data) {
 				board = data;
 			}
@@ -122,7 +115,7 @@
 		if (!newCardTitle.trim() || !boardId) return;
 		creatingCard = true;
 		try {
-			await api.request('POST', `/channels/${channelId}/experimental/kanban/${boardId}/columns/${columnId}/cards`, {
+			await api.createKanbanCard(channelId, boardId, columnId, {
 				title: newCardTitle,
 				assignee_ids: [],
 				label_ids: []
@@ -140,7 +133,7 @@
 	async function addColumn() {
 		if (!newColumnName.trim() || !boardId) return;
 		try {
-			await api.request('POST', `/channels/${channelId}/experimental/kanban/${boardId}/columns`, {
+			await api.createKanbanColumn(channelId, boardId, {
 				name: newColumnName,
 				color: newColumnColor
 			});
@@ -156,7 +149,7 @@
 	async function moveCard(cardId: string, targetColumnId: string, position: number) {
 		if (!boardId) return;
 		try {
-			await api.request('PATCH', `/channels/${channelId}/experimental/kanban/${boardId}/cards/${cardId}/move`, {
+			await api.moveKanbanCard(channelId, boardId, cardId, {
 				column_id: targetColumnId,
 				position
 			});
@@ -169,7 +162,7 @@
 	async function deleteCard(cardId: string) {
 		if (!boardId) return;
 		try {
-			await api.request('DELETE', `/channels/${channelId}/experimental/kanban/${boardId}/cards/${cardId}`);
+			await api.deleteKanbanCard(channelId, boardId, cardId);
 			selectedCard = null;
 			await loadBoard();
 		} catch (err: any) {
@@ -410,7 +403,7 @@
 			<div class="bg-bg-secondary border border-border-primary rounded-lg w-full max-w-md p-4 shadow-xl">
 				<div class="flex items-center justify-between mb-3">
 					<h3 class="text-text-primary font-medium">{selectedCard.title}</h3>
-					<button type="button" class="text-text-muted hover:text-text-primary" onclick={() => (selectedCard = null)}>
+					<button type="button" class="text-text-muted hover:text-text-primary" aria-label="Close card details" onclick={() => (selectedCard = null)}>
 						<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 							<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 						</svg>

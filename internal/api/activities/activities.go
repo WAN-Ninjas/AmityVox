@@ -916,10 +916,8 @@ func (h *Handler) HandleGameMove(w http.ResponseWriter, r *http.Request) {
 	// Merge move into state.
 	var currentState map[string]interface{}
 	json.Unmarshal(state, &currentState)
-	if moveData != nil {
-		for k, v := range moveData {
-			currentState[k] = v
-		}
+	for k, v := range moveData {
+		currentState[k] = v
 	}
 	newStateJSON, _ := json.Marshal(currentState)
 

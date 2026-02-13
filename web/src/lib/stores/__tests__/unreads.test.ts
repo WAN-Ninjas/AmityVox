@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { get } from 'svelte/store';
+import { get, type Writable } from 'svelte/store';
 
 // Mock the API client before importing the store.
 vi.mock('$lib/api/client', () => ({
@@ -13,7 +13,7 @@ vi.mock('$lib/api/client', () => ({
 vi.mock('../channels', () => {
 	const { writable } = require('svelte/store');
 	return {
-		currentChannelId: writable<string | null>(null)
+		currentChannelId: writable(null) as Writable<string | null>
 	};
 });
 

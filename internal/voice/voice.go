@@ -147,7 +147,7 @@ func (s *Service) GenerateToken(userID, channelID string, canPublish, canSubscri
 	grant.CanSubscribe = &canSubscribe
 	grant.CanPublishData = &canPublish
 
-	at.AddGrant(grant).
+	at.SetVideoGrant(grant).
 		SetIdentity(userID).
 		SetValidFor(24 * time.Hour)
 

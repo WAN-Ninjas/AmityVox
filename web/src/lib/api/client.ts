@@ -1166,6 +1166,59 @@ class ApiClient {
 	createUserStickerPack(name: string, description?: string): Promise<StickerPack> {
 		return this.post('/stickers/my-packs', { name, description });
 	}
+
+	// --- Activities ---
+
+	getActiveSession<T>(channelId: string): Promise<T> {
+		return this.get(`/channels/${channelId}/activities/sessions/active`);
+	}
+
+	listActivities<T>(category?: string): Promise<T> {
+		const url = category ? `/activities?category=${category}` : '/activities';
+		return this.get(url);
+	}
+
+	createActivitySession<T>(channelId: string, body: unknown): Promise<T> {
+		return this.post(`/channels/${channelId}/activities/sessions`, body);
+	}
+
+	joinActivitySession(channelId: string, sessionId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/join`);
+	}
+
+	leaveActivitySession(channelId: string, sessionId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/leave`);
+	}
+
+	endActivitySession(channelId: string, sessionId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/end`);
+	}
+
+	// --- Kanban ---
+
+	createKanbanBoard<T>(channelId: string, body: unknown): Promise<T> {
+		return this.post(`/channels/${channelId}/experimental/kanban`, body);
+	}
+
+	getKanbanBoard<T>(channelId: string, boardId: string): Promise<T> {
+		return this.get(`/channels/${channelId}/experimental/kanban/${boardId}`);
+	}
+
+	createKanbanColumn(channelId: string, boardId: string, body: unknown): Promise<void> {
+		return this.post(`/channels/${channelId}/experimental/kanban/${boardId}/columns`, body);
+	}
+
+	createKanbanCard(channelId: string, boardId: string, columnId: string, body: unknown): Promise<void> {
+		return this.post(`/channels/${channelId}/experimental/kanban/${boardId}/columns/${columnId}/cards`, body);
+	}
+
+	moveKanbanCard(channelId: string, boardId: string, cardId: string, body: unknown): Promise<void> {
+		return this.patch(`/channels/${channelId}/experimental/kanban/${boardId}/cards/${cardId}/move`, body);
+	}
+
+	deleteKanbanCard(channelId: string, boardId: string, cardId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/experimental/kanban/${boardId}/cards/${cardId}`);
+	}
 }
 
 export class ApiRequestError extends Error {
