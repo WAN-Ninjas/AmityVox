@@ -2,6 +2,8 @@
 
 import { writable, derived, get } from 'svelte/store';
 import { api } from '$lib/api/client';
+import { notificationSoundsEnabled, notificationVolume, isDndActive } from './settings';
+import { playNotificationSound } from '$lib/utils/sounds';
 import {
 	Room,
 	RoomEvent,
@@ -114,6 +116,7 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		}
 
 		voiceState.set('connected');
+		playVoiceSound('voice-join');
 	} catch (err) {
 		console.error('[Voice] Failed to join:', err);
 		cleanup();
@@ -130,6 +133,7 @@ export async function leaveVoice() {
 			// Best-effort — server will clean up eventually
 		}
 	}
+	playVoiceSound('voice-leave');
 	cleanup();
 }
 
@@ -274,6 +278,12 @@ function updateChannelVoiceParticipants(
 
 // --- Internal helpers ---
 
+function playVoiceSound(preset: 'voice-join' | 'voice-leave') {
+	if (!get(isDndActive) && get(notificationSoundsEnabled)) {
+		playNotificationSound(preset, get(notificationVolume));
+	}
+}
+
 function cleanup() {
 	if (room) {
 		room.removeAllListeners();
@@ -373,6 +383,7 @@ function updateSelfInParticipants() {
 
 function handleParticipantConnected(participant: RemoteParticipant) {
 	addRemoteParticipant(participant);
+	playVoiceSound('voice-join');
 }
 
 function handleParticipantDisconnected(participant: RemoteParticipant) {
@@ -383,6 +394,7 @@ function handleParticipantDisconnected(participant: RemoteParticipant) {
 		next.delete(userId);
 		return next;
 	});
+	playVoiceSound('voice-leave');
 }
 
 // Container for remote audio elements so they play through speakers.
