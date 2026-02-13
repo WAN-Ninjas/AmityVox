@@ -9,7 +9,6 @@
 		selfCamera,
 		participantList,
 		videoTrackList,
-		videoTracks,
 		joinVoice,
 		leaveVoice,
 		toggleMute,
@@ -40,22 +39,20 @@
 	let showScreenShare = $state(false);
 	let textCollapsed = $state(false);
 	let cameraToggling = $state(false);
-	let focusedTrackSid: string | null = $state(null);
 
 	const connected = $derived($voiceState === 'connected');
 	const connecting = $derived($voiceState === 'connecting');
 
 	const allTracks = $derived($videoTrackList);
-	const focusedTrack = $derived(
-		focusedTrackSid
-			? $videoTracks.get(focusedTrackSid) ?? allTracks[0] ?? null
-			: allTracks[0] ?? null
-	);
-	const thumbnailTracks = $derived(
-		allTracks.filter((t) => t.trackSid !== focusedTrack?.trackSid)
-	);
 	const audioOnlyParticipants = $derived(
 		$participantList.filter((p) => !allTracks.some((t) => t.userId === p.userId))
+	);
+	const totalTiles = $derived(allTracks.length + audioOnlyParticipants.length);
+	const gridCols = $derived(
+		totalTiles <= 1 ? 'grid-cols-1' :
+		totalTiles <= 4 ? 'grid-cols-2' :
+		totalTiles <= 9 ? 'grid-cols-3' :
+		'grid-cols-4'
 	);
 
 	function getParticipant(userId: string): VoiceParticipant {
@@ -178,86 +175,21 @@
 				</div>
 			</div>
 		{:else}
-			<!-- Connected state: Video grid OR avatar grid -->
-
-			{#if allTracks.length > 0}
-				<!-- Video layout: focused stream + thumbnail strip -->
-				<div class="flex min-h-0 flex-1 flex-col">
-					<!-- Focused stream -->
-					{#if focusedTrack}
-						<div class="min-h-0 flex-1 p-2">
-							<VideoTile
-								trackInfo={focusedTrack}
-								participant={getParticipant(focusedTrack.userId)}
-								focused={true}
-							/>
-						</div>
-					{/if}
-
-					<!-- Thumbnail strip -->
-					{#if thumbnailTracks.length > 0 || audioOnlyParticipants.length > 0}
-						<div class="flex shrink-0 gap-2 overflow-x-auto border-t border-bg-floating bg-bg-secondary p-2" style="max-height: 180px">
-							{#each thumbnailTracks as track (track.trackSid)}
-								<div class="h-[140px] w-[186px] shrink-0">
-									<VideoTile
-										trackInfo={track}
-										participant={getParticipant(track.userId)}
-										focused={false}
-										onclick={() => { focusedTrackSid = track.trackSid; }}
-									/>
-								</div>
-							{/each}
-							{#each audioOnlyParticipants as participant (participant.userId)}
-								<div class="h-[140px] w-[186px] shrink-0">
-									<VideoTile
-										trackInfo={null}
-										{participant}
-										focused={false}
-									/>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			{:else}
-				<!-- Audio-only: avatar grid (no video tracks) -->
-				<div class="flex-1 overflow-y-auto p-4">
-					<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-						{#each $participantList as participant (participant.userId)}
-							{@const isSelf = participant.userId === $currentUser?.id}
-							<div
-								class="flex flex-col items-center gap-2 rounded-xl bg-bg-secondary p-4 transition-all {participant.speaking ? 'ring-2 ring-green-500' : ''}"
-							>
-								<div class="relative">
-									<div class="h-16 w-16 overflow-hidden rounded-full {participant.speaking ? 'ring-2 ring-green-400 ring-offset-2 ring-offset-bg-secondary' : ''}">
-										<Avatar
-											name={participant.displayName ?? participant.username}
-											size="lg"
-										/>
-									</div>
-									{#if participant.deafened}
-										<div class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
-											<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-												<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-												<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-											</svg>
-										</div>
-									{:else if participant.muted}
-										<div class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
-											<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-												<path d="M19 19L5 5m14 0v8a3 3 0 01-5.12 2.12M12 19v2m-4-4h8" />
-											</svg>
-										</div>
-									{/if}
-								</div>
-								<span class="max-w-full truncate text-xs font-medium {isSelf ? 'text-brand-400' : 'text-text-primary'}">
-									{participant.displayName ?? participant.username}
-								</span>
-							</div>
-						{/each}
-					</div>
-				</div>
-			{/if}
+			<!-- Connected state: equal-sized participant grid -->
+			<div class="grid min-h-0 flex-1 auto-rows-fr gap-1.5 p-1.5 {gridCols}">
+				{#each allTracks as track (track.trackSid)}
+					<VideoTile
+						trackInfo={track}
+						participant={getParticipant(track.userId)}
+					/>
+				{/each}
+				{#each audioOnlyParticipants as participant (participant.userId)}
+					<VideoTile
+						trackInfo={null}
+						{participant}
+					/>
+				{/each}
+			</div>
 
 			<!-- Voice control bar -->
 			<div class="flex items-center justify-center gap-2 border-t border-bg-floating bg-bg-secondary px-4 py-3">

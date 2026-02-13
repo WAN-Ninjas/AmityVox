@@ -6,11 +6,10 @@
 	interface Props {
 		trackInfo: VideoTrackInfo | null;
 		participant: VoiceParticipant;
-		focused?: boolean;
 		onclick?: () => void;
 	}
 
-	let { trackInfo, participant, focused = false, onclick }: Props = $props();
+	let { trackInfo, participant, onclick }: Props = $props();
 
 	let videoContainer = $state<HTMLDivElement | undefined>(undefined);
 
@@ -32,12 +31,12 @@
 	{onclick}
 >
 	{#if trackInfo}
-		<div bind:this={videoContainer} class="absolute inset-0 flex items-center justify-center [&>video]:max-h-full [&>video]:max-w-full [&>video]:object-contain"></div>
+		<div bind:this={videoContainer} class="absolute inset-0 [&>video]:h-full [&>video]:w-full [&>video]:object-cover"></div>
 	{:else}
 		<div class="flex items-center justify-center">
 			<Avatar
 				name={participant.displayName ?? participant.username}
-				size={focused ? 'lg' : 'md'}
+				size="lg"
 			/>
 		</div>
 	{/if}
