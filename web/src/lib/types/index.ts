@@ -18,6 +18,7 @@ export interface User {
 	accent_color: string | null;
 	pronouns: string | null;
 	flags: number;
+	handle?: string;
 	created_at: string;
 }
 
