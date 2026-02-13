@@ -11,7 +11,7 @@
 		Announcement, AnnouncementSeverity
 	} from '$lib/types';
 
-	type Tab = 'dashboard' | 'users' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha';
+	type Tab = 'dashboard' | 'users' | 'guilds' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha';
 	let currentTab = $state<Tab>('dashboard');
 
 	// --- Dashboard ---
@@ -203,6 +203,46 @@
 	let captchaSiteKey = $state('');
 	let captchaSecretKey = $state('');
 
+	// --- Guilds ---
+	interface AdminGuild {
+		id: string;
+		name: string;
+		icon_url: string | null;
+		owner_id: string;
+		owner_name: string;
+		member_count: number;
+		channel_count: number;
+		role_count: number;
+		created_at: string;
+	}
+	interface AdminGuildDetail extends AdminGuild {
+		description: string | null;
+		emoji_count: number;
+		invite_count: number;
+		message_count: number;
+		messages_today: number;
+		ban_count: number;
+	}
+	interface AdminUserGuild {
+		id: string;
+		name: string;
+		icon_url: string | null;
+		is_owner: boolean;
+		member_count: number;
+		joined_at: string;
+	}
+	let adminGuilds = $state<AdminGuild[]>([]);
+	let loadingGuilds = $state(false);
+	let guildSearch = $state('');
+	let guildSort = $state('newest');
+	let guildSearchTimeout: ReturnType<typeof setTimeout> | null = null;
+	let selectedGuildDetail = $state<AdminGuildDetail | null>(null);
+	let guildDetailModalOpen = $state(false);
+	let loadingGuildDetail = $state(false);
+	let expandedUserGuilds = $state<string | null>(null);
+	let userGuildsList = $state<AdminUserGuild[]>([]);
+	let loadingUserGuilds = $state(false);
+
 	onMount(async () => {
 		try {
 			stats = await api.getAdminStats();
@@ -215,6 +255,7 @@
 
 	$effect(() => {
 		if (currentTab === 'users' && !usersLoaded) loadUsers();
+		if (currentTab === 'guilds' && adminGuilds.length === 0) loadGuilds();
 		if (currentTab === 'bots' && !botsLoaded) loadAllBots();
 		if (currentTab === 'bans' && !bansLoaded) loadInstanceBans();
 		if (currentTab === 'instance' && !instance) loadInstance();
@@ -820,6 +861,65 @@
 		return s.charAt(0).toUpperCase() + s.slice(1);
 	}
 
+	// --- Guild Functions ---
+	async function loadGuilds() {
+		loadingGuilds = true;
+		try {
+			adminGuilds = await api.getAdminGuilds({ query: guildSearch, sort: guildSort, limit: 100 });
+		} catch (err: any) {
+			addToast(err.message || 'Failed to load guilds', 'error');
+		} finally {
+			loadingGuilds = false;
+		}
+	}
+
+	function handleGuildSearch() {
+		if (guildSearchTimeout) clearTimeout(guildSearchTimeout);
+		guildSearchTimeout = setTimeout(() => loadGuilds(), 300);
+	}
+
+	async function viewGuildDetail(guildId: string) {
+		guildDetailModalOpen = true;
+		loadingGuildDetail = true;
+		try {
+			selectedGuildDetail = await api.getAdminGuildDetails(guildId);
+		} catch (err: any) {
+			addToast(err.message || 'Failed to load guild details', 'error');
+			guildDetailModalOpen = false;
+		} finally {
+			loadingGuildDetail = false;
+		}
+	}
+
+	async function handleDeleteGuild(guildId: string, guildName: string) {
+		if (!confirm(`Are you sure you want to delete "${guildName}"? This action is irreversible.`)) return;
+		try {
+			await api.adminDeleteGuild(guildId);
+			adminGuilds = adminGuilds.filter(g => g.id !== guildId);
+			guildDetailModalOpen = false;
+			addToast(`Guild "${guildName}" deleted.`, 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to delete guild', 'error');
+		}
+	}
+
+	async function loadUserGuilds(userId: string) {
+		if (expandedUserGuilds === userId) {
+			expandedUserGuilds = null;
+			return;
+		}
+		expandedUserGuilds = userId;
+		loadingUserGuilds = true;
+		try {
+			userGuildsList = await api.getAdminUserGuilds(userId);
+		} catch (err: any) {
+			addToast(err.message || 'Failed to load user guilds', 'error');
+			userGuildsList = [];
+		} finally {
+			loadingUserGuilds = false;
+		}
+	}
+
 	function severityClasses(s: AnnouncementSeverity): string {
 		switch (s) {
 			case 'info': return 'bg-blue-500/20 text-blue-400';
@@ -831,6 +931,7 @@
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'dashboard', label: 'Dashboard' },
 		{ id: 'users', label: 'Users' },
+		{ id: 'guilds', label: 'Guilds' },
 		{ id: 'bots', label: 'Bots' },
 		{ id: 'bans', label: 'Instance Bans' },
 		{ id: 'registration', label: 'Registration' },
@@ -871,6 +972,82 @@
 			>
 				{banning ? 'Banning...' : 'Ban User'}
 			</button>
+		</div>
+	{/if}
+</Modal>
+
+<!-- Guild Detail Modal -->
+<Modal open={guildDetailModalOpen} title="Guild Details" onclose={() => (guildDetailModalOpen = false)}>
+	{#if loadingGuildDetail}
+		<p class="text-sm text-text-muted">Loading guild details...</p>
+	{:else if selectedGuildDetail}
+		<div class="space-y-4">
+			<div class="flex items-center gap-3">
+				{#if selectedGuildDetail.icon_url}
+					<img src={selectedGuildDetail.icon_url} alt="" class="h-12 w-12 rounded-full object-cover" />
+				{:else}
+					<div class="flex h-12 w-12 items-center justify-center rounded-full bg-brand-500/20 text-lg font-bold text-brand-400">
+						{selectedGuildDetail.name.charAt(0).toUpperCase()}
+					</div>
+				{/if}
+				<div>
+					<h3 class="text-lg font-bold text-text-primary">{selectedGuildDetail.name}</h3>
+					{#if selectedGuildDetail.description}
+						<p class="text-sm text-text-muted">{selectedGuildDetail.description}</p>
+					{/if}
+				</div>
+			</div>
+
+			<div class="grid grid-cols-2 gap-3">
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Members</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.member_count.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Channels</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.channel_count.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Roles</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.role_count.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Emojis</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.emoji_count.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Total Messages</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.message_count.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Messages Today</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.messages_today.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Active Invites</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.invite_count.toLocaleString()}</p>
+				</div>
+				<div class="rounded-lg bg-bg-modifier/30 p-3">
+					<p class="text-xs text-text-muted">Bans</p>
+					<p class="text-lg font-bold text-text-primary">{selectedGuildDetail.ban_count.toLocaleString()}</p>
+				</div>
+			</div>
+
+			<div class="space-y-1 text-xs text-text-muted">
+				<p>Owner: <span class="text-text-primary">{selectedGuildDetail.owner_name}</span></p>
+				<p>ID: <span class="font-mono text-text-primary">{selectedGuildDetail.id}</span></p>
+				<p>Created: <span class="text-text-primary">{new Date(selectedGuildDetail.created_at).toLocaleString()}</span></p>
+			</div>
+
+			<div class="flex justify-end gap-2 pt-2">
+				<button class="btn-secondary text-sm" onclick={() => (guildDetailModalOpen = false)}>Close</button>
+				<button
+					class="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
+					onclick={() => handleDeleteGuild(selectedGuildDetail!.id, selectedGuildDetail!.name)}
+				>
+					Delete Guild
+				</button>
+			</div>
 		</div>
 	{/if}
 </Modal>
@@ -1275,6 +1452,113 @@
 										onclick={() => openBanModal(user)}
 									>
 										Ban
+									</button>
+									<button
+										class="text-xs text-text-muted hover:text-text-primary"
+										onclick={() => loadUserGuilds(user.id)}
+									>
+										{expandedUserGuilds === user.id ? 'Hide' : 'Guilds'}
+									</button>
+								</div>
+							</div>
+							{#if expandedUserGuilds === user.id}
+								<div class="ml-12 mt-1 mb-2 rounded-lg bg-bg-modifier/30 p-3">
+									{#if loadingUserGuilds}
+										<p class="text-xs text-text-muted">Loading guilds...</p>
+									{:else if userGuildsList.length === 0}
+										<p class="text-xs text-text-muted">Not a member of any guilds.</p>
+									{:else}
+										<p class="text-xs text-text-muted mb-2">{userGuildsList.length} guild{userGuildsList.length !== 1 ? 's' : ''}</p>
+										<div class="space-y-1">
+											{#each userGuildsList as ug (ug.id)}
+												<div class="flex items-center justify-between rounded bg-bg-secondary/50 px-2 py-1.5">
+													<div class="flex items-center gap-2">
+														<span class="text-sm text-text-primary">{ug.name}</span>
+														{#if ug.is_owner}
+															<span class="rounded bg-yellow-500/20 px-1 py-0.5 text-2xs font-bold text-yellow-400">Owner</span>
+														{/if}
+													</div>
+													<span class="text-xs text-text-muted">{ug.member_count} members &middot; Joined {new Date(ug.joined_at).toLocaleDateString()}</span>
+												</div>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/if}
+						{/each}
+					</div>
+				{/if}
+
+			<!-- ==================== GUILDS ==================== -->
+			{:else if currentTab === 'guilds'}
+				<div class="mb-6 flex items-center justify-between">
+					<h1 class="text-2xl font-bold text-text-primary">Guild Management</h1>
+					<button class="btn-secondary text-sm" onclick={() => { adminGuilds = []; loadGuilds(); }}>
+						{loadingGuilds ? 'Loading...' : 'Refresh'}
+					</button>
+				</div>
+
+				<div class="mb-4 flex gap-3">
+					<input
+						type="text"
+						class="input flex-1"
+						placeholder="Search guilds by name..."
+						bind:value={guildSearch}
+						oninput={handleGuildSearch}
+					/>
+					<select class="input w-40" bind:value={guildSort} onchange={() => loadGuilds()}>
+						<option value="newest">Newest</option>
+						<option value="oldest">Oldest</option>
+						<option value="name">Name A-Z</option>
+						<option value="members">Most Members</option>
+					</select>
+				</div>
+
+				{#if loadingGuilds}
+					<p class="text-sm text-text-muted">Loading guilds...</p>
+				{:else if adminGuilds.length === 0}
+					<div class="rounded-lg bg-bg-secondary p-6 text-center">
+						<p class="text-sm text-text-muted">No guilds found.</p>
+					</div>
+				{:else}
+					<p class="mb-3 text-xs text-text-muted">{adminGuilds.length} guild{adminGuilds.length !== 1 ? 's' : ''}</p>
+					<div class="space-y-2">
+						{#each adminGuilds as guild (guild.id)}
+							<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
+								<div class="flex items-center gap-3">
+									{#if guild.icon_url}
+										<img src={guild.icon_url} alt="" class="h-10 w-10 rounded-full object-cover" />
+									{:else}
+										<div class="flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20 text-sm font-bold text-brand-400">
+											{guild.name.charAt(0).toUpperCase()}
+										</div>
+									{/if}
+									<div>
+										<div class="flex items-center gap-2">
+											<span class="text-sm font-medium text-text-primary">{guild.name}</span>
+											<span class="text-xs text-text-muted">{guild.id.slice(0, 8)}...</span>
+										</div>
+										<p class="text-xs text-text-muted">
+											Owner: {guild.owner_name} &middot;
+											{guild.member_count} member{guild.member_count !== 1 ? 's' : ''} &middot;
+											{guild.channel_count} channel{guild.channel_count !== 1 ? 's' : ''} &middot;
+											{guild.role_count} role{guild.role_count !== 1 ? 's' : ''} &middot;
+											Created {new Date(guild.created_at).toLocaleDateString()}
+										</p>
+									</div>
+								</div>
+								<div class="flex items-center gap-2">
+									<button
+										class="text-xs text-brand-400 hover:text-brand-300"
+										onclick={() => viewGuildDetail(guild.id)}
+									>
+										Details
+									</button>
+									<button
+										class="text-xs text-red-400 hover:text-red-300"
+										onclick={() => handleDeleteGuild(guild.id, guild.name)}
+									>
+										Delete
 									</button>
 								</div>
 							</div>

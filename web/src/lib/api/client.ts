@@ -560,6 +560,30 @@ class ApiClient {
 		return this.patch('/admin/instance', data);
 	}
 
+	// --- Admin Guilds ---
+
+	getAdminGuilds(params?: { limit?: number; offset?: number; query?: string; sort?: string }): Promise<any[]> {
+		const q = new URLSearchParams();
+		if (params?.limit) q.set('limit', String(params.limit));
+		if (params?.offset) q.set('offset', String(params.offset));
+		if (params?.query) q.set('q', params.query);
+		if (params?.sort) q.set('sort', params.sort);
+		const qs = q.toString();
+		return this.get(`/admin/guilds${qs ? '?' + qs : ''}`);
+	}
+
+	getAdminGuildDetails(guildId: string): Promise<any> {
+		return this.get(`/admin/guilds/${guildId}`);
+	}
+
+	adminDeleteGuild(guildId: string): Promise<void> {
+		return this.del(`/admin/guilds/${guildId}`);
+	}
+
+	getAdminUserGuilds(userId: string): Promise<any[]> {
+		return this.get(`/admin/users/${userId}/guilds`);
+	}
+
 	// --- Admin Users ---
 
 	getAdminUsers(params?: { limit?: number; offset?: number; query?: string }): Promise<User[]> {
