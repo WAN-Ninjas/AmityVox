@@ -78,7 +78,7 @@
 	const IMAGE_URL_RE = /^https?:\/\/\S+\.(?:gif|png|jpe?g|webp)(?:\?[^\s]*)?$/i;
 	const GIPHY_RE = /^https?:\/\/(?:media\d*\.giphy\.com|i\.giphy\.com)\//i;
 	const TENOR_RE = /^https?:\/\/(?:media\.tenor\.com|c\.tenor\.com)\//i;
-	const imageOnlyUrl = $derived(() => {
+	const imageOnlyUrl = $derived.by(() => {
 		const text = message.content?.trim();
 		if (!text || message.attachments?.length) return null;
 		if (IMAGE_URL_RE.test(text) || GIPHY_RE.test(text) || TENOR_RE.test(text)) return text;
@@ -442,14 +442,15 @@
 				</div>
 			{/if}
 
-			{#if imageOnlyUrl()}
+			{#if imageOnlyUrl}
 				<!-- Message is a single image/GIF URL — render inline -->
-				<button class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl())}>
+				<button class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl)}>
 					<img
-						src={imageOnlyUrl()}
-						alt="GIF"
+						src={imageOnlyUrl}
+						alt="Linked image"
 						class="max-h-72 max-w-full rounded"
 						loading="lazy"
+						onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
 					/>
 				</button>
 			{:else if message.content}

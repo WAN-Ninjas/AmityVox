@@ -1,14 +1,28 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/amityvox/amityvox/internal/auth"
 )
+
+// giphyHTTPClient is a shared HTTP client with a 10-second timeout for all Giphy API requests.
+var giphyHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// giphyGet performs a GET request to the Giphy API with a 10-second context deadline.
+func giphyGet(ctx context.Context, giphyURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, giphyURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return giphyHTTPClient.Do(req)
+}
 
 // handleGiphySearch handles GET /api/v1/giphy/search?q=...&limit=...&offset=...
 // This proxies the Giphy API so the API key is never exposed to the client.
@@ -48,7 +62,7 @@ func (s *Server) handleGiphySearch(w http.ResponseWriter, r *http.Request) {
 	params.Set("lang", "en")
 
 	giphyURL := fmt.Sprintf("https://api.giphy.com/v1/gifs/search?%s", params.Encode())
-	resp, err := http.Get(giphyURL)
+	resp, err := giphyGet(r.Context(), giphyURL)
 	if err != nil {
 		s.Logger.Error("giphy API request failed", "error", err)
 		WriteError(w, http.StatusBadGateway, "giphy_error", "Failed to reach Giphy API")
@@ -125,7 +139,7 @@ func (s *Server) handleGiphyCategories(w http.ResponseWriter, r *http.Request) {
 	params.Set("limit", limit)
 
 	giphyURL := fmt.Sprintf("https://api.giphy.com/v1/gifs/categories?%s", params.Encode())
-	resp, err := http.Get(giphyURL)
+	resp, err := giphyGet(r.Context(), giphyURL)
 	if err != nil {
 		s.Logger.Error("giphy categories API request failed", "error", err)
 		WriteError(w, http.StatusBadGateway, "giphy_error", "Failed to reach Giphy API")
@@ -194,7 +208,7 @@ func (s *Server) handleGiphyTrending(w http.ResponseWriter, r *http.Request) {
 	params.Set("rating", "pg-13")
 
 	giphyURL := fmt.Sprintf("https://api.giphy.com/v1/gifs/trending?%s", params.Encode())
-	resp, err := http.Get(giphyURL)
+	resp, err := giphyGet(r.Context(), giphyURL)
 	if err != nil {
 		s.Logger.Error("giphy trending API request failed", "error", err)
 		WriteError(w, http.StatusBadGateway, "giphy_error", "Failed to reach Giphy API")
