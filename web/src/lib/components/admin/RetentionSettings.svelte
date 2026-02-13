@@ -213,8 +213,8 @@
 			<h3 class="text-sm font-semibold text-text-secondary mb-4">New Retention Policy</h3>
 			<div class="space-y-4">
 				<div>
-					<label for="retention-scope" class="block text-sm font-medium text-text-secondary mb-2">Scope</label>
-					<div id="retention-scope" class="flex gap-4" role="radiogroup" aria-label="Retention scope">
+					<span id="retention-scope-label" class="block text-sm font-medium text-text-secondary mb-2">Scope</span>
+					<div class="flex gap-4" role="radiogroup" aria-labelledby="retention-scope-label">
 						<label class="flex items-center gap-2 text-sm text-text-primary">
 							<input type="radio" bind:group={newScope} value="guild" />
 							Guild
