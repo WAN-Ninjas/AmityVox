@@ -10,6 +10,7 @@ import {
 	type RemoteParticipant,
 	type RemoteTrack,
 	type LocalParticipant,
+	type LocalTrackPublication,
 	type RemoteTrackPublication,
 	type Participant
 } from 'livekit-client';
@@ -24,6 +25,14 @@ export interface VoiceParticipant {
 	speaking: boolean;
 }
 
+export interface VideoTrackInfo {
+	trackSid: string;
+	userId: string;
+	source: 'camera' | 'screenshare';
+	videoElement: HTMLVideoElement;
+	participantIdentity: string;
+}
+
 export type VoiceConnectionState = 'disconnected' | 'connecting' | 'connected';
 
 // Stores
@@ -35,11 +44,12 @@ export const selfMute = writable(false);
 export const selfDeaf = writable(false);
 export const voiceParticipants = writable<Map<string, VoiceParticipant>>(new Map());
 
-// Screen share: holds the HTMLVideoElement when a remote participant is sharing their screen.
-export const screenShareElement = writable<HTMLVideoElement | null>(null);
-export const screenShareUserId = writable<string | null>(null);
+// Multi-track video: holds all active video tracks (cameras + screen shares).
+export const videoTracks = writable<Map<string, VideoTrackInfo>>(new Map());
+export const selfCamera = writable(false);
 
 // Derived
+export const videoTrackList = derived(videoTracks, ($t) => Array.from($t.values()));
 export const isVoiceConnected = derived(voiceState, ($s) => $s === 'connected');
 export const isVoiceConnecting = derived(voiceState, ($s) => $s === 'connecting');
 export const participantList = derived(voiceParticipants, ($p) => Array.from($p.values()));
@@ -85,6 +95,8 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
 		room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
 		room.on(RoomEvent.ActiveSpeakersChanged, handleActiveSpeakersChanged);
+		room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+		room.on(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished);
 		room.on(RoomEvent.Disconnected, handleDisconnected);
 		room.on(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
 
@@ -159,6 +171,21 @@ export function toggleDeafen() {
 	}
 
 	updateSelfInParticipants();
+}
+
+export async function toggleCamera() {
+	if (!room) return;
+	const enabled = !get(selfCamera);
+	selfCamera.set(enabled);
+	try {
+		await room.localParticipant.setCameraEnabled(enabled, {
+			resolution: { width: 1280, height: 720, frameRate: 30 },
+			facingMode: 'user'
+		});
+	} catch (err) {
+		console.error('[Voice] Failed to toggle camera:', err);
+		selfCamera.set(!enabled);
+	}
 }
 
 // Update the voice participants map when we receive a VOICE_STATE_UPDATE from the gateway.
@@ -258,6 +285,14 @@ function cleanup() {
 		audioContainer.remove();
 		audioContainer = null;
 	}
+	// Clean up all video track elements.
+	const tracks = get(videoTracks);
+	for (const info of tracks.values()) {
+		info.videoElement.remove();
+	}
+	videoTracks.set(new Map());
+	selfCamera.set(false);
+
 	voiceState.set('disconnected');
 	voiceChannelId.set(null);
 	voiceGuildId.set(null);
@@ -265,8 +300,6 @@ function cleanup() {
 	selfMute.set(false);
 	selfDeaf.set(false);
 	voiceParticipants.set(new Map());
-	screenShareElement.set(null);
-	screenShareUserId.set(null);
 }
 
 function addLocalParticipant(participant: LocalParticipant) {
@@ -380,14 +413,25 @@ function handleTrackSubscribed(
 		getAudioContainer().appendChild(el);
 	}
 
-	// Attach screen share video tracks to a store so the UI can display them.
-	if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+	// Attach video tracks (camera + screen share) to the videoTracks store.
+	if (track.kind === Track.Kind.Video) {
+		const isScreenShare = publication.source === Track.Source.ScreenShare;
 		const videoEl = track.attach() as HTMLVideoElement;
 		videoEl.style.width = '100%';
 		videoEl.style.height = '100%';
-		videoEl.style.objectFit = 'contain';
-		screenShareElement.set(videoEl);
-		screenShareUserId.set(userId);
+		videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';
+		const info: VideoTrackInfo = {
+			trackSid: track.sid,
+			userId,
+			source: isScreenShare ? 'screenshare' : 'camera',
+			videoElement: videoEl,
+			participantIdentity: participant.identity
+		};
+		videoTracks.update((map) => {
+			const next = new Map(map);
+			next.set(track.sid, info);
+			return next;
+		});
 	}
 
 	// Update the participant's mute state.
@@ -405,15 +449,57 @@ function handleTrackSubscribed(
 
 function handleTrackUnsubscribed(
 	track: RemoteTrack,
-	publication: RemoteTrackPublication,
+	_publication: RemoteTrackPublication,
 	_participant: RemoteParticipant
 ) {
-	// Clean up screen share when track is unsubscribed.
-	if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
-		screenShareElement.set(null);
-		screenShareUserId.set(null);
+	// Remove video track from store.
+	if (track.kind === Track.Kind.Video) {
+		videoTracks.update((map) => {
+			const next = new Map(map);
+			next.delete(track.sid);
+			return next;
+		});
 	}
 	// Detach all media elements for this track.
+	track.detach().forEach((el) => el.remove());
+}
+
+function handleLocalTrackPublished(publication: LocalTrackPublication, participant: LocalParticipant) {
+	const track = publication.track;
+	if (!track || track.kind !== Track.Kind.Video) return;
+
+	const metadata = parseMetadata(participant.metadata);
+	const userId = metadata.userId ?? participant.identity;
+	const isScreenShare = publication.source === Track.Source.ScreenShare;
+
+	const videoEl = track.attach() as HTMLVideoElement;
+	videoEl.style.width = '100%';
+	videoEl.style.height = '100%';
+	videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';
+
+	const info: VideoTrackInfo = {
+		trackSid: track.sid,
+		userId,
+		source: isScreenShare ? 'screenshare' : 'camera',
+		videoElement: videoEl,
+		participantIdentity: participant.identity
+	};
+	videoTracks.update((map) => {
+		const next = new Map(map);
+		next.set(track.sid, info);
+		return next;
+	});
+}
+
+function handleLocalTrackUnpublished(publication: LocalTrackPublication, _participant: LocalParticipant) {
+	const track = publication.track;
+	if (!track || track.kind !== Track.Kind.Video) return;
+
+	videoTracks.update((map) => {
+		const next = new Map(map);
+		next.delete(track.sid);
+		return next;
+	});
 	track.detach().forEach((el) => el.remove());
 }
 

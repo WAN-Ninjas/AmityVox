@@ -744,6 +744,20 @@ class ApiClient {
 		return this.post(`/channels/${channelId}/messages/${messageId}/crosspost`, { target_channel_id: targetChannelId });
 	}
 
+	// --- Message Translation ---
+
+	translateMessage(channelId: string, messageId: string, targetLang: string): Promise<{
+		message_id: string;
+		source_lang: string;
+		target_lang: string;
+		translated_text: string;
+		cached: boolean;
+	}> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/translate`, {
+			target_lang: targetLang
+		});
+	}
+
 	// --- Emoji Upload ---
 
 	async uploadEmoji(guildId: string, name: string, file: File): Promise<CustomEmoji> {

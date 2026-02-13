@@ -1,4 +1,4 @@
-<!-- VoiceChannelView.svelte — Main voice channel experience with participant grid, controls, and text-in-voice. -->
+<!-- VoiceChannelView.svelte — Main voice channel experience with video grid, controls, and text-in-voice. -->
 <script lang="ts">
 	import { currentUser } from '$lib/stores/auth';
 	import { currentChannel } from '$lib/stores/channels';
@@ -6,13 +6,15 @@
 		voiceState,
 		selfMute,
 		selfDeaf,
+		selfCamera,
 		participantList,
+		videoTrackList,
+		videoTracks,
 		joinVoice,
 		leaveVoice,
 		toggleMute,
 		toggleDeafen,
-		screenShareElement,
-		screenShareUserId,
+		toggleCamera,
 		type VoiceParticipant
 	} from '$lib/stores/voice';
 	import { addToast } from '$lib/stores/toast';
@@ -22,6 +24,8 @@
 	import VoiceControls from './VoiceControls.svelte';
 	import Soundboard from './Soundboard.svelte';
 	import ScreenShareControls from './ScreenShareControls.svelte';
+	import CameraSettings from './CameraSettings.svelte';
+	import VideoTile from './VideoTile.svelte';
 
 	interface Props {
 		channelId: string;
@@ -30,29 +34,43 @@
 
 	let { channelId, guildId }: Props = $props();
 
-	import { onMount } from 'svelte';
-
 	let joining = $state(false);
 	let showSettings = $state(false);
 	let showSoundboard = $state(false);
 	let showScreenShare = $state(false);
 	let textCollapsed = $state(false);
-	let screenShareContainer: HTMLDivElement;
+	let cameraToggling = $state(false);
+	let focusedTrackSid: string | null = $state(null);
 
 	const connected = $derived($voiceState === 'connected');
 	const connecting = $derived($voiceState === 'connecting');
 
-	// Attach/detach the screen share video element when it changes.
-	$effect(() => {
-		const videoEl = $screenShareElement;
-		const container = screenShareContainer;
-		if (!container) return;
-		// Clear previous content
-		container.innerHTML = '';
-		if (videoEl) {
-			container.appendChild(videoEl);
-		}
-	});
+	const allTracks = $derived($videoTrackList);
+	const focusedTrack = $derived(
+		focusedTrackSid
+			? $videoTracks.get(focusedTrackSid) ?? allTracks[0] ?? null
+			: allTracks[0] ?? null
+	);
+	const thumbnailTracks = $derived(
+		allTracks.filter((t) => t.trackSid !== focusedTrack?.trackSid)
+	);
+	const audioOnlyParticipants = $derived(
+		$participantList.filter((p) => !allTracks.some((t) => t.userId === p.userId))
+	);
+
+	function getParticipant(userId: string): VoiceParticipant {
+		return (
+			$participantList.find((p) => p.userId === userId) ?? {
+				userId,
+				username: 'Unknown',
+				displayName: null,
+				avatarId: null,
+				muted: false,
+				deafened: false,
+				speaking: false
+			}
+		);
+	}
 
 	async function handleJoin() {
 		joining = true;
@@ -70,6 +88,17 @@
 			await leaveVoice();
 		} catch (err: any) {
 			addToast(err.message || 'Failed to leave voice channel', 'error');
+		}
+	}
+
+	async function handleToggleCamera() {
+		cameraToggling = true;
+		try {
+			await toggleCamera();
+		} catch (err: any) {
+			addToast(err.message || 'Failed to toggle camera', 'error');
+		} finally {
+			cameraToggling = false;
 		}
 	}
 </script>
@@ -149,63 +178,86 @@
 				</div>
 			</div>
 		{:else}
-			<!-- Connected state: Screen share + Participant grid -->
+			<!-- Connected state: Video grid OR avatar grid -->
 
-			<!-- Screen share video (always in DOM for bind:this, hidden when inactive) -->
-			<div class="flex flex-col border-b border-bg-floating bg-black" class:hidden={!$screenShareElement}>
-				<div class="flex items-center gap-2 bg-bg-secondary px-3 py-1.5">
-					<span class="h-2 w-2 animate-pulse rounded-full bg-brand-500"></span>
-					<span class="text-xs font-medium text-text-secondary">
-						{#each $participantList.filter(p => p.userId === $screenShareUserId) as sharer}
-							{sharer.displayName ?? sharer.username} is sharing their screen
-						{:else}
-							Screen share active
-						{/each}
-					</span>
-				</div>
-				<div
-					bind:this={screenShareContainer}
-					class="flex max-h-[60vh] min-h-[200px] items-center justify-center bg-black"
-				></div>
-			</div>
+			{#if allTracks.length > 0}
+				<!-- Video layout: focused stream + thumbnail strip -->
+				<div class="flex min-h-0 flex-1 flex-col">
+					<!-- Focused stream -->
+					{#if focusedTrack}
+						<div class="min-h-0 flex-1 p-2">
+							<VideoTile
+								trackInfo={focusedTrack}
+								participant={getParticipant(focusedTrack.userId)}
+								focused={true}
+							/>
+						</div>
+					{/if}
 
-			<div class="flex-1 overflow-y-auto p-4">
-				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-					{#each $participantList as participant (participant.userId)}
-						{@const isSelf = participant.userId === $currentUser?.id}
-						<div
-							class="flex flex-col items-center gap-2 rounded-xl bg-bg-secondary p-4 transition-all {participant.speaking ? 'ring-2 ring-green-500' : ''}"
-						>
-							<div class="relative">
-								<div class="h-16 w-16 overflow-hidden rounded-full {participant.speaking ? 'ring-2 ring-green-400 ring-offset-2 ring-offset-bg-secondary' : ''}">
-									<Avatar
-										name={participant.displayName ?? participant.username}
-										size="lg"
+					<!-- Thumbnail strip -->
+					{#if thumbnailTracks.length > 0 || audioOnlyParticipants.length > 0}
+						<div class="flex shrink-0 gap-2 overflow-x-auto border-t border-bg-floating bg-bg-secondary p-2" style="max-height: 180px">
+							{#each thumbnailTracks as track (track.trackSid)}
+								<div class="h-[140px] w-[186px] shrink-0">
+									<VideoTile
+										trackInfo={track}
+										participant={getParticipant(track.userId)}
+										focused={false}
+										onclick={() => { focusedTrackSid = track.trackSid; }}
 									/>
 								</div>
-								<!-- Mute/deafen indicators -->
-								{#if participant.deafened}
-									<div class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
-										<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-											<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-											<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-										</svg>
-									</div>
-								{:else if participant.muted}
-									<div class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
-										<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-											<path d="M19 19L5 5m14 0v8a3 3 0 01-5.12 2.12M12 19v2m-4-4h8" />
-										</svg>
-									</div>
-								{/if}
-							</div>
-							<span class="max-w-full truncate text-xs font-medium {isSelf ? 'text-brand-400' : 'text-text-primary'}">
-								{participant.displayName ?? participant.username}
-							</span>
+							{/each}
+							{#each audioOnlyParticipants as participant (participant.userId)}
+								<div class="h-[140px] w-[186px] shrink-0">
+									<VideoTile
+										trackInfo={null}
+										{participant}
+										focused={false}
+									/>
+								</div>
+							{/each}
 						</div>
-					{/each}
+					{/if}
 				</div>
-			</div>
+			{:else}
+				<!-- Audio-only: avatar grid (no video tracks) -->
+				<div class="flex-1 overflow-y-auto p-4">
+					<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+						{#each $participantList as participant (participant.userId)}
+							{@const isSelf = participant.userId === $currentUser?.id}
+							<div
+								class="flex flex-col items-center gap-2 rounded-xl bg-bg-secondary p-4 transition-all {participant.speaking ? 'ring-2 ring-green-500' : ''}"
+							>
+								<div class="relative">
+									<div class="h-16 w-16 overflow-hidden rounded-full {participant.speaking ? 'ring-2 ring-green-400 ring-offset-2 ring-offset-bg-secondary' : ''}">
+										<Avatar
+											name={participant.displayName ?? participant.username}
+											size="lg"
+										/>
+									</div>
+									{#if participant.deafened}
+										<div class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
+											<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+												<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+												<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+											</svg>
+										</div>
+									{:else if participant.muted}
+										<div class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500">
+											<svg class="h-3 w-3 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+												<path d="M19 19L5 5m14 0v8a3 3 0 01-5.12 2.12M12 19v2m-4-4h8" />
+											</svg>
+										</div>
+									{/if}
+								</div>
+								<span class="max-w-full truncate text-xs font-medium {isSelf ? 'text-brand-400' : 'text-text-primary'}">
+									{participant.displayName ?? participant.username}
+								</span>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
 
 			<!-- Voice control bar -->
 			<div class="flex items-center justify-center gap-2 border-t border-bg-floating bg-bg-secondary px-4 py-3">
@@ -240,6 +292,29 @@
 					{:else}
 						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 							<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+						</svg>
+					{/if}
+				</button>
+
+				<!-- Camera -->
+				<button
+					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {$selfCamera ? 'bg-brand-500/20 text-brand-400 hover:bg-brand-500/30' : 'bg-bg-modifier text-text-secondary hover:bg-bg-floating hover:text-text-primary'}"
+					onclick={handleToggleCamera}
+					disabled={cameraToggling}
+					title={$selfCamera ? 'Turn off camera' : 'Turn on camera'}
+				>
+					{#if cameraToggling}
+						<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+						</svg>
+					{:else if $selfCamera}
+						<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+							<path d="M15 8v8H5V8h10m1-2H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4V7c0-.55-.45-1-1-1z" />
+						</svg>
+					{:else}
+						<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+							<path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27 4.73 6H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.21 0 .39-.08.55-.18L19.73 21 21 19.73 3.27 2z" />
 						</svg>
 					{/if}
 				</button>
@@ -292,7 +367,7 @@
 		{/if}
 	</div>
 
-	<!-- Settings / Soundboard / Screen Share panels -->
+	<!-- Settings / Soundboard / Screen Share / Camera Settings panels -->
 	{#if connected && showSettings}
 		<div class="border-t border-bg-floating">
 			<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
@@ -303,7 +378,7 @@
 					</svg>
 				</button>
 			</div>
-			<div class="max-h-60 overflow-y-auto bg-bg-primary p-4">
+			<div class="max-h-80 overflow-y-auto bg-bg-primary p-4">
 				<VoiceControls
 					{channelId}
 					{guildId}
@@ -311,6 +386,10 @@
 					selfMute={$selfMute}
 					selfDeaf={$selfDeaf}
 				/>
+				<div class="mt-3 border-t border-bg-floating pt-3">
+					<h4 class="mb-2 text-2xs font-medium uppercase tracking-wide text-text-secondary">Camera Settings</h4>
+					<CameraSettings />
+				</div>
 			</div>
 		</div>
 	{/if}
