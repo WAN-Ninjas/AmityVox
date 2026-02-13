@@ -131,7 +131,9 @@
 			<div class="hidden md:contents" class:!contents={mobileSidebarOpen}>
 				<div class="{mobileSidebarOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'contents'}">
 					<GuildSidebar onToggleNotifications={toggleNotificationCenter} />
-					<ChannelSidebar />
+					{#if !$page.url.pathname.startsWith('/app/admin')}
+						<ChannelSidebar />
+					{/if}
 				</div>
 			</div>
 
