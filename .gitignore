@@ -12,6 +12,12 @@
 coverage.html
 coverage.txt
 
+# Claude Code / AI prompts
+CLAUDE.md
+KICKOFF_PROMPT.md
+.claude/
+.github/
+
 # IDE and editor
 .vscode/
 .idea/
