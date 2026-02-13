@@ -130,59 +130,6 @@ func probeVideo(ctx context.Context, attachmentID string) (*VideoProbe, error) {
 	return &VideoProbe{}, nil
 }
 
-// probeVideoFile runs ffprobe on a local file path and extracts metadata.
-func probeVideoFile(ctx context.Context, filePath string) (*VideoProbe, error) {
-	cmd := exec.CommandContext(ctx, "ffprobe",
-		"-v", "quiet",
-		"-print_format", "json",
-		"-show_format",
-		"-show_streams",
-		filePath,
-	)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ffprobe error: %w, stderr: %s", err, stderr.String())
-	}
-
-	var result struct {
-		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
-			Width     int    `json:"width"`
-			Height    int    `json:"height"`
-		} `json:"streams"`
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-	}
-
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("parsing ffprobe output: %w", err)
-	}
-
-	probe := &VideoProbe{}
-	for _, stream := range result.Streams {
-		switch stream.CodecType {
-		case "video":
-			probe.VideoCodec = stream.CodecName
-			probe.Width = stream.Width
-			probe.Height = stream.Height
-		case "audio":
-			probe.AudioCodec = stream.CodecName
-		}
-	}
-
-	if result.Format.Duration != "" {
-		fmt.Sscanf(result.Format.Duration, "%f", &probe.Duration)
-	}
-
-	return probe, nil
-}
-
 // TranscodeVideoFile transcodes a video file using ffmpeg to H.264+Opus.
 func TranscodeVideoFile(ctx context.Context, inputPath, outputPath string) error {
 	args := []string{

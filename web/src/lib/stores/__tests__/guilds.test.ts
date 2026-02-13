@@ -37,6 +37,8 @@ function createMockGuild(overrides?: Partial<Guild>): Guild {
 		preferred_locale: 'en-US',
 		max_members: 1000,
 		vanity_url: null,
+		verification_level: 0,
+		tags: [],
 		member_count: 1,
 		created_at: new Date().toISOString(),
 		...overrides

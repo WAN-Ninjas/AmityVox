@@ -13,7 +13,7 @@ vi.mock('$lib/api/client', () => ({
 vi.mock('../channels', () => {
 	const { writable } = require('svelte/store');
 	return {
-		currentChannelId: writable<string | null>(null)
+		currentChannelId: writable(null)
 	};
 });
 
