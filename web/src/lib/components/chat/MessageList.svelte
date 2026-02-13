@@ -247,21 +247,20 @@
 
 	// Count of messages that arrived while scrolled up.
 	let newMessageCount = $state(0);
+	let trackedMessageLength = 0;
 
 	// Track new messages arriving while not auto-scrolling.
 	// Use untrack for the write to avoid $effect re-triggering on newMessageCount.
-	let prevMessageLen = 0;
 	$effect(() => {
 		const len = messages.length;
-		const scrolling = shouldAutoScroll;
-		untrack(() => {
-			if (scrolling) {
-				newMessageCount = 0;
-			} else if (len > prevMessageLen && prevMessageLen > 0) {
-				newMessageCount += len - prevMessageLen;
-			}
-			prevMessageLen = len;
-		});
+		if (shouldAutoScroll) {
+			newMessageCount = 0;
+			trackedMessageLength = len;
+		} else if (len > trackedMessageLength && trackedMessageLength > 0) {
+			newMessageCount = len - trackedMessageLength;
+		} else {
+			trackedMessageLength = len;
+		}
 	});
 
 	function scrollToFirstUnread() {
