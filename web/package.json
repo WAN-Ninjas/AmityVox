@@ -37,7 +37,8 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "katex": "^0.16.21"
+    "katex": "^0.16.21",
+    "livekit-client": "^2.17.1"
   },
   "overrides": {
     "cookie": "^0.7.0"

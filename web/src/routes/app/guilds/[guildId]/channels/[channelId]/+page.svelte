@@ -15,6 +15,7 @@
 	import TypingIndicator from '$components/chat/TypingIndicator.svelte';
 	import PinnedMessages from '$components/chat/PinnedMessages.svelte';
 	import ThreadPanel from '$components/chat/ThreadPanel.svelte';
+	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
 
 	let showMembers = $state(true);
 	let showPins = $state(false);
@@ -250,46 +251,34 @@
 			{showPins}
 			{showFollowers}
 		/>
-		{#if $currentChannel?.channel_type === 'voice'}
-			<!-- Voice channel controls banner -->
-			<div class="flex items-center gap-3 border-b border-bg-floating bg-bg-secondary/50 px-4 py-2">
-				<svg class="h-5 w-5 shrink-0 text-brand-400" fill="currentColor" viewBox="0 0 24 24">
-					<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
-				</svg>
-				<div class="flex-1">
-					<span class="text-sm font-medium text-text-primary">Voice Channel</span>
-					<span class="ml-2 text-xs text-text-muted">
-						{#if $currentChannel.user_limit > 0}
-							{$currentChannel.user_limit} user limit
-						{:else}
-							No user limit
-						{/if}
-						&middot; {Math.floor($currentChannel.bitrate / 1000)}kbps
-					</span>
-				</div>
-			</div>
-		{/if}
-		{#if isArchived}
-			<div class="flex items-center gap-2 border-b border-bg-floating bg-yellow-500/10 px-4 py-2">
-				<svg class="h-5 w-5 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-				</svg>
-				<span class="text-sm font-medium text-yellow-500">This channel is archived. It is read-only.</span>
-			</div>
-		{/if}
-		<MessageList onopenthread={openThread} />
-		<TypingIndicator typingUsers={$currentTypingUsers} />
-		{#if isArchived}
-			<div class="border-t border-bg-floating px-4 pb-4 pt-2">
-				<div class="flex items-center justify-center gap-2 rounded-lg bg-bg-modifier px-4 py-3">
-					<svg class="h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+		{#if $currentChannel?.channel_type === 'voice' || $currentChannel?.channel_type === 'stage'}
+			<VoiceChannelView
+				channelId={$currentChannelId ?? ''}
+				guildId={$page.params.guildId}
+			/>
+		{:else}
+			{#if isArchived}
+				<div class="flex items-center gap-2 border-b border-bg-floating bg-yellow-500/10 px-4 py-2">
+					<svg class="h-5 w-5 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 						<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
 					</svg>
-					<span class="text-sm text-text-muted">This channel is archived</span>
+					<span class="text-sm font-medium text-yellow-500">This channel is archived. It is read-only.</span>
 				</div>
-			</div>
-		{:else}
-			<MessageInput />
+			{/if}
+			<MessageList onopenthread={openThread} />
+			<TypingIndicator typingUsers={$currentTypingUsers} />
+			{#if isArchived}
+				<div class="border-t border-bg-floating px-4 pb-4 pt-2">
+					<div class="flex items-center justify-center gap-2 rounded-lg bg-bg-modifier px-4 py-3">
+						<svg class="h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+						</svg>
+						<span class="text-sm text-text-muted">This channel is archived</span>
+					</div>
+				</div>
+			{:else}
+				<MessageInput />
+			{/if}
 		{/if}
 	</div>
 

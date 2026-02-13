@@ -12,6 +12,7 @@ import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
 import { incrementUnread, loadReadState } from './unreads';
 import { addNotification } from './notifications';
+import { handleVoiceStateUpdate } from './voice';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
@@ -152,6 +153,20 @@ export function connectGateway(token: string) {
 			// --- User events ---
 			case 'USER_UPDATE':
 				currentUser.set(data as User);
+				break;
+
+			// --- Voice state events ---
+			case 'VOICE_STATE_UPDATE':
+				handleVoiceStateUpdate(data as {
+					channel_id: string;
+					user_id: string;
+					username?: string;
+					display_name?: string | null;
+					avatar_id?: string | null;
+					muted?: boolean;
+					deafened?: boolean;
+					action?: 'join' | 'leave' | 'update';
+				});
 				break;
 
 			// --- Relationship events (friend requests) ---
