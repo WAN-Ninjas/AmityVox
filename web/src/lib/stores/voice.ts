@@ -2,13 +2,17 @@
 
 import { writable, derived, get } from 'svelte/store';
 import { api } from '$lib/api/client';
+import { notificationSoundsEnabled, notificationVolume, isDndActive } from './settings';
+import { playNotificationSound } from '$lib/utils/sounds';
 import {
 	Room,
 	RoomEvent,
 	Track,
 	ConnectionState,
 	type RemoteParticipant,
+	type RemoteTrack,
 	type LocalParticipant,
+	type LocalTrackPublication,
 	type RemoteTrackPublication,
 	type Participant
 } from 'livekit-client';
@@ -23,6 +27,14 @@ export interface VoiceParticipant {
 	speaking: boolean;
 }
 
+export interface VideoTrackInfo {
+	trackSid: string;
+	userId: string;
+	source: 'camera' | 'screenshare';
+	videoElement: HTMLVideoElement;
+	participantIdentity: string;
+}
+
 export type VoiceConnectionState = 'disconnected' | 'connecting' | 'connected';
 
 // Stores
@@ -34,7 +46,12 @@ export const selfMute = writable(false);
 export const selfDeaf = writable(false);
 export const voiceParticipants = writable<Map<string, VoiceParticipant>>(new Map());
 
+// Multi-track video: holds all active video tracks (cameras + screen shares).
+export const videoTracks = writable<Map<string, VideoTrackInfo>>(new Map());
+export const selfCamera = writable(false);
+
 // Derived
+export const videoTrackList = derived(videoTracks, ($t) => Array.from($t.values()));
 export const isVoiceConnected = derived(voiceState, ($s) => $s === 'connected');
 export const isVoiceConnecting = derived(voiceState, ($s) => $s === 'connecting');
 export const participantList = derived(voiceParticipants, ($p) => Array.from($p.values()));
@@ -78,7 +95,10 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
 		room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
 		room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+		room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
 		room.on(RoomEvent.ActiveSpeakersChanged, handleActiveSpeakersChanged);
+		room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+		room.on(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished);
 		room.on(RoomEvent.Disconnected, handleDisconnected);
 		room.on(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
 
@@ -96,6 +116,7 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		}
 
 		voiceState.set('connected');
+		playVoiceSound('voice-join');
 	} catch (err) {
 		console.error('[Voice] Failed to join:', err);
 		cleanup();
@@ -112,6 +133,7 @@ export async function leaveVoice() {
 			// Best-effort — server will clean up eventually
 		}
 	}
+	playVoiceSound('voice-leave');
 	cleanup();
 }
 
@@ -153,6 +175,21 @@ export function toggleDeafen() {
 	}
 
 	updateSelfInParticipants();
+}
+
+export async function toggleCamera() {
+	if (!room) return;
+	const enabled = !get(selfCamera);
+	selfCamera.set(enabled);
+	try {
+		await room.localParticipant.setCameraEnabled(enabled, {
+			resolution: { width: 1280, height: 720, frameRate: 30 },
+			facingMode: 'user'
+		});
+	} catch (err) {
+		console.error('[Voice] Failed to toggle camera:', err);
+		selfCamera.set(!enabled);
+	}
 }
 
 // Update the voice participants map when we receive a VOICE_STATE_UPDATE from the gateway.
@@ -241,12 +278,31 @@ function updateChannelVoiceParticipants(
 
 // --- Internal helpers ---
 
+function playVoiceSound(preset: 'voice-join' | 'voice-leave') {
+	if (!get(isDndActive) && get(notificationSoundsEnabled)) {
+		playNotificationSound(preset, get(notificationVolume));
+	}
+}
+
 function cleanup() {
 	if (room) {
 		room.removeAllListeners();
 		room.disconnect();
 		room = null;
 	}
+	// Remove all attached audio elements.
+	if (audioContainer) {
+		audioContainer.remove();
+		audioContainer = null;
+	}
+	// Clean up all video track elements.
+	const tracks = get(videoTracks);
+	for (const info of tracks.values()) {
+		info.videoElement.remove();
+	}
+	videoTracks.set(new Map());
+	selfCamera.set(false);
+
 	voiceState.set('disconnected');
 	voiceChannelId.set(null);
 	voiceGuildId.set(null);
@@ -327,6 +383,7 @@ function updateSelfInParticipants() {
 
 function handleParticipantConnected(participant: RemoteParticipant) {
 	addRemoteParticipant(participant);
+	playVoiceSound('voice-join');
 }
 
 function handleParticipantDisconnected(participant: RemoteParticipant) {
@@ -337,16 +394,59 @@ function handleParticipantDisconnected(participant: RemoteParticipant) {
 		next.delete(userId);
 		return next;
 	});
+	playVoiceSound('voice-leave');
+}
+
+// Container for remote audio elements so they play through speakers.
+let audioContainer: HTMLDivElement | null = null;
+
+function getAudioContainer(): HTMLDivElement {
+	if (!audioContainer) {
+		audioContainer = document.createElement('div');
+		audioContainer.id = 'livekit-audio';
+		audioContainer.style.display = 'none';
+		document.body.appendChild(audioContainer);
+	}
+	return audioContainer;
 }
 
 function handleTrackSubscribed(
-	_track: any,
-	_publication: RemoteTrackPublication,
+	track: RemoteTrack,
+	publication: RemoteTrackPublication,
 	participant: RemoteParticipant
 ) {
-	// When we subscribe to a track, update the participant's mute state
 	const metadata = parseMetadata(participant.metadata);
 	const userId = metadata.userId ?? participant.identity;
+
+	// Attach audio tracks to the DOM so they actually play.
+	if (track.kind === Track.Kind.Audio) {
+		const el = track.attach();
+		el.id = `audio-${participant.identity}`;
+		getAudioContainer().appendChild(el);
+	}
+
+	// Attach video tracks (camera + screen share) to the videoTracks store.
+	if (track.kind === Track.Kind.Video) {
+		const isScreenShare = publication.source === Track.Source.ScreenShare;
+		const videoEl = track.attach() as HTMLVideoElement;
+		videoEl.autoplay = true;
+		videoEl.playsInline = true;
+		videoEl.muted = true; // Audio comes via separate audio track
+		const info: VideoTrackInfo = {
+			trackSid: track.sid,
+			userId,
+			source: isScreenShare ? 'screenshare' : 'camera',
+			videoElement: videoEl,
+			participantIdentity: participant.identity
+		};
+		videoTracks.update((map) => {
+			const next = new Map(map);
+			next.set(track.sid, info);
+			return next;
+		});
+	}
+
+	// Update the participant's mute state.
 	voiceParticipants.update((map) => {
 		const existing = map.get(userId);
 		if (!existing) return map;
@@ -357,6 +457,62 @@ function handleTrackSubscribed(
 		});
 		return next;
 	});
+}
+
+function handleTrackUnsubscribed(
+	track: RemoteTrack,
+	_publication: RemoteTrackPublication,
+	_participant: RemoteParticipant
+) {
+	// Remove video track from store.
+	if (track.kind === Track.Kind.Video) {
+		videoTracks.update((map) => {
+			const next = new Map(map);
+			next.delete(track.sid);
+			return next;
+		});
+	}
+	// Detach all media elements for this track.
+	track.detach().forEach((el) => el.remove());
+}
+
+function handleLocalTrackPublished(publication: LocalTrackPublication, participant: LocalParticipant) {
+	const track = publication.track;
+	if (!track || track.kind !== Track.Kind.Video) return;
+
+	const metadata = parseMetadata(participant.metadata);
+	const userId = metadata.userId ?? participant.identity;
+	const isScreenShare = publication.source === Track.Source.ScreenShare;
+
+	const videoEl = track.attach() as HTMLVideoElement;
+	videoEl.autoplay = true;
+	videoEl.playsInline = true;
+	videoEl.muted = true; // Audio comes via separate audio track
+
+	const info: VideoTrackInfo = {
+		trackSid: track.sid,
+		userId,
+		source: isScreenShare ? 'screenshare' : 'camera',
+		videoElement: videoEl,
+		participantIdentity: participant.identity
+	};
+	videoTracks.update((map) => {
+		const next = new Map(map);
+		next.set(track.sid, info);
+		return next;
+	});
+}
+
+function handleLocalTrackUnpublished(publication: LocalTrackPublication, _participant: LocalParticipant) {
+	const track = publication.track;
+	if (!track || track.kind !== Track.Kind.Video) return;
+
+	videoTracks.update((map) => {
+		const next = new Map(map);
+		next.delete(track.sid);
+		return next;
+	});
+	track.detach().forEach((el) => el.remove());
 }
 
 function handleActiveSpeakersChanged(speakers: Participant[]) {

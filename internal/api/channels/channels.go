@@ -259,7 +259,16 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", channel)
+	guildID := ""
+	if channel.GuildID != nil {
+		guildID = *channel.GuildID
+	}
+	h.EventBus.Publish(r.Context(), events.SubjectChannelUpdate, events.Event{
+		Type:      "CHANNEL_UPDATE",
+		GuildID:   guildID,
+		ChannelID: channelID,
+		Data:      mustMarshal(channel),
+	})
 
 	writeJSON(w, http.StatusOK, channel)
 }
@@ -275,6 +284,12 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch guild_id BEFORE deleting so we can route the event to guild members.
+	var guildID *string
+	if err := h.Pool.QueryRow(r.Context(), `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID); err != nil && err != pgx.ErrNoRows {
+		h.Logger.Warn("failed to fetch guild_id before channel delete", slog.String("channel_id", channelID), slog.String("error", err.Error()))
+	}
+
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channels WHERE id = $1`, channelID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel")
@@ -285,8 +300,15 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelDelete, "CHANNEL_DELETE", map[string]string{
-		"id": channelID,
+	deleteGuildID := ""
+	if guildID != nil {
+		deleteGuildID = *guildID
+	}
+	h.EventBus.Publish(r.Context(), events.SubjectChannelDelete, events.Event{
+		Type:      "CHANNEL_DELETE",
+		GuildID:   deleteGuildID,
+		ChannelID: channelID,
+		Data:      mustMarshal(map[string]string{"id": channelID, "guild_id": deleteGuildID}),
 	})
 
 	w.WriteHeader(http.StatusNoContent)
@@ -1356,7 +1378,15 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "THREAD_CREATE", thread)
+	threadGuildID := ""
+	if guildID != nil {
+		threadGuildID = *guildID
+	}
+	h.EventBus.Publish(r.Context(), events.SubjectChannelCreate, events.Event{
+		Type:    "THREAD_CREATE",
+		GuildID: threadGuildID,
+		Data:    mustMarshal(thread),
+	})
 
 	writeJSON(w, http.StatusCreated, thread)
 }
@@ -2457,7 +2487,11 @@ func (h *Handler) HandleApplyChannelTemplate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+	h.EventBus.Publish(r.Context(), events.SubjectChannelCreate, events.Event{
+		Type:    "CHANNEL_CREATE",
+		GuildID: guildID,
+		Data:    mustMarshal(channel),
+	})
 
 	writeJSON(w, http.StatusCreated, channel)
 }

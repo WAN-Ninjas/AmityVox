@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore } from '$lib/stores/channels';
 	import { channelVoiceUsers } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -130,7 +130,8 @@
 		creatingChannel = true;
 		channelError = '';
 		try {
-			await api.createChannel(guildId, newChannelName.trim(), newChannelType);
+			const channel = await api.createChannel(guildId, newChannelName.trim(), newChannelType);
+			updateChannelStore(channel);
 			showCreateChannel = false;
 			newChannelName = '';
 			newChannelType = 'text';
@@ -155,7 +156,8 @@
 				updateData.user_limit = editChannelUserLimit;
 				updateData.bitrate = editChannelBitrate;
 			}
-			await api.updateChannel(editChannelId, updateData as any);
+			const updated = await api.updateChannel(editChannelId, updateData as any);
+			updateChannelStore(updated);
 			showEditChannel = false;
 		} catch (err: any) {
 			channelError = err.message || 'Failed to update channel';
@@ -168,6 +170,7 @@
 		if (!confirm('Are you sure you want to delete this channel?')) return;
 		try {
 			await api.deleteChannel(channelId);
+			removeChannelStore(channelId);
 		} catch (err: any) {
 			alert(err.message || 'Failed to delete channel');
 		}

@@ -118,9 +118,67 @@ function playPop(ctx: AudioContext, volume: number) {
 	osc.stop(now + 0.08);
 }
 
+function playVoiceJoin(ctx: AudioContext, volume: number) {
+	const now = ctx.currentTime;
+
+	// First tone: E5 (659Hz)
+	const osc1 = ctx.createOscillator();
+	const gain1 = ctx.createGain();
+	osc1.type = 'sine';
+	osc1.frequency.setValueAtTime(659, now);
+	gain1.gain.setValueAtTime(volume, now);
+	gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+	osc1.connect(gain1);
+	gain1.connect(ctx.destination);
+	osc1.start(now);
+	osc1.stop(now + 0.1);
+
+	// Second tone: A5 (880Hz) — ascending, welcoming
+	const osc2 = ctx.createOscillator();
+	const gain2 = ctx.createGain();
+	osc2.type = 'sine';
+	osc2.frequency.setValueAtTime(880, now + 0.1);
+	gain2.gain.setValueAtTime(0.001, now);
+	gain2.gain.setValueAtTime(volume, now + 0.1);
+	gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+	osc2.connect(gain2);
+	gain2.connect(ctx.destination);
+	osc2.start(now + 0.1);
+	osc2.stop(now + 0.2);
+}
+
+function playVoiceLeave(ctx: AudioContext, volume: number) {
+	const now = ctx.currentTime;
+
+	// First tone: A4 (440Hz)
+	const osc1 = ctx.createOscillator();
+	const gain1 = ctx.createGain();
+	osc1.type = 'sine';
+	osc1.frequency.setValueAtTime(440, now);
+	gain1.gain.setValueAtTime(volume * 0.8, now);
+	gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+	osc1.connect(gain1);
+	gain1.connect(ctx.destination);
+	osc1.start(now);
+	osc1.stop(now + 0.1);
+
+	// Second tone: E4 (330Hz) — descending, softer
+	const osc2 = ctx.createOscillator();
+	const gain2 = ctx.createGain();
+	osc2.type = 'sine';
+	osc2.frequency.setValueAtTime(330, now + 0.1);
+	gain2.gain.setValueAtTime(0.001, now);
+	gain2.gain.setValueAtTime(volume * 0.8, now + 0.1);
+	gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+	osc2.connect(gain2);
+	gain2.connect(ctx.destination);
+	osc2.start(now + 0.1);
+	osc2.stop(now + 0.2);
+}
+
 /**
  * Play a notification sound using the Web Audio API.
- * @param preset - The sound preset id ('default', 'chime', 'bell', 'pop', 'none')
+ * @param preset - The sound preset id ('default', 'chime', 'bell', 'pop', 'voice-join', 'voice-leave', 'none')
  * @param volume - Volume level from 0 to 100 (default 80)
  */
 export function playNotificationSound(preset: string, volume: number = 80): void {
@@ -141,6 +199,12 @@ export function playNotificationSound(preset: string, volume: number = 80): void
 			break;
 		case 'pop':
 			playPop(ctx, normalizedVolume);
+			break;
+		case 'voice-join':
+			playVoiceJoin(ctx, normalizedVolume);
+			break;
+		case 'voice-leave':
+			playVoiceLeave(ctx, normalizedVolume);
 			break;
 		case 'default':
 		default:

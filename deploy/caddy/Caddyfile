@@ -5,7 +5,7 @@ amityvox.chat {
 		X-Frame-Options "DENY"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
 	}
 
 	# Reverse proxy API requests to AmityVox core.
@@ -24,6 +24,11 @@ amityvox.chat {
 	# Reverse proxy WebSocket gateway.
 	handle /ws {
 		reverse_proxy amityvox:8081
+	}
+
+	# Reverse proxy LiveKit WebSocket (voice/video WebRTC signaling).
+	handle /rtc /rtc/* {
+		reverse_proxy livekit:7880
 	}
 
 	# Reverse proxy federation discovery endpoint.

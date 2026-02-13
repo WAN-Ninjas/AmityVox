@@ -493,7 +493,16 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "channel_create", "channel", channelID, nil)
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+	channelData, err := json.Marshal(channel)
+	if err != nil {
+		h.Logger.Error("failed to marshal channel for event", slog.String("error", err.Error()))
+	} else {
+		h.EventBus.Publish(r.Context(), events.SubjectChannelCreate, events.Event{
+			Type:    "CHANNEL_CREATE",
+			GuildID: guildID,
+			Data:    channelData,
+		})
+	}
 
 	writeJSON(w, http.StatusCreated, channel)
 }

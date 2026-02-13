@@ -31,7 +31,8 @@ use_ssl = false
 # For MinIO: endpoint = "http://localhost:9000", region = "us-east-1"
 
 [livekit]
-url = "ws://localhost:7880"
+url = "ws://localhost:7880"         # Internal URL for server-side SDK
+public_url = "wss://localhost/rtc"  # Public WSS URL returned to browser clients
 api_key = ""
 api_secret = ""
 

@@ -76,7 +76,8 @@ type StorageConfig struct {
 
 // LiveKitConfig defines LiveKit voice/video server settings.
 type LiveKitConfig struct {
-	URL       string `toml:"url"`
+	URL       string `toml:"url"`        // Internal URL for server-side SDK (e.g. ws://livekit:7880)
+	PublicURL string `toml:"public_url"` // Public WSS URL for browser clients (e.g. wss://amityvox.chat/rtc)
 	APIKey    string `toml:"api_key"`
 	APISecret string `toml:"api_secret"`
 }
@@ -358,6 +359,9 @@ func applyEnvOverrides(cfg *Config) {
 	// LiveKit
 	if v := os.Getenv("AMITYVOX_LIVEKIT_URL"); v != "" {
 		cfg.LiveKit.URL = v
+	}
+	if v := os.Getenv("AMITYVOX_LIVEKIT_PUBLIC_URL"); v != "" {
+		cfg.LiveKit.PublicURL = v
 	}
 	if v := os.Getenv("AMITYVOX_LIVEKIT_API_KEY"); v != "" {
 		cfg.LiveKit.APIKey = v
