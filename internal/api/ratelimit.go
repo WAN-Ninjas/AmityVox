@@ -21,12 +21,12 @@ const (
 	authedRateLimit  = 6000
 	authedRateWindow = 1 * time.Minute
 
-	// Unauthenticated global rate limit: 600 requests per minute per IP.
-	unauthRateLimit  = 600
+	// Unauthenticated global rate limit: 6000 requests per minute per IP.
+	unauthRateLimit  = 6000
 	unauthRateWindow = 1 * time.Minute
 
-	// Auth rate limit: 100 requests per minute per IP (login/register).
-	authRateLimit  = 100
+	// Auth rate limit: 1000 requests per minute per IP (login/register).
+	authRateLimit  = 1000
 	authRateWindow = 1 * time.Minute
 
 	// Message creation: 100 messages per 10 seconds per user.
