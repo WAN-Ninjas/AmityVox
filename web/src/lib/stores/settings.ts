@@ -137,17 +137,27 @@ const CUSTOM_CSS_MAX_LENGTH = 10000;
 const CUSTOM_CSS_STORAGE_KEY = 'amityvox_custom_css';
 
 // Sanitize custom CSS to prevent XSS attacks.
+// Strips characters and patterns that have no valid use in CSS but could
+// enable HTML injection or dangerous URL scheme execution.
 export function sanitizeCustomCss(css: string): string {
-	let sanitized = css;
-	// Strip dangerous patterns (case-insensitive).
-	sanitized = sanitized.replace(/<script/gi, '');
-	sanitized = sanitized.replace(/javascript:/gi, '');
-	sanitized = sanitized.replace(/expression\(/gi, '');
-	sanitized = sanitized.replace(/@import\s+url\(/gi, '');
-	// Enforce max length.
-	if (sanitized.length > CUSTOM_CSS_MAX_LENGTH) {
-		sanitized = sanitized.slice(0, CUSTOM_CSS_MAX_LENGTH);
-	}
+	let sanitized = css.length > CUSTOM_CSS_MAX_LENGTH
+		? css.slice(0, CUSTOM_CSS_MAX_LENGTH)
+		: css;
+
+	// '<' has no valid use in CSS — strip all occurrences to prevent
+	// HTML injection (e.g. <script>, </style>) including nested bypasses.
+	sanitized = sanitized.replace(/</g, '');
+	// Dangerous URL schemes.
+	sanitized = sanitized.replace(/javascript\s*:/gi, '');
+	sanitized = sanitized.replace(/vbscript\s*:/gi, '');
+	sanitized = sanitized.replace(/data\s*:/gi, '');
+	// CSS expression evaluation (IE).
+	sanitized = sanitized.replace(/expression\s*\(/gi, '');
+	// External resource loading.
+	sanitized = sanitized.replace(/@import/gi, '');
+	// Mozilla XBL binding.
+	sanitized = sanitized.replace(/-moz-binding/gi, '');
+
 	return sanitized;
 }
 

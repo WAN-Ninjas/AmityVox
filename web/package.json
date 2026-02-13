@@ -39,5 +39,8 @@
   "dependencies": {
     "katex": "^0.16.21"
   },
+  "overrides": {
+    "cookie": "^0.7.0"
+  },
   "type": "module"
 }
