@@ -431,6 +431,7 @@ function handleTrackSubscribed(
 		const videoEl = track.attach() as HTMLVideoElement;
 		videoEl.autoplay = true;
 		videoEl.playsInline = true;
+		videoEl.muted = true; // Audio comes via separate audio track
 		videoEl.style.width = '100%';
 		videoEl.style.height = '100%';
 		videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';
@@ -489,6 +490,7 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 	const videoEl = track.attach() as HTMLVideoElement;
 	videoEl.autoplay = true;
 	videoEl.playsInline = true;
+	videoEl.muted = true; // Audio comes via separate audio track
 	videoEl.style.width = '100%';
 	videoEl.style.height = '100%';
 	videoEl.style.objectFit = isScreenShare ? 'contain' : 'cover';

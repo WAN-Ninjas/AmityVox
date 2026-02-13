@@ -20,13 +20,15 @@
 		videoContainer.innerHTML = '';
 		if (trackInfo?.videoElement) {
 			videoContainer.appendChild(trackInfo.videoElement);
+			// Ensure playback starts (fallback if autoplay is blocked)
+			trackInfo.videoElement.play().catch(() => {});
 		}
 	});
 </script>
 
 <button
 	type="button"
-	class="video-tile group relative flex items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {focused ? 'aspect-video' : 'aspect-[4/3]'} {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''} {onclick ? 'cursor-pointer' : 'cursor-default'}"
+	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {focused ? 'aspect-video' : 'aspect-[4/3]'} {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''} {onclick ? 'cursor-pointer' : 'cursor-default'}"
 	{onclick}
 >
 	{#if trackInfo}
