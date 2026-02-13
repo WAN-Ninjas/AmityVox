@@ -2376,9 +2376,9 @@
 						<div>
 							<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Federation Mode</label>
 							<select class="input w-full" bind:value={instanceFedMode}>
-								<option value="allow">Allow (federate with all peers)</option>
+								<option value="open">Open (federate with all peers)</option>
 								<option value="allowlist">Allowlist (federate only with approved peers)</option>
-								<option value="deny">Deny (no federation)</option>
+								<option value="closed">Closed (no federation)</option>
 							</select>
 						</div>
 
