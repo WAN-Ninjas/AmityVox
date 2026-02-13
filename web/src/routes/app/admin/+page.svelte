@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -20,6 +21,7 @@
 
 	// --- Users ---
 	let users = $state<User[]>([]);
+	let usersLoaded = $state(false);
 	let loadingUsers = $state(false);
 	let userSearch = $state('');
 	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -32,6 +34,7 @@
 
 	// --- Instance Bans ---
 	let instanceBans = $state<InstanceBan[]>([]);
+	let bansLoaded = $state(false);
 	let loadingBans = $state(false);
 
 	// --- Instance ---
@@ -44,6 +47,7 @@
 
 	// --- Federation ---
 	let peers = $state<FederationPeer[]>([]);
+	let peersLoaded = $state(false);
 	let loadingPeers = $state(false);
 	let newPeerDomain = $state('');
 	let addingPeer = $state(false);
@@ -98,11 +102,13 @@
 		presence: BotPresenceInfo | null;
 	}
 	let allBots = $state<BotWithDetails[]>([]);
+	let botsLoaded = $state(false);
 	let loadingAllBots = $state(false);
 	let expandedBotId = $state<string | null>(null);
 
 	// --- Announcements ---
 	let announcements = $state<Announcement[]>([]);
+	let announcementsLoaded = $state(false);
 	let loadingAnnouncements = $state(false);
 	let createAnnouncementModalOpen = $state(false);
 	let editAnnouncementModalOpen = $state(false);
@@ -169,6 +175,7 @@
 		created_at: string;
 	}
 	let contentScanRules = $state<ContentScanRule[]>([]);
+	let contentRulesLoaded = $state(false);
 	let contentScanLog = $state<ContentScanLogEntry[]>([]);
 	let loadingContentRules = $state(false);
 	let loadingContentLog = $state(false);
@@ -247,16 +254,16 @@
 	});
 
 	$effect(() => {
-		if (currentTab === 'users' && users.length === 0) loadUsers();
+		if (currentTab === 'users' && !usersLoaded) loadUsers();
 		if (currentTab === 'guilds' && adminGuilds.length === 0) loadGuilds();
-		if (currentTab === 'bots' && allBots.length === 0) loadAllBots();
-		if (currentTab === 'bans' && instanceBans.length === 0) loadInstanceBans();
+		if (currentTab === 'bots' && !botsLoaded) loadAllBots();
+		if (currentTab === 'bans' && !bansLoaded) loadInstanceBans();
 		if (currentTab === 'instance' && !instance) loadInstance();
-		if (currentTab === 'federation' && peers.length === 0) loadPeers();
+		if (currentTab === 'federation' && !peersLoaded) loadPeers();
 		if (currentTab === 'registration' && !regSettings) loadRegistration();
-		if (currentTab === 'announcements' && announcements.length === 0) loadAnnouncements();
+		if (currentTab === 'announcements' && !announcementsLoaded) loadAnnouncements();
 		if (currentTab === 'rate_limits' && !rateLimitStats) loadRateLimitStats();
-		if (currentTab === 'content_safety' && contentScanRules.length === 0) loadContentScanRules();
+		if (currentTab === 'content_safety' && !contentRulesLoaded) loadContentScanRules();
 		if (currentTab === 'captcha' && !captchaConfig) loadCaptchaConfig();
 	});
 
@@ -278,6 +285,7 @@
 		loadingUsers = true;
 		try {
 			users = await api.getAdminUsers({ limit: 50, query });
+			usersLoaded = true;
 		} catch { users = []; }
 		finally { loadingUsers = false; }
 	}
@@ -292,6 +300,7 @@
 			if (!res.ok) throw new Error('Failed to load bots');
 			const json = await res.json();
 			allBots = json.data ?? [];
+			botsLoaded = true;
 		} catch {
 			// Fallback: load basic bot list without details.
 			try {
@@ -303,6 +312,7 @@
 					rate_limit: null,
 					presence: null
 				}));
+				botsLoaded = true;
 			} catch { allBots = []; }
 		}
 		finally { loadingAllBots = false; }
@@ -383,7 +393,7 @@
 
 	async function loadInstanceBans() {
 		loadingBans = true;
-		try { instanceBans = await api.getInstanceBans(); } catch { instanceBans = []; }
+		try { instanceBans = await api.getInstanceBans(); bansLoaded = true; } catch { instanceBans = []; }
 		finally { loadingBans = false; }
 	}
 
@@ -425,7 +435,7 @@
 
 	async function loadPeers() {
 		loadingPeers = true;
-		try { peers = await api.getFederationPeers(); } catch { peers = []; }
+		try { peers = await api.getFederationPeers(); peersLoaded = true; } catch { peers = []; }
 		finally { loadingPeers = false; }
 	}
 
@@ -527,7 +537,7 @@
 
 	async function loadAnnouncements() {
 		loadingAnnouncements = true;
-		try { announcements = await api.getAdminAnnouncements(); } catch { announcements = []; }
+		try { announcements = await api.getAdminAnnouncements(); announcementsLoaded = true; } catch { announcements = []; }
 		finally { loadingAnnouncements = false; }
 	}
 
@@ -660,6 +670,7 @@
 			if (!res.ok) throw new Error('Failed to load');
 			const json = await res.json();
 			contentScanRules = json.data;
+			contentRulesLoaded = true;
 		} catch { contentScanRules = []; }
 		finally { loadingContentRules = false; }
 	}
@@ -1251,7 +1262,7 @@
 
 <div class="flex h-full">
 	<!-- Sidebar -->
-	<nav class="w-48 shrink-0 overflow-y-auto bg-bg-secondary p-4">
+	<nav class="flex w-48 shrink-0 flex-col overflow-y-auto bg-bg-secondary p-4">
 		<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Administration</h3>
 		<ul class="space-y-0.5">
 			{#each tabs as tab (tab.id)}
@@ -1265,6 +1276,17 @@
 				</li>
 			{/each}
 		</ul>
+		<div class="mt-auto pt-4">
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+				onclick={() => goto('/app')}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M15 19l-7-7 7-7" />
+				</svg>
+				Back to App
+			</button>
+		</div>
 	</nav>
 
 	<!-- Content -->

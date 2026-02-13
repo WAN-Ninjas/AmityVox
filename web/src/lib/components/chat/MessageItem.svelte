@@ -50,20 +50,15 @@
 
 	// --- NSFW content filter ---
 	const isNsfwChannel = $derived($currentChannel?.nsfw ?? false);
-	let nsfwFilterSetting = $state<'blur_all' | 'blur_suspicious' | 'show_all'>('blur_all');
-	let revealedImages = $state<Set<string>>(new Set());
-
-	// Load NSFW filter setting from localStorage (synced from user settings).
-	$effect(() => {
+	function getStoredNsfwFilter(): 'blur_all' | 'blur_suspicious' | 'show_all' {
 		try {
 			const stored = localStorage.getItem('av-nsfw-filter');
-			if (stored === 'blur_all' || stored === 'blur_suspicious' || stored === 'show_all') {
-				nsfwFilterSetting = stored;
-			}
-		} catch {
-			// Use default.
-		}
-	});
+			if (stored === 'blur_all' || stored === 'blur_suspicious' || stored === 'show_all') return stored;
+		} catch {}
+		return 'blur_all';
+	}
+	let nsfwFilterSetting = $state(getStoredNsfwFilter());
+	let revealedImages = $state<Set<string>>(new Set());
 
 	function shouldBlurImage(attachmentId: string): boolean {
 		if (!isNsfwChannel) return false;

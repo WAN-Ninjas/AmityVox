@@ -247,16 +247,18 @@
 
 	// Count of messages that arrived while scrolled up.
 	let newMessageCount = $state(0);
+	let trackedMessageLength = 0;
 
 	// Track new messages arriving while not auto-scrolling.
 	$effect(() => {
 		const len = messages.length;
-		if (len > 0 && !shouldAutoScroll) {
-			// This fires when messages array changes length.
-			newMessageCount++;
-		}
 		if (shouldAutoScroll) {
 			newMessageCount = 0;
+			trackedMessageLength = len;
+		} else if (len > trackedMessageLength && trackedMessageLength > 0) {
+			newMessageCount = len - trackedMessageLength;
+		} else {
+			trackedMessageLength = len;
 		}
 	});
 

@@ -291,6 +291,14 @@ func (s *Server) registerRoutes() {
 				r.Get("/@me/emoji", userH.HandleGetUserEmoji)
 				r.Post("/@me/emoji", userH.HandleCreateUserEmoji)
 				r.Delete("/@me/emoji/{emojiID}", userH.HandleDeleteUserEmoji)
+			r.Route("/@me/channel-groups", func(r chi.Router) {
+				r.Get("/", channelGroupH.HandleGetChannelGroups)
+				r.Post("/", channelGroupH.HandleCreateChannelGroup)
+				r.Patch("/{groupID}", channelGroupH.HandleUpdateChannelGroup)
+				r.Delete("/{groupID}", channelGroupH.HandleDeleteChannelGroup)
+				r.Put("/{groupID}/channels", channelGroupH.HandleAddChannelToGroup)
+				r.Delete("/{groupID}/channels/{channelID}", channelGroupH.HandleRemoveChannelFromGroup)
+			})
 				r.Get("/{userID}", userH.HandleGetUser)
 				r.Get("/{userID}/note", userH.HandleGetUserNote)
 				r.Put("/{userID}/note", userH.HandleSetUserNote)
@@ -631,15 +639,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/recovery-codes", widgetH.HandleGenerateRecoveryCodes)
 			})
 
-			// User channel groups.
-			r.Route("/channel-groups", func(r chi.Router) {
-				r.Get("/", channelGroupH.HandleGetChannelGroups)
-				r.Post("/", channelGroupH.HandleCreateChannelGroup)
-				r.Patch("/{groupID}", channelGroupH.HandleUpdateChannelGroup)
-				r.Delete("/{groupID}", channelGroupH.HandleDeleteChannelGroup)
-				r.Put("/{groupID}/channels/{channelID}", channelGroupH.HandleAddChannelToGroup)
-				r.Delete("/{groupID}/channels/{channelID}", channelGroupH.HandleRemoveChannelFromGroup)
-			})
+			// User channel groups — moved to /users/@me/channel-groups.
 
 			// Experimental features.
 			r.Route("/channels/{channelID}/experimental", func(r chi.Router) {
