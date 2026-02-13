@@ -39,17 +39,25 @@ func TestClientIP(t *testing.T) {
 		t.Errorf("clientIP with XFF = %q, want %q", got, "1.2.3.4")
 	}
 
-	// Without X-Forwarded-For.
+	// Without X-Forwarded-For — port should be stripped.
 	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req2.RemoteAddr = "10.0.0.1:12345"
-	if got := clientIP(req2); got != "10.0.0.1:12345" {
-		t.Errorf("clientIP without XFF = %q, want %q", got, "10.0.0.1:12345")
+	if got := clientIP(req2); got != "10.0.0.1" {
+		t.Errorf("clientIP without XFF = %q, want %q", got, "10.0.0.1")
+	}
+
+	// X-Forwarded-For with multiple IPs — should take the first.
+	req3 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req3.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8, 9.10.11.12")
+	req3.RemoteAddr = "10.0.0.1:12345"
+	if got := clientIP(req3); got != "1.2.3.4" {
+		t.Errorf("clientIP with multiple XFF = %q, want %q", got, "1.2.3.4")
 	}
 }
 
 func TestWriteRateLimitResponse(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeRateLimitResponse(w, globalRateWindow)
+	writeRateLimitResponse(w, authedRateWindow)
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusTooManyRequests)
@@ -67,7 +75,7 @@ func TestSetRateLimitHeaders(t *testing.T) {
 		Remaining: 100,
 		Count:     20,
 	}
-	setRateLimitHeaders(w, result, globalRateWindow)
+	setRateLimitHeaders(w, result, authedRateWindow)
 
 	if v := w.Header().Get("X-RateLimit-Limit"); v != "120" {
 		t.Errorf("X-RateLimit-Limit = %q, want %q", v, "120")
