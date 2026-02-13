@@ -844,6 +844,7 @@ func (s *Server) registerRoutes() {
 				r.Route("/giphy", func(r chi.Router) {
 					r.Get("/search", s.handleGiphySearch)
 					r.Get("/trending", s.handleGiphyTrending)
+					r.Get("/categories", s.handleGiphyCategories)
 				})
 			}
 

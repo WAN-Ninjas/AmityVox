@@ -546,6 +546,10 @@ class ApiClient {
 		return this.get(`/giphy/trending?limit=${limit}&offset=${offset}`);
 	}
 
+	getGiphyCategories(limit = 15): Promise<any> {
+		return this.get(`/giphy/categories?limit=${limit}`);
+	}
+
 	// --- Admin ---
 
 	getAdminStats(): Promise<AdminStats> {

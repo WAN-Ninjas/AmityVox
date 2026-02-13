@@ -57,6 +57,7 @@ docker compose restart amityvox
 1. The backend exposes proxy endpoints:
    - `GET /api/v1/giphy/search?q=query&limit=25` — search GIFs
    - `GET /api/v1/giphy/trending?limit=25` — trending GIFs
+   - `GET /api/v1/giphy/categories?limit=15` — GIF categories with representative thumbnails
 2. The backend calls Giphy's API with the server-side API key (never exposed to clients)
 3. The frontend displays results in a GIF picker panel
 4. When a user selects a GIF, the Giphy URL is sent as a message
