@@ -15,30 +15,30 @@ import (
 
 // Rate limit tiers for different endpoint categories.
 const (
-	// Authenticated user global rate limit: 600 requests per minute.
+	// Authenticated user global rate limit: 6000 requests per minute.
 	// Users clicking through settings/menus trigger many parallel API calls,
 	// so this needs to be generous.
-	authedRateLimit  = 600
+	authedRateLimit  = 6000
 	authedRateWindow = 1 * time.Minute
 
-	// Unauthenticated global rate limit: 60 requests per minute per IP.
-	unauthRateLimit  = 60
+	// Unauthenticated global rate limit: 600 requests per minute per IP.
+	unauthRateLimit  = 600
 	unauthRateWindow = 1 * time.Minute
 
-	// Auth rate limit: 10 requests per minute per IP (login/register).
-	authRateLimit  = 10
+	// Auth rate limit: 100 requests per minute per IP (login/register).
+	authRateLimit  = 100
 	authRateWindow = 1 * time.Minute
 
-	// Message creation: 10 messages per 10 seconds per user.
-	messageRateLimit  = 10
+	// Message creation: 100 messages per 10 seconds per user.
+	messageRateLimit  = 100
 	messageRateWindow = 10 * time.Second
 
-	// Search: 30 queries per minute per user.
-	searchRateLimit  = 30
+	// Search: 300 queries per minute per user.
+	searchRateLimit  = 300
 	searchRateWindow = 1 * time.Minute
 
-	// Webhook execution: 30 calls per minute per webhook.
-	webhookRateLimit  = 30
+	// Webhook execution: 300 calls per minute per webhook.
+	webhookRateLimit  = 300
 	webhookRateWindow = 1 * time.Minute
 )
 
