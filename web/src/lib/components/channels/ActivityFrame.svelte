@@ -57,7 +57,7 @@
 	let showBrowser = $state(false);
 	let selectedCategory = $state('all');
 	let joining = $state(false);
-	let iframeEl: HTMLIFrameElement;
+	let iframeEl = $state<HTMLIFrameElement | null>(null);
 
 	const categories = [
 		{ id: 'all', label: 'All' },
@@ -74,10 +74,7 @@
 		loading = true;
 		error = '';
 		try {
-			const data = await api.request<{ session: ActivitySession; participants: Participant[] }>(
-				'GET',
-				`/channels/${channelId}/activities/sessions/active`
-			);
+			const data = await api.getActiveSession<{ session: ActivitySession; participants: Participant[] }>(channelId);
 			if (data && data.session) {
 				session = data.session;
 				participants = data.participants ?? [];
@@ -97,10 +94,7 @@
 		loading = true;
 		try {
 			const category = selectedCategory === 'all' ? undefined : selectedCategory;
-			const url = category
-				? `/activities?category=${category}`
-				: '/activities';
-			const data = await api.request<Activity[]>('GET', url);
+			const data = await api.listActivities<Activity[]>(category);
 			activities = data ?? [];
 		} catch (err: any) {
 			error = err.message || 'Failed to load activities';
@@ -113,11 +107,7 @@
 		joining = true;
 		error = '';
 		try {
-			const result = await api.request<ActivitySession>(
-				'POST',
-				`/channels/${channelId}/activities/sessions`,
-				{ activity_id: activityId, config: {} }
-			);
+			const result = await api.createActivitySession<ActivitySession>(channelId, { activity_id: activityId, config: {} });
 			if (result) {
 				session = result;
 				showBrowser = false;
@@ -134,7 +124,7 @@
 		if (!session) return;
 		joining = true;
 		try {
-			await api.request('POST', `/channels/${channelId}/activities/sessions/${session.id}/join`);
+			await api.joinActivitySession(channelId, session.id);
 			await loadActiveSession();
 		} catch (err: any) {
 			error = err.message || 'Failed to join';
@@ -146,7 +136,7 @@
 	async function leaveSession() {
 		if (!session) return;
 		try {
-			await api.request('POST', `/channels/${channelId}/activities/sessions/${session.id}/leave`);
+			await api.leaveActivitySession(channelId, session.id);
 			await loadActiveSession();
 		} catch {
 			// Ignore.
@@ -156,7 +146,7 @@
 	async function endSession() {
 		if (!session) return;
 		try {
-			await api.request('POST', `/channels/${channelId}/activities/sessions/${session.id}/end`);
+			await api.endActivitySession(channelId, session.id);
 			session = null;
 			participants = [];
 			showBrowser = true;
@@ -252,7 +242,7 @@
 				{/if}
 
 				{#if onclose}
-					<button type="button" class="text-text-muted hover:text-text-primary p-1" onclick={onclose}>
+					<button type="button" class="text-text-muted hover:text-text-primary p-1" aria-label="Close activity" onclick={onclose}>
 						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 							<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 						</svg>
@@ -294,7 +284,7 @@
 		<div class="flex items-center justify-between px-4 py-3 border-b border-border-primary">
 			<h2 class="text-text-primary font-medium">Activities</h2>
 			{#if onclose}
-				<button type="button" class="text-text-muted hover:text-text-primary" onclick={onclose}>
+				<button type="button" class="text-text-muted hover:text-text-primary" aria-label="Close activity browser" onclick={onclose}>
 					<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 					</svg>

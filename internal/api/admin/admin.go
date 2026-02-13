@@ -5,6 +5,7 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -983,7 +984,7 @@ func parseInt(s string) (int, error) {
 	var v int
 	for _, c := range s {
 		if c < '0' || c > '9' {
-			return 0, json.Unmarshal(nil, nil)
+			return 0, fmt.Errorf("invalid character in number")
 		}
 		v = v*10 + int(c-'0')
 	}

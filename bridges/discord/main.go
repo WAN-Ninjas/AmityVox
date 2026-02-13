@@ -175,7 +175,7 @@ func (b *Bridge) connectDiscordGateway(ctx context.Context) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Discord gateway API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("discord gateway API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var gateway struct {
@@ -212,6 +212,8 @@ type DiscordMessage struct {
 }
 
 // relayDiscordMessage sends a Discord message to the mapped AmityVox channel.
+//
+//nolint:unused // bridge skeleton — called when Discord gateway events are implemented
 func (b *Bridge) relayDiscordMessage(ctx context.Context, msg DiscordMessage) {
 	channelID := b.discordToChannelID(msg.ChannelID)
 	if channelID == "" {
@@ -277,6 +279,8 @@ func (b *Bridge) listenAmityVox(ctx context.Context) {
 }
 
 // sendDiscordWebhook sends a message to a Discord channel via webhook.
+//
+//nolint:unused // bridge skeleton — called when AmityVox→Discord relay is implemented
 func (b *Bridge) sendDiscordWebhook(ctx context.Context, discordChannelID, username, avatarURL, content string) error {
 	webhookURL := b.getWebhookURL(discordChannelID)
 	if webhookURL == "" {
@@ -305,13 +309,15 @@ func (b *Bridge) sendDiscordWebhook(ctx context.Context, discordChannelID, usern
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Discord webhook error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("discord webhook error %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
 }
 
 // sendDiscordMessage sends a message to a Discord channel via the bot API.
+//
+//nolint:unused // bridge skeleton — called by sendDiscordWebhook fallback
 func (b *Bridge) sendDiscordMessage(ctx context.Context, channelID, content string) error {
 	url := fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", channelID)
 
@@ -333,7 +339,7 @@ func (b *Bridge) sendDiscordMessage(ctx context.Context, channelID, content stri
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Discord API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("discord API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -356,18 +362,21 @@ func (b *Bridge) SetWebhookURL(discordChannelID, webhookURL string) {
 	b.webhookURLs[discordChannelID] = webhookURL
 }
 
+//nolint:unused // bridge skeleton — used when AmityVox→Discord relay is implemented
 func (b *Bridge) channelToDiscordID(channelID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.channelToDiscord[channelID]
 }
 
+//nolint:unused // bridge skeleton — used by relayDiscordMessage
 func (b *Bridge) discordToChannelID(discordID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.discordToChannel[discordID]
 }
 
+//nolint:unused // bridge skeleton — used by sendDiscordWebhook
 func (b *Bridge) getWebhookURL(discordChannelID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

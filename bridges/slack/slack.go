@@ -310,6 +310,8 @@ func (b *Bridge) listenAmityVox(ctx context.Context) {
 }
 
 // sendSlackMessage sends a message to a Slack channel via the Web API.
+//
+//nolint:unused // bridge skeleton — called when AmityVox→Slack relay is implemented
 func (b *Bridge) sendSlackMessage(ctx context.Context, slackChannelID, username, text string) error {
 	apiURL := "https://slack.com/api/chat.postMessage"
 
@@ -335,7 +337,7 @@ func (b *Bridge) sendSlackMessage(ctx context.Context, slackChannelID, username,
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Slack API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("slack API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -383,6 +385,7 @@ func (b *Bridge) MapChannel(channelID, slackChannelID string) {
 	b.slackToChannel[slackChannelID] = channelID
 }
 
+//nolint:unused // bridge skeleton — used when AmityVox→Slack relay is implemented
 func (b *Bridge) channelToSlackID(channelID string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
