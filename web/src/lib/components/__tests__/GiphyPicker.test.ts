@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
 	FAVORITES_KEY,
-	MAX_FAVORITES,
 	type FavoriteGif,
 	loadFavorites,
 	saveFavorites,
