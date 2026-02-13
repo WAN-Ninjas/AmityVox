@@ -244,8 +244,9 @@
 		loadingUsers = true;
 		try {
 			users = await api.getAdminUsers({ limit: 50, query });
+			usersLoaded = true;
 		} catch { users = []; }
-		finally { loadingUsers = false; usersLoaded = true; }
+		finally { loadingUsers = false; }
 	}
 
 	async function loadAllBots() {
@@ -258,6 +259,7 @@
 			if (!res.ok) throw new Error('Failed to load bots');
 			const json = await res.json();
 			allBots = json.data ?? [];
+			botsLoaded = true;
 		} catch {
 			// Fallback: load basic bot list without details.
 			try {
@@ -269,9 +271,10 @@
 					rate_limit: null,
 					presence: null
 				}));
+				botsLoaded = true;
 			} catch { allBots = []; }
 		}
-		finally { loadingAllBots = false; botsLoaded = true; }
+		finally { loadingAllBots = false; }
 	}
 
 	function toggleBotExpand(botId: string) {
@@ -349,8 +352,8 @@
 
 	async function loadInstanceBans() {
 		loadingBans = true;
-		try { instanceBans = await api.getInstanceBans(); } catch { instanceBans = []; }
-		finally { loadingBans = false; bansLoaded = true; }
+		try { instanceBans = await api.getInstanceBans(); bansLoaded = true; } catch { instanceBans = []; }
+		finally { loadingBans = false; }
 	}
 
 	async function handleInstanceUnban(userId: string) {
@@ -391,8 +394,8 @@
 
 	async function loadPeers() {
 		loadingPeers = true;
-		try { peers = await api.getFederationPeers(); } catch { peers = []; }
-		finally { loadingPeers = false; peersLoaded = true; }
+		try { peers = await api.getFederationPeers(); peersLoaded = true; } catch { peers = []; }
+		finally { loadingPeers = false; }
 	}
 
 	async function handleAddPeer() {
@@ -493,8 +496,8 @@
 
 	async function loadAnnouncements() {
 		loadingAnnouncements = true;
-		try { announcements = await api.getAdminAnnouncements(); } catch { announcements = []; }
-		finally { loadingAnnouncements = false; announcementsLoaded = true; }
+		try { announcements = await api.getAdminAnnouncements(); announcementsLoaded = true; } catch { announcements = []; }
+		finally { loadingAnnouncements = false; }
 	}
 
 	function openCreateAnnouncement() {
@@ -626,8 +629,9 @@
 			if (!res.ok) throw new Error('Failed to load');
 			const json = await res.json();
 			contentScanRules = json.data;
+			contentRulesLoaded = true;
 		} catch { contentScanRules = []; }
-		finally { loadingContentRules = false; contentRulesLoaded = true; }
+		finally { loadingContentRules = false; }
 	}
 
 	async function loadContentScanLog() {
@@ -1100,7 +1104,7 @@
 				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
 				onclick={() => goto('/app')}
 			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M15 19l-7-7 7-7" />
 				</svg>
 				Back to App
