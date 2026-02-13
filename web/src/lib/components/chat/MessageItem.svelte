@@ -74,6 +74,17 @@
 
 	const isOwnMessage = $derived($currentUser?.id === message.author_id);
 
+	// Detect messages that are just a single image/GIF URL (e.g. from Giphy picker).
+	const IMAGE_URL_RE = /^https?:\/\/\S+\.(?:gif|png|jpe?g|webp)(?:\?[^\s]*)?$/i;
+	const GIPHY_RE = /^https?:\/\/(?:media\d*\.giphy\.com|i\.giphy\.com)\//i;
+	const TENOR_RE = /^https?:\/\/(?:media\.tenor\.com|c\.tenor\.com)\//i;
+	const imageOnlyUrl = $derived(() => {
+		const text = message.content?.trim();
+		if (!text || message.attachments?.length) return null;
+		if (IMAGE_URL_RE.test(text) || GIPHY_RE.test(text) || TENOR_RE.test(text)) return text;
+		return null;
+	});
+
 	// Detect sticker-like messages: no text content with a single image attachment.
 	const isStickerMessage = $derived(
 		!message.content?.trim() &&
@@ -431,7 +442,17 @@
 				</div>
 			{/if}
 
-			{#if message.content}
+			{#if imageOnlyUrl()}
+				<!-- Message is a single image/GIF URL — render inline -->
+				<button class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl())}>
+					<img
+						src={imageOnlyUrl()}
+						alt="GIF"
+						class="max-h-72 max-w-full rounded"
+						loading="lazy"
+					/>
+				</button>
+			{:else if message.content}
 				<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
 					<MarkdownRenderer content={message.content} />
 				</div>
