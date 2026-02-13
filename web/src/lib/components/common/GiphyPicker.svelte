@@ -1,5 +1,14 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import {
+		type FavoriteGif,
+		loadFavorites,
+		saveFavorites,
+		isFavorited,
+		addFavorite,
+		removeFavorite,
+		MAX_FAVORITES
+	} from '$lib/utils/gifFavorites';
 
 	interface Props {
 		onselect: (gifUrl: string) => void;
@@ -21,53 +30,26 @@
 	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Favorites (localStorage) ---
-	const FAVORITES_KEY = 'amityvox_gif_favorites';
-	const MAX_FAVORITES = 50;
-
-	interface FavoriteGif {
-		id: string;
-		title: string;
-		url: string;
-		previewUrl: string;
-	}
-
 	let favorites = $state<FavoriteGif[]>(loadFavorites());
 
-	function loadFavorites(): FavoriteGif[] {
-		try {
-			const raw = localStorage.getItem(FAVORITES_KEY);
-			if (!raw) return [];
-			const parsed = JSON.parse(raw);
-			if (!Array.isArray(parsed)) return [];
-			return parsed;
-		} catch {
-			return [];
-		}
-	}
-
-	function saveFavorites(favs: FavoriteGif[]) {
-		localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs));
-	}
-
 	function isFavorite(gifId: string): boolean {
-		return favorites.some((f) => f.id === gifId);
+		return isFavorited(favorites, gifId);
 	}
 
 	function toggleFavorite(gif: any) {
 		const gifId = gif.id;
 		if (isFavorite(gifId)) {
-			favorites = favorites.filter((f) => f.id !== gifId);
+			favorites = removeFavorite(favorites, gifId);
 			if (browsingFavorites) {
 				gifs = gifs.filter((g: any) => g.id !== gifId);
 			}
 		} else {
-			const entry: FavoriteGif = {
+			favorites = addFavorite(favorites, {
 				id: gifId,
 				title: gif.title || '',
 				url: gif.images?.fixed_height?.url ?? gif.images?.original?.url ?? '',
 				previewUrl: gif.images?.fixed_height_small?.url ?? gif.images?.fixed_height?.url ?? ''
-			};
-			favorites = [entry, ...favorites].slice(0, MAX_FAVORITES);
+			});
 		}
 		saveFavorites(favorites);
 	}
@@ -81,8 +63,8 @@
 		try {
 			const data = await api.getGiphyCategories(15);
 			categories = data?.data ?? [];
-		} catch {
-			// Categories failing is non-critical
+		} catch (e) {
+			console.debug('Failed to load Giphy categories:', e);
 		}
 	}
 

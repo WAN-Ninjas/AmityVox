@@ -1,56 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import {
+	FAVORITES_KEY,
+	MAX_FAVORITES,
+	type FavoriteGif,
+	loadFavorites,
+	saveFavorites,
+	isFavorited,
+	addFavorite,
+	removeFavorite
+} from '$lib/utils/gifFavorites';
 
 /**
- * Test the favorites logic from GiphyPicker.svelte as pure functions.
- * Since Svelte 5 components can't render in happy-dom, we extract
- * and test the localStorage-backed favorites management.
+ * Test the favorites logic shared between GiphyPicker.svelte and this test.
+ * Both import from $lib/utils/gifFavorites.ts — single source of truth.
  */
-
-const FAVORITES_KEY = 'amityvox_gif_favorites';
-const MAX_FAVORITES = 50;
-
-interface FavoriteGif {
-	id: string;
-	title: string;
-	url: string;
-	previewUrl: string;
-}
-
-// --- Pure functions mirroring GiphyPicker.svelte logic ---
-
-function loadFavorites(): FavoriteGif[] {
-	try {
-		const raw = localStorage.getItem(FAVORITES_KEY);
-		if (!raw) return [];
-		const parsed = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return [];
-		return parsed;
-	} catch {
-		return [];
-	}
-}
-
-function saveFavorites(favs: FavoriteGif[]) {
-	localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs));
-}
-
-function isFavorite(favorites: FavoriteGif[], gifId: string): boolean {
-	return favorites.some((f) => f.id === gifId);
-}
-
-function addFavorite(favorites: FavoriteGif[], gif: { id: string; title?: string; url: string; previewUrl: string }): FavoriteGif[] {
-	const entry: FavoriteGif = {
-		id: gif.id,
-		title: gif.title || '',
-		url: gif.url,
-		previewUrl: gif.previewUrl
-	};
-	return [entry, ...favorites].slice(0, MAX_FAVORITES);
-}
-
-function removeFavorite(favorites: FavoriteGif[], gifId: string): FavoriteGif[] {
-	return favorites.filter((f) => f.id !== gifId);
-}
 
 // --- Helpers ---
 
@@ -106,20 +69,20 @@ describe('GiphyPicker favorites', () => {
 		});
 	});
 
-	describe('isFavorite', () => {
+	describe('isFavorited', () => {
 		it('returns true when GIF is in favorites', () => {
 			const favs = [makeFav('a'), makeFav('b')];
-			expect(isFavorite(favs, 'a')).toBe(true);
-			expect(isFavorite(favs, 'b')).toBe(true);
+			expect(isFavorited(favs, 'a')).toBe(true);
+			expect(isFavorited(favs, 'b')).toBe(true);
 		});
 
 		it('returns false when GIF is not in favorites', () => {
 			const favs = [makeFav('a')];
-			expect(isFavorite(favs, 'z')).toBe(false);
+			expect(isFavorited(favs, 'z')).toBe(false);
 		});
 
 		it('returns false for empty favorites', () => {
-			expect(isFavorite([], 'x')).toBe(false);
+			expect(isFavorited([], 'x')).toBe(false);
 		});
 	});
 
@@ -187,9 +150,9 @@ describe('GiphyPicker favorites', () => {
 			expect(favs[1].id).toBe('g1');
 
 			// Check membership
-			expect(isFavorite(favs, 'g1')).toBe(true);
-			expect(isFavorite(favs, 'g2')).toBe(true);
-			expect(isFavorite(favs, 'g3')).toBe(false);
+			expect(isFavorited(favs, 'g1')).toBe(true);
+			expect(isFavorited(favs, 'g2')).toBe(true);
+			expect(isFavorited(favs, 'g3')).toBe(false);
 
 			// Remove one
 			favs = removeFavorite(favs, 'g1');
@@ -199,7 +162,7 @@ describe('GiphyPicker favorites', () => {
 			favs = loadFavorites();
 			expect(favs).toHaveLength(1);
 			expect(favs[0].id).toBe('g2');
-			expect(isFavorite(favs, 'g1')).toBe(false);
+			expect(isFavorited(favs, 'g1')).toBe(false);
 		});
 	});
 });
