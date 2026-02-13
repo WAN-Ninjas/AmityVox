@@ -66,8 +66,9 @@ A self-hosted, federated, optionally-encrypted communication platform that combi
 | Orange Pi 5 | RK3588S (4xA76 + 4xA55) | 16GB | Small-medium with HW transcode |
 | Orange Pi 5 | RK3588S (4xA76 + 4xA55) | 32GB | Medium community |
 | Orange Pi 6 Plus | RK3588 (4xA76 + 4xA55 + Mali-G610) | 32GB | Medium-large with GPU transcode |
-| Minisforum MS-R1 | AMD Ryzen (ARM? x86?) | 64GB | Large community / multi-guild |
-| VM on server | AMD 9955HX | 96GB | Enterprise / stress testing |
+| Minisforum MS-R1 | CIX CP8180 (ARMv9.2-A 8xA720 + 4xA520 12C, 6nm, 28W) | 64GB | Large community / multi-guild (linux/arm64) |
+| Minisforum MS-A2 | AMD Ryzen 9 9955HX (Zen 5 16C/32T, 105W) | 96GB | Enterprise / stress testing |
+| Generic enterprise | AMD EPYC or Intel Xeon (32C+ recommended) | 128GB+ | Large-scale / multi-instance federation |
 
 ### Media Transcoding
 

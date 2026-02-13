@@ -400,12 +400,13 @@
 
 	<!-- Backup History -->
 	{#if historyScheduleId}
+		{@const historySchedule = schedules.find(s => s.id === historyScheduleId)}
 		<div class="bg-bg-tertiary rounded-lg p-5">
 			<div class="flex items-center justify-between mb-4">
 				<h3 class="text-sm font-semibold text-text-secondary">
 					Backup History
-					{#if schedules.find(s => s.id === historyScheduleId)}
-						- {schedules.find(s => s.id === historyScheduleId)?.name}
+					{#if historySchedule}
+						- {historySchedule.name}
 					{/if}
 				</h3>
 				<button class="text-xs text-text-muted hover:text-text-secondary" onclick={() => { historyScheduleId = ''; history = []; }}>
