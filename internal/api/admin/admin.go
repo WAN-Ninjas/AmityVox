@@ -1116,8 +1116,9 @@ func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) 
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description,
 		        g.icon_id, g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
-		        g.preferred_locale, g.max_members, g.vanity_url, g.verification_level, g.tags,
-		        g.created_at,
+		        g.system_channel_join, g.system_channel_leave, g.system_channel_kick, g.system_channel_ban,
+		        g.preferred_locale, g.max_members, g.vanity_url, g.verification_level,
+		        g.afk_channel_id, g.afk_timeout, g.tags, g.created_at,
 		        COALESCE(u.username, 'unknown') AS owner_name,
 		        (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count,
 		        (SELECT COUNT(*) FROM channels c WHERE c.guild_id = g.id) AS channel_count,
@@ -1133,8 +1134,9 @@ func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) 
 	).Scan(
 		&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description,
 		&g.IconID, &g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
-		&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel, &g.Tags,
-		&g.CreatedAt,
+		&g.SystemChannelJoin, &g.SystemChannelLeave, &g.SystemChannelKick, &g.SystemChannelBan,
+		&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel,
+		&g.AFKChannelID, &g.AFKTimeout, &g.Tags, &g.CreatedAt,
 		&g.OwnerName, &g.MemberCount, &g.ChannelCount, &g.RoleCount,
 		&g.EmojiCount, &g.InviteCount, &g.MessageCount, &g.MessagesToday, &g.BanCount,
 	)

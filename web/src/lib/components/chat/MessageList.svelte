@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import type { Message, Channel } from '$lib/types';
 	import { currentChannelId } from '$lib/stores/channels';
 	import { messagesByChannel, loadMessages, isLoadingMessages } from '$lib/stores/messages';
@@ -250,6 +250,7 @@
 	let trackedMessageLength = 0;
 
 	// Track new messages arriving while not auto-scrolling.
+	// Use untrack for the write to avoid $effect re-triggering on newMessageCount.
 	$effect(() => {
 		const len = messages.length;
 		if (shouldAutoScroll) {

@@ -15,6 +15,7 @@ coverage.txt
 # Claude Code / AI prompts
 CLAUDE.md
 KICKOFF_PROMPT.md
+TODO.md
 .claude/
 .github/
 

@@ -135,7 +135,8 @@ func New(cfg Config) (*Service, error) {
 
 // GenerateToken creates a LiveKit access token for a user joining a voice channel.
 // The token grants permission to publish/subscribe audio and optionally video.
-func (s *Service) GenerateToken(userID, channelID string, canPublish, canSubscribe, canVideo bool) (string, error) {
+// metadata is a JSON string embedded in the token for participant display info.
+func (s *Service) GenerateToken(userID, channelID string, canPublish, canSubscribe, canVideo bool, metadata string) (string, error) {
 	at := auth.NewAccessToken(s.apiKey, s.apiSecret)
 	grant := &auth.VideoGrant{
 		RoomJoin: true,
@@ -150,6 +151,10 @@ func (s *Service) GenerateToken(userID, channelID string, canPublish, canSubscri
 	at.SetVideoGrant(grant).
 		SetIdentity(userID).
 		SetValidFor(24 * time.Hour)
+
+	if metadata != "" {
+		at.SetMetadata(metadata)
+	}
 
 	token, err := at.ToJWT()
 	if err != nil {
