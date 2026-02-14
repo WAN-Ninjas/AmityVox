@@ -240,6 +240,22 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 		channels = append(channels, c)
 	}
 
+	// Batch-load recipients for all DM/group channels.
+	channelIDs := make([]string, len(channels))
+	for i, c := range channels {
+		channelIDs[i] = c.ID
+	}
+	recipients, err := h.loadChannelRecipients(r.Context(), channelIDs)
+	if err != nil {
+		h.Logger.Error("failed to load DM recipients", slog.String("error", err.Error()))
+	} else {
+		for i := range channels {
+			if r, ok := recipients[channels[i].ID]; ok {
+				channels[i].Recipients = r
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, channels)
 }
 
@@ -391,6 +407,22 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 				targetID, userID)
 			tx.Commit(r.Context())
 
+			// Emit RELATIONSHIP_UPDATE to both users.
+			selfUser, _ := h.getUser(r.Context(), userID)
+			targetUser, _ := h.getUser(r.Context(), targetID)
+			selfRel, _ := json.Marshal(map[string]interface{}{
+				"user_id": userID, "target_id": targetID, "type": models.RelationshipFriend, "user": targetUser,
+			})
+			targetRel, _ := json.Marshal(map[string]interface{}{
+				"user_id": targetID, "target_id": userID, "type": models.RelationshipFriend, "user": selfUser,
+			})
+			h.EventBus.Publish(r.Context(), events.SubjectRelationshipUpdate, events.Event{
+				Type: "RELATIONSHIP_UPDATE", UserID: userID, Data: selfRel,
+			})
+			h.EventBus.Publish(r.Context(), events.SubjectRelationshipUpdate, events.Event{
+				Type: "RELATIONSHIP_UPDATE", UserID: targetID, Data: targetRel,
+			})
+
 			writeJSON(w, http.StatusOK, map[string]string{
 				"user_id":   userID,
 				"target_id": targetID,
@@ -423,6 +455,22 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to send friend request")
 		return
 	}
+
+	// Emit RELATIONSHIP_ADD to both users.
+	selfUser, _ := h.getUser(r.Context(), userID)
+	targetUser, _ := h.getUser(r.Context(), targetID)
+	selfRel, _ := json.Marshal(map[string]interface{}{
+		"user_id": userID, "target_id": targetID, "type": models.RelationshipPendingOutgoing, "user": targetUser,
+	})
+	targetRel, _ := json.Marshal(map[string]interface{}{
+		"user_id": targetID, "target_id": userID, "type": models.RelationshipPendingIncoming, "user": selfUser,
+	})
+	h.EventBus.Publish(r.Context(), events.SubjectRelationshipAdd, events.Event{
+		Type: "RELATIONSHIP_ADD", UserID: userID, Data: selfRel,
+	})
+	h.EventBus.Publish(r.Context(), events.SubjectRelationshipAdd, events.Event{
+		Type: "RELATIONSHIP_ADD", UserID: targetID, Data: targetRel,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"user_id":   userID,
@@ -457,6 +505,16 @@ func (h *Handler) HandleRemoveFriend(w http.ResponseWriter, r *http.Request) {
 		targetID, userID)
 
 	tx.Commit(r.Context())
+
+	// Emit RELATIONSHIP_REMOVE to both users.
+	selfRel, _ := json.Marshal(map[string]string{"user_id": userID, "target_id": targetID, "type": "none"})
+	targetRel, _ := json.Marshal(map[string]string{"user_id": targetID, "target_id": userID, "type": "none"})
+	h.EventBus.Publish(r.Context(), events.SubjectRelationshipRemove, events.Event{
+		Type: "RELATIONSHIP_REMOVE", UserID: userID, Data: selfRel,
+	})
+	h.EventBus.Publish(r.Context(), events.SubjectRelationshipRemove, events.Event{
+		Type: "RELATIONSHIP_REMOVE", UserID: targetID, Data: targetRel,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1175,6 +1233,47 @@ func (h *Handler) computeHandle(ctx context.Context, user *models.User) {
 	user.Handle = "@" + user.Username + "@" + domain
 }
 
+// loadChannelRecipients batch-loads the recipients for a set of DM/group channels.
+// Returns a map of channel ID → slice of User.
+func (h *Handler) loadChannelRecipients(ctx context.Context, channelIDs []string) (map[string][]models.User, error) {
+	result := make(map[string][]models.User)
+	if len(channelIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT cr.channel_id, u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns,
+		        u.bot_owner_id, u.flags, u.created_at
+		 FROM channel_recipients cr
+		 JOIN users u ON u.id = cr.user_id
+		 WHERE cr.channel_id = ANY($1)`,
+		channelIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var channelID string
+		var u models.User
+		if err := rows.Scan(
+			&channelID,
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
+			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result[channelID] = append(result[channelID], u)
+	}
+
+	return result, nil
+}
+
 func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, error) {
 	var user models.User
 	err := h.Pool.QueryRow(ctx,
@@ -1238,7 +1337,19 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 		&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
 		&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
 	)
-	return &c, err
+	if err != nil {
+		return &c, err
+	}
+
+	// Load recipients for DM/group channels.
+	if c.ChannelType == models.ChannelTypeDM || c.ChannelType == models.ChannelTypeGroup {
+		recipients, err := h.loadChannelRecipients(ctx, []string{channelID})
+		if err == nil {
+			c.Recipients = recipients[channelID]
+		}
+	}
+
+	return &c, nil
 }
 
 // writeJSON and writeError match the api package envelope format.

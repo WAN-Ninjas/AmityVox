@@ -282,6 +282,7 @@ func (s *Server) registerRoutes() {
 				r.Delete("/@me/sessions/{sessionID}", userH.HandleDeleteSelfSession)
 				r.Get("/@me/settings", userH.HandleGetUserSettings)
 				r.Patch("/@me/settings", userH.HandleUpdateUserSettings)
+				r.Get("/@me/relationships", userH.HandleGetRelationships)
 				r.Get("/@me/blocked", userH.HandleGetBlockedUsers)
 				r.Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
 				r.Get("/@me/bots", botH.HandleListMyBots)

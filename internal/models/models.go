@@ -200,6 +200,7 @@ type Channel struct {
 	ReadOnlyRoleIDs           []string   `json:"read_only_role_ids,omitempty"`
 	DefaultAutoArchiveDuration int       `json:"default_auto_archive_duration"`
 	CreatedAt                 time.Time  `json:"created_at"`
+	Recipients                []User     `json:"recipients,omitempty"`
 }
 
 // ChannelType constants for channels.channel_type.

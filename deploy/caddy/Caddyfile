@@ -27,7 +27,8 @@ amityvox.chat {
 	}
 
 	# Reverse proxy LiveKit WebSocket (voice/video WebRTC signaling).
-	handle /rtc* {
+	@rtc path /rtc /rtc/*
+	handle @rtc {
 		reverse_proxy livekit:7880
 	}
 
