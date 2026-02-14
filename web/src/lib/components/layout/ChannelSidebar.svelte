@@ -12,12 +12,14 @@
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { addToast } from '$lib/stores/toast';
+	import { pendingIncomingCount } from '$lib/stores/relationships';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 	import ChannelGroups from '$components/layout/ChannelGroups.svelte';
 	import VoiceConnectionBar from '$components/layout/VoiceConnectionBar.svelte';
+	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import type { Channel, GuildEvent } from '$lib/types';
 
 	let upcomingEvents = $state<GuildEvent[]>([]);
@@ -461,7 +463,12 @@
 					<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
 						<path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
 					</svg>
-					<span>Friends</span>
+					<span class="flex-1">Friends</span>
+					{#if $pendingIncomingCount > 0}
+						<span class="flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+							{$pendingIncomingCount > 99 ? '99+' : $pendingIncomingCount}
+						</span>
+					{/if}
 				</button>
 			</div>
 
@@ -488,13 +495,14 @@
 					{#each $dmList as dm (dm.id)}
 						{@const dmUnread = $unreadCounts.get(dm.id) ?? 0}
 						{@const dmMentions = $mentionCounts.get(dm.id) ?? 0}
-						{@const dmName = dm.name ?? 'Direct Message'}
+						{@const dmName = getDMDisplayName(dm, $currentUser?.id)}
+						{@const dmRecipient = getDMRecipient(dm, $currentUser?.id)}
 						<button
 							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; contextMenu = null; }}
 						>
-							<Avatar name={dmName} size="sm" status={dm.owner_id ? ($presenceMap.get(dm.owner_id) ?? undefined) : undefined} />
+							<Avatar name={dmName} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMentions > 0}
 								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{dmMentions} mention{dmMentions !== 1 ? 's' : ''}">

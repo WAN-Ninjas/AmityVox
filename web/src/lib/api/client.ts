@@ -316,6 +316,10 @@ class ApiClient {
 		return this.get('/users/@me/blocked');
 	}
 
+	resolveHandle(handle: string): Promise<User> {
+		return this.get(`/users/resolve?handle=${encodeURIComponent(handle)}`);
+	}
+
 	// --- Reactions ---
 
 	addReaction(channelId: string, messageId: string, emoji: string): Promise<void> {

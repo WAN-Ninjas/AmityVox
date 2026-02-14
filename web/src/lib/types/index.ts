@@ -18,6 +18,7 @@ export interface User {
 	accent_color: string | null;
 	pronouns: string | null;
 	flags: number;
+	handle?: string;
 	created_at: string;
 }
 
@@ -62,6 +63,7 @@ export interface Channel {
 	locked_at: string | null;
 	archived: boolean;
 	created_at: string;
+	recipients?: User[];
 }
 
 export type ChannelType = 'text' | 'voice' | 'dm' | 'group' | 'announcement' | 'forum' | 'stage';

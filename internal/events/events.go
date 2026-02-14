@@ -51,7 +51,9 @@ const (
 	// User/presence events.
 	SubjectPresenceUpdate      = "amityvox.presence.update"
 	SubjectUserUpdate          = "amityvox.user.update"
+	SubjectRelationshipAdd     = "amityvox.user.relationship_add"
 	SubjectRelationshipUpdate  = "amityvox.user.relationship_update"
+	SubjectRelationshipRemove  = "amityvox.user.relationship_remove"
 
 	// Voice events.
 	SubjectVoiceStateUpdate  = "amityvox.voice.state_update"
