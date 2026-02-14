@@ -11,6 +11,7 @@
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
+	import { addToast } from '$lib/stores/toast';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -205,6 +206,7 @@
 			}
 		} catch (err) {
 			console.error('Failed to close DM:', err);
+			addToast('Failed to close DM', 'error');
 		}
 	}
 
