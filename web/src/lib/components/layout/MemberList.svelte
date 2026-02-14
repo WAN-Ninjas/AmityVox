@@ -6,6 +6,8 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import { presenceMap } from '$lib/stores/presence';
 	import { addDMChannel } from '$lib/stores/dms';
+	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
+	import { addToast } from '$lib/stores/toast';
 	import { setGuildMembers, memberTimeouts } from '$lib/stores/members';
 	import { goto } from '$app/navigation';
 
@@ -49,6 +51,7 @@
 	);
 
 	const isOwner = $derived($currentGuild?.owner_id === $currentUser?.id);
+	const contextMemberRel = $derived(contextMenu ? $relationships.get(contextMenu.member.user_id) : undefined);
 
 	function openContextMenu(e: MouseEvent, member: GuildMember) {
 		e.preventDefault();
@@ -94,6 +97,17 @@
 		} catch (err: any) {
 			alert(err.message || 'Failed to create DM');
 			closeContextMenu();
+		}
+	}
+
+	async function addFriend(member: GuildMember) {
+		closeContextMenu();
+		try {
+			const rel = await api.addFriend(member.user_id);
+			addOrUpdateRelationship(rel);
+			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to send friend request', 'error');
 		}
 	}
 
@@ -185,6 +199,21 @@
 		>
 			Message
 		</button>
+		{#if !contextMemberRel || contextMemberRel.type === 'pending_incoming'}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => addFriend(contextMenu!.member)}
+			>
+				{contextMemberRel?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
+			</button>
+		{:else if contextMemberRel.type === 'pending_outgoing'}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-muted cursor-default"
+				disabled
+			>
+				Request Sent
+			</button>
+		{/if}
 		{#if isOwner}
 			<div class="my-1 border-t border-bg-modifier"></div>
 			<button
