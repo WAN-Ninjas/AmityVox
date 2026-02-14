@@ -7,6 +7,8 @@
 	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
 	import Avatar from '$lib/components/common/Avatar.svelte';
+	import { currentUser } from '$lib/stores/auth';
+	import { getDMDisplayName } from '$lib/utils/dm';
 
 	type Tab = 'all' | 'online' | 'pending' | 'blocked' | 'add';
 	let currentTab = $state<Tab>('all');
@@ -464,7 +466,7 @@
 							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-muted hover:bg-bg-modifier hover:text-text-secondary"
 							onclick={() => openDM(dm)}
 						>
-							<span class="truncate">{dm.name ?? 'Direct Message'}</span>
+							<span class="truncate">{getDMDisplayName(dm, $currentUser?.id)}</span>
 						</button>
 					{/each}
 				{/if}
