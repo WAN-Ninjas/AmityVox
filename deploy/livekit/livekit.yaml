@@ -5,3 +5,6 @@ rtc:
   port_range_end: 60000
   use_external_ip: false
   node_ip: 68.14.228.10
+turn:
+  enabled: true
+  udp_port: 443

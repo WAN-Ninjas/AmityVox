@@ -1,3 +1,9 @@
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
 amityvox.chat {
 	# Security headers applied to all responses.
 	header {
@@ -45,6 +51,15 @@ amityvox.chat {
 	# Serve static web client files.
 	handle {
 		root * /srv
+
+		# Immutable assets (content-hashed filenames) — cache forever.
+		@immutable path /_app/immutable/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+		# HTML and non-immutable assets — always revalidate to pick up new builds.
+		@html path / /index.html
+		header @html Cache-Control "no-cache"
+
 		try_files {path} /index.html
 		file_server
 	}
