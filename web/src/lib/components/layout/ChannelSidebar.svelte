@@ -6,7 +6,10 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import { presenceMap } from '$lib/stores/presence';
-	import { dmList } from '$lib/stores/dms';
+	import { dmList, removeDMChannel } from '$lib/stores/dms';
+	import ContextMenu from '$components/common/ContextMenu.svelte';
+	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
+	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
@@ -117,6 +120,9 @@
 	// Context menu
 	let contextMenu = $state<{ x: number; y: number; channelId: string; channelName: string; archived: boolean } | null>(null);
 
+	// DM context menu
+	let dmContextMenu = $state<{ x: number; y: number; channel: Channel } | null>(null);
+
 	function handleChannelClick(channelId: string) {
 		const guildId = $currentGuildId;
 		if (guildId) {
@@ -179,10 +185,25 @@
 	function openContextMenu(e: MouseEvent, channel: Channel) {
 		e.preventDefault();
 		contextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived };
+		dmContextMenu = null;
 	}
 
 	function closeContextMenu() {
 		contextMenu = null;
+	}
+
+	function markDMRead(channelId: string) {
+		api.ackChannel(channelId).catch(() => {});
+	}
+
+	async function closeDM(channelId: string) {
+		try {
+			await api.deleteChannel(channelId);
+			removeDMChannel(channelId);
+			if ($currentChannelId === channelId) {
+				goto('/app/friends');
+			}
+		} catch { /* silently fail */ }
 	}
 
 	function openEditModal(channelId: string, channelName: string) {
@@ -209,7 +230,7 @@
 	}
 </script>
 
-<svelte:window onclick={closeContextMenu} />
+<svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; }} />
 
 <aside class="flex h-full w-60 shrink-0 flex-col bg-bg-secondary" aria-label="Channel list">
 	<!-- Guild header -->
@@ -467,6 +488,7 @@
 						<button
 							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => goto(`/app/dms/${dm.id}`)}
+							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; contextMenu = null; }}
 						>
 							<Avatar name={dmName} size="sm" status={dm.owner_id ? ($presenceMap.get(dm.owner_id) ?? undefined) : undefined} />
 							<span class="flex-1 truncate">{dmName}</span>
@@ -541,6 +563,16 @@
 			Delete Channel
 		</button>
 	</div>
+{/if}
+
+<!-- DM context menu -->
+{#if dmContextMenu}
+	<ContextMenu x={dmContextMenu.x} y={dmContextMenu.y} onclose={() => (dmContextMenu = null)}>
+		<ContextMenuItem label="Open Message" onclick={() => { goto(`/app/dms/${dmContextMenu!.channel.id}`); dmContextMenu = null; }} />
+		<ContextMenuItem label="Mark as Read" onclick={() => { markDMRead(dmContextMenu!.channel.id); dmContextMenu = null; }} />
+		<ContextMenuDivider />
+		<ContextMenuItem label="Close DM" danger onclick={() => { closeDM(dmContextMenu!.channel.id); dmContextMenu = null; }} />
+	</ContextMenu>
 {/if}
 
 <!-- Invite Modal -->
