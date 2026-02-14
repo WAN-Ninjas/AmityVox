@@ -13,6 +13,7 @@ import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
 import { incrementUnread, loadReadState } from './unreads';
 import { addNotification } from './notifications';
 import { handleVoiceStateUpdate } from './voice';
+import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
@@ -33,6 +34,7 @@ export function connectGateway(token: string) {
 				loadGuilds();
 				loadDMs();
 				loadReadState();
+				loadRelationships();
 				updatePresence(ready.user.id, 'online');
 				// Load initial presence for all online guild members.
 				if (ready.presences) {
@@ -172,6 +174,7 @@ export function connectGateway(token: string) {
 			// --- Relationship events (friend requests) ---
 			case 'RELATIONSHIP_ADD': {
 				const rel = data as Relationship;
+				addOrUpdateRelationship(rel);
 				if (rel.type === 'pending_incoming') {
 					const senderName = rel.user?.display_name ?? rel.user?.username ?? 'Someone';
 					addNotification({
@@ -186,6 +189,16 @@ export function connectGateway(token: string) {
 						content: `${senderName} sent you a friend request`
 					});
 				}
+				break;
+			}
+			case 'RELATIONSHIP_UPDATE': {
+				const rel = data as Relationship;
+				addOrUpdateRelationship(rel);
+				break;
+			}
+			case 'RELATIONSHIP_REMOVE': {
+				const rel = data as { target_id: string };
+				removeRelationship(rel.target_id);
 				break;
 			}
 		}

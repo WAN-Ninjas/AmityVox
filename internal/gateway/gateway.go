@@ -757,7 +757,10 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 
 	// User-specific events: only dispatch to the targeted user.
 	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
-		if event.Type == "USER_UPDATE" {
+		if event.Type == "USER_UPDATE" ||
+			event.Type == "RELATIONSHIP_ADD" ||
+			event.Type == "RELATIONSHIP_UPDATE" ||
+			event.Type == "RELATIONSHIP_REMOVE" {
 			return event.UserID == client.userID
 		}
 	}

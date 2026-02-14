@@ -130,9 +130,11 @@ func (s *Server) registerMiddleware() {
 func (s *Server) registerRoutes() {
 	// Create domain handlers.
 	userH := &users.Handler{
-		Pool:     s.DB.Pool,
-		EventBus: s.EventBus,
-		Logger:   s.Logger,
+		Pool:           s.DB.Pool,
+		EventBus:       s.EventBus,
+		InstanceID:     s.InstanceID,
+		InstanceDomain: s.Config.Instance.Domain,
+		Logger:         s.Logger,
 	}
 	guildH := &guilds.Handler{
 		Pool:       s.DB.Pool,
@@ -274,11 +276,13 @@ func (s *Server) registerRoutes() {
 				r.Delete("/@me", userH.HandleDeleteSelf)
 				r.Get("/@me/guilds", userH.HandleGetSelfGuilds)
 				r.Get("/@me/dms", userH.HandleGetSelfDMs)
+				r.Get("/@me/relationships", userH.HandleGetRelationships)
 				r.Get("/@me/read-state", userH.HandleGetSelfReadState)
 				r.Get("/@me/sessions", userH.HandleGetSelfSessions)
 				r.Delete("/@me/sessions/{sessionID}", userH.HandleDeleteSelfSession)
 				r.Get("/@me/settings", userH.HandleGetUserSettings)
 				r.Patch("/@me/settings", userH.HandleUpdateUserSettings)
+				r.Get("/@me/relationships", userH.HandleGetRelationships)
 				r.Get("/@me/blocked", userH.HandleGetBlockedUsers)
 				r.Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
 				r.Get("/@me/bots", botH.HandleListMyBots)
@@ -301,6 +305,9 @@ func (s *Server) registerRoutes() {
 					r.Put("/{groupID}/channels/{channelID}", channelGroupH.HandleAddChannelToGroup)
 					r.Delete("/{groupID}/channels/{channelID}", channelGroupH.HandleRemoveChannelFromGroup)
 				})
+
+				// Handle resolution must be before /{userID} to avoid conflicts.
+				r.Get("/resolve", userH.HandleResolveHandle)
 
 				r.Get("/{userID}", userH.HandleGetUser)
 				r.Get("/{userID}/note", userH.HandleGetUserNote)

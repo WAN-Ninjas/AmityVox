@@ -10,11 +10,16 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/models"
@@ -28,6 +33,9 @@ const VersionNext = "amityvox-federation/1.1"
 
 // SupportedVersions lists all protocol versions this instance can negotiate.
 var SupportedVersions = []string{Version, VersionNext}
+
+// UsernameRegex validates usernames for federation and user lookup requests.
+var UsernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]{2,32}$`)
 
 // DefaultCapabilities lists the default capabilities advertised by this instance.
 var DefaultCapabilities = []string{
@@ -223,9 +231,40 @@ func VerifySignature(publicKeyPEM string, payload []byte, signatureHex string) (
 	return ed25519.Verify(pubKey, payload, sig), nil
 }
 
+// ValidateFederationDomain checks that a domain is a valid public hostname and
+// not an internal/private address to prevent SSRF attacks.
+func ValidateFederationDomain(domain string) error {
+	// Block obviously internal domains.
+	lower := strings.ToLower(domain)
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") ||
+		strings.HasSuffix(lower, ".internal") || strings.HasSuffix(lower, ".localhost") {
+		return fmt.Errorf("internal domain not allowed for federation")
+	}
+
+	// Resolve the domain and block private/loopback IPs.
+	ips, err := net.LookupHost(domain)
+	if err != nil {
+		return fmt.Errorf("domain does not resolve: %w", err)
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("domain %s resolves to private/loopback address", domain)
+		}
+	}
+	return nil
+}
+
 // DiscoverInstance fetches the .well-known/amityvox endpoint of a remote
 // instance and returns its discovery response.
 func DiscoverInstance(ctx context.Context, domain string) (*DiscoveryResponse, error) {
+	if err := ValidateFederationDomain(domain); err != nil {
+		return nil, fmt.Errorf("domain validation failed: %w", err)
+	}
+
 	url := fmt.Sprintf("https://%s/.well-known/amityvox", domain)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -235,7 +274,21 @@ func DiscoverInstance(ctx context.Context, domain string) (*DiscoveryResponse, e
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "AmityVox/0.1.0 (+federation)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("stopped after 5 redirects")
+			}
+			if r.URL.Scheme != "https" {
+				return errors.New("redirects must use https")
+			}
+			if err := ValidateFederationDomain(r.URL.Hostname()); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", url, err)
@@ -544,6 +597,72 @@ func (s *Service) GetPeerCapabilities(ctx context.Context, peerID string) ([]str
 		return DefaultCapabilities, nil
 	}
 	return caps, nil
+}
+
+// HandleUserLookup handles GET /federation/v1/users/lookup?username=... — a public
+// endpoint that allows remote instances to look up a local user by username.
+// Rate-limited. Returns 403 if the instance's federation_mode is not "open".
+func (s *Service) HandleUserLookup(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		http.Error(w, "missing username parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Validate username format.
+	if !UsernameRegex.MatchString(username) {
+		http.Error(w, "invalid username", http.StatusBadRequest)
+		return
+	}
+
+	// Check federation mode.
+	var mode string
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT federation_mode FROM instances WHERE id = $1`, s.instanceID).Scan(&mode)
+	if err != nil {
+		s.logger.Error("user lookup: failed to get federation mode", slog.String("error", err.Error()))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if mode != "open" {
+		http.Error(w, "federation lookups are not enabled on this instance", http.StatusForbidden)
+		return
+	}
+
+	// Look up the user.
+	var user struct {
+		ID          string
+		Username    string
+		DisplayName *string
+		AvatarID    *string
+		Bio         *string
+		CreatedAt   time.Time
+	}
+	err = s.pool.QueryRow(r.Context(),
+		`SELECT id, username, display_name, avatar_id, bio, created_at
+		 FROM users
+		 WHERE LOWER(username) = LOWER($1) AND instance_id = $2`,
+		username, s.instanceID,
+	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.AvatarID, &user.Bio, &user.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			http.Error(w, "user not found", http.StatusNotFound)
+		} else {
+			s.logger.Error("federation user lookup failed", slog.String("error", err.Error()))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":           user.ID,
+		"username":     user.Username,
+		"display_name": user.DisplayName,
+		"avatar_id":    user.AvatarID,
+		"bio":          user.Bio,
+		"created_at":   user.CreatedAt.Format(time.RFC3339),
+	})
 }
 
 // PeerSupportsCapability checks if a given peer supports a specific capability.
