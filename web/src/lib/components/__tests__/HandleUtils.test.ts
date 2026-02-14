@@ -49,9 +49,14 @@ describe('parseHandle', () => {
 		expect(result).toEqual({ username: 'user.name-test', domain: null });
 	});
 
-	it('trims surrounding whitespace', () => {
+	it('trims surrounding whitespace from federated handle', () => {
 		const result = parseHandle('  @horatio@amityvox.chat  ');
 		expect(result).toEqual({ username: 'horatio', domain: 'amityvox.chat' });
+	});
+
+	it('trims surrounding whitespace from local handle', () => {
+		const result = parseHandle('  @horatio  ');
+		expect(result).toEqual({ username: 'horatio', domain: null });
 	});
 
 	it('only splits on the first @ after username', () => {

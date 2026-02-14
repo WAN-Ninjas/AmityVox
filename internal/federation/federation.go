@@ -601,7 +601,7 @@ func (s *Service) GetPeerCapabilities(ctx context.Context, peerID string) ([]str
 
 // HandleUserLookup handles GET /federation/v1/users/lookup?username=... — a public
 // endpoint that allows remote instances to look up a local user by username.
-// Rate-limited. Returns 403 if federation mode is closed.
+// Rate-limited. Returns 403 if the instance's federation_mode is not "open".
 func (s *Service) HandleUserLookup(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	if username == "" {
