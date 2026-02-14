@@ -413,7 +413,11 @@
 			instance = await api.getAdminInstance();
 			instanceName = instance?.name ?? '';
 			instanceDesc = instance?.description ?? '';
-			instanceFedMode = instance?.federation_mode ?? 'allow';
+			const rawMode = instance?.federation_mode ?? 'closed';
+			instanceFedMode =
+				rawMode === 'allow' ? 'open' :
+				rawMode === 'deny' || rawMode === 'disabled' ? 'closed' :
+				rawMode;
 		} catch {}
 		finally { loadingInstance = false; }
 	}
