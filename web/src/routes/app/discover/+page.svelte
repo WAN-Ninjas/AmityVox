@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
+	import { loadGuilds as reloadGuilds } from '$lib/stores/guilds';
 	import type { Guild } from '$lib/types';
 
 	let guilds = $state<Guild[]>([]);
@@ -47,8 +48,8 @@
 	async function joinGuild(guild: Guild) {
 		joining = guild.id;
 		try {
-			// Try to join via invite or direct join for public guilds
 			await api.joinGuild(guild.id);
+			await reloadGuilds();
 			goto(`/app/guilds/${guild.id}`);
 		} catch (err: any) {
 			error = err.message || 'Failed to join server';
