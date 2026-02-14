@@ -18,6 +18,7 @@
 	let iconFile = $state<File | null>(null);
 	let iconPreview = $state<string | null>(null);
 	let guildTags = $state<string[]>([]);
+	let discoverable = $state(false);
 	let newTag = $state('');
 	let saving = $state(false);
 	let error = $state('');
@@ -205,6 +206,7 @@
 			description = $currentGuild.description ?? '';
 			verificationLevel = $currentGuild.verification_level ?? 0;
 			guildTags = [...($currentGuild.tags ?? [])];
+			discoverable = $currentGuild.discoverable ?? false;
 		}
 	});
 
@@ -749,7 +751,8 @@
 			const payload: Record<string, unknown> = {
 				name, description: description || undefined,
 				verification_level: verificationLevel,
-				tags: guildTags
+				tags: guildTags,
+				discoverable
 			};
 			if (iconId) payload.icon_id = iconId;
 
@@ -1536,6 +1539,17 @@
 							{/each}
 						</div>
 					{/if}
+				</div>
+
+				<!-- Server Discovery -->
+				<div class="mb-6">
+					<label class="flex items-center gap-3">
+						<input type="checkbox" bind:checked={discoverable} class="rounded" />
+						<div>
+							<span class="text-sm font-medium text-text-primary">Show in Server Discovery</span>
+							<p class="text-xs text-text-muted">Allow anyone to find and join this server from the Discover Servers page</p>
+						</div>
+					</label>
 				</div>
 
 				<button class="btn-primary" onclick={handleSave} disabled={saving}>

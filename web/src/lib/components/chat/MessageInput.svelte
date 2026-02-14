@@ -654,7 +654,7 @@
 				{#if !isEditing}
 					<div class="giphy-picker relative self-center">
 						<button
-							class="rounded border border-text-muted px-1 py-0.5 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
+							class="flex h-5 items-center rounded border border-text-muted px-1 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
 							title="GIF"
 							onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
