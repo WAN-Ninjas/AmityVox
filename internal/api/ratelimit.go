@@ -21,11 +21,13 @@ const (
 	authedRateLimit  = 6000
 	authedRateWindow = 1 * time.Minute
 
-	// Unauthenticated global rate limit: 600 requests per minute per IP.
-	unauthRateLimit  = 600
+	// Unauthenticated global rate limit: 1200 requests per minute per IP.
+	// Lower than authed to discourage scraping while still allowing browsing.
+	unauthRateLimit  = 1200
 	unauthRateWindow = 1 * time.Minute
 
 	// Auth rate limit: 100 requests per minute per IP (login/register).
+	// Kept strict to protect against credential brute-force attacks.
 	authRateLimit  = 100
 	authRateWindow = 1 * time.Minute
 
