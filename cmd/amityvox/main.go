@@ -307,6 +307,7 @@ func runServe() error {
 	// Create and start federation sync service (message routing between instances).
 	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
 	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	srv.Router.Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
 	if cfg.Instance.FederationMode != "closed" {
 		syncSvc.StartRouter(ctx)
 		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))

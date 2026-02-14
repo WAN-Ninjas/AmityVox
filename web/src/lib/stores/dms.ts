@@ -20,11 +20,13 @@ export const dmList = derived(dmChannels, ($dms) =>
 export async function loadDMs() {
 	try {
 		const list = await api.getMyDMs();
-		const map = new Map<string, Channel>();
-		for (const ch of list) {
-			map.set(ch.id, ch);
-		}
-		dmChannels.set(map);
+		dmChannels.update((existing) => {
+			const merged = new Map(existing);
+			for (const ch of list) {
+				merged.set(ch.id, ch);
+			}
+			return merged;
+		});
 		dmLoaded.set(true);
 	} catch {
 		// Silently fail — DMs may not be available yet.
