@@ -17,9 +17,6 @@ services:
       dockerfile: deploy/docker/Dockerfile
     container_name: amityvox
     restart: unless-stopped
-    ports:
-      - "8080:8080"
-      - "8081:8081"
     env_file:
       - ../../.env
     environment:
@@ -68,8 +65,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-amityvox}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-amityvox} -d ${POSTGRES_DB:-amityvox}"]
       interval: 5s
@@ -88,9 +83,6 @@ services:
     command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
     volumes:
       - nats_data:/data
-    ports:
-      - "4222:4222"
-      - "8222:8222"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
       interval: 30s
@@ -108,8 +100,6 @@ services:
     restart: unless-stopped
     volumes:
       - dragonfly_data:/data
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -129,9 +119,6 @@ services:
       - garage_data:/var/lib/garage/data
       - garage_meta:/var/lib/garage/meta
       - ../../deploy/garage/garage.toml:/etc/garage.toml:ro
-    ports:
-      - "3900:3900"
-      - "3902:3902"
     environment:
       GARAGE_ALLOW_WORLD_READABLE_TMPDIR: "true"
     networks:
@@ -145,8 +132,7 @@ services:
     container_name: amityvox-livekit
     restart: unless-stopped
     ports:
-      - "7880:7880"
-      - "7881:7881"
+      - "443:443/udp"
       - "50000-50100:50000-50100/udp"
     volumes:
       - ../../deploy/livekit/livekit.yaml:/etc/livekit.yaml:ro
@@ -165,8 +151,6 @@ services:
     restart: unless-stopped
     volumes:
       - meili_data:/meili_data
-    ports:
-      - "7700:7700"
     environment:
       MEILI_ENV: development
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-}
@@ -209,7 +193,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
     volumes:
       - ../../deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - web_build:/srv:ro
@@ -232,7 +215,7 @@ services:
       dockerfile: deploy/docker/Dockerfile
       target: frontend
     container_name: amityvox-web-init
-    entrypoint: ["sh", "-c", "cp -r /web/build/* /srv/"]
+    entrypoint: ["sh", "-c", "rm -rf /srv/_app && cp -r /web/build/* /srv/"]
     volumes:
       - web_build:/srv
     networks:
