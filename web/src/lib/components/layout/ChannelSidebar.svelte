@@ -193,7 +193,7 @@
 	}
 
 	function markDMRead(channelId: string) {
-		api.ackChannel(channelId).catch(() => {});
+		api.ackChannel(channelId).catch((err) => console.error('Failed to mark DM as read:', err));
 	}
 
 	async function closeDM(channelId: string) {
@@ -203,7 +203,9 @@
 			if ($currentChannelId === channelId) {
 				goto('/app/friends');
 			}
-		} catch { /* silently fail */ }
+		} catch (err) {
+			console.error('Failed to close DM:', err);
+		}
 	}
 
 	function openEditModal(channelId: string, channelName: string) {
