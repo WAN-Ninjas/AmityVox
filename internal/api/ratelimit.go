@@ -44,10 +44,12 @@ const (
 	webhookRateWindow = 1 * time.Minute
 )
 
-// rateLimitMiddleware returns middleware that enforces rate limits using
+// RateLimitGlobal returns middleware that enforces rate limits using
 // DragonflyDB/Redis. It applies a global rate limit per user (or IP for
 // unauthenticated requests) and tighter limits for specific endpoint categories.
-func (s *Server) rateLimitMiddleware() func(http.Handler) http.Handler {
+// Must be applied AFTER auth middleware on authenticated routes so that
+// auth.UserIDFromContext returns the authenticated user ID.
+func (s *Server) RateLimitGlobal() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if s.Cache == nil {

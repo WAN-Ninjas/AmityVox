@@ -91,7 +91,7 @@ func TestSetRateLimitHeaders(t *testing.T) {
 func TestRateLimitMiddleware_NoCache(t *testing.T) {
 	// When Cache is nil, middleware should pass through.
 	s := &Server{Cache: nil}
-	mw := s.rateLimitMiddleware()
+	mw := s.RateLimitGlobal()
 
 	called := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

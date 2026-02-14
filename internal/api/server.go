@@ -123,7 +123,9 @@ func (s *Server) registerMiddleware() {
 	s.Router.Use(middleware.Compress(5))
 	s.Router.Use(middleware.Timeout(30 * time.Second))
 	s.Router.Use(maxBodySize(1 << 20)) // 1MB default body limit
-	s.Router.Use(s.rateLimitMiddleware())
+	// Rate limiting is applied per-route group in registerRoutes so that
+	// authenticated routes run AFTER auth.RequireAuth, allowing the middleware
+	// to key on userID (6000 req/min) instead of falling back to IP (1200 req/min).
 }
 
 // registerRoutes mounts all API route groups on the router.
@@ -238,36 +240,47 @@ func (s *Server) registerRoutes() {
 		Logger:   s.Logger,
 	}
 
-	// Health check — outside versioned API prefix.
-	s.Router.Get("/health", s.handleHealthCheck)
-	s.Router.Get("/health/deep", s.handleDeepHealthCheck)
+	// Health check — outside versioned API prefix, IP-based rate limited.
+	s.Router.With(s.RateLimitGlobal()).Get("/health", s.handleHealthCheck)
+	s.Router.With(s.RateLimitGlobal()).Get("/health/deep", s.handleDeepHealthCheck)
 
 	// Prometheus metrics endpoint.
-	s.Router.Get("/metrics", s.handleMetrics)
+	s.Router.With(s.RateLimitGlobal()).Get("/metrics", s.handleMetrics)
 
 	// API v1 routes.
 	s.Router.Route("/api/v1", func(r chi.Router) {
-		// Auth routes — public, no Bearer token required.
+		// Auth routes.
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/register", s.handleRegister)
-			r.Post("/login", s.handleLogin)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/logout", s.handleLogout)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/password", s.handleChangePassword)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/email", s.handleChangeEmail)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/enable", s.handleTOTPEnable)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/totp/verify", s.handleTOTPVerify)
-			r.With(auth.RequireAuth(s.AuthService)).Delete("/totp", s.handleTOTPDisable)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/backup-codes", s.handleGenerateBackupCodes)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/backup-codes/verify", s.handleConsumeBackupCode)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
-			r.With(auth.RequireAuth(s.AuthService)).Post("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
+			// Public auth endpoints (login/register) — IP-based rate limiting.
+			r.Group(func(r chi.Router) {
+				r.Use(s.RateLimitGlobal())
+				r.Post("/register", s.handleRegister)
+				r.Post("/login", s.handleLogin)
+			})
+
+			// Authenticated auth-management endpoints — user-based rate limiting.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireAuth(s.AuthService))
+				r.Use(s.RateLimitGlobal())
+				r.Post("/logout", s.handleLogout)
+				r.Post("/password", s.handleChangePassword)
+				r.Post("/email", s.handleChangeEmail)
+				r.Post("/totp/enable", s.handleTOTPEnable)
+				r.Post("/totp/verify", s.handleTOTPVerify)
+				r.Delete("/totp", s.handleTOTPDisable)
+				r.Post("/backup-codes", s.handleGenerateBackupCodes)
+				r.Post("/backup-codes/verify", s.handleConsumeBackupCode)
+				r.Post("/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
+				r.Post("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
+				r.Post("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
+				r.Post("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
+			})
 		})
 
 		// Authenticated routes — require Bearer token.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireAuth(s.AuthService))
+			r.Use(s.RateLimitGlobal()) // Runs after auth: keys on userID (6000 req/min).
 
 			// User routes.
 			r.Route("/users", func(r chi.Router) {
@@ -967,16 +980,18 @@ func (s *Server) registerRoutes() {
 			})
 		})
 
-		// Public guild widget embed (no auth).
-		r.Get("/guilds/{guildID}/widget.json", widgetH.HandleGetGuildWidgetEmbed)
+		// Public routes — rate limited by IP (no authenticated user context).
+		r.Group(func(r chi.Router) {
+			r.Use(s.RateLimitGlobal())
 
-		// File serving — public, no auth required (used by <img> tags).
-		if s.Media != nil {
-			r.Get("/files/{fileID}", s.Media.HandleGetFile)
-		}
+			r.Get("/guilds/{guildID}/widget.json", widgetH.HandleGetGuildWidgetEmbed)
 
-		// Webhook execution — uses token auth, no Bearer token needed.
-		r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
+			if s.Media != nil {
+				r.Get("/files/{fileID}", s.Media.HandleGetFile)
+			}
+
+			r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
+		})
 	})
 
 	// Start outgoing webhook event subscriber (delivers events to outgoing webhook URLs).

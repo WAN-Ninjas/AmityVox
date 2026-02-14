@@ -301,13 +301,14 @@ func runServe() error {
 	srv.Notifications = notifSvc
 	srv.Version = version
 
-	// Mount federation endpoints.
-	srv.Router.Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
+	// Mount federation endpoints (rate limited by IP — no auth context).
+	fedRL := srv.RateLimitGlobal()
+	srv.Router.With(fedRL).Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
 
 	// Create and start federation sync service (message routing between instances).
 	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
-	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
-	srv.Router.Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
+	srv.Router.With(fedRL).Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	srv.Router.With(fedRL).Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
 	if cfg.Instance.FederationMode != "closed" {
 		syncSvc.StartRouter(ctx)
 		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))
