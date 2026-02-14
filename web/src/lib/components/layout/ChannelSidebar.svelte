@@ -12,7 +12,7 @@
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { addToast } from '$lib/stores/toast';
-	import { pendingIncomingCount } from '$lib/stores/relationships';
+	import { pendingIncomingCount, relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -197,6 +197,18 @@
 
 	function markDMRead(channelId: string) {
 		api.ackChannel(channelId).catch((err) => console.error('Failed to mark DM as read:', err));
+	}
+
+	async function addFriendFromDM(channel: Channel) {
+		const recipient = getDMRecipient(channel, $currentUser?.id);
+		if (!recipient) return;
+		try {
+			const rel = await api.addFriend(recipient.id);
+			addOrUpdateRelationship(rel);
+			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to send friend request', 'error');
+		}
 	}
 
 	async function closeDM(channelId: string) {
@@ -582,6 +594,18 @@
 	<ContextMenu x={dmContextMenu.x} y={dmContextMenu.y} onclose={() => (dmContextMenu = null)}>
 		<ContextMenuItem label="Open Message" onclick={() => { goto(`/app/dms/${dmContextMenu!.channel.id}`); dmContextMenu = null; }} />
 		<ContextMenuItem label="Mark as Read" onclick={() => { markDMRead(dmContextMenu!.channel.id); dmContextMenu = null; }} />
+		{@const dmRecip = getDMRecipient(dmContextMenu.channel, $currentUser?.id)}
+		{#if dmRecip}
+			{@const dmRel = $relationships.get(dmRecip.id)}
+			{#if !dmRel || dmRel.type === 'pending_incoming'}
+				<ContextMenuItem
+					label={dmRel?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
+					onclick={() => { addFriendFromDM(dmContextMenu!.channel); dmContextMenu = null; }}
+				/>
+			{:else if dmRel.type === 'pending_outgoing'}
+				<ContextMenuItem label="Request Sent" disabled />
+			{/if}
+		{/if}
 		<ContextMenuDivider />
 		<ContextMenuItem label="Close DM" danger onclick={() => { closeDM(dmContextMenu!.channel.id); dmContextMenu = null; }} />
 	</ContextMenu>
