@@ -5,6 +5,7 @@
 	import { presenceMap } from '$lib/stores/presence';
 	import { currentUser } from '$lib/stores/auth';
 	import { addToast } from '$lib/stores/toast';
+	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
 	import { goto } from '$app/navigation';
 	import Avatar from './Avatar.svelte';
 
@@ -26,6 +27,23 @@
 
 	const isSelf = $derived($currentUser?.id === userId);
 	const status = $derived($presenceMap.get(userId) ?? 'offline');
+	const relationship = $derived($relationships.get(userId));
+
+	let addingFriend = $state(false);
+
+	async function handleAddFriend() {
+		if (addingFriend) return;
+		addingFriend = true;
+		try {
+			const rel = await api.addFriend(userId);
+			addOrUpdateRelationship(rel);
+			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to send friend request', 'error');
+		} finally {
+			addingFriend = false;
+		}
+	}
 
 	$effect(() => {
 		api.getUser(userId)
@@ -188,6 +206,22 @@
 					<button class="btn-primary flex-1 text-sm" onclick={handleMessage}>
 						Message
 					</button>
+					{#if !relationship || relationship.type === 'pending_incoming'}
+						<button
+							class="flex-1 rounded px-3 py-1.5 text-sm font-medium transition-colors {relationship?.type === 'pending_incoming' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-brand-500 text-white hover:bg-brand-600'}"
+							onclick={handleAddFriend}
+							disabled={addingFriend}
+						>
+							{addingFriend ? '...' : relationship?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
+						</button>
+					{:else if relationship.type === 'pending_outgoing'}
+						<button
+							class="flex-1 cursor-default rounded bg-bg-modifier px-3 py-1.5 text-sm font-medium text-text-muted"
+							disabled
+						>
+							Request Sent
+						</button>
+					{/if}
 				</div>
 			{/if}
 		</div>
