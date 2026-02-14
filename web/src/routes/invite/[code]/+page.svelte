@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { updateGuild } from '$lib/stores/guilds';
 
 	let guildName = $state('');
 	let memberCount = $state(0);
@@ -47,6 +48,7 @@
 		joining = true;
 		try {
 			const guild = await api.acceptInvite(code);
+			updateGuild(guild);
 			addToast(`Joined ${guildName || 'server'}!`, 'success');
 			goto(`/app/guilds/${guild.id}`);
 		} catch (err: any) {
