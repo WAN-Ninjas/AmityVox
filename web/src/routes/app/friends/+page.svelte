@@ -9,6 +9,7 @@
 	import Avatar from '$lib/components/common/Avatar.svelte';
 	import { currentUser } from '$lib/stores/auth';
 	import { getDMDisplayName } from '$lib/utils/dm';
+	import { pendingIncomingCount } from '$lib/stores/relationships';
 
 	type Tab = 'all' | 'online' | 'pending' | 'blocked' | 'add';
 	let currentTab = $state<Tab>('all');
@@ -196,7 +197,7 @@
 				{ id: 'add', label: 'Add Friend' }
 			] as tab (tab.id)}
 				<button
-					class="rounded px-3 py-1 text-xs transition-colors"
+					class="flex items-center gap-1 rounded px-3 py-1 text-xs transition-colors"
 					class:bg-brand-500={currentTab === tab.id && tab.id === 'add'}
 					class:text-white={currentTab === tab.id && tab.id === 'add'}
 					class:bg-bg-modifier={currentTab === tab.id && tab.id !== 'add'}
@@ -207,6 +208,11 @@
 					onclick={() => (currentTab = tab.id as Tab)}
 				>
 					{tab.label}
+					{#if tab.id === 'pending' && $pendingIncomingCount > 0}
+						<span class="flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+							{$pendingIncomingCount}
+						</span>
+					{/if}
 				</button>
 			{/each}
 		</div>

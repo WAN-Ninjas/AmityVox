@@ -3,6 +3,8 @@
 	import { channels } from '$lib/stores/channels';
 	import { unreadCounts } from '$lib/stores/unreads';
 	import { unreadNotificationCount } from '$lib/stores/notifications';
+	import { pendingIncomingCount } from '$lib/stores/relationships';
+	import { dmChannels } from '$lib/stores/dms';
 	import { currentUser } from '$lib/stores/auth';
 	import { isDndActive } from '$lib/stores/settings';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -29,6 +31,15 @@
 		return false;
 	}
 
+	// Badge count for the Home button: pending friend requests + unread DMs.
+	const homeBadgeCount = $derived.by(() => {
+		let dmUnreads = 0;
+		for (const [channelId, n] of $unreadCounts) {
+			if (n > 0 && $dmChannels.has(channelId)) dmUnreads += n;
+		}
+		return dmUnreads + $pendingIncomingCount;
+	});
+
 	let showCreateModal = $state(false);
 
 	function selectGuild(id: string) {
@@ -39,7 +50,7 @@
 <nav class="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto bg-bg-floating py-3" aria-label="Server list">
 	<!-- Home / DMs button -->
 	<button
-		class="flex h-12 w-12 items-center justify-center rounded-2xl bg-bg-tertiary text-text-primary transition-all hover:rounded-xl hover:bg-brand-500"
+		class="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-bg-tertiary text-text-primary transition-all hover:rounded-xl hover:bg-brand-500"
 		class:!rounded-xl={$currentGuildId === null}
 		class:!bg-brand-500={$currentGuildId === null}
 		onclick={() => { setGuild(null); goto('/app'); }}
@@ -48,6 +59,11 @@
 		<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
 			<path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
 		</svg>
+		{#if homeBadgeCount > 0}
+			<span class="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+				{homeBadgeCount > 99 ? '99+' : homeBadgeCount}
+			</span>
+		{/if}
 	</button>
 
 	<div class="mx-auto w-8 border-t border-bg-modifier"></div>
