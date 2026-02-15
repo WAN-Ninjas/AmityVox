@@ -25,9 +25,8 @@
 		if (!search.trim()) {
 			return categories.find((c) => c.id === activeCategory)?.emojis ?? [];
 		}
-		// Simple search: return emojis from all categories
-		// (since we can't really search emoji by name without a mapping, just show all)
-		return categories.flatMap((c) => c.emojis);
+		// Simple search: return emojis from all categories, deduplicated to avoid key conflicts.
+		return [...new Set(categories.flatMap((c) => c.emojis))];
 	});
 
 	function handleClickOutside(e: MouseEvent) {

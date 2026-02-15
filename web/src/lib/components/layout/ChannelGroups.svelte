@@ -330,7 +330,7 @@
 				{#if group.channels.length === 0}
 					<p class="px-3 py-1 text-2xs text-text-muted italic">Drag channels here</p>
 				{:else}
-					{#each group.channels as channelId (channelId)}
+					{#each [...new Set(group.channels)] as channelId (channelId)}
 						{@const unread = $unreadCounts.get(channelId) ?? 0}
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
 						{@const isVoice = getChannelType(channelId) === 'voice' || getChannelType(channelId) === 'stage'}

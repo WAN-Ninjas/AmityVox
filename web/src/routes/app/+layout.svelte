@@ -99,6 +99,7 @@
 	</div>
 {:else if $currentUser}
 	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary">
+		<div class="accent-stripe"></div>
 		<!-- Announcement banner at the very top -->
 		<AnnouncementBanner />
 

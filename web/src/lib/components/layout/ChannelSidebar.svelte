@@ -274,7 +274,7 @@
 
 <svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; }} />
 
-<aside class="flex h-full w-60 shrink-0 flex-col bg-bg-secondary" aria-label="Channel list">
+<aside class="flex h-full w-56 shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" aria-label="Channel list">
 	<!-- Guild header -->
 	{#if $currentGuild}
 		<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
@@ -324,7 +324,7 @@
 			{#if activeTextChannels.length > 0 || $currentGuild}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4 first:pt-0">
 					<button
-						class="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
 						onclick={() => toggleSection('text-channels')}
 						title={isSectionCollapsed('text-channels') ? 'Expand Text Channels' : 'Collapse Text Channels'}
 					>
@@ -355,8 +355,8 @@
 							onclick={() => handleChannelClick(channel.id)}
 							oncontextmenu={(e) => openContextMenu(e, channel)}
 						>
-							<span class="text-lg leading-none">#</span>
-							<span class="flex-1 truncate">{channel.name}</span>
+							<span class="text-lg leading-none text-brand-500 font-mono">#</span>
+							<span class="flex-1 truncate font-mono">{channel.name}</span>
 							{#if mentions > 0 && $currentChannelId !== channel.id}
 								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{mentions} mention{mentions !== 1 ? 's' : ''}">
 									@{mentions > 99 ? '99+' : mentions}
@@ -375,7 +375,7 @@
 			{#if activeVoiceChannels.length > 0 || $currentGuild}
 				<div class="mb-1 flex items-center justify-between px-1 pt-4">
 					<button
-						class="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
 						onclick={() => toggleSection('voice-channels')}
 						title={isSectionCollapsed('voice-channels') ? 'Expand Voice Channels' : 'Collapse Voice Channels'}
 					>
@@ -573,7 +573,7 @@
 				</p>
 			</div>
 			<button
-				class="text-orange-500 hover:text-orange-400"
+				class="text-orange-400 hover:text-orange-300"
 				onclick={() => (showReportIssue = true)}
 				title="Report Issue"
 			>

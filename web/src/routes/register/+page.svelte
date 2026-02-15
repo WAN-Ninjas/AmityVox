@@ -51,7 +51,7 @@
 
 			<form onsubmit={handleSubmit}>
 				<div class="mb-4">
-					<label for="username" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="username" class="mb-2 block font-mono text-xs font-bold uppercase tracking-wide text-text-muted">
 						Username
 					</label>
 					<input
@@ -67,7 +67,7 @@
 				</div>
 
 				<div class="mb-4">
-					<label for="email" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="email" class="mb-2 block font-mono text-xs font-bold uppercase tracking-wide text-text-muted">
 						Email
 					</label>
 					<input
@@ -81,7 +81,7 @@
 				</div>
 
 				<div class="mb-4">
-					<label for="password" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="password" class="mb-2 block font-mono text-xs font-bold uppercase tracking-wide text-text-muted">
 						Password
 					</label>
 					<input
@@ -96,7 +96,7 @@
 				</div>
 
 				<div class="mb-6">
-					<label for="confirmPassword" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="confirmPassword" class="mb-2 block font-mono text-xs font-bold uppercase tracking-wide text-text-muted">
 						Confirm Password
 					</label>
 					<input
