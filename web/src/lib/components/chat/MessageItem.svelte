@@ -12,6 +12,7 @@
 	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
 	import TranslateButton from '$components/chat/TranslateButton.svelte';
 	import CrossChannelQuote from '$components/chat/CrossChannelQuote.svelte';
+	import Modal from '$components/common/Modal.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
@@ -43,6 +44,9 @@
 	let showQuoteInChannel = $state(false);
 	let quoteTargetChannelId = $state('');
 	let quotingInChannel = $state(false);
+	let showCreateThread = $state(false);
+	let newThreadName = $state('');
+	let creatingThread = $state(false);
 
 	// --- Blocked user support ---
 	const isAuthorBlocked = $derived($blockedUserIds.has(message.author_id));
@@ -203,15 +207,26 @@
 		addToast('Link copied', 'info');
 	}
 
-	async function handleCreateThread() {
+	function handleCreateThread() {
 		contextMenu = null;
-		const name = message.content?.slice(0, 50) || 'New Thread';
+		newThreadName = message.content?.slice(0, 50)?.trim() || 'New Thread';
+		showCreateThread = true;
+	}
+
+	async function submitCreateThread() {
+		if (creatingThread) return;
+		const name = newThreadName.trim();
+		if (!name) return;
+		creatingThread = true;
 		try {
 			const threadChannel = await api.createThread(message.channel_id, message.id, name);
+			showCreateThread = false;
 			addToast('Thread created', 'success');
 			onopenthread?.(threadChannel, message);
 		} catch (err: any) {
 			addToast('Failed to create thread', 'error');
+		} finally {
+			creatingThread = false;
 		}
 	}
 
@@ -828,3 +843,27 @@
 		</div>
 	</div>
 {/if}
+
+<!-- Create Thread Modal -->
+<Modal open={showCreateThread} title="Create Thread" onclose={() => !creatingThread && (showCreateThread = false)}>
+	<div class="mb-4">
+		<label for="threadName" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+			Thread Name
+		</label>
+		<input
+			id="threadName"
+			type="text"
+			class="input w-full"
+			bind:value={newThreadName}
+			placeholder="Give this thread a name"
+			maxlength="100"
+			onkeydown={(e) => e.key === 'Enter' && submitCreateThread()}
+		/>
+	</div>
+	<div class="flex justify-end gap-2">
+		<button class="btn-secondary" disabled={creatingThread} onclick={() => (showCreateThread = false)}>Cancel</button>
+		<button class="btn-primary" onclick={submitCreateThread} disabled={creatingThread || !newThreadName.trim()}>
+			{creatingThread ? 'Creating...' : 'Create Thread'}
+		</button>
+	</div>
+</Modal>

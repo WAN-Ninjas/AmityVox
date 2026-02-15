@@ -2,7 +2,7 @@
 	import { page } from '$app/stores';
 	import type { Snippet } from 'svelte';
 	import { setGuild } from '$lib/stores/guilds';
-	import { loadChannels } from '$lib/stores/channels';
+	import { loadChannels, loadHiddenThreads } from '$lib/stores/channels';
 
 	interface Props {
 		children: Snippet;
@@ -16,6 +16,7 @@
 		if (guildId) {
 			setGuild(guildId);
 			loadChannels(guildId);
+			loadHiddenThreads();
 		}
 	});
 </script>

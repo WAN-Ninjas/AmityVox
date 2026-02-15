@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import type { Channel, Message, ChannelFollower } from '$lib/types';
-	import { setChannel, currentChannel, currentChannelId } from '$lib/stores/channels';
+	import { setChannel, currentChannel, currentChannelId, pendingThreadOpen, activeThreadId, channels as channelsStore } from '$lib/stores/channels';
 	import { currentGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
@@ -120,10 +120,33 @@
 		}
 	}
 
-	function openThread(threadChannel: Channel, parentMessage: Message) {
+	function openThread(threadChannel: Channel, parentMessage: Message | null = null) {
 		activeThread = { channel: threadChannel, parentMessage };
+		activeThreadId.set(threadChannel.id);
 		showPins = false;
 	}
+
+	// React to sidebar thread/channel clicks via the pendingThreadOpen store.
+	// Only clear the signal after successful resolution so it retries when channels load.
+	$effect(() => {
+		const threadId = $pendingThreadOpen;
+		const allChannels = $channelsStore;
+		if (threadId) {
+			if (threadId === '__close__') {
+				activeThread = null;
+				activeThreadId.set(null);
+				pendingThreadOpen.set(null);
+			} else {
+				const thread = allChannels.get(threadId);
+				if (thread) {
+					openThread(thread);
+					pendingThreadOpen.set(null);
+				}
+				// If thread not found yet, leave pendingThreadOpen set so
+				// the effect retries when channelsStore updates.
+			}
+		}
+	});
 
 	// --- Channel Followers ---
 
@@ -131,6 +154,7 @@
 		showFollowers = !showFollowers;
 		if (showFollowers) {
 			activeThread = null;
+			activeThreadId.set(null);
 			showPins = false;
 			loadFollowers();
 		}
@@ -246,7 +270,7 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<TopBar
 			onToggleMembers={() => (showMembers = !showMembers)}
-			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; showFollowers = false; } }}
+			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; activeThreadId.set(null); showFollowers = false; } }}
 			onToggleFollowers={toggleFollowers}
 			{showPins}
 			{showFollowers}
@@ -286,7 +310,7 @@
 		<ThreadPanel
 			threadChannel={activeThread.channel}
 			parentMessage={activeThread.parentMessage}
-			onclose={() => (activeThread = null)}
+			onclose={() => { activeThread = null; activeThreadId.set(null); }}
 		/>
 	{/if}
 

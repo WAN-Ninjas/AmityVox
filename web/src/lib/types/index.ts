@@ -62,6 +62,8 @@ export interface Channel {
 	locked_by: string | null;
 	locked_at: string | null;
 	archived: boolean;
+	parent_channel_id: string | null;
+	last_activity_at: string | null;
 	created_at: string;
 	recipients?: User[];
 }
