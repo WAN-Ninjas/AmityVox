@@ -149,7 +149,7 @@ Total memory: ~700 MB - 1.2 GB.
 
 ## CLI Reference
 
-```
+```bash
 docker exec amityvox amityvox <command>
 ```
 

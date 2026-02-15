@@ -120,7 +120,7 @@ services:
   # DragonflyDB — cache and sessions (Redis-compatible)
   # ============================================================
   dragonflydb:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27
     container_name: amityvox-dragonflydb
     restart: unless-stopped
     volumes:
@@ -155,7 +155,7 @@ services:
   # LiveKit — voice and video (WebRTC SFU)
   # ============================================================
   livekit:
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.8
     container_name: amityvox-livekit
     restart: unless-stopped
     ports:
@@ -308,7 +308,7 @@ configs:
       consistency_mode = "consistent"
 
       rpc_bind_addr = "[::]:3901"
-      rpc_secret = "0f53f31aba357d04786a8611d34da1cb2989fefb8959b6f16bcb8f268ddaec65"
+      rpc_secret = "${GARAGE_RPC_SECRET:-please-change-me-to-a-random-64-char-hex-string}"
 
       [s3_api]
       s3_region = "garage"
