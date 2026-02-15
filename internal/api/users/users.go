@@ -210,7 +210,8 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 		`SELECT c.id, c.guild_id, c.category_id, c.channel_type, c.name, c.topic,
 		        c.position, c.slowmode_seconds, c.nsfw, c.encrypted, c.last_message_id,
 		        c.owner_id, c.default_permissions, c.user_limit, c.bitrate,
-		        c.locked, c.locked_by, c.locked_at, c.archived, c.created_at
+		        c.locked, c.locked_by, c.locked_at, c.archived,
+		        c.parent_channel_id, c.last_activity_at, c.created_at
 		 FROM channels c
 		 JOIN channel_recipients cr ON c.id = cr.channel_id
 		 WHERE cr.user_id = $1 AND c.channel_type IN ('dm', 'group')
@@ -231,7 +232,8 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
 			&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
-			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
+			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived,
+			&c.ParentChannelID, &c.LastActivityAt, &c.CreatedAt,
 		); err != nil {
 			h.Logger.Error("failed to scan channel", slog.String("error", err.Error()))
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read DMs")

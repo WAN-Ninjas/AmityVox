@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
 	import { channelVoiceUsers } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -144,16 +144,86 @@
 	// Invite modal
 	let showInvite = $state(false);
 
-	// Context menu
-	let contextMenu = $state<{ x: number; y: number; channelId: string; channelName: string; archived: boolean } | null>(null);
+	// Context menu (channel)
+	let channelContextMenu = $state<{ x: number; y: number; channelId: string; channelName: string; archived: boolean } | null>(null);
+
+	// Thread context menu
+	let threadContextMenu = $state<{ x: number; y: number; thread: Channel } | null>(null);
+
+	// Show Threads submenu
+	let showThreadFilterSubmenu = $state(false);
 
 	// DM context menu
 	let dmContextMenu = $state<{ x: number; y: number; channel: Channel } | null>(null);
 
+	// Thread activity filter state — triggers reactivity when changed.
+	let threadFilterVersion = $state(0);
+
+	function getFilteredThreads(channelId: string): Channel[] {
+		// Access threadFilterVersion to trigger reactivity.
+		void threadFilterVersion;
+		const threads = $threadsByParent.get(channelId) ?? [];
+		const filterMinutes = getThreadActivityFilter(channelId);
+
+		return threads.filter((t) => {
+			// Never show archived threads.
+			if (t.archived) return false;
+			// Always show threads with unreads regardless of filter.
+			const unread = $unreadCounts.get(t.id) ?? 0;
+			const mentions = $mentionCounts.get(t.id) ?? 0;
+			if (unread > 0 || mentions > 0) return true;
+			// Apply activity time filter.
+			if (filterMinutes === null) return true; // "All" — no filter.
+			if (!t.last_activity_at) return false;
+			const activityTime = new Date(t.last_activity_at).getTime();
+			const cutoff = Date.now() - filterMinutes * 60 * 1000;
+			return activityTime >= cutoff;
+		});
+	}
+
+	function handleSetThreadFilter(channelId: string, minutes: number | null) {
+		setThreadActivityFilter(channelId, minutes);
+		threadFilterVersion++;
+		showThreadFilterSubmenu = false;
+	}
+
+	async function handleHideThread(thread: Channel) {
+		if (!thread.parent_channel_id) return;
+		try {
+			await hideThreadStore(thread.parent_channel_id, thread.id);
+		} catch (err: any) {
+			addToast(err.message || 'Failed to hide thread', 'error');
+		} finally {
+			threadContextMenu = null;
+		}
+	}
+
+	async function handleArchiveThread(thread: Channel, archive: boolean) {
+		try {
+			const updated = await api.updateChannel(thread.id, { archived: archive });
+			updateChannelStore(updated);
+		} catch (err: any) {
+			addToast(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} thread`, 'error');
+		}
+		threadContextMenu = null;
+	}
+
 	function handleChannelClick(channelId: string) {
 		const guildId = $currentGuildId;
-		if (guildId) {
-			goto(`/app/guilds/${guildId}/channels/${channelId}`);
+		if (!guildId) return;
+		// Close any open thread panel.
+		pendingThreadOpen.set('__close__');
+		goto(`/app/guilds/${guildId}/channels/${channelId}`);
+	}
+
+	function handleThreadClick(thread: Channel) {
+		const guildId = $currentGuildId;
+		if (!guildId || !thread.parent_channel_id) return;
+		// Signal the channel page to open this thread in the side panel.
+		pendingThreadOpen.set(thread.id);
+		// Navigate to the parent channel (if not already there).
+		if ($currentChannelId !== thread.parent_channel_id) {
+			goto(`/app/guilds/${guildId}/channels/${thread.parent_channel_id}`);
 		}
 	}
 
@@ -211,12 +281,23 @@
 
 	function openContextMenu(e: MouseEvent, channel: Channel) {
 		e.preventDefault();
-		contextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived };
+		channelContextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived };
+		dmContextMenu = null;
+		threadContextMenu = null;
+		showThreadFilterSubmenu = false;
+	}
+
+	function openThreadContextMenu(e: MouseEvent, thread: Channel) {
+		e.preventDefault();
+		threadContextMenu = { x: e.clientX, y: e.clientY, thread };
+		channelContextMenu = null;
 		dmContextMenu = null;
 	}
 
 	function closeContextMenu() {
-		contextMenu = null;
+		channelContextMenu = null;
+		threadContextMenu = null;
+		showThreadFilterSubmenu = false;
 	}
 
 	function markDMRead(channelId: string) {
@@ -367,6 +448,35 @@
 								</span>
 							{/if}
 						</button>
+						<!-- Nested threads under this channel -->
+						{@const filteredThreads = getFilteredThreads(channel.id)}
+						{#if filteredThreads.length > 0}
+							<div class="ml-3 border-l border-bg-floating/50 pl-1">
+								{#each filteredThreads as thread (thread.id)}
+									{@const threadUnread = $unreadCounts.get(thread.id) ?? 0}
+									{@const threadMentions = $mentionCounts.get(thread.id) ?? 0}
+									<button
+										class="mb-0.5 flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs transition-colors {$activeThreadId === thread.id ? 'bg-bg-modifier text-text-primary' : threadUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+										onclick={() => handleThreadClick(thread)}
+										oncontextmenu={(e) => openThreadContextMenu(e, thread)}
+									>
+										<svg class="h-3.5 w-3.5 shrink-0 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+										</svg>
+										<span class="flex-1 truncate">{thread.name}</span>
+										{#if threadMentions > 0 && $activeThreadId !== thread.id}
+											<span class="ml-auto flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-2xs font-bold text-white">
+												@{threadMentions > 99 ? '99+' : threadMentions}
+											</span>
+										{:else if threadUnread > 0 && $activeThreadId !== thread.id}
+											<span class="ml-auto flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-text-muted px-0.5 text-2xs font-bold text-white">
+												{threadUnread > 99 ? '99+' : threadUnread}
+											</span>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						{/if}
 					{/each}
 				{/if}
 			{/if}
@@ -536,7 +646,7 @@
 						<button
 							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => goto(`/app/dms/${dm.id}`)}
-							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; contextMenu = null; }}
+							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
 							<Avatar name={dmName} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 							<span class="flex-1 truncate">{dmName}</span>
@@ -595,30 +705,116 @@
 	{/if}
 </aside>
 
-<!-- Context menu -->
-{#if contextMenu}
+<!-- Channel context menu -->
+{#if channelContextMenu}
 	<div
 		class="fixed z-50 min-w-[160px] rounded-md bg-bg-floating p-1 shadow-lg"
-		style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+		style="left: {channelContextMenu.x}px; top: {channelContextMenu.y}px;"
+		onclick={(e) => e.stopPropagation()}
 	>
 		<button
 			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-			onclick={() => openEditModal(contextMenu!.channelId, contextMenu!.channelName)}
+			onclick={() => openEditModal(channelContextMenu!.channelId, channelContextMenu!.channelName)}
 		>
 			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 				<path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
 			</svg>
 			Edit Channel
 		</button>
+		<!-- Show Threads submenu -->
+		<div class="relative">
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => (showThreadFilterSubmenu = !showThreadFilterSubmenu)}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+				</svg>
+				Show Threads
+				<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M9 5l7 7-7 7" />
+				</svg>
+			</button>
+			{#if showThreadFilterSubmenu}
+				{@const currentFilter = getThreadActivityFilter(channelContextMenu.channelId)}
+				{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
+				<div class="absolute top-0 max-h-[50vh] min-w-[140px] overflow-y-auto rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}"
+				>
+					{#each [
+						{ label: 'All', value: null },
+						{ label: 'Last Hour', value: 60 },
+						{ label: 'Last 6 Hours', value: 360 },
+						{ label: 'Last 12 Hours', value: 720 },
+						{ label: 'Last Day', value: 1440 }
+					] as option}
+						<button
+							class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors {currentFilter === option.value ? 'text-brand-400' : 'text-text-secondary'} hover:bg-brand-500 hover:text-white"
+							onclick={() => handleSetThreadFilter(channelContextMenu!.channelId, option.value)}
+						>
+							{option.label}
+						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
 		<button
 			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
-			onclick={() => { handleDeleteChannel(contextMenu!.channelId); closeContextMenu(); }}
+			onclick={() => { handleDeleteChannel(channelContextMenu!.channelId); closeContextMenu(); }}
 		>
 			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 				<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
 			</svg>
 			Delete Channel
 		</button>
+	</div>
+{/if}
+
+<!-- Thread context menu -->
+{#if threadContextMenu}
+	<div
+		class="fixed z-50 min-w-[160px] rounded-md bg-bg-floating p-1 shadow-lg"
+		style="left: {threadContextMenu.x}px; top: {threadContextMenu.y}px;"
+		onclick={(e) => e.stopPropagation()}
+	>
+		<button
+			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+			onclick={() => { handleThreadClick(threadContextMenu!.thread); threadContextMenu = null; }}
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+			</svg>
+			Open Thread
+		</button>
+		<button
+			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+			onclick={() => handleHideThread(threadContextMenu!.thread)}
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+			</svg>
+			Hide Thread
+		</button>
+		{#if threadContextMenu.thread.archived}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => handleArchiveThread(threadContextMenu!.thread, false)}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+				</svg>
+				Unarchive Thread
+			</button>
+		{:else}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => handleArchiveThread(threadContextMenu!.thread, true)}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+				</svg>
+				Archive Thread
+			</button>
+		{/if}
 	</div>
 {/if}
 

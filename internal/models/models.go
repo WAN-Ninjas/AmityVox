@@ -202,7 +202,9 @@ type Channel struct {
 	Archived                  bool       `json:"archived"`
 	ReadOnly                  bool       `json:"read_only"`
 	ReadOnlyRoleIDs           []string   `json:"read_only_role_ids,omitempty"`
-	DefaultAutoArchiveDuration int       `json:"default_auto_archive_duration"`
+	DefaultAutoArchiveDuration int        `json:"default_auto_archive_duration"`
+	ParentChannelID           *string    `json:"parent_channel_id,omitempty"`
+	LastActivityAt            *time.Time `json:"last_activity_at,omitempty"`
 	CreatedAt                 time.Time  `json:"created_at"`
 	Recipients                []User     `json:"recipients,omitempty"`
 }
