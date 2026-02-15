@@ -37,6 +37,7 @@ amityvox.toml
 data/
 *.db
 *.sqlite
+*.sqlite3
 
 # Debug binary
 __debug_bin*
