@@ -754,7 +754,7 @@ export interface UserReport {
 	reason: string;
 	context_guild_id: string | null;
 	context_channel_id: string | null;
-	status: string;
+	status: 'open' | 'resolved' | 'dismissed';
 	resolved_by: string | null;
 	resolved_at: string | null;
 	notes: string | null;
@@ -768,8 +768,8 @@ export interface ReportedIssue {
 	reporter_id: string;
 	title: string;
 	description: string;
-	category: string;
-	status: string;
+	category: 'general' | 'bug' | 'abuse' | 'suggestion';
+	status: 'open' | 'in_progress' | 'resolved' | 'dismissed';
 	resolved_by: string | null;
 	resolved_at: string | null;
 	notes: string | null;
@@ -790,7 +790,7 @@ export interface ModerationMessageReport {
 	message_id: string;
 	reporter_id: string;
 	reason: string;
-	status: string;
+	status: 'open' | 'resolved' | 'dismissed' | 'admin_pending';
 	resolved_by: string | null;
 	resolved_at: string | null;
 	created_at: string;

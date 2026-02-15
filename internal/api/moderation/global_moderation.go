@@ -193,6 +193,11 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if req.Category == "" {
 		req.Category = "general"
 	}
+	validCategories := map[string]bool{"general": true, "bug": true, "abuse": true, "suggestion": true}
+	if !validCategories[req.Category] {
+		writeError(w, http.StatusBadRequest, "invalid_category", "Category must be one of: general, bug, abuse, suggestion")
+		return
+	}
 
 	id := models.NewULID().String()
 	_, err := h.Pool.Exec(r.Context(),
