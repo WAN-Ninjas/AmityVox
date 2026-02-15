@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import type { Channel, Message, ChannelFollower } from '$lib/types';
-	import { setChannel, currentChannel, currentChannelId, pendingThreadOpen, channels as channelsStore } from '$lib/stores/channels';
+	import { setChannel, currentChannel, currentChannelId, pendingThreadOpen, activeThreadId, channels as channelsStore } from '$lib/stores/channels';
 	import { currentGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
@@ -122,6 +122,7 @@
 
 	function openThread(threadChannel: Channel, parentMessage: Message | null = null) {
 		activeThread = { channel: threadChannel, parentMessage };
+		activeThreadId.set(threadChannel.id);
 		showPins = false;
 	}
 
@@ -132,6 +133,7 @@
 		if (threadId) {
 			if (threadId === '__close__') {
 				activeThread = null;
+				activeThreadId.set(null);
 			} else {
 				const thread = allChannels.get(threadId);
 				if (thread) {
@@ -303,7 +305,7 @@
 		<ThreadPanel
 			threadChannel={activeThread.channel}
 			parentMessage={activeThread.parentMessage}
-			onclose={() => (activeThread = null)}
+			onclose={() => { activeThread = null; activeThreadId.set(null); }}
 		/>
 	{/if}
 

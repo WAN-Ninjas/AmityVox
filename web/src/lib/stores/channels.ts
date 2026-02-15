@@ -10,6 +10,9 @@ export const currentChannelId = writable<string | null>(null);
 // When set, the channel page should open this thread in its side panel.
 export const pendingThreadOpen = writable<string | null>(null);
 
+// Tracks which thread is currently open in the side panel.
+export const activeThreadId = writable<string | null>(null);
+
 export const channelList = derived(channels, ($channels) =>
 	Array.from($channels.values()).sort((a, b) => a.position - b.position)
 );

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
 	import { channelVoiceUsers } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -456,7 +456,7 @@
 									{@const threadUnread = $unreadCounts.get(thread.id) ?? 0}
 									{@const threadMentions = $mentionCounts.get(thread.id) ?? 0}
 									<button
-										class="mb-0.5 flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs transition-colors {$currentChannelId === thread.id ? 'bg-bg-modifier text-text-primary' : threadUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+										class="mb-0.5 flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs transition-colors {$activeThreadId === thread.id ? 'bg-bg-modifier text-text-primary' : threadUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 										onclick={() => handleThreadClick(thread)}
 										oncontextmenu={(e) => openThreadContextMenu(e, thread)}
 									>
@@ -464,11 +464,11 @@
 											<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
 										</svg>
 										<span class="flex-1 truncate">{thread.name}</span>
-										{#if threadMentions > 0 && $currentChannelId !== thread.id}
+										{#if threadMentions > 0 && $activeThreadId !== thread.id}
 											<span class="ml-auto flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-2xs font-bold text-white">
 												@{threadMentions > 99 ? '99+' : threadMentions}
 											</span>
-										{:else if threadUnread > 0 && $currentChannelId !== thread.id}
+										{:else if threadUnread > 0 && $activeThreadId !== thread.id}
 											<span class="ml-auto flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-text-muted px-0.5 text-2xs font-bold text-white">
 												{threadUnread > 99 ? '99+' : threadUnread}
 											</span>
@@ -737,7 +737,9 @@
 			</button>
 			{#if showThreadFilterSubmenu}
 				{@const currentFilter = getThreadActivityFilter(channelContextMenu.channelId)}
-				<div class="absolute left-full top-0 ml-1 min-w-[140px] rounded-md bg-bg-floating p-1 shadow-lg">
+				{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
+				<div class="absolute top-0 max-h-[50vh] min-w-[140px] overflow-y-auto rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}"
+				>
 					{#each [
 						{ label: 'All', value: null },
 						{ label: 'Last Hour', value: 60 },
@@ -797,6 +799,9 @@
 				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
 				onclick={() => handleArchiveThread(threadContextMenu!.thread, false)}
 			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+				</svg>
 				Unarchive Thread
 			</button>
 		{:else}
@@ -804,6 +809,9 @@
 				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
 				onclick={() => handleArchiveThread(threadContextMenu!.thread, true)}
 			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+				</svg>
 				Archive Thread
 			</button>
 		{/if}

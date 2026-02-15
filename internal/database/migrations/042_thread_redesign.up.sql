@@ -1,4 +1,4 @@
--- 041_thread_redesign: Add parent_channel_id and last_activity_at to channels,
+-- 042_thread_redesign: Add parent_channel_id and last_activity_at to channels,
 -- create user_hidden_threads table, and backfill existing threads.
 
 -- Add parent_channel_id FK from thread to its parent channel.
