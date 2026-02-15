@@ -175,12 +175,12 @@
 <div class="min-h-screen bg-bg-primary flex items-center justify-center p-4">
 	<div class="w-full max-w-2xl">
 		{#if loading}
-			<div class="bg-bg-secondary rounded-lg p-12 text-center">
+			<div class="bg-bg-secondary rounded p-12 text-center">
 				<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full mx-auto"></div>
 				<p class="text-text-secondary mt-4">Checking setup status...</p>
 			</div>
 		{:else if setupComplete}
-			<div class="bg-bg-secondary rounded-lg p-12 text-center">
+			<div class="bg-bg-secondary rounded border-t-2 border-brand-500 p-12 text-center">
 				<div class="w-16 h-16 bg-status-online/20 rounded-full flex items-center justify-center mx-auto mb-4">
 					<svg class="w-8 h-8 text-status-online" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
@@ -195,7 +195,7 @@
 				</button>
 			</div>
 		{:else if alreadyCompleted}
-			<div class="bg-bg-secondary rounded-lg p-12 text-center">
+			<div class="bg-bg-secondary rounded border-t-2 border-brand-500 p-12 text-center">
 				<h1 class="text-2xl font-bold text-text-primary mb-2">Already Configured</h1>
 				<p class="text-text-secondary mb-6">
 					This instance has already been set up. You can reconfigure it from the admin dashboard.
@@ -214,11 +214,11 @@
 			<!-- Progress bar -->
 			<div class="flex items-center gap-2 mb-8">
 				{#each Array(totalSteps) as _, i}
-					<div class="flex-1 h-2 rounded-full transition-colors {i < step ? 'bg-brand-500' : 'bg-bg-modifier'}"></div>
+					<div class="flex-1 h-2 rounded-sm transition-colors {i < step ? 'bg-brand-500' : 'bg-bg-modifier'}"></div>
 				{/each}
 			</div>
 
-			<div class="bg-bg-secondary rounded-lg p-8">
+			<div class="bg-bg-secondary rounded border-t-2 border-brand-500 p-8">
 				{#if error}
 					<div class="bg-status-dnd/10 border border-status-dnd/30 rounded-lg p-3 mb-6">
 						<p class="text-sm text-status-dnd">{error}</p>

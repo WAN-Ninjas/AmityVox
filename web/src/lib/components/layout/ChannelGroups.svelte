@@ -243,6 +243,7 @@
 
 {#if !loading && groups.length > 0}
 	{#each groups as group (group.id)}
+		{@const uniqueChannels = [...new Set(group.channels)]}
 		<div
 			class="mb-1"
 			ondragover={handleDragOver}
@@ -300,7 +301,7 @@
 							<path d="M19 9l-7 7-7-7" />
 						</svg>
 						{group.name}
-						<span class="ml-1 text-text-muted">({group.channels.length})</span>
+						<span class="ml-1 text-text-muted">({uniqueChannels.length})</span>
 					</button>
 					<div class="flex items-center gap-0.5">
 						<button
@@ -330,10 +331,11 @@
 				{#if group.channels.length === 0}
 					<p class="px-3 py-1 text-2xs text-text-muted italic">Drag channels here</p>
 				{:else}
-					{#each group.channels as channelId (channelId)}
+					{#each uniqueChannels as channelId (channelId)}
 						{@const unread = $unreadCounts.get(channelId) ?? 0}
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
-						{@const isVoice = getChannelType(channelId) === 'voice' || getChannelType(channelId) === 'stage'}
+						{@const channelType = getChannelType(channelId)}
+						{@const isVoice = channelType === 'voice' || channelType === 'stage'}
 						<div class="group/item flex items-center">
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"

@@ -38,6 +38,10 @@ export default {
 					offline: 'var(--status-offline)'
 				}
 			},
+			fontFamily: {
+				sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+				mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace']
+			},
 			fontSize: {
 				'2xs': '0.625rem'
 			}
