@@ -49,6 +49,10 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
 		return
 	}
+	if len(req.Reason) > 2000 {
+		writeError(w, http.StatusBadRequest, "reason_too_long", "Reason must be 2000 characters or less")
+		return
+	}
 	if req.ContextGuildID != nil && *req.ContextGuildID == "" {
 		req.ContextGuildID = nil
 	}
@@ -205,6 +209,14 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Title == "" || req.Description == "" {
 		writeError(w, http.StatusBadRequest, "missing_fields", "Title and description are required")
+		return
+	}
+	if len(req.Title) > 200 {
+		writeError(w, http.StatusBadRequest, "title_too_long", "Title must be 200 characters or less")
+		return
+	}
+	if len(req.Description) > 4000 {
+		writeError(w, http.StatusBadRequest, "description_too_long", "Description must be 4000 characters or less")
 		return
 	}
 	if req.Category == "" {
