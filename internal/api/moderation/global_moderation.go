@@ -13,15 +13,16 @@ import (
 )
 
 // isGlobalModOrAdmin checks if the requesting user has the global moderator or admin flag.
-func (h *Handler) isGlobalModOrAdmin(r *http.Request) bool {
+// Returns (authorized, error) so callers can distinguish permission failures from DB errors.
+func (h *Handler) isGlobalModOrAdmin(r *http.Request) (bool, error) {
 	userID := auth.UserIDFromContext(r.Context())
 	var flags int
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return flags&(models.UserFlagAdmin|models.UserFlagGlobalMod) != 0
+	return flags&(models.UserFlagAdmin|models.UserFlagGlobalMod) != 0, nil
 }
 
 // HandleReportUser handles POST /api/v1/users/{userID}/report.
@@ -84,7 +85,13 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 // HandleGetUserReports handles GET /api/v1/moderation/user-reports?status=
 // Only global moderators and admins can access this.
 func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
@@ -138,7 +145,13 @@ func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 
 // HandleResolveUserReport handles PATCH /api/v1/moderation/user-reports/{reportID}.
 func (h *Handler) HandleResolveUserReport(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
@@ -218,7 +231,13 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetIssues handles GET /api/v1/moderation/issues?status=
 func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
@@ -269,7 +288,13 @@ func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 
 // HandleResolveIssue handles PATCH /api/v1/moderation/issues/{issueID}.
 func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
@@ -317,7 +342,13 @@ func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetModerationStats handles GET /api/v1/moderation/stats.
 func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
@@ -346,7 +377,13 @@ func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Reques
 // HandleGetAllMessageReports handles GET /api/v1/moderation/message-reports?status=
 // Reuses existing message_reports table, filtered to admin_pending reports.
 func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
@@ -399,7 +436,13 @@ func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Requ
 
 // HandleResolveMessageReport handles PATCH /api/v1/moderation/message-reports/{reportID}.
 func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Request) {
-	if !h.isGlobalModOrAdmin(r) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		h.Logger.Error("failed to check moderation permissions", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
