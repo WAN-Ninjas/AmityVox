@@ -36,7 +36,6 @@ amityvox.toml
 # Docker volumes and local data
 data/
 *.db
-*.sqlite
 
 # Debug binary
 __debug_bin*

@@ -1,0 +1,352 @@
+# AmityVox — standalone deployment with prebuilt images.
+# No build step required. Just edit .env and run: docker compose up -d
+#
+# Quick start:
+#   curl -O https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/docker_deploy/docker-compose.yml
+#   curl -O https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/docker_deploy/.env.example
+#   cp .env.example .env   # Edit with your settings
+#   docker compose up -d
+
+services:
+  # ============================================================
+  # AmityVox Core Server
+  # ============================================================
+  amityvox:
+    image: ghcr.io/wan-ninjas/amityvox:latest
+    container_name: amityvox
+    restart: unless-stopped
+    environment:
+      AMITYVOX_DATABASE_URL: "postgres://${POSTGRES_USER:-amityvox}:${POSTGRES_PASSWORD:-amityvox}@postgresql:5432/${POSTGRES_DB:-amityvox}?sslmode=disable"
+      AMITYVOX_NATS_URL: "nats://nats:4222"
+      AMITYVOX_CACHE_URL: "redis://dragonflydb:6379"
+      AMITYVOX_STORAGE_ENDPOINT: "http://garage:3900"
+      AMITYVOX_STORAGE_ACCESS_KEY: "${AMITYVOX_STORAGE_ACCESS_KEY:-}"
+      AMITYVOX_STORAGE_SECRET_KEY: "${AMITYVOX_STORAGE_SECRET_KEY:-}"
+      AMITYVOX_STORAGE_BUCKET: "${AMITYVOX_STORAGE_BUCKET:-amityvox}"
+      AMITYVOX_STORAGE_REGION: "garage"
+      AMITYVOX_LIVEKIT_URL: "ws://livekit:7880"
+      AMITYVOX_LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-devkey}"
+      AMITYVOX_LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-secret}"
+      AMITYVOX_LIVEKIT_PUBLIC_URL: "${AMITYVOX_LIVEKIT_PUBLIC_URL:-wss://localhost}"
+      AMITYVOX_SEARCH_URL: "http://meilisearch:7700"
+      AMITYVOX_SEARCH_API_KEY: "${MEILI_MASTER_KEY:-}"
+      AMITYVOX_HTTP_LISTEN: "0.0.0.0:8080"
+      AMITYVOX_WEBSOCKET_LISTEN: "0.0.0.0:8081"
+      AMITYVOX_LOGGING_LEVEL: "${AMITYVOX_LOGGING_LEVEL:-info}"
+      AMITYVOX_LOGGING_FORMAT: "${AMITYVOX_LOGGING_FORMAT:-json}"
+      AMITYVOX_INSTANCE_NAME: "${AMITYVOX_INSTANCE_NAME:-AmityVox}"
+      AMITYVOX_INSTANCE_DOMAIN: "${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
+      AMITYVOX_INSTANCE_DESCRIPTION: "${AMITYVOX_INSTANCE_DESCRIPTION:-A self-hosted communication platform}"
+      AMITYVOX_INSTANCE_FEDERATION_MODE: "${AMITYVOX_INSTANCE_FEDERATION_MODE:-closed}"
+      AMITYVOX_AUTH_REGISTRATION_ENABLED: "${AMITYVOX_AUTH_REGISTRATION_ENABLED:-true}"
+      AMITYVOX_AUTH_INVITE_ONLY: "${AMITYVOX_AUTH_INVITE_ONLY:-false}"
+      AMITYVOX_AUTH_REQUIRE_EMAIL: "${AMITYVOX_AUTH_REQUIRE_EMAIL:-false}"
+      AMITYVOX_AUTH_WEBAUTHN_RP_DISPLAY_NAME: "${AMITYVOX_INSTANCE_NAME:-AmityVox}"
+      AMITYVOX_AUTH_WEBAUTHN_RP_ID: "${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
+      AMITYVOX_AUTH_WEBAUTHN_RP_ORIGINS: "https://${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
+      AMITYVOX_MEDIA_MAX_UPLOAD_SIZE: "${AMITYVOX_MEDIA_MAX_UPLOAD_SIZE:-50MB}"
+      AMITYVOX_PUSH_VAPID_PUBLIC_KEY: "${AMITYVOX_PUSH_VAPID_PUBLIC_KEY:-}"
+      AMITYVOX_PUSH_VAPID_PRIVATE_KEY: "${AMITYVOX_PUSH_VAPID_PRIVATE_KEY:-}"
+      AMITYVOX_PUSH_VAPID_CONTACT_EMAIL: "${AMITYVOX_PUSH_VAPID_CONTACT_EMAIL:-}"
+      AMITYVOX_GIPHY_ENABLED: "${AMITYVOX_GIPHY_ENABLED:-false}"
+      AMITYVOX_GIPHY_API_KEY: "${AMITYVOX_GIPHY_API_KEY:-}"
+      AMITYVOX_TRANSLATION_ENABLED: "true"
+      AMITYVOX_TRANSLATION_API_URL: "http://libretranslate:5000"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      dragonflydb:
+        condition: service_healthy
+      libretranslate:
+        condition: service_healthy
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Web Init — copies frontend build to shared volume for Caddy
+  # ============================================================
+  web-init:
+    image: ghcr.io/wan-ninjas/amityvox:latest
+    container_name: amityvox-web-init
+    entrypoint: ["sh", "-c", "rm -rf /srv/_app && cp -r /srv/web/* /srv/public/"]
+    volumes:
+      - web_build:/srv/public
+    restart: "no"
+    networks:
+      - amityvox
+
+  # ============================================================
+  # PostgreSQL — primary data store
+  # ============================================================
+  postgresql:
+    image: postgres:16-alpine
+    container_name: amityvox-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-amityvox}
+      POSTGRES_USER: ${POSTGRES_USER:-amityvox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-amityvox}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-amityvox} -d ${POSTGRES_DB:-amityvox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - amityvox
+
+  # ============================================================
+  # NATS — message broker with JetStream
+  # ============================================================
+  nats:
+    image: nats:2-alpine
+    container_name: amityvox-nats
+    restart: unless-stopped
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - amityvox
+
+  # ============================================================
+  # DragonflyDB — cache and sessions (Redis-compatible)
+  # ============================================================
+  dragonflydb:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: amityvox-dragonflydb
+    restart: unless-stopped
+    volumes:
+      - dragonfly_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Garage — S3-compatible file storage
+  # ============================================================
+  garage:
+    image: dxflrs/garage:v1.0.1
+    container_name: amityvox-garage
+    restart: unless-stopped
+    volumes:
+      - garage_data:/var/lib/garage/data
+      - garage_meta:/var/lib/garage/meta
+    configs:
+      - source: garage_config
+        target: /etc/garage.toml
+    environment:
+      GARAGE_ALLOW_WORLD_READABLE_TMPDIR: "true"
+    networks:
+      - amityvox
+
+  # ============================================================
+  # LiveKit — voice and video (WebRTC SFU)
+  # ============================================================
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: amityvox-livekit
+    restart: unless-stopped
+    ports:
+      - "443:443/udp"
+      - "50000-50100:50000-50100/udp"
+    configs:
+      - source: livekit_config
+        target: /etc/livekit.yaml
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret}"
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Meilisearch — full-text search
+  # ============================================================
+  meilisearch:
+    image: getmeili/meilisearch:v1.35
+    container_name: amityvox-meilisearch
+    restart: unless-stopped
+    volumes:
+      - meili_data:/meili_data
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7700/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - amityvox
+
+  # ============================================================
+  # LibreTranslate — self-hosted translation API
+  # ============================================================
+  libretranslate:
+    image: libretranslate/libretranslate:${LIBRETRANSLATE_TAG:-v1.8.4}
+    container_name: amityvox-libretranslate
+    restart: unless-stopped
+    environment:
+      LT_LOAD_ONLY: "${LT_LOAD_ONLY:-en,es,fr,de,it,pt,ru,ja,ko,zh,ar,hi,nl,pl,tr,uk}"
+      LT_DISABLE_WEB_UI: "true"
+    volumes:
+      - libretranslate_data:/home/libretranslate/.local
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/languages')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - amityvox
+
+  # ============================================================
+  # Caddy — reverse proxy with auto-TLS
+  # ============================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: amityvox-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - web_build:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    depends_on:
+      amityvox:
+        condition: service_started
+      web-init:
+        condition: service_completed_successfully
+    networks:
+      - amityvox
+
+# ============================================================
+# Embedded configuration files — no extra downloads needed
+# ============================================================
+configs:
+  caddyfile:
+    content: |
+      {
+        servers {
+          protocols h1 h2
+        }
+      }
+
+      ${AMITYVOX_INSTANCE_DOMAIN:-localhost} {
+        header {
+          Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+          X-Frame-Options "DENY"
+          X-Content-Type-Options "nosniff"
+          Referrer-Policy "strict-origin-when-cross-origin"
+          Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+        }
+
+        handle /api/* {
+          request_body {
+            max_size 550MB
+          }
+          reverse_proxy amityvox:8080
+        }
+
+        handle /health {
+          reverse_proxy amityvox:8080
+        }
+
+        handle /ws {
+          reverse_proxy amityvox:8081
+        }
+
+        @rtc path /rtc /rtc/*
+        handle @rtc {
+          reverse_proxy livekit:7880
+        }
+
+        handle /.well-known/amityvox {
+          reverse_proxy amityvox:8080
+        }
+
+        handle /federation/* {
+          reverse_proxy amityvox:8080
+        }
+
+        handle {
+          root * /srv
+
+          @immutable path /_app/immutable/*
+          header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+          @html path / /index.html
+          header @html Cache-Control "no-cache"
+
+          try_files {path} /index.html
+          file_server
+        }
+      }
+
+  garage_config:
+    content: |
+      metadata_dir = "/var/lib/garage/meta"
+      data_dir = "/var/lib/garage/data"
+      db_engine = "lmdb"
+      replication_factor = 1
+      consistency_mode = "consistent"
+
+      rpc_bind_addr = "[::]:3901"
+      rpc_secret = "0f53f31aba357d04786a8611d34da1cb2989fefb8959b6f16bcb8f268ddaec65"
+
+      [s3_api]
+      s3_region = "garage"
+      api_bind_addr = "[::]:3900"
+      root_domain = ".s3.garage.localhost"
+
+      [s3_web]
+      bind_addr = "[::]:3902"
+      root_domain = ".web.garage.localhost"
+      index = "index.html"
+
+      [admin]
+      api_bind_addr = "[::]:3903"
+
+  livekit_config:
+    content: |
+      port: 7880
+      rtc:
+        tcp_port: 7881
+        port_range_start: 50000
+        port_range_end: 50100
+        use_external_ip: true
+      turn:
+        enabled: true
+        udp_port: 443
+
+volumes:
+  web_build:
+  postgres_data:
+  nats_data:
+  dragonfly_data:
+  garage_data:
+  garage_meta:
+  meili_data:
+  caddy_data:
+  caddy_config:
+  libretranslate_data:
+
+networks:
+  amityvox:
+    driver: bridge
