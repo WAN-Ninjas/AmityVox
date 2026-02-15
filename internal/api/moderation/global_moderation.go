@@ -57,7 +57,11 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 
 	// Verify reported user exists.
 	var exists bool
-	h.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, reportedUserID).Scan(&exists)
+	if err := h.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, reportedUserID).Scan(&exists); err != nil {
+		h.Logger.Error("failed to check user existence", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify user")
+		return
+	}
 	if !exists {
 		writeError(w, http.StatusNotFound, "user_not_found", "User not found")
 		return
@@ -404,8 +408,7 @@ func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Requ
 	modID := auth.UserIDFromContext(r.Context())
 
 	var req struct {
-		Status string  `json:"status"`
-		Notes  *string `json:"notes"`
+		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
