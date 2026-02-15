@@ -154,6 +154,7 @@
 		showFollowers = !showFollowers;
 		if (showFollowers) {
 			activeThread = null;
+			activeThreadId.set(null);
 			showPins = false;
 			loadFollowers();
 		}
@@ -269,7 +270,7 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<TopBar
 			onToggleMembers={() => (showMembers = !showMembers)}
-			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; showFollowers = false; } }}
+			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; activeThreadId.set(null); showFollowers = false; } }}
 			onToggleFollowers={toggleFollowers}
 			{showPins}
 			{showFollowers}

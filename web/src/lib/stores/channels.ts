@@ -130,7 +130,12 @@ export function getThreadActivityFilter(channelId: string): number | null {
 export function setThreadActivityFilter(channelId: string, minutes: number | null) {
 	try {
 		const stored = localStorage.getItem(THREAD_FILTER_KEY);
-		const filters: Record<string, number> = stored ? JSON.parse(stored) : {};
+		let filters: Record<string, number> = {};
+		try {
+			filters = stored ? JSON.parse(stored) : {};
+		} catch {
+			// Corrupted JSON — reset to empty so subsequent writes succeed.
+		}
 		if (minutes === null) {
 			delete filters[channelId];
 		} else {
@@ -138,7 +143,7 @@ export function setThreadActivityFilter(channelId: string, minutes: number | nul
 		}
 		localStorage.setItem(THREAD_FILTER_KEY, JSON.stringify(filters));
 	} catch {
-		// Ignore storage errors.
+		// Ignore storage errors (e.g. quota exceeded, private browsing).
 	}
 }
 
