@@ -53,13 +53,14 @@ export async function hideThread(channelId: string, threadId: string) {
 	});
 	try {
 		await api.hideThread(channelId, threadId);
-	} catch {
-		// Rollback on failure.
+	} catch (e) {
+		// Rollback on failure, then re-throw so callers can show a toast.
 		hiddenThreadIds.update((set) => {
 			const next = new Set(set);
 			next.delete(threadId);
 			return next;
 		});
+		throw e;
 	}
 }
 
@@ -72,13 +73,14 @@ export async function unhideThread(channelId: string, threadId: string) {
 	});
 	try {
 		await api.unhideThread(channelId, threadId);
-	} catch {
-		// Rollback on failure.
+	} catch (e) {
+		// Rollback on failure, then re-throw so callers can show a toast.
 		hiddenThreadIds.update((set) => {
 			const next = new Set(set);
 			next.add(threadId);
 			return next;
 		});
+		throw e;
 	}
 }
 

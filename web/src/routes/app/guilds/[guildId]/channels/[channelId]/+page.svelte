@@ -127,6 +127,7 @@
 	}
 
 	// React to sidebar thread/channel clicks via the pendingThreadOpen store.
+	// Only clear the signal after successful resolution so it retries when channels load.
 	$effect(() => {
 		const threadId = $pendingThreadOpen;
 		const allChannels = $channelsStore;
@@ -134,13 +135,16 @@
 			if (threadId === '__close__') {
 				activeThread = null;
 				activeThreadId.set(null);
+				pendingThreadOpen.set(null);
 			} else {
 				const thread = allChannels.get(threadId);
 				if (thread) {
 					openThread(thread);
+					pendingThreadOpen.set(null);
 				}
+				// If thread not found yet, leave pendingThreadOpen set so
+				// the effect retries when channelsStore updates.
 			}
-			pendingThreadOpen.set(null);
 		}
 	});
 
