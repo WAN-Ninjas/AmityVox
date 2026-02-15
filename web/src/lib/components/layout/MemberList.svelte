@@ -88,6 +88,32 @@
 		closeContextMenu();
 	}
 
+	let showReportUserModal = $state(false);
+	let reportUserTarget = $state<GuildMember | null>(null);
+	let reportUserReason = $state('');
+	let reportUserSubmitting = $state(false);
+
+	function openReportUser(member: GuildMember) {
+		reportUserTarget = member;
+		reportUserReason = '';
+		showReportUserModal = true;
+		closeContextMenu();
+	}
+
+	async function submitReportUser() {
+		if (!reportUserTarget || !reportUserReason.trim()) return;
+		reportUserSubmitting = true;
+		try {
+			await api.reportUser(reportUserTarget.user_id, reportUserReason.trim(), $currentGuildId ?? undefined);
+			addToast('User reported to moderators', 'success');
+			showReportUserModal = false;
+		} catch {
+			addToast('Failed to report user', 'error');
+		} finally {
+			reportUserSubmitting = false;
+		}
+	}
+
 	async function startDM(member: GuildMember) {
 		try {
 			const channel = await api.createDM(member.user_id);
@@ -214,6 +240,15 @@
 				Request Sent
 			</button>
 		{/if}
+		{#if contextMenu.member.user_id !== $currentUser?.id}
+			<div class="my-1 border-t border-bg-modifier"></div>
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
+				onclick={() => openReportUser(contextMenu!.member)}
+			>
+				Report User
+			</button>
+		{/if}
 		{#if isOwner}
 			<div class="my-1 border-t border-bg-modifier"></div>
 			<button
@@ -229,5 +264,34 @@
 				Ban
 			</button>
 		{/if}
+	</div>
+{/if}
+
+<!-- Report user modal -->
+{#if showReportUserModal && reportUserTarget}
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showReportUserModal = false} onkeydown={(e) => e.key === 'Escape' && (showReportUserModal = false)} role="dialog" tabindex="-1">
+		<div class="w-96 rounded-lg bg-bg-secondary p-4 shadow-xl" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
+			<h3 class="mb-3 text-lg font-semibold text-text-primary">Report User</h3>
+			<p class="mb-2 text-sm text-text-muted">
+				Report <strong class="text-text-primary">{reportUserTarget.nickname ?? reportUserTarget.user?.username ?? 'this user'}</strong> to instance moderators.
+			</p>
+			<textarea
+				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+				placeholder="Why are you reporting this user?"
+				rows="3"
+				bind:value={reportUserReason}
+			></textarea>
+			<div class="flex justify-end gap-2">
+				<button
+					class="rounded-md px-3 py-1.5 text-sm text-text-muted hover:text-text-primary"
+					onclick={() => showReportUserModal = false}
+				>Cancel</button>
+				<button
+					class="rounded-md bg-red-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
+					disabled={!reportUserReason.trim() || reportUserSubmitting}
+					onclick={submitReportUser}
+				>{reportUserSubmitting ? 'Submitting...' : 'Report'}</button>
+			</div>
+		</div>
 	</div>
 {/if}

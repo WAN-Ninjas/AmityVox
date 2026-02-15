@@ -280,6 +280,30 @@
 		showQuoteInChannel = true;
 	}
 
+	let showReportModal = $state(false);
+	let reportReason = $state('');
+	let reportSubmitting = $state(false);
+
+	function handleReportMessage() {
+		contextMenu = null;
+		showReportModal = true;
+		reportReason = '';
+	}
+
+	async function submitReportMessage() {
+		if (!reportReason.trim()) return;
+		reportSubmitting = true;
+		try {
+			await api.reportMessageToAdmins(message.channel_id, message.id, reportReason.trim());
+			addToast('Message reported to moderators', 'success');
+			showReportModal = false;
+		} catch {
+			addToast('Failed to report message', 'error');
+		} finally {
+			reportSubmitting = false;
+		}
+	}
+
 	async function submitQuoteInChannel() {
 		if (!quoteTargetChannelId.trim()) return;
 		quotingInChannel = true;
@@ -676,11 +700,42 @@
 		{#if message.content}
 			<ContextMenuItem label="Quote in Channel" onclick={handleQuoteInChannel} />
 		{/if}
+		{#if !isOwnMessage}
+			<ContextMenuDivider />
+			<ContextMenuItem label="Report Message" danger onclick={handleReportMessage} />
+		{/if}
 		{#if isOwnMessage}
 			<ContextMenuDivider />
 			<ContextMenuItem label="Delete Message" danger onclick={handleDelete} />
 		{/if}
 	</ContextMenu>
+{/if}
+
+<!-- Report message modal -->
+{#if showReportModal}
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showReportModal = false} onkeydown={(e) => e.key === 'Escape' && (showReportModal = false)} role="dialog" tabindex="-1">
+		<div class="w-96 rounded-lg bg-bg-secondary p-4 shadow-xl" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
+			<h3 class="mb-3 text-lg font-semibold text-text-primary">Report Message</h3>
+			<p class="mb-2 text-sm text-text-muted">This will be sent to instance moderators for review.</p>
+			<textarea
+				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+				placeholder="Why are you reporting this message?"
+				rows="3"
+				bind:value={reportReason}
+			></textarea>
+			<div class="flex justify-end gap-2">
+				<button
+					class="rounded-md px-3 py-1.5 text-sm text-text-muted hover:text-text-primary"
+					onclick={() => showReportModal = false}
+				>Cancel</button>
+				<button
+					class="rounded-md bg-red-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
+					disabled={!reportReason.trim() || reportSubmitting}
+					onclick={submitReportMessage}
+				>{reportSubmitting ? 'Submitting...' : 'Report'}</button>
+			</div>
+		</div>
+	</div>
 {/if}
 
 <!-- Attachment context menu -->

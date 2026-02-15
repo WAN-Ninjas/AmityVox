@@ -22,6 +22,30 @@
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import type { Channel, GuildEvent } from '$lib/types';
 
+	// Report issue modal
+	let showReportIssue = $state(false);
+	let reportIssueTitle = $state('');
+	let reportIssueDescription = $state('');
+	let reportIssueCategory = $state('general');
+	let reportIssueSubmitting = $state(false);
+
+	async function submitReportIssue() {
+		if (!reportIssueTitle.trim() || !reportIssueDescription.trim()) return;
+		reportIssueSubmitting = true;
+		try {
+			await api.createIssue(reportIssueTitle.trim(), reportIssueDescription.trim(), reportIssueCategory);
+			addToast('Issue reported successfully', 'success');
+			showReportIssue = false;
+			reportIssueTitle = '';
+			reportIssueDescription = '';
+			reportIssueCategory = 'general';
+		} catch (err: any) {
+			addToast(err.message || 'Failed to report issue', 'error');
+		} finally {
+			reportIssueSubmitting = false;
+		}
+	}
+
 	let upcomingEvents = $state<GuildEvent[]>([]);
 
 	// Archived channels
@@ -549,6 +573,15 @@
 				</p>
 			</div>
 			<button
+				class="text-orange-500 hover:text-orange-400"
+				onclick={() => (showReportIssue = true)}
+				title="Report Issue"
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+				</svg>
+			</button>
+			<button
 				class="text-text-muted hover:text-text-primary"
 				onclick={() => goto('/app/settings')}
 				title="User Settings"
@@ -757,6 +790,33 @@
 		<button class="btn-secondary" onclick={() => (showEditChannel = false)}>Cancel</button>
 		<button class="btn-primary" onclick={handleEditChannel} disabled={editingChannel || !editChannelName.trim()}>
 			{editingChannel ? 'Saving...' : 'Save'}
+		</button>
+	</div>
+</Modal>
+
+<!-- Report Issue Modal -->
+<Modal open={showReportIssue} title="Report Issue" onclose={() => (showReportIssue = false)}>
+	<div class="mb-4">
+		<label for="issueTitle" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Title</label>
+		<input id="issueTitle" type="text" class="input w-full" bind:value={reportIssueTitle} placeholder="Brief summary" maxlength="200" />
+	</div>
+	<div class="mb-4">
+		<label for="issueCategory" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Category</label>
+		<select id="issueCategory" class="input w-full" bind:value={reportIssueCategory}>
+			<option value="general">General</option>
+			<option value="bug">Bug</option>
+			<option value="abuse">Abuse</option>
+			<option value="suggestion">Suggestion</option>
+		</select>
+	</div>
+	<div class="mb-4">
+		<label for="issueDesc" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Description</label>
+		<textarea id="issueDesc" class="input w-full" rows="4" bind:value={reportIssueDescription} placeholder="Describe the issue in detail..."></textarea>
+	</div>
+	<div class="flex justify-end gap-2">
+		<button class="btn-secondary" onclick={() => (showReportIssue = false)}>Cancel</button>
+		<button class="btn-primary" onclick={submitReportIssue} disabled={reportIssueSubmitting || !reportIssueTitle.trim() || !reportIssueDescription.trim()}>
+			{reportIssueSubmitting ? 'Submitting...' : 'Submit'}
 		</button>
 	</div>
 </Modal>
