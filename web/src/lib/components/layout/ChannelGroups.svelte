@@ -334,7 +334,8 @@
 					{#each uniqueChannels as channelId (channelId)}
 						{@const unread = $unreadCounts.get(channelId) ?? 0}
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
-						{@const isVoice = getChannelType(channelId) === 'voice' || getChannelType(channelId) === 'stage'}
+						{@const channelType = getChannelType(channelId)}
+						{@const isVoice = channelType === 'voice' || channelType === 'stage'}
 						<div class="group/item flex items-center">
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
