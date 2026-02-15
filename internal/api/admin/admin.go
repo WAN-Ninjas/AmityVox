@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/auth"
@@ -473,6 +474,42 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"admin": req.Admin})
+}
+
+// HandleSetGlobalMod handles POST /api/v1/admin/users/{userID}/set-globalmod.
+func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	userID := chi.URLParam(r, "userID")
+
+	var req struct {
+		GlobalMod bool `json:"global_mod"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var tag pgconn.CommandTag
+	var err error
+	if req.GlobalMod {
+		tag, err = h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
+	} else {
+		tag, err = h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update global mod status")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "User not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"global_mod": req.GlobalMod})
 }
 
 // HandleInstanceBanUser bans a user at the instance level (suspends + records reason).

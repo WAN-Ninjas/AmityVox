@@ -333,6 +333,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{userID}/mutual-friends", userH.HandleGetMutualFriends)
 				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)
 				r.Get("/{userID}/badges", userH.HandleGetUserBadges)
+				r.Post("/{userID}/report", modH.HandleReportUser)
 			})
 
 			// Bot management routes.
@@ -603,6 +604,20 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{channelID}/screen-share", s.handleStopScreenShare)
 				r.Patch("/{channelID}/screen-share", s.handleUpdateScreenShare)
 				r.Get("/{channelID}/screen-shares", s.handleGetScreenShares)
+			})
+
+			// Issue reporting (any authenticated user).
+			r.Post("/issues", modH.HandleCreateIssue)
+
+			// Moderation panel routes (permission checks inside handlers).
+			r.Route("/moderation", func(r chi.Router) {
+				r.Get("/stats", modH.HandleGetModerationStats)
+				r.Get("/user-reports", modH.HandleGetUserReports)
+				r.Patch("/user-reports/{reportID}", modH.HandleResolveUserReport)
+				r.Get("/message-reports", modH.HandleGetAllMessageReports)
+				r.Patch("/message-reports/{reportID}", modH.HandleResolveMessageReport)
+				r.Get("/issues", modH.HandleGetIssues)
+				r.Patch("/issues/{issueID}", modH.HandleResolveIssue)
 			})
 
 			// Public ban lists.
@@ -883,6 +898,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/users/{userID}/suspend", adminH.HandleSuspendUser)
 				r.Post("/users/{userID}/unsuspend", adminH.HandleUnsuspendUser)
 				r.Post("/users/{userID}/set-admin", adminH.HandleSetAdmin)
+				r.Post("/users/{userID}/set-globalmod", adminH.HandleSetGlobalMod)
 				r.Post("/users/{userID}/instance-ban", adminH.HandleInstanceBanUser)
 				r.Post("/users/{userID}/instance-unban", adminH.HandleInstanceUnbanUser)
 				r.Get("/instance-bans", adminH.HandleGetInstanceBans)

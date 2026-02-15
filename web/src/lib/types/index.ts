@@ -435,7 +435,7 @@ export interface MessageReport {
 	message_id: string;
 	reporter_id: string;
 	reason: string;
-	status: 'open' | 'resolved' | 'dismissed';
+	status: 'open' | 'resolved' | 'dismissed' | 'admin_pending';
 	resolved_by: string | null;
 	resolved_at: string | null;
 	created_at: string;
@@ -743,4 +743,56 @@ export interface ChannelFollower {
 	guild_name?: string;
 	channel_name?: string;
 	created_at: string;
+}
+
+// --- Global Moderation ---
+
+export interface UserReport {
+	id: string;
+	reporter_id: string;
+	reported_user_id: string;
+	reason: string;
+	context_guild_id: string | null;
+	context_channel_id: string | null;
+	status: 'open' | 'resolved' | 'dismissed';
+	resolved_by: string | null;
+	resolved_at: string | null;
+	notes: string | null;
+	created_at: string;
+	reporter_name?: string;
+	reported_user_name?: string;
+}
+
+export interface ReportedIssue {
+	id: string;
+	reporter_id: string;
+	title: string;
+	description: string;
+	category: 'general' | 'bug' | 'abuse' | 'suggestion';
+	status: 'open' | 'in_progress' | 'resolved' | 'dismissed';
+	resolved_by: string | null;
+	resolved_at: string | null;
+	notes: string | null;
+	created_at: string;
+	reporter_name?: string;
+}
+
+export interface ModerationStats {
+	open_message_reports: number;
+	open_user_reports: number;
+	open_issues: number;
+}
+
+export interface ModerationMessageReport {
+	id: string;
+	guild_id: string | null;
+	channel_id: string;
+	message_id: string;
+	reporter_id: string;
+	reason: string;
+	status: 'open' | 'resolved' | 'dismissed' | 'admin_pending';
+	resolved_by: string | null;
+	resolved_at: string | null;
+	created_at: string;
+	reporter_name?: string;
 }

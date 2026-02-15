@@ -368,6 +368,15 @@
 		} catch { addToast('Failed to update admin status', 'error'); }
 	}
 
+	async function handleToggleGlobalMod(userId: string, currentFlags: number) {
+		const isMod = (currentFlags & 32) !== 0;
+		try {
+			await api.setGlobalMod(userId, !isMod);
+			users = users.map(u => u.id === userId ? { ...u, flags: isMod ? u.flags & ~32 : u.flags | 32 } : u);
+			addToast(isMod ? 'Global Mod removed' : 'Global Mod granted', 'success');
+		} catch { addToast('Failed to update global mod status', 'error'); }
+	}
+
 	// --- Instance Ban ---
 
 	function openBanModal(user: User) {
@@ -1420,6 +1429,9 @@
 											{#if isAdmin}
 												<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-2xs font-bold text-brand-400">Admin</span>
 											{/if}
+											{#if (user.flags & 32) !== 0}
+												<span class="rounded bg-orange-500/20 px-1.5 py-0.5 text-2xs font-bold text-orange-400">Global Mod</span>
+											{/if}
 											{#if isSuspended}
 												<span class="rounded bg-red-500/20 px-1.5 py-0.5 text-2xs font-bold text-red-400">Suspended</span>
 											{/if}
@@ -1435,6 +1447,12 @@
 										onclick={() => handleToggleAdmin(user.id, user.flags)}
 									>
 										{isAdmin ? 'Remove Admin' : 'Make Admin'}
+									</button>
+									<button
+										class="text-xs {(user.flags & 32) !== 0 ? 'text-orange-400 hover:text-orange-300' : 'text-orange-400 hover:text-orange-300'}"
+										onclick={() => handleToggleGlobalMod(user.id, user.flags)}
+									>
+										{(user.flags & 32) !== 0 ? 'Remove Mod' : 'Make Mod'}
 									</button>
 									{#if isSuspended}
 										<button
