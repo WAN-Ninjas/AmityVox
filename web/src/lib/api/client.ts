@@ -50,7 +50,11 @@ import type {
 	BotToken,
 	SlashCommand,
 	StickerPack,
-	Sticker
+	Sticker,
+	UserReport,
+	ReportedIssue,
+	ModerationStats,
+	ModerationMessageReport
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -1268,6 +1272,51 @@ class ApiClient {
 
 	deleteKanbanCard(channelId: string, boardId: string, cardId: string): Promise<void> {
 		return this.del(`/channels/${channelId}/experimental/kanban/${boardId}/cards/${cardId}`);
+	}
+
+	// --- Global Moderation ---
+
+	reportUser(userId: string, reason: string, contextGuildId?: string, contextChannelId?: string): Promise<{ id: string; status: string }> {
+		return this.post(`/users/${userId}/report`, { reason, context_guild_id: contextGuildId, context_channel_id: contextChannelId });
+	}
+
+	reportMessageToAdmins(channelId: string, messageId: string, reason: string): Promise<MessageReport> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/report-admin`, { reason });
+	}
+
+	createIssue(title: string, description: string, category: string): Promise<{ id: string; status: string }> {
+		return this.post('/issues', { title, description, category });
+	}
+
+	getModerationStats(): Promise<ModerationStats> {
+		return this.get('/moderation/stats');
+	}
+
+	getModerationUserReports(status?: string): Promise<UserReport[]> {
+		const url = status ? `/moderation/user-reports?status=${status}` : '/moderation/user-reports';
+		return this.get(url);
+	}
+
+	resolveModerationUserReport(reportId: string, status: string, notes?: string): Promise<void> {
+		return this.patch(`/moderation/user-reports/${reportId}`, { status, notes });
+	}
+
+	getModerationMessageReports(status?: string): Promise<ModerationMessageReport[]> {
+		const url = status ? `/moderation/message-reports?status=${status}` : '/moderation/message-reports';
+		return this.get(url);
+	}
+
+	getModerationIssues(status?: string): Promise<ReportedIssue[]> {
+		const url = status ? `/moderation/issues?status=${status}` : '/moderation/issues';
+		return this.get(url);
+	}
+
+	resolveModerationIssue(issueId: string, status: string, notes?: string): Promise<void> {
+		return this.patch(`/moderation/issues/${issueId}`, { status, notes });
+	}
+
+	setGlobalMod(userId: string, globalMod: boolean): Promise<void> {
+		return this.post(`/admin/users/${userId}/set-globalmod`, { global_mod: globalMod });
 	}
 }
 

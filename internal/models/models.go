@@ -64,6 +64,7 @@ const (
 	UserFlagAdmin      = 1 << 2
 	UserFlagBot        = 1 << 3
 	UserFlagVerified   = 1 << 4
+	UserFlagGlobalMod  = 1 << 5
 )
 
 // IsSuspended reports whether the user is suspended.
@@ -77,6 +78,9 @@ func (u User) IsAdmin() bool { return u.Flags&UserFlagAdmin != 0 }
 
 // IsBot reports whether the user is a bot account.
 func (u User) IsBot() bool { return u.Flags&UserFlagBot != 0 }
+
+// IsGlobalMod reports whether the user is a global moderator.
+func (u User) IsGlobalMod() bool { return u.Flags&UserFlagGlobalMod != 0 }
 
 // UserSession represents an active login session. Session tokens are stored as
 // the primary key and used as Bearer tokens for API authentication.
@@ -812,4 +816,45 @@ type BotRateLimit struct {
 	RequestsPerSecond int       `json:"requests_per_second"`
 	Burst             int       `json:"burst"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// UserReport represents a report filed against a user by another user.
+// Corresponds to the user_reports table.
+type UserReport struct {
+	ID               string     `json:"id"`
+	ReporterID       string     `json:"reporter_id"`
+	ReportedUserID   string     `json:"reported_user_id"`
+	Reason           string     `json:"reason"`
+	ContextGuildID   *string    `json:"context_guild_id,omitempty"`
+	ContextChannelID *string    `json:"context_channel_id,omitempty"`
+	Status           string     `json:"status"`
+	ResolvedBy       *string    `json:"resolved_by,omitempty"`
+	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
+	Notes            *string    `json:"notes,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ReporterName     *string    `json:"reporter_name,omitempty"`
+	ReportedUserName *string    `json:"reported_user_name,omitempty"`
+}
+
+// ReportedIssue represents a general issue/bug/concern reported by a user.
+// Corresponds to the reported_issues table.
+type ReportedIssue struct {
+	ID           string     `json:"id"`
+	ReporterID   string     `json:"reporter_id"`
+	Title        string     `json:"title"`
+	Description  string     `json:"description"`
+	Category     string     `json:"category"`
+	Status       string     `json:"status"`
+	ResolvedBy   *string    `json:"resolved_by,omitempty"`
+	ResolvedAt   *time.Time `json:"resolved_at,omitempty"`
+	Notes        *string    `json:"notes,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ReporterName *string    `json:"reporter_name,omitempty"`
+}
+
+// ModerationStats holds counts of open moderation items.
+type ModerationStats struct {
+	OpenMessageReports int `json:"open_message_reports"`
+	OpenUserReports    int `json:"open_user_reports"`
+	OpenIssues         int `json:"open_issues"`
 }

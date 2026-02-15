@@ -475,6 +475,37 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"admin": req.Admin})
 }
 
+// HandleSetGlobalMod handles POST /api/v1/admin/users/{userID}/set-globalmod.
+func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+	userID := chi.URLParam(r, "userID")
+
+	var req struct {
+		GlobalMod bool `json:"global_mod"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var err error
+	if req.GlobalMod {
+		_, err = h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
+	} else {
+		_, err = h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update global mod status")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"global_mod": req.GlobalMod})
+}
+
 // HandleInstanceBanUser bans a user at the instance level (suspends + records reason).
 // POST /api/v1/admin/users/{userID}/instance-ban
 func (h *Handler) HandleInstanceBanUser(w http.ResponseWriter, r *http.Request) {
