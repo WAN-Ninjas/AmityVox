@@ -17,7 +17,7 @@ CLAUDE.md
 KICKOFF_PROMPT.md
 TODO.md
 .claude/
-.github/
+# .github/ — tracked (contains CI workflows)
 
 # IDE and editor
 .vscode/
@@ -40,7 +40,6 @@ amityvox.toml
 # Docker volumes and local data
 data/
 *.db
-*.sqlite
 
 # Debug binary
 __debug_bin*

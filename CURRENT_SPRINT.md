@@ -1,57 +1,120 @@
-# Current Sprint: Thread Redesign — Nested Sidebar Threads
+# Current Sprint: README Rewrite + Container Registry for v0.5.0
 
 ## Goal
 
-Make threads first-class sidebar citizens: they appear nested/indented beneath their parent channel with a distinct speech-bubble icon, can be hidden per-user, and channels gain a right-click "Show Threads" submenu with activity time filters.
+1. Rewrite README.md as a clean deployment-only guide (no developer content)
+2. Set up GitHub Actions to publish prebuilt images to GitHub Container Registry
+3. Provide a standalone docker-compose.yml so users never need to build anything
 
-## Changes
+## Part 1: GitHub Container Registry
 
-### Database (Migration 042)
+### New file: `.github/workflows/publish.yml`
 
-- `channels.parent_channel_id` — direct FK from thread to parent channel
-- `channels.last_activity_at` — updated on each message post, avoids expensive subqueries
-- `user_hidden_threads` table — per-user thread hide preferences
-- Backfill existing threads from `messages.thread_id`
+Workflow that builds and pushes the Docker image to `ghcr.io/wan-ninjas/amityvox`.
 
-### Backend
+**Triggers:**
+- Push to `main` branch (tags as `latest`)
+- Push of version tags `v*` (tags as version, e.g. `v0.5.0` and `0.5.0`)
 
-- **Model**: `ParentChannelID` and `LastActivityAt` added to `Channel` struct
-- **All Channel SELECT/Scan queries updated** across `channels.go`, `guilds.go`, `users.go`
-- **HandleCreateThread**: Sets `parent_channel_id` and `last_activity_at`
-- **HandleGetThreads**: Uses `parent_channel_id` instead of JOIN through messages
-- **HandleCreateMessage**: Updates `last_activity_at` for thread channels
-- **New handlers**: `HandleHideThread`, `HandleUnhideThread`, `HandleGetHiddenThreads`
-- **Routes**: Hide/unhide under `/channels/{id}/threads/{id}/hide`, hidden list under `/users/@me/hidden-threads`
+**Steps:**
+1. Checkout code
+2. Set up Docker Buildx (for multi-platform)
+3. Login to ghcr.io using `GITHUB_TOKEN`
+4. Extract metadata (tags + labels from git ref)
+5. Build + push multi-platform image (linux/amd64, linux/arm64)
+6. Pass build args: VERSION, COMMIT, BUILD_DATE
 
-### Frontend
+**Key actions used:**
+- `docker/setup-buildx-action`
+- `docker/login-action` (registry: ghcr.io, username: `${{ github.actor }}`, password: `${{ secrets.GITHUB_TOKEN }}`)
+- `docker/metadata-action` (generates tags from git ref)
+- `docker/build-push-action` (multi-platform, push: true)
 
-- **Types**: `parent_channel_id` and `last_activity_at` on Channel interface
-- **API Client**: `hideThread()`, `unhideThread()`, `getHiddenThreads()`
-- **Channels Store**:
-  - `textChannels` excludes threads (`!parent_channel_id`)
-  - `threadsByParent` derived store: grouped by parent, sorted by activity DESC, excluding hidden
-  - `hiddenThreadIds` writable store with optimistic updates
-  - `getThreadActivityFilter()` / `setThreadActivityFilter()` — localStorage-based per-channel
-- **Gateway**: Handles `THREAD_CREATE` event; updates `last_activity_at` on `MESSAGE_CREATE`
-- **ChannelSidebar**: Threads render nested under parent with speech-bubble icon, thread context menu (hide/archive), channel context menu with "Show Threads" activity filter submenu
-- **Guild Layout**: Loads hidden threads on guild init
+**Package visibility:** Set to public in repo settings (Settings > Packages) or via workflow label.
 
-### Tests
+### New file: `docker_deploy/docker-compose.yml`
 
-- Channel store tests updated for thread exclusion from `textChannels`
-- `threadsByParent` grouping, sorting, hidden filtering
-- Thread activity filter localStorage round-trip
-- Per-channel filter independence
+A standalone, user-facing compose file that uses prebuilt images. No `build:` directives, no `../../` paths.
 
-## Verification Checklist
+```yaml
+services:
+  amityvox:
+    image: ghcr.io/wan-ninjas/amityvox:latest
+    # ... same env/depends as current, but paths simplified
 
-- [ ] Migration 042 runs cleanly
-- [ ] `HandleCreateThread` sets `parent_channel_id` and `last_activity_at`
-- [ ] `HandleCreateMessage` updates `last_activity_at` for threads
-- [ ] `HandleGetGuildChannels` returns threads with `parent_channel_id`
-- [ ] Threads appear nested in sidebar with speech-bubble icon
-- [ ] Right-click thread -> Hide Thread works
-- [ ] Right-click channel -> Show Threads -> filter by time works
-- [ ] Threads with unreads bypass activity filter
-- [ ] Frontend tests pass
-- [ ] Docker build passes with --no-cache
+  web-init:
+    image: ghcr.io/wan-ninjas/amityvox:latest
+    entrypoint: ["sh", "-c", "cp -r /srv/web/* /srv/public/"]
+    # Frontend is baked into the image at /srv/web
+
+  # All other services (postgresql, nats, dragonfly, etc.) stay as-is
+  # since they use public images already
+```
+
+Users download this single file + `.env.example` and run `docker compose up -d`.
+
+**The existing `deploy/docker/docker-compose.yml` stays** for development (builds from source).
+
+### Config files
+
+The compose also needs supporting config files. Options:
+- Inline defaults via environment variables (preferred — fewer files to download)
+- Or bundle configs into the image (garage.toml, livekit.yaml, Caddyfile)
+
+Check which configs are mounted as volumes and decide if they can be embedded or provided as env vars.
+
+## Part 2: README Rewrite
+
+### Structure
+
+1. **Header** — Name, one-liner, version badge, license badge, Discord badge
+2. **Links** — Discord | Live Instance | Docs
+3. **Features** — Single compact bullet list (no sub-sections)
+4. **Quick Start**
+   - Prerequisites (Docker + Compose, domain, 2GB RAM)
+   - Option A: One-command deploy (curl compose + env, edit, up)
+   - Option B: Clone repo and `docker compose up`
+5. **Initial Setup**
+   - Web setup wizard (auto on first launch, locked after completion)
+   - Create admin user via CLI
+6. **Configuration** — `.env` reference, key variables, TLS/domain setup
+7. **Services** — Table of containers
+8. **CLI Reference** — Brief subcommand list
+9. **Backup & Restore** — One-liners
+10. **Community** — Discord, instance, license
+
+### What to Remove
+
+- Local Development section
+- Testing section
+- Project Structure tree
+- API Overview / endpoint listing
+- Contributing section
+- Tech Stack detailed table
+- Desktop & Mobile section (Tauri/Capacitor)
+
+### Key Info
+
+- **Version**: v0.5.0
+- **Discord**: https://discord.gg/VvxgUpF3uQ
+- **Live instance**: https://amityvox.chat/invite/b38a4701f16f
+- **License**: AGPL-3.0
+
+### Setup Wizard Notes
+
+- `GET /api/v1/admin/setup/status` — returns `{completed, instance_name, instance_id}`
+- `POST /api/v1/admin/setup/complete` — sets instance name, description, domain, registration mode, federation mode
+- **Gating**: Before setup completion, anyone can access. After `instance_settings.setup_completed = 'true'`, requires admin auth.
+- Admin user creation is separate (CLI only): `docker exec amityvox amityvox admin create-user <username> <email> <password>`
+
+## Verification
+
+- [x] `publish.yml` builds and pushes on main/tags
+- [x] Multi-platform: linux/amd64 + linux/arm64
+- [x] Root `docker-compose.yml` uses `image:` not `build:`
+- [x] Users can deploy with just compose file + .env (no clone needed)
+- [x] README says v0.5.0
+- [x] Discord and instance links present
+- [x] No developer instructions in README
+- [x] Setup wizard + admin creation documented
+- [x] Existing `deploy/docker/docker-compose.yml` unchanged (dev use)

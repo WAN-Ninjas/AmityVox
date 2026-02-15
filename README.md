@@ -2,337 +2,194 @@
 
 A self-hosted, federated, optionally-encrypted communication platform. Think Discord, but open source, federated, and designed to run on a Raspberry Pi.
 
-**Version:** v0.4.0 | **License:** AGPL-3.0
+**v0.5.0** | [AGPL-3.0](LICENSE) | [Discord](https://discord.gg/VvxgUpF3uQ) | [Live Instance](https://amityvox.chat/invite/b38a4701f16f)
 
 ## Features
 
-**Core**
-- Guilds (servers) with channels, categories, roles, and permissions
-- Real-time messaging with replies, reactions, pins, threads, and markdown
-- WebSocket gateway with typing indicators and presence tracking
-- DMs and group DMs
+- Guilds with channels, categories, roles, and granular permissions
+- Real-time messaging with replies, reactions, threads, pins, and markdown
+- DMs and group DMs with typing indicators and read receipts
+- Voice and video channels powered by LiveKit (WebRTC)
 - File uploads with image thumbnails, blurhash previews, and EXIF stripping
 - Full-text search via Meilisearch
-- Webhooks with external execution
-- Audit log for all administrative actions
-- Rate limiting and per-guild AutoMod (word/regex/invite/spam/link filters)
-
-**Authentication**
-- Argon2id password hashing
-- TOTP two-factor authentication with backup codes
-- WebAuthn/FIDO2 hardware key support
-- Session management with device listing and revocation
-
-**Voice & Video**
-- LiveKit-powered voice channels with WebRTC
-- Token-based room join with voice state tracking
-
-**Federation**
-- Instance-to-instance communication with Ed25519-signed messages
-- Hybrid Logical Clock ordering for consistency
-- Configurable modes: open, allowlist, or closed
-- Offline queuing with exponential backoff retry
-
-**Encryption**
-- MLS (Messaging Layer Security, RFC 9420) key management
-- Per-channel encryption with key packages, welcome messages, and group state
-- Server-side delivery service — client-side encryption
-
-**Push Notifications**
-- WebPush with VAPID authentication
-- Per-guild notification preferences (all, mentions only, none)
-- Recipient resolution for DMs, mentions, role mentions, and @everyone
-
-**Bridges**
-- Matrix bridge (Application Service API, virtual user impersonation)
-- Discord bridge (bot gateway, webhook relay, channel mapping)
-
-**Frontend**
-- SvelteKit 5 web client with TailwindCSS
-- Discord-like three-panel layout
-- Builds to 195KB static bundle served by Caddy
-- Full interactive UI: context menus, replies, reactions, edit/delete messages
-- Threaded conversations and message search
-- User popovers, DMs, and unread indicators
-- Pinned messages and typing indicators
-- Online/offline presence display
-- Image lightbox for media previews
-- Emoji picker and Giphy integration
-- Keyboard shortcuts for power users
-- Notification toasts for real-time feedback
-- Mobile responsive layout
-
-**Admin Dashboard**
-- Live instance statistics (users, messages, guilds, connections)
-- User management (search, suspend, grant/revoke admin)
-- Instance settings configuration
-- Federation peer management
-
-**Desktop & Mobile**
-- Tauri desktop app for Windows, macOS, and Linux
-- Capacitor mobile app for iOS and Android
-
-**Operations**
-- One-line installer script (`install.sh`) for quick deployment
-- Backup and restore scripts for data safety
-- Prometheus-compatible metrics endpoint (`/metrics`)
-
-## Tech Stack
-
-| Component | Technology | Purpose |
-|---|---|---|
-| Backend | Go 1.23+ | Single binary, subcommands: serve, migrate, admin, version |
-| Frontend | SvelteKit 5 | Static SPA served by Caddy |
-| Database | PostgreSQL 16 | Primary data store (always — no SQLite) |
-| Message Broker | NATS + JetStream | Real-time events, persistent streams, job queues |
-| Cache | DragonflyDB | Sessions, presence, rate limiting (Redis-compatible) |
-| Voice/Video | LiveKit | WebRTC SFU |
-| File Storage | Garage | S3-compatible (swappable to MinIO/AWS S3/Wasabi) |
-| Search | Meilisearch | Full-text message and user search |
-| Reverse Proxy | Caddy | Auto-TLS, static file serving, WebSocket proxy |
+- MLS end-to-end encryption (RFC 9420) for channels
+- Federation between instances with Ed25519-signed messages
+- TOTP and WebAuthn/FIDO2 two-factor authentication
+- WebPush notifications with per-guild preferences
+- Bridges to Matrix, Discord, Telegram, Slack, and IRC
+- Bot SDK for building custom integrations
+- Webhooks, audit logs, and AutoMod (word/regex/spam/link filters)
+- Admin dashboard with user management and instance settings
+- Emoji picker, Giphy integration, and keyboard shortcuts
+- Self-hosted translation via LibreTranslate
+- Prometheus metrics endpoint
+- ~16 MB Docker image, runs on 2 GB RAM
 
 ## Quick Start
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) v2+
-- 2GB+ RAM (runs comfortably on Raspberry Pi 5 with 8GB)
+- [Docker Engine](https://docs.docker.com/engine/install/) and Docker Compose v2+
+- A domain name (for TLS) or `localhost` for local testing
+- 2 GB+ RAM (runs comfortably on Raspberry Pi 5)
 
-### Option A: One-line installer
+### Option A: Deploy without cloning
+
+Download the compose file and environment template, then start:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/install.sh | bash
+mkdir amityvox && cd amityvox
+curl -O https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/docker_deploy/docker-compose.yml
+curl -O https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/docker_deploy/.env.example
+cp .env.example .env
+# Edit .env — set AMITYVOX_INSTANCE_DOMAIN, POSTGRES_PASSWORD, etc.
+docker compose up -d
 ```
 
 ### Option B: Clone and start
 
 ```bash
 git clone https://github.com/WAN-Ninjas/AmityVox.git
-cd AmityVox
-cp .env.example .env        # Review and edit settings
-make docker-up               # Start all services
+cd AmityVox/docker_deploy
+cp .env.example .env
+# Edit .env — set AMITYVOX_INSTANCE_DOMAIN, POSTGRES_PASSWORD, etc.
+docker compose up -d
 ```
 
-### 2. Create an admin user
+## Initial Setup
+
+### 1. Setup Wizard
+
+On first launch, open your domain (or `http://localhost`) in a browser. The setup wizard runs automatically and lets you configure:
+
+- Instance name and description
+- Domain and registration mode
+- Federation mode (open, allowlist, or closed)
+
+The wizard locks after completion. Further changes require admin authentication.
+
+### 2. Create an Admin User
 
 ```bash
-docker exec amityvox amityvox admin create-user \
-  --username admin \
-  --email admin@example.com \
-  --password 'YourSecurePassword'
-
+docker exec amityvox amityvox admin create-user admin admin@example.com YourSecurePassword
 docker exec amityvox amityvox admin set-admin admin
 ```
 
-### 3. Open the web client
+### 3. Log In
 
-Navigate to `http://localhost` in your browser. Log in with the admin credentials.
-
-### Stopping
-
-```bash
-make docker-down
-```
-
-## Local Development
-
-### Requirements
-
-- Go 1.23+
-- Node.js 20+
-- PostgreSQL 16
-- NATS 2.x
-- DragonflyDB or Redis 7+
-
-### Backend
-
-```bash
-# Install Go dependencies
-make deps
-
-# Copy and edit config
-cp amityvox.example.toml amityvox.toml
-
-# Run database migrations
-make migrate-up
-
-# Build and run
-make run
-```
-
-### Frontend
-
-```bash
-cd web
-npm install
-npm run dev    # Dev server with API proxy to localhost:8080
-```
-
-### Testing
-
-```bash
-# Run all Go tests (unit + integration if Docker available)
-make test
-
-# Run with coverage report
-make test-cover
-
-# Type-check frontend
-cd web && npm run check
-
-# Frontend unit tests
-cd web && npm test
-
-# Frontend E2E tests
-cd web && npx playwright test
-```
-
-## Docker Compose Services
-
-The full stack runs 8 containers:
-
-| Service | Image | Ports | Purpose |
-|---|---|---|---|
-| amityvox | Built from source | 8080, 8081 | REST API + WebSocket |
-| postgresql | postgres:16-alpine | 5432 | Database |
-| nats | nats:2-alpine | 4222, 8222 | Message broker |
-| dragonflydb | dragonflydb/dragonfly | 6379 | Cache/sessions |
-| garage | dxflrs/garage:v1.0 | 3900, 3902 | S3 file storage |
-| livekit | livekit/livekit-server | 7880, 7881, 7882/udp | Voice/video |
-| meilisearch | meilisearch:v1.7 | 7700 | Search |
-| caddy | caddy:2-alpine | 80, 443 | Reverse proxy + TLS |
-
-Total memory: ~700MB–1.2GB (leaves 6.8–7.3GB free on 8GB RPi5).
+Open your domain in the browser, register or log in with the admin account, and start using AmityVox.
 
 ## Configuration
 
-AmityVox is configured via `amityvox.toml` with environment variable overrides (prefixed `AMITYVOX_`). See [`amityvox.example.toml`](amityvox.example.toml) for all options.
+All settings are controlled via environment variables in `.env`. Key variables:
 
-Key environment variables for Docker:
+| Variable | Default | Purpose |
+|---|---|---|
+| `AMITYVOX_INSTANCE_DOMAIN` | `localhost` | Public domain (used for TLS, WebAuthn, federation) |
+| `AMITYVOX_INSTANCE_NAME` | `AmityVox` | Display name shown in the UI |
+| `POSTGRES_PASSWORD` | `amityvox` | Database password (**change for production**) |
+| `LIVEKIT_API_KEY` | `devkey` | LiveKit auth key (**change for production**) |
+| `LIVEKIT_API_SECRET` | `secret` | LiveKit auth secret (**change for production**) |
+| `MEILI_MASTER_KEY` | *(empty)* | Meilisearch API key (set for production) |
+| `AMITYVOX_STORAGE_ACCESS_KEY` | *(empty)* | S3 access key (see Garage setup below) |
+| `AMITYVOX_STORAGE_SECRET_KEY` | *(empty)* | S3 secret key (see Garage setup below) |
 
-```bash
-AMITYVOX_DATABASE_URL=postgres://user:pass@host:5432/db
-AMITYVOX_NATS_URL=nats://host:4222
-AMITYVOX_CACHE_URL=redis://host:6379
-AMITYVOX_STORAGE_ENDPOINT=http://host:3900
-AMITYVOX_STORAGE_ACCESS_KEY=your-key
-AMITYVOX_STORAGE_SECRET_KEY=your-secret
-AMITYVOX_LIVEKIT_URL=ws://host:7880
-AMITYVOX_LIVEKIT_API_KEY=devkey
-AMITYVOX_LIVEKIT_API_SECRET=secret
-AMITYVOX_SEARCH_URL=http://host:7700
-AMITYVOX_INSTANCE_DOMAIN=chat.example.com
-```
+See [`docker_deploy/.env.example`](docker_deploy/.env.example) for all available options including push notifications, Giphy, translation languages, and media settings.
 
-### Production with TLS
+### TLS / Custom Domain
 
-Edit `deploy/caddy/Caddyfile` — replace `:80` with your domain:
+Set `AMITYVOX_INSTANCE_DOMAIN` to your domain in `.env`. Caddy automatically provisions Let's Encrypt certificates — no manual TLS configuration needed. Ensure ports 80 and 443 are open.
 
-```
-chat.example.com {
-    # ... same route blocks ...
-}
-```
+### Garage S3 Setup
 
-Caddy automatically provisions Let's Encrypt certificates.
-
-## CLI Commands
+After first boot, create the storage bucket and key:
 
 ```bash
-amityvox serve                          # Start the server
-amityvox migrate up                     # Run pending migrations
-amityvox migrate down                   # Rollback last migration
-amityvox migrate status                 # Show migration status
-amityvox admin create-user              # Create a user
-amityvox admin suspend X                # Suspend a user
-amityvox admin unsuspend X              # Unsuspend a user
-amityvox admin set-admin X              # Grant admin flag
-amityvox admin unset-admin X            # Revoke admin flag
-amityvox admin list-users               # List all users
-amityvox version                        # Print version info
+# Get the node ID
+docker exec amityvox-garage /garage status
+
+# Assign and apply layout (replace NODE_ID)
+docker exec amityvox-garage /garage layout assign -z dc1 -c 1G NODE_ID
+docker exec amityvox-garage /garage layout apply --version 1
+
+# Create bucket and key
+docker exec amityvox-garage /garage bucket create amityvox
+docker exec amityvox-garage /garage key create amityvox-key
+
+# Allow key access to bucket
+docker exec amityvox-garage /garage bucket allow amityvox --read --write --key amityvox-key
+
+# Get the key ID and secret
+docker exec amityvox-garage /garage key info amityvox-key
 ```
 
-## Project Structure
+Copy the key ID and secret into `AMITYVOX_STORAGE_ACCESS_KEY` and `AMITYVOX_STORAGE_SECRET_KEY` in `.env`, then restart:
 
-```
-amityvox/
-├── cmd/amityvox/           # CLI entrypoint (serve, migrate, admin, version)
-├── internal/
-│   ├── api/                # REST API handlers (/api/v1/*)
-│   ├── auth/               # Authentication (Argon2id, TOTP, WebAuthn, sessions)
-│   ├── automod/            # AutoMod engine (filters, rules, actions)
-│   ├── config/             # TOML config parsing + env overrides
-│   ├── database/           # PostgreSQL connection, embedded migrations
-│   ├── encryption/         # MLS key management
-│   ├── events/             # NATS pub/sub event bus
-│   ├── federation/         # Instance-to-instance protocol
-│   ├── gateway/            # WebSocket gateway (identify, heartbeat, events)
-│   ├── integration/        # Integration tests (dockertest)
-│   ├── media/              # File upload, S3, thumbnails, blurhash
-│   ├── models/             # Shared data types
-│   ├── notifications/      # WebPush notification service
-│   ├── permissions/        # Bitfield permission system
-│   ├── presence/           # Online/offline tracking via DragonflyDB
-│   ├── search/             # Meilisearch integration
-│   ├── voice/              # LiveKit voice integration
-│   └── workers/            # Background jobs (transcode, unfurl, automod, push)
-├── web/                    # SvelteKit frontend
-│   └── src/lib/
-│       ├── components/     # UI components (chat, common, channels, encryption, guild)
-│       ├── stores/         # Svelte stores (state management)
-│       ├── api/            # API client modules
-│       └── types/          # TypeScript type definitions
-├── bridges/
-│   ├── matrix/             # Matrix bridge (standalone binary)
-│   └── discord/            # Discord bridge (standalone binary)
-├── desktop/                # Tauri desktop app configuration (Windows, macOS, Linux)
-├── mobile/                 # Capacitor mobile app configuration (iOS, Android)
-├── scripts/                # Backup/restore and operational scripts
-├── deploy/
-│   ├── docker/             # Dockerfile + docker-compose.yml
-│   └── caddy/              # Caddyfile
-├── docs/
-│   ├── architecture.md     # Master architecture specification
-│   ├── deployment.md       # Deployment guide
-│   ├── giphy-setup.md      # Giphy integration setup
-│   └── ui-standards.md     # UI standards and conventions
-├── amityvox.example.toml   # Configuration template
-├── Makefile                # Build, test, deploy targets
-└── TODO.md                 # Development roadmap
+```bash
+docker compose restart amityvox
 ```
 
-## API Overview
+## Services
 
-138+ REST API endpoints across 15 resource groups, all under `/api/v1/`. Authentication via `Authorization: Bearer <token>`.
+The full stack runs 9 containers:
 
-Response format:
-```json
-// Success
-{ "data": { ... } }
+| Service | Image | Purpose |
+|---|---|---|
+| `amityvox` | `ghcr.io/wan-ninjas/amityvox` | REST API + WebSocket gateway |
+| `postgresql` | `postgres:16-alpine` | Primary database |
+| `nats` | `nats:2-alpine` | Message broker (JetStream) |
+| `dragonflydb` | `dragonflydb/dragonfly` | Cache and sessions |
+| `garage` | `dxflrs/garage:v1.0.1` | S3-compatible file storage |
+| `livekit` | `livekit/livekit-server` | Voice/video (WebRTC) |
+| `meilisearch` | `getmeili/meilisearch:v1.35` | Full-text search |
+| `libretranslate` | `libretranslate/libretranslate` | Message translation |
+| `caddy` | `caddy:2-alpine` | Reverse proxy + auto-TLS |
 
-// Error
-{ "error": { "code": "not_found", "message": "Guild not found" } }
+Total memory: ~700 MB - 1.2 GB.
+
+## CLI Reference
+
+```
+docker exec amityvox amityvox <command>
 ```
 
-Major endpoint groups:
-- `POST /auth/register`, `POST /auth/login` — Authentication
-- `GET/PATCH /users/@me` — Current user
-- `POST /guilds`, `GET /guilds/{id}` — Guild management
-- `GET /guilds/{id}/channels`, `POST /guilds/{id}/channels` — Channels
-- `GET/POST /channels/{id}/messages` — Messaging
-- `GET /channels/{id}/messages/{id}/reactions` — Reactions
-- `POST /voice/{channelId}/join` — Voice channels
-- `/ws` — WebSocket gateway
-- `GET /admin/stats` — Live instance statistics
-- `GET/PATCH /admin/users` — Admin user management
-- `GET/PATCH /admin/instance` — Instance settings
-- `GET /metrics` — Prometheus-compatible metrics endpoint
+| Command | Purpose |
+|---|---|
+| `admin create-user <user> <email> <pass>` | Create a user |
+| `admin set-admin <user>` | Grant admin privileges |
+| `admin unset-admin <user>` | Revoke admin privileges |
+| `admin suspend <user>` | Suspend a user |
+| `admin unsuspend <user>` | Unsuspend a user |
+| `admin list-users` | List all users |
+| `migrate up` | Run pending database migrations |
+| `migrate down` | Rollback last migration |
+| `migrate status` | Show migration status |
+| `version` | Print version info |
 
-See [`docs/architecture.md`](docs/architecture.md) for the complete API reference.
+## Backup & Restore
 
-## Contributing
+```bash
+# Backup all data (database + volumes)
+docker exec amityvox-postgresql pg_dumpall -U amityvox > backup.sql
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and contribution guidelines.
+# Restore
+cat backup.sql | docker exec -i amityvox-postgresql psql -U amityvox
+```
+
+## Updating
+
+```bash
+docker compose pull        # Pull latest images
+docker compose up -d       # Recreate containers
+```
+
+Migrations run automatically on startup.
+
+## Community
+
+- [Discord](https://discord.gg/VvxgUpF3uQ) — Support, feedback, and announcements
+- [Live Instance](https://amityvox.chat/invite/b38a4701f16f) — Try AmityVox without installing
+- [GitHub Issues](https://github.com/WAN-Ninjas/AmityVox/issues) — Bug reports and feature requests
 
 ## License
 
