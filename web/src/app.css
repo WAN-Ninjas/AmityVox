@@ -4,34 +4,34 @@
 
 /* ===== Theme Definitions ===== */
 
-/* Dark (default — Discord-inspired) */
+/* Dark (default — Terminal Forge / GitHub-dark inspired) */
 :root,
 [data-theme='dark'] {
-	--brand-50: #e8eaf6;
-	--brand-100: #c5cae9;
-	--brand-200: #9fa8da;
-	--brand-300: #7986cb;
-	--brand-400: #5c6bc0;
-	--brand-500: #3f51b5;
-	--brand-600: #3949ab;
-	--brand-700: #303f9f;
-	--brand-800: #283593;
-	--brand-900: #1a237e;
-	--bg-primary: #1e1f22;
-	--bg-secondary: #2b2d31;
-	--bg-tertiary: #313338;
-	--bg-modifier: #383a40;
-	--bg-floating: #111214;
-	--text-primary: #f2f3f5;
-	--text-secondary: #b5bac1;
-	--text-muted: #949ba4;
-	--text-link: #00a8fc;
-	--status-online: #23a55a;
-	--status-idle: #f0b232;
-	--status-dnd: #f23f43;
-	--status-offline: #80848e;
-	--border-primary: #383a40;
-	--scrollbar-thumb: #1e1f22;
+	--brand-50: #e0f5ee;
+	--brand-100: #b3e6d5;
+	--brand-200: #80d4ba;
+	--brand-300: #4dc29f;
+	--brand-400: #26b48b;
+	--brand-500: #0ea37a;
+	--brand-600: #0c8f6b;
+	--brand-700: #097859;
+	--brand-800: #076148;
+	--brand-900: #043f2f;
+	--bg-primary: #0d1117;
+	--bg-secondary: #161b22;
+	--bg-tertiary: #1c2128;
+	--bg-modifier: #272d36;
+	--bg-floating: #0a0d12;
+	--text-primary: #e6edf3;
+	--text-secondary: #8b949e;
+	--text-muted: #6e7681;
+	--text-link: #58a6ff;
+	--status-online: #3fb950;
+	--status-idle: #d29922;
+	--status-dnd: #f85149;
+	--status-offline: #484f58;
+	--border-primary: #30363d;
+	--scrollbar-thumb: #21262d;
 }
 
 /* Light */
@@ -264,7 +264,7 @@
 
 @layer components {
 	.btn {
-		@apply rounded px-4 py-2 text-sm font-medium transition-colors duration-150;
+		@apply rounded-sm px-4 py-2 text-sm font-medium transition-colors duration-150;
 	}
 
 	.btn-primary {
@@ -280,9 +280,15 @@
 	}
 
 	.input {
-		@apply rounded bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none
+		@apply rounded-sm bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none
 			ring-1 ring-bg-modifier placeholder:text-text-muted
 			focus:ring-brand-500;
+	}
+
+	.accent-stripe {
+		height: 2px;
+		background: linear-gradient(90deg, var(--brand-500), #22d3ee);
+		flex-shrink: 0;
 	}
 }
 

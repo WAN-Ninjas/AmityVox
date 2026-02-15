@@ -28,10 +28,10 @@
 
 <div class="relative inline-flex shrink-0">
 	{#if src}
-		<img class="{sizes[size]} rounded-full object-cover" {src} alt={name} />
+		<img class="{sizes[size]} rounded-md object-cover" {src} alt={name} />
 	{:else}
 		<div
-			class="{sizes[size]} flex items-center justify-center rounded-full bg-brand-600 font-semibold text-white"
+			class="{sizes[size]} flex items-center justify-center rounded-md bg-brand-600 font-semibold text-white"
 		>
 			{initials}
 		</div>

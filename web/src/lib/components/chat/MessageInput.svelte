@@ -552,11 +552,11 @@
 			/>
 		{:else}
 			<div
-				class="flex items-end gap-2 rounded-lg px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
+				class="flex items-end gap-2 rounded border border-bg-modifier px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
 			>
 				<!-- File upload -->
 				{#if !isEditing}
-					<label class="cursor-pointer self-center text-text-muted hover:text-text-primary">
+					<label class="flex cursor-pointer items-center justify-center text-text-muted hover:text-text-primary">
 						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 							<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
 						</svg>
@@ -572,14 +572,15 @@
 					oninput={handleInput}
 					onpaste={handlePaste}
 					placeholder={isEditing ? 'Edit your message...' : isReplying ? 'Reply...' : silentMode ? `Message #${channelName} (silent)` : `Message #${channelName}`}
-					class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
+					class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted placeholder:font-mono"
 					rows="1"
 				></textarea>
 
-				<!-- Silent mode toggle button -->
+				<!-- Right-side icon toolbar -->
 				{#if !isEditing}
+				<div class="flex items-center gap-2">
 					<button
-						class="self-center transition-colors {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
+						class="flex items-center justify-center transition-colors {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
 						title={silentMode ? 'Silent mode on (click to disable)' : 'Send silently (no notifications)'}
 						onclick={() => {
 							silentMode = !silentMode;
@@ -599,13 +600,11 @@
 							</svg>
 						{/if}
 					</button>
-				{/if}
 
 				<!-- Schedule message button -->
-				{#if !isEditing}
-					<div class="relative self-center">
+					<div class="relative">
 						<button
-							class="text-text-muted hover:text-text-primary"
+							class="flex items-center justify-center text-text-muted hover:text-text-primary"
 							title="Schedule message"
 							onclick={() => {
 								showSchedulePicker = !showSchedulePicker;
@@ -648,11 +647,9 @@
 							</div>
 						{/if}
 					</div>
-				{/if}
 
 				<!-- GIF picker button -->
-				{#if !isEditing}
-					<div class="giphy-picker relative self-center">
+					<div class="giphy-picker relative">
 						<button
 							class="flex h-5 items-center rounded border border-text-muted px-1 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
 							title="GIF"
@@ -664,13 +661,11 @@
 							<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
 						{/if}
 					</div>
-				{/if}
 
 				<!-- Sticker picker button -->
-				{#if !isEditing}
-					<div class="sticker-picker relative self-center">
+					<div class="sticker-picker relative">
 						<button
-							class="text-text-muted hover:text-text-primary"
+							class="flex items-center justify-center text-text-muted hover:text-text-primary"
 							title="Stickers"
 							onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showEmojiPicker = false; showGiphyPicker = false; showSchedulePicker = false; }}
 						>
@@ -683,13 +678,11 @@
 							<StickerPicker onselect={sendSticker} onclose={() => (showStickerPicker = false)} />
 						{/if}
 					</div>
-				{/if}
 
 				<!-- Emoji picker button -->
-				{#if !isEditing}
-					<div class="emoji-picker relative self-center">
+					<div class="emoji-picker relative">
 						<button
-							class="text-text-muted hover:text-text-primary"
+							class="flex items-center justify-center text-text-muted hover:text-text-primary"
 							title="Emoji"
 							onclick={(e) => { e.stopPropagation(); showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
@@ -701,12 +694,10 @@
 							<EmojiPicker onselect={insertEmoji} onclose={() => (showEmojiPicker = false)} />
 						{/if}
 					</div>
-				{/if}
 
 				<!-- Voice message button -->
-				{#if !isEditing}
 					<button
-						class="self-center text-text-muted hover:text-text-primary"
+						class="flex items-center justify-center text-text-muted hover:text-text-primary"
 						title="Record voice message"
 						onclick={() => {
 							showVoiceRecorder = true;
@@ -721,11 +712,12 @@
 							<path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 						</svg>
 					</button>
+				</div>
 				{/if}
 
 				<!-- Submit hint -->
 				{#if isEditing}
-					<span class="self-center text-2xs text-text-muted">Esc cancel · Enter save</span>
+					<span class="text-2xs text-text-muted">Esc cancel · Enter save</span>
 				{/if}
 			</div>
 		{/if}

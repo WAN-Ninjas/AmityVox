@@ -29,7 +29,7 @@
 
 <div class="flex min-h-screen items-center justify-center bg-bg-primary p-4">
 	<div class="w-full max-w-sm">
-		<div class="rounded-lg bg-bg-secondary p-8 shadow-xl">
+		<div class="rounded border-t-2 border-brand-500 bg-bg-secondary p-8 shadow-xl">
 			<h1 class="mb-2 text-center text-2xl font-bold text-text-primary">Welcome back!</h1>
 			<p class="mb-6 text-center text-sm text-text-muted">We're so excited to see you again!</p>
 
@@ -39,7 +39,7 @@
 
 			<form onsubmit={handleSubmit}>
 				<div class="mb-4">
-					<label for="username" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="username" class="mb-2 block font-mono text-xs font-bold uppercase tracking-wide text-text-muted">
 						Username
 					</label>
 					<input
@@ -53,7 +53,7 @@
 				</div>
 
 				<div class="mb-6">
-					<label for="password" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="password" class="mb-2 block font-mono text-xs font-bold uppercase tracking-wide text-text-muted">
 						Password
 					</label>
 					<input
