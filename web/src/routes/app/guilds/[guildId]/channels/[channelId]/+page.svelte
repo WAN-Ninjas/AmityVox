@@ -2,7 +2,6 @@
 	import { page } from '$app/stores';
 	import type { Channel, Message, ChannelFollower } from '$lib/types';
 	import { setChannel, currentChannel, currentChannelId, pendingThreadOpen, channels as channelsStore } from '$lib/stores/channels';
-	import { get } from 'svelte/store';
 	import { currentGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
@@ -129,16 +128,17 @@
 	// React to sidebar thread/channel clicks via the pendingThreadOpen store.
 	$effect(() => {
 		const threadId = $pendingThreadOpen;
+		const allChannels = $channelsStore;
 		if (threadId) {
-			pendingThreadOpen.set(null);
 			if (threadId === '__close__') {
 				activeThread = null;
 			} else {
-				const thread = get(channelsStore).get(threadId);
+				const thread = allChannels.get(threadId);
 				if (thread) {
 					openThread(thread);
 				}
 			}
+			pendingThreadOpen.set(null);
 		}
 	});
 

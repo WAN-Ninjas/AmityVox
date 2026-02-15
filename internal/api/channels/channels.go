@@ -1472,7 +1472,22 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/channels/{channelID}/threads/{threadID}/hide
 func (h *Handler) HandleHideThread(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
 	threadID := chi.URLParam(r, "threadID")
+
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
+
+	var exists bool
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM channels WHERE id = $1 AND parent_channel_id = $2)`,
+		threadID, channelID,
+	).Scan(&exists); err != nil || !exists {
+		writeError(w, http.StatusNotFound, "thread_not_found", "Thread not found in this channel")
+		return
+	}
 
 	_, err := h.Pool.Exec(r.Context(),
 		`INSERT INTO user_hidden_threads (user_id, thread_id, hidden_at)
@@ -1492,7 +1507,22 @@ func (h *Handler) HandleHideThread(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/v1/channels/{channelID}/threads/{threadID}/hide
 func (h *Handler) HandleUnhideThread(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
 	threadID := chi.URLParam(r, "threadID")
+
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		return
+	}
+
+	var exists bool
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM channels WHERE id = $1 AND parent_channel_id = $2)`,
+		threadID, channelID,
+	).Scan(&exists); err != nil || !exists {
+		writeError(w, http.StatusNotFound, "thread_not_found", "Thread not found in this channel")
+		return
+	}
 
 	_, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM user_hidden_threads WHERE user_id = $1 AND thread_id = $2`,

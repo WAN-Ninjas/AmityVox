@@ -1,6 +1,6 @@
 // Channel store — manages channels for the current guild.
 
-import { writable, derived, get } from 'svelte/store';
+import { writable, derived } from 'svelte/store';
 import type { Channel } from '$lib/types';
 import { api } from '$lib/api/client';
 

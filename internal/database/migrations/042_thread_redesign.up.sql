@@ -10,8 +10,8 @@ ALTER TABLE channels ADD COLUMN last_activity_at TIMESTAMPTZ;
 
 -- Per-user thread hide preferences.
 CREATE TABLE user_hidden_threads (
-    user_id   TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
+    user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
     hidden_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, thread_id)
 );

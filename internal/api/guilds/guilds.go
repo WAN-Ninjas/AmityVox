@@ -2430,6 +2430,10 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch channel")
 		return
 	}
+	if orig.ParentChannelID != nil {
+		writeError(w, http.StatusBadRequest, "cannot_clone_thread", "Thread channels cannot be cloned")
+		return
+	}
 
 	// Parse optional name from request body.
 	var req struct {

@@ -6,13 +6,15 @@ Make threads first-class sidebar citizens: they appear nested/indented beneath t
 
 ## Changes
 
-### Database (Migration 041)
+### Database (Migration 042)
+
 - `channels.parent_channel_id` — direct FK from thread to parent channel
 - `channels.last_activity_at` — updated on each message post, avoids expensive subqueries
 - `user_hidden_threads` table — per-user thread hide preferences
 - Backfill existing threads from `messages.thread_id`
 
 ### Backend
+
 - **Model**: `ParentChannelID` and `LastActivityAt` added to `Channel` struct
 - **All Channel SELECT/Scan queries updated** across `channels.go`, `guilds.go`, `users.go`
 - **HandleCreateThread**: Sets `parent_channel_id` and `last_activity_at`
@@ -22,6 +24,7 @@ Make threads first-class sidebar citizens: they appear nested/indented beneath t
 - **Routes**: Hide/unhide under `/channels/{id}/threads/{id}/hide`, hidden list under `/users/@me/hidden-threads`
 
 ### Frontend
+
 - **Types**: `parent_channel_id` and `last_activity_at` on Channel interface
 - **API Client**: `hideThread()`, `unhideThread()`, `getHiddenThreads()`
 - **Channels Store**:
@@ -34,13 +37,15 @@ Make threads first-class sidebar citizens: they appear nested/indented beneath t
 - **Guild Layout**: Loads hidden threads on guild init
 
 ### Tests
+
 - Channel store tests updated for thread exclusion from `textChannels`
 - `threadsByParent` grouping, sorting, hidden filtering
 - Thread activity filter localStorage round-trip
 - Per-channel filter independence
 
 ## Verification Checklist
-- [ ] Migration 041 runs cleanly
+
+- [ ] Migration 042 runs cleanly
 - [ ] `HandleCreateThread` sets `parent_channel_id` and `last_activity_at`
 - [ ] `HandleCreateMessage` updates `last_activity_at` for threads
 - [ ] `HandleGetGuildChannels` returns threads with `parent_channel_id`

@@ -189,8 +189,13 @@
 
 	async function handleHideThread(thread: Channel) {
 		if (!thread.parent_channel_id) return;
-		await hideThreadStore(thread.parent_channel_id, thread.id);
-		threadContextMenu = null;
+		try {
+			await hideThreadStore(thread.parent_channel_id, thread.id);
+		} catch (err: any) {
+			addToast(err.message || 'Failed to hide thread', 'error');
+		} finally {
+			threadContextMenu = null;
+		}
 	}
 
 	async function handleArchiveThread(thread: Channel, archive: boolean) {

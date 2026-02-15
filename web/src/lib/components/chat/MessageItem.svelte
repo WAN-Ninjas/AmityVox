@@ -214,6 +214,7 @@
 	}
 
 	async function submitCreateThread() {
+		if (creatingThread) return;
 		const name = newThreadName.trim();
 		if (!name) return;
 		creatingThread = true;
@@ -844,7 +845,7 @@
 {/if}
 
 <!-- Create Thread Modal -->
-<Modal open={showCreateThread} title="Create Thread" onclose={() => (showCreateThread = false)}>
+<Modal open={showCreateThread} title="Create Thread" onclose={() => !creatingThread && (showCreateThread = false)}>
 	<div class="mb-4">
 		<label for="threadName" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
 			Thread Name
@@ -860,7 +861,7 @@
 		/>
 	</div>
 	<div class="flex justify-end gap-2">
-		<button class="btn-secondary" onclick={() => (showCreateThread = false)}>Cancel</button>
+		<button class="btn-secondary" disabled={creatingThread} onclick={() => (showCreateThread = false)}>Cancel</button>
 		<button class="btn-primary" onclick={submitCreateThread} disabled={creatingThread || !newThreadName.trim()}>
 			{creatingThread ? 'Creating...' : 'Create Thread'}
 		</button>
