@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
@@ -46,6 +47,12 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 	if req.Reason == "" {
 		writeError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
 		return
+	}
+	if req.ContextGuildID != nil && *req.ContextGuildID == "" {
+		req.ContextGuildID = nil
+	}
+	if req.ContextChannelID != nil && *req.ContextChannelID == "" {
+		req.ContextChannelID = nil
 	}
 
 	// Verify reported user exists.
@@ -89,42 +96,34 @@ func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 		JOIN users reporter ON reporter.id = ur.reporter_id
 		JOIN users reported ON reported.id = ur.reported_user_id`
 
+	var rows pgx.Rows
+	var qerr error
 	if status != "" {
 		query += ` WHERE ur.status = $1 ORDER BY ur.created_at DESC LIMIT 100`
-		rows, err := h.Pool.Query(r.Context(), query, status)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch reports")
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var rpt models.UserReport
-			if err := rows.Scan(&rpt.ID, &rpt.ReporterID, &rpt.ReportedUserID, &rpt.Reason,
-				&rpt.ContextGuildID, &rpt.ContextChannelID, &rpt.Status,
-				&rpt.ResolvedBy, &rpt.ResolvedAt, &rpt.Notes, &rpt.CreatedAt,
-				&rpt.ReporterName, &rpt.ReportedUserName); err != nil {
-				continue
-			}
-			reports = append(reports, rpt)
-		}
+		rows, qerr = h.Pool.Query(r.Context(), query, status)
 	} else {
 		query += ` ORDER BY ur.created_at DESC LIMIT 100`
-		rows, err := h.Pool.Query(r.Context(), query)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch reports")
+		rows, qerr = h.Pool.Query(r.Context(), query)
+	}
+	if qerr != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch reports")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rpt models.UserReport
+		if err := rows.Scan(&rpt.ID, &rpt.ReporterID, &rpt.ReportedUserID, &rpt.Reason,
+			&rpt.ContextGuildID, &rpt.ContextChannelID, &rpt.Status,
+			&rpt.ResolvedBy, &rpt.ResolvedAt, &rpt.Notes, &rpt.CreatedAt,
+			&rpt.ReporterName, &rpt.ReportedUserName); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read reports")
 			return
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var rpt models.UserReport
-			if err := rows.Scan(&rpt.ID, &rpt.ReporterID, &rpt.ReportedUserID, &rpt.Reason,
-				&rpt.ContextGuildID, &rpt.ContextChannelID, &rpt.Status,
-				&rpt.ResolvedBy, &rpt.ResolvedAt, &rpt.Notes, &rpt.CreatedAt,
-				&rpt.ReporterName, &rpt.ReportedUserName); err != nil {
-				continue
-			}
-			reports = append(reports, rpt)
-		}
+		reports = append(reports, rpt)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read reports")
+		return
 	}
 
 	if reports == nil {
@@ -224,40 +223,33 @@ func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 		FROM reported_issues ri
 		JOIN users u ON u.id = ri.reporter_id`
 
+	var irows pgx.Rows
+	var ierr error
 	if status != "" {
 		query += ` WHERE ri.status = $1 ORDER BY ri.created_at DESC LIMIT 100`
-		rows, err := h.Pool.Query(r.Context(), query, status)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var issue models.ReportedIssue
-			if err := rows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
-				&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
-				&issue.Notes, &issue.CreatedAt, &issue.ReporterName); err != nil {
-				continue
-			}
-			issues = append(issues, issue)
-		}
+		irows, ierr = h.Pool.Query(r.Context(), query, status)
 	} else {
 		query += ` ORDER BY ri.created_at DESC LIMIT 100`
-		rows, err := h.Pool.Query(r.Context(), query)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
+		irows, ierr = h.Pool.Query(r.Context(), query)
+	}
+	if ierr != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
+		return
+	}
+	defer irows.Close()
+	for irows.Next() {
+		var issue models.ReportedIssue
+		if err := irows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
+			&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
+			&issue.Notes, &issue.CreatedAt, &issue.ReporterName); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
 			return
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var issue models.ReportedIssue
-			if err := rows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
-				&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
-				&issue.Notes, &issue.CreatedAt, &issue.ReporterName); err != nil {
-				continue
-			}
-			issues = append(issues, issue)
-		}
+		issues = append(issues, issue)
+	}
+	if err := irows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+		return
 	}
 
 	if issues == nil {
@@ -323,12 +315,21 @@ func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Reques
 
 	var stats models.ModerationStats
 
-	h.Pool.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM message_reports WHERE status = 'admin_pending'`).Scan(&stats.OpenMessageReports)
-	h.Pool.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM user_reports WHERE status = 'open'`).Scan(&stats.OpenUserReports)
-	h.Pool.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM reported_issues WHERE status IN ('open', 'in_progress')`).Scan(&stats.OpenIssues)
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM message_reports WHERE status = 'admin_pending'`).Scan(&stats.OpenMessageReports); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
+		return
+	}
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM user_reports WHERE status = 'open'`).Scan(&stats.OpenUserReports); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
+		return
+	}
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM reported_issues WHERE status IN ('open', 'in_progress')`).Scan(&stats.OpenIssues); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, stats)
 }
@@ -371,13 +372,58 @@ func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Requ
 		if err := rows.Scan(&rpt.ID, &rpt.GuildID, &rpt.ChannelID, &rpt.MessageID,
 			&rpt.ReporterID, &rpt.Reason, &rpt.Status, &rpt.ResolvedBy,
 			&rpt.ResolvedAt, &rpt.CreatedAt, &rpt.ReporterName); err != nil {
-			continue
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read message reports")
+			return
 		}
 		reports = append(reports, rpt)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read message reports")
+		return
 	}
 
 	if reports == nil {
 		reports = []messageReportRow{}
 	}
 	writeJSON(w, http.StatusOK, reports)
+}
+
+// HandleResolveMessageReport handles PATCH /api/v1/moderation/message-reports/{reportID}.
+func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Request) {
+	if !h.isGlobalModOrAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		return
+	}
+
+	reportID := chi.URLParam(r, "reportID")
+	modID := auth.UserIDFromContext(r.Context())
+
+	var req struct {
+		Status string  `json:"status"`
+		Notes  *string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.Status != "resolved" && req.Status != "dismissed" {
+		writeError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
+		return
+	}
+
+	now := time.Now()
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE message_reports SET status = $1, resolved_by = $2, resolved_at = $3 WHERE id = $4`,
+		req.Status, modID, now, reportID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve message report")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Report not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
 }

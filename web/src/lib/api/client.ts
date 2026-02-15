@@ -1306,6 +1306,10 @@ class ApiClient {
 		return this.get(url);
 	}
 
+	resolveModerationMessageReport(reportId: string, status: string, notes?: string): Promise<void> {
+		return this.patch(`/moderation/message-reports/${reportId}`, { status, notes });
+	}
+
 	getModerationIssues(status?: string): Promise<ReportedIssue[]> {
 		const url = status ? `/moderation/issues?status=${status}` : '/moderation/issues';
 		return this.get(url);

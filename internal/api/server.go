@@ -615,6 +615,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/user-reports", modH.HandleGetUserReports)
 				r.Patch("/user-reports/{reportID}", modH.HandleResolveUserReport)
 				r.Get("/message-reports", modH.HandleGetAllMessageReports)
+				r.Patch("/message-reports/{reportID}", modH.HandleResolveMessageReport)
 				r.Get("/issues", modH.HandleGetIssues)
 				r.Patch("/issues/{issueID}", modH.HandleResolveIssue)
 			})

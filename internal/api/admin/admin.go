@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/auth"
@@ -491,16 +492,21 @@ func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var tag pgconn.CommandTag
 	var err error
 	if req.GlobalMod {
-		_, err = h.Pool.Exec(r.Context(),
+		tag, err = h.Pool.Exec(r.Context(),
 			`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
 	} else {
-		_, err = h.Pool.Exec(r.Context(),
+		tag, err = h.Pool.Exec(r.Context(),
 			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update global mod status")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "User not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"global_mod": req.GlobalMod})

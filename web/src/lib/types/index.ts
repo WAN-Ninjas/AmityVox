@@ -435,7 +435,7 @@ export interface MessageReport {
 	message_id: string;
 	reporter_id: string;
 	reason: string;
-	status: 'open' | 'resolved' | 'dismissed';
+	status: 'open' | 'resolved' | 'dismissed' | 'admin_pending';
 	resolved_by: string | null;
 	resolved_at: string | null;
 	created_at: string;

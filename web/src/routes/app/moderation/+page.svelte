@@ -103,7 +103,10 @@
 	async function submitResolve(status: string) {
 		resolving = true;
 		try {
-			if (resolveType === 'user_report') {
+			if (resolveType === 'message_report') {
+				await api.resolveModerationMessageReport(resolveId, status, resolveNotes || undefined);
+				messageReports = messageReports.map(r => r.id === resolveId ? { ...r, status } : r);
+			} else if (resolveType === 'user_report') {
 				await api.resolveModerationUserReport(resolveId, status, resolveNotes || undefined);
 				userReports = userReports.map(r => r.id === resolveId ? { ...r, status } : r);
 			} else if (resolveType === 'issue') {
@@ -352,7 +355,7 @@
 											{#if issue.status === 'open'}
 												<button
 													class="rounded bg-yellow-500 px-2 py-1 text-xs font-medium text-white hover:bg-yellow-600"
-													onclick={() => { resolveType = 'issue'; resolveId = issue.id; submitResolve('in_progress'); }}
+													onclick={() => { resolveType = 'issue'; resolveId = issue.id; resolveNotes = ''; submitResolve('in_progress'); }}
 												>
 													In Progress
 												</button>
