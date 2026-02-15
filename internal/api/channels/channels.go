@@ -615,6 +615,11 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	h.Pool.Exec(r.Context(),
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
 
+	// Update last_activity_at for thread channels (fire-and-forget).
+	h.Pool.Exec(r.Context(),
+		`UPDATE channels SET last_activity_at = now() WHERE id = $1 AND parent_channel_id IS NOT NULL`,
+		channelID)
+
 	// Populate author user data for the response and event.
 	h.enrichMessageWithAuthor(r.Context(), &msg)
 
@@ -1339,13 +1344,14 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 	// Create the thread as a new channel linked to the guild, inheriting the parent's auto-archive duration.
 	var thread models.Channel
 	err = tx.QueryRow(r.Context(),
-		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, created_at)
-		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, now())
+		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, parent_channel_id, last_activity_at, created_at)
+		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, $6, now(), now())
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
 		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
-		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
-		threadID, guildID, req.Name, userID, parentAutoArchive,
+		           archived, read_only, read_only_role_ids, default_auto_archive_duration,
+		           parent_channel_id, last_activity_at, created_at`,
+		threadID, guildID, req.Name, userID, parentAutoArchive, channelID,
 	).Scan(
 		&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
 		&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,
@@ -1353,7 +1359,7 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 		&thread.UserLimit, &thread.Bitrate,
 		&thread.Locked, &thread.LockedBy, &thread.LockedAt,
 		&thread.Archived, &thread.ReadOnly, &thread.ReadOnlyRoleIDs,
-		&thread.DefaultAutoArchiveDuration, &thread.CreatedAt,
+		&thread.DefaultAutoArchiveDuration, &thread.ParentChannelID, &thread.LastActivityAt, &thread.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create thread channel", slog.String("error", err.Error()))
@@ -1412,34 +1418,27 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-archive expired threads on fetch: any thread whose last message is older
+	// Auto-archive expired threads on fetch: any thread whose last_activity_at is older
 	// than its default_auto_archive_duration gets archived automatically.
 	h.Pool.Exec(r.Context(),
 		`UPDATE channels SET archived = TRUE
-		 WHERE id IN (
-		     SELECT DISTINCT c.id
-		     FROM channels c
-		     JOIN messages m2 ON m2.thread_id = c.id
-		     WHERE m2.channel_id = $1
-		       AND c.archived = FALSE
-		       AND c.default_auto_archive_duration > 0
-		       AND COALESCE(
-		           (SELECT MAX(msg.created_at) FROM messages msg WHERE msg.channel_id = c.id),
-		           c.created_at
-		       ) < now() - make_interval(mins => c.default_auto_archive_duration)
-		 )`,
+		 WHERE parent_channel_id = $1
+		   AND archived = FALSE
+		   AND default_auto_archive_duration > 0
+		   AND COALESCE(last_activity_at, created_at) < now() - make_interval(mins => default_auto_archive_duration)`,
 		channelID,
 	)
 
-	// Find all threads originating from messages in this channel.
+	// Find all threads for this parent channel using parent_channel_id.
 	rows, err := h.Pool.Query(r.Context(),
-		`SELECT DISTINCT c.id, c.guild_id, c.category_id, c.channel_type, c.name, c.topic,
-		        c.position, c.slowmode_seconds, c.nsfw, c.encrypted, c.last_message_id,
-		        c.owner_id, c.default_permissions, c.archived, c.default_auto_archive_duration, c.created_at
-		 FROM channels c
-		 JOIN messages m ON m.thread_id = c.id
-		 WHERE m.channel_id = $1
-		 ORDER BY c.created_at DESC
+		`SELECT id, guild_id, category_id, channel_type, name, topic,
+		        position, slowmode_seconds, nsfw, encrypted, last_message_id,
+		        owner_id, default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		        archived, read_only, read_only_role_ids, default_auto_archive_duration,
+		        parent_channel_id, last_activity_at, created_at
+		 FROM channels
+		 WHERE parent_channel_id = $1
+		 ORDER BY last_activity_at DESC NULLS LAST
 		 LIMIT 50`,
 		channelID,
 	)
@@ -1455,7 +1454,10 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
-			&c.OwnerID, &c.DefaultPermissions, &c.Archived, &c.DefaultAutoArchiveDuration, &c.CreatedAt,
+			&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
+			&c.Locked, &c.LockedBy, &c.LockedAt,
+			&c.Archived, &c.ReadOnly, &c.ReadOnlyRoleIDs,
+			&c.DefaultAutoArchiveDuration, &c.ParentChannelID, &c.LastActivityAt, &c.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read threads")
 			return
@@ -1464,6 +1466,72 @@ func (h *Handler) HandleGetThreads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, threads)
+}
+
+// HandleHideThread hides a thread for the current user.
+// POST /api/v1/channels/{channelID}/threads/{threadID}/hide
+func (h *Handler) HandleHideThread(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	threadID := chi.URLParam(r, "threadID")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO user_hidden_threads (user_id, thread_id, hidden_at)
+		 VALUES ($1, $2, now())
+		 ON CONFLICT DO NOTHING`,
+		userID, threadID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to hide thread")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleUnhideThread unhides a thread for the current user.
+// DELETE /api/v1/channels/{channelID}/threads/{threadID}/hide
+func (h *Handler) HandleUnhideThread(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	threadID := chi.URLParam(r, "threadID")
+
+	_, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM user_hidden_threads WHERE user_id = $1 AND thread_id = $2`,
+		userID, threadID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unhide thread")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetHiddenThreads returns the list of thread IDs hidden by the current user.
+// GET /api/v1/users/@me/hidden-threads
+func (h *Handler) HandleGetHiddenThreads(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT thread_id FROM user_hidden_threads WHERE user_id = $1`,
+		userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get hidden threads")
+		return
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read hidden threads")
+			return
+		}
+		ids = append(ids, id)
+	}
+
+	writeJSON(w, http.StatusOK, ids)
 }
 
 // --- Scheduled Messages ---
@@ -1646,7 +1714,8 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
 		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
-		        archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at
+		        archived, read_only, read_only_role_ids, default_auto_archive_duration,
+		        parent_channel_id, last_activity_at, created_at
 		 FROM channels WHERE id = $1`,
 		channelID,
 	).Scan(
@@ -1655,7 +1724,7 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 		&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
 		&c.Locked, &c.LockedBy, &c.LockedAt,
 		&c.Archived, &c.ReadOnly, &c.ReadOnlyRoleIDs,
-		&c.DefaultAutoArchiveDuration, &c.CreatedAt,
+		&c.DefaultAutoArchiveDuration, &c.ParentChannelID, &c.LastActivityAt, &c.CreatedAt,
 	)
 	return &c, err
 }

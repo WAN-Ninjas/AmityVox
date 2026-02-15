@@ -524,6 +524,18 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/threads`);
 	}
 
+	hideThread(channelId: string, threadId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/threads/${threadId}/hide`);
+	}
+
+	unhideThread(channelId: string, threadId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/threads/${threadId}/hide`);
+	}
+
+	getHiddenThreads(): Promise<string[]> {
+		return this.get('/users/@me/hidden-threads');
+	}
+
 	// --- Message Edit History ---
 
 	getMessageEdits(channelId: string, messageId: string): Promise<{ content: string; edited_at: string }[]> {

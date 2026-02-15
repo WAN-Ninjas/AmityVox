@@ -402,7 +402,8 @@ func (h *Handler) HandleGetGuildChannels(w http.ResponseWriter, r *http.Request)
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		        archived, parent_channel_id, last_activity_at, created_at
 		 FROM channels WHERE guild_id = $1
 		 ORDER BY position, created_at`,
 		guildID,
@@ -420,7 +421,8 @@ func (h *Handler) HandleGetGuildChannels(w http.ResponseWriter, r *http.Request)
 			&c.ID, &c.GuildID, &c.CategoryID, &c.ChannelType, &c.Name, &c.Topic,
 			&c.Position, &c.SlowmodeSeconds, &c.NSFW, &c.Encrypted, &c.LastMessageID,
 			&c.OwnerID, &c.DefaultPermissions, &c.UserLimit, &c.Bitrate,
-			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived, &c.CreatedAt,
+			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived,
+			&c.ParentChannelID, &c.LastActivityAt, &c.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read channels")
 			return
@@ -477,14 +479,16 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		           archived, parent_channel_id, last_activity_at, created_at`,
 		channelID, guildID, req.CategoryID, req.ChannelType, req.Name, req.Topic, position, nsfw,
 	).Scan(
 		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
 		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
 		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
 		&channel.UserLimit, &channel.Bitrate,
-		&channel.Locked, &channel.LockedBy, &channel.LockedAt, &channel.Archived, &channel.CreatedAt,
+		&channel.Locked, &channel.LockedBy, &channel.LockedAt, &channel.Archived,
+		&channel.ParentChannelID, &channel.LastActivityAt, &channel.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to create channel", slog.String("error", err.Error()))
@@ -2405,7 +2409,8 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT id, guild_id, category_id, channel_type, name, topic, position,
 		        slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at
+		        default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		        archived, parent_channel_id, last_activity_at, created_at
 		 FROM channels WHERE id = $1 AND guild_id = $2`,
 		channelID, guildID,
 	).Scan(
@@ -2413,7 +2418,8 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 		&orig.Topic, &orig.Position, &orig.SlowmodeSeconds, &orig.NSFW, &orig.Encrypted,
 		&orig.LastMessageID, &orig.OwnerID, &orig.DefaultPermissions,
 		&orig.UserLimit, &orig.Bitrate,
-		&orig.Locked, &orig.LockedBy, &orig.LockedAt, &orig.Archived, &orig.CreatedAt,
+		&orig.Locked, &orig.LockedBy, &orig.LockedAt, &orig.Archived,
+		&orig.ParentChannelID, &orig.LastActivityAt, &orig.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -2478,7 +2484,8 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10, $11, now())
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at, archived, created_at`,
+		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+		           archived, parent_channel_id, last_activity_at, created_at`,
 		newID, guildID, orig.CategoryID, orig.ChannelType, newName, orig.Topic,
 		orig.Position+1, orig.SlowmodeSeconds, orig.NSFW, orig.UserLimit, orig.Bitrate,
 	).Scan(
@@ -2486,7 +2493,8 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 		&cloned.Topic, &cloned.Position, &cloned.SlowmodeSeconds, &cloned.NSFW, &cloned.Encrypted,
 		&cloned.LastMessageID, &cloned.OwnerID, &cloned.DefaultPermissions,
 		&cloned.UserLimit, &cloned.Bitrate,
-		&cloned.Locked, &cloned.LockedBy, &cloned.LockedAt, &cloned.Archived, &cloned.CreatedAt,
+		&cloned.Locked, &cloned.LockedBy, &cloned.LockedAt, &cloned.Archived,
+		&cloned.ParentChannelID, &cloned.LastActivityAt, &cloned.CreatedAt,
 	)
 	if err != nil {
 		h.Logger.Error("failed to clone channel", slog.String("error", err.Error()))

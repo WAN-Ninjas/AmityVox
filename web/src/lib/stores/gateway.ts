@@ -68,7 +68,8 @@ export function connectGateway(token: string) {
 
 			// --- Channel events ---
 			case 'CHANNEL_CREATE':
-			case 'CHANNEL_UPDATE': {
+			case 'CHANNEL_UPDATE':
+			case 'THREAD_CREATE': {
 				const ch = data as Channel;
 				updateChannel(ch);
 				// Also track DM channels.
@@ -88,6 +89,11 @@ export function connectGateway(token: string) {
 			case 'MESSAGE_CREATE': {
 				const msg = data as Message;
 				appendMessage(msg);
+				// Update last_activity_at for thread channels.
+				const msgChannel = get(channelsStore).get(msg.channel_id);
+				if (msgChannel?.parent_channel_id) {
+					updateChannel({ ...msgChannel, last_activity_at: msg.created_at });
+				}
 				// Track unreads for messages not from self.
 				let selfId: string | undefined;
 				currentUser.subscribe((u) => (selfId = u?.id ?? undefined))();
