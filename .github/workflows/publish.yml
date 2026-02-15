@@ -11,6 +11,7 @@ env:
 
 jobs:
   publish:
+    if: github.event.deleted != true
     runs-on: ubuntu-latest
     permissions:
       contents: read
