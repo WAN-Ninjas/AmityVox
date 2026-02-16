@@ -3,6 +3,8 @@ package gateway
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/events"
 )
 
 func TestOpcodeConstants(t *testing.T) {
@@ -267,5 +269,151 @@ func TestClient_GuildIDsInit(t *testing.T) {
 	delete(guilds, "guild-1")
 	if guilds["guild-1"] {
 		t.Error("guild-1 should be removed")
+	}
+}
+
+func TestClient_FriendIDsInit(t *testing.T) {
+	friends := make(map[string]bool)
+	friends["friend-1"] = true
+	friends["friend-2"] = true
+
+	if !friends["friend-1"] {
+		t.Error("friend-1 should be in map")
+	}
+	if friends["friend-3"] {
+		t.Error("friend-3 should not be in map")
+	}
+	if len(friends) != 2 {
+		t.Errorf("len = %d, want 2", len(friends))
+	}
+
+	delete(friends, "friend-1")
+	if friends["friend-1"] {
+		t.Error("friend-1 should be removed")
+	}
+}
+
+func TestShouldDispatchTo_PresenceUpdate_Friend(t *testing.T) {
+	// Test that PRESENCE_UPDATE is dispatched to friends even without shared guilds.
+	s := &Server{
+		clients:     make(map[*Client]struct{}),
+		userClients: make(map[string]map[*Client]struct{}),
+	}
+
+	// Create the event source client (the user whose presence changed).
+	sourceClient := &Client{
+		userID:     "user-A",
+		identified: true,
+		guildIDs:   map[string]bool{"guild-1": true},
+		friendIDs:  map[string]bool{},
+	}
+
+	// Create the target client (the user who should receive the event).
+	targetClient := &Client{
+		userID:     "user-B",
+		identified: true,
+		guildIDs:   map[string]bool{"guild-2": true}, // No shared guilds.
+		friendIDs:  map[string]bool{"user-A": true},   // But is friends with user-A.
+	}
+
+	s.clients[sourceClient] = struct{}{}
+	s.clients[targetClient] = struct{}{}
+
+	data, _ := json.Marshal(map[string]string{"user_id": "user-A", "status": "online"})
+	event := events.Event{
+		Type:   "PRESENCE_UPDATE",
+		UserID: "user-A",
+		Data:   data,
+	}
+
+	// Target should receive because user-A is in their friendIDs.
+	if !s.shouldDispatchTo(targetClient, "amityvox.presence.update", event) {
+		t.Error("expected friend to receive PRESENCE_UPDATE")
+	}
+}
+
+func TestShouldDispatchTo_PresenceUpdate_NoFriendNoGuild(t *testing.T) {
+	// Test that PRESENCE_UPDATE is NOT dispatched to non-friends with no shared guilds.
+	s := &Server{
+		clients:     make(map[*Client]struct{}),
+		userClients: make(map[string]map[*Client]struct{}),
+	}
+
+	sourceClient := &Client{
+		userID:     "user-A",
+		identified: true,
+		guildIDs:   map[string]bool{"guild-1": true},
+		friendIDs:  map[string]bool{},
+	}
+
+	targetClient := &Client{
+		userID:     "user-B",
+		identified: true,
+		guildIDs:   map[string]bool{"guild-2": true}, // No shared guilds.
+		friendIDs:  map[string]bool{},                  // Not friends.
+	}
+
+	s.clients[sourceClient] = struct{}{}
+	s.clients[targetClient] = struct{}{}
+
+	data, _ := json.Marshal(map[string]string{"user_id": "user-A", "status": "online"})
+	event := events.Event{
+		Type:   "PRESENCE_UPDATE",
+		UserID: "user-A",
+		Data:   data,
+	}
+
+	if s.shouldDispatchTo(targetClient, "amityvox.presence.update", event) {
+		t.Error("non-friend without shared guild should NOT receive PRESENCE_UPDATE")
+	}
+}
+
+func TestNotifyFriendAdd_UpdatesFriendIDs(t *testing.T) {
+	s := &Server{
+		clients:     make(map[*Client]struct{}),
+		userClients: make(map[string]map[*Client]struct{}),
+	}
+
+	client := &Client{
+		userID:    "user-A",
+		guildIDs:  make(map[string]bool),
+		friendIDs: make(map[string]bool),
+	}
+
+	s.userClients["user-A"] = map[*Client]struct{}{client: {}}
+
+	s.NotifyFriendAdd("user-A", "user-B")
+
+	client.mu.Lock()
+	hasFriend := client.friendIDs["user-B"]
+	client.mu.Unlock()
+
+	if !hasFriend {
+		t.Error("friendIDs should contain user-B after NotifyFriendAdd")
+	}
+}
+
+func TestNotifyFriendRemove_RemovesFriendIDs(t *testing.T) {
+	s := &Server{
+		clients:     make(map[*Client]struct{}),
+		userClients: make(map[string]map[*Client]struct{}),
+	}
+
+	client := &Client{
+		userID:    "user-A",
+		guildIDs:  make(map[string]bool),
+		friendIDs: map[string]bool{"user-B": true},
+	}
+
+	s.userClients["user-A"] = map[*Client]struct{}{client: {}}
+
+	s.NotifyFriendRemove("user-A", "user-B")
+
+	client.mu.Lock()
+	hasFriend := client.friendIDs["user-B"]
+	client.mu.Unlock()
+
+	if hasFriend {
+		t.Error("friendIDs should not contain user-B after NotifyFriendRemove")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,7 @@ import (
 // translateRequest is the body for HandleTranslateMessage.
 type translateRequest struct {
 	TargetLang string `json:"target_lang"`
+	Force      bool   `json:"force,omitempty"`
 }
 
 // libreTranslateRequest is the request body sent to the LibreTranslate API.
@@ -119,24 +121,26 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check the translation cache first.
-	var cachedText string
-	var cachedSourceLang string
-	err = h.Pool.QueryRow(r.Context(),
-		`SELECT translated_text, source_lang FROM translation_cache
-		 WHERE message_id = $1 AND target_lang = $2`,
-		messageID, req.TargetLang,
-	).Scan(&cachedText, &cachedSourceLang)
-	if err == nil {
-		// Cache hit — return cached translation.
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"message_id":      messageID,
-			"source_lang":     cachedSourceLang,
-			"target_lang":     req.TargetLang,
-			"translated_text": cachedText,
-			"cached":          true,
-		})
-		return
+	// Check the translation cache first (skip if force=true for retry).
+	if !req.Force {
+		var cachedText string
+		var cachedSourceLang string
+		err = h.Pool.QueryRow(r.Context(),
+			`SELECT translated_text, source_lang FROM translation_cache
+			 WHERE message_id = $1 AND target_lang = $2`,
+			messageID, req.TargetLang,
+		).Scan(&cachedText, &cachedSourceLang)
+		if err == nil {
+			// Cache hit — return cached translation.
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"message_id":      messageID,
+				"source_lang":     cachedSourceLang,
+				"target_lang":     req.TargetLang,
+				"translated_text": cachedText,
+				"cached":          true,
+			})
+			return
+		}
 	}
 
 	// Call LibreTranslate API.
@@ -179,6 +183,18 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Validate translation output: detect garbage responses where a single word
+	// is repeated many times (e.g. "MAINSTREAM MAINSTREAM MAINSTREAM...").
+	// This happens when LibreTranslate language models fail to load or are corrupted.
+	if isRepeatedWordGarbage(ltResp.TranslatedText) {
+		h.Logger.Warn("LibreTranslate returned repeated-word garbage output",
+			slog.String("output", ltResp.TranslatedText[:min(len(ltResp.TranslatedText), 100)]),
+		)
+		writeError(w, http.StatusBadGateway, "translation_error",
+			"Translation service returned invalid output — check LibreTranslate configuration")
+		return
+	}
+
 	sourceLang := ltResp.DetectedLanguage.Language
 	if sourceLang == "" {
 		sourceLang = "auto"
@@ -206,4 +222,41 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 		"translated_text": ltResp.TranslatedText,
 		"cached":          false,
 	})
+}
+
+// isRepeatedWordGarbage detects translation output that indicates a LibreTranslate
+// model failure. Catches two patterns:
+// 1. Space-separated: "MAINSTREAM MAINSTREAM MAINSTREAM"
+// 2. Concatenated: "MAINSTREMAINSTREMAINSTRE..." (single long token with repeated substring)
+func isRepeatedWordGarbage(text string) bool {
+	// Pattern 1: all space-separated words are the same.
+	words := strings.Fields(text)
+	if len(words) >= 3 {
+		first := strings.ToLower(words[0])
+		allSame := true
+		for _, w := range words[1:] {
+			if strings.ToLower(w) != first {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return true
+		}
+	}
+
+	// Pattern 2: a short substring (3-20 chars) repeats 5+ times in the text.
+	lower := strings.ToLower(text)
+	if len(lower) < 30 {
+		return false
+	}
+	for subLen := 3; subLen <= 20 && subLen <= len(lower)/5; subLen++ {
+		sub := lower[:subLen]
+		count := strings.Count(lower, sub)
+		if count >= 5 && len(sub)*count >= len(lower)/2 {
+			return true
+		}
+	}
+
+	return false
 }

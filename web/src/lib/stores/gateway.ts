@@ -12,8 +12,10 @@ import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
 import { incrementUnread, loadReadState } from './unreads';
 import { addNotification } from './notifications';
-import { handleVoiceStateUpdate } from './voice';
+import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
 import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
+import { loadPermissions, invalidatePermissions } from './permissions';
+import { loadChannelMutePrefs, isChannelMuted, isGuildMuted } from './muting';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
@@ -35,6 +37,7 @@ export function connectGateway(token: string) {
 				loadDMs();
 				loadReadState();
 				loadRelationships();
+				loadChannelMutePrefs();
 				updatePresence(ready.user.id, 'online');
 				// Load initial presence for all online guild members.
 				if (ready.presences) {
@@ -43,6 +46,25 @@ export function connectGateway(token: string) {
 					}
 				}
 				client?.updatePresence('online');
+
+				// Clear stale voice state then repopulate from READY payload.
+				clearChannelVoiceUsers();
+				if (ready.voice_states) {
+					for (const vs of ready.voice_states) {
+						handleVoiceStateUpdate({
+							channel_id: vs.channel_id,
+							user_id: vs.user_id,
+							username: vs.username,
+							display_name: vs.display_name,
+							avatar_id: vs.avatar_id,
+							muted: vs.self_mute,
+							deafened: vs.self_deaf,
+							action: 'join'
+						});
+					}
+				}
+
+				// E2EE is now passphrase-based — no init or welcome processing needed
 				break;
 			}
 
@@ -59,12 +81,18 @@ export function connectGateway(token: string) {
 
 			// --- Guild events ---
 			case 'GUILD_CREATE':
-			case 'GUILD_UPDATE':
-				updateGuild(data as Guild);
+			case 'GUILD_UPDATE': {
+				const guild = data as Guild;
+				updateGuild(guild);
+				loadPermissions(guild.id);
 				break;
-			case 'GUILD_DELETE':
-				removeGuild((data as { id: string }).id);
+			}
+			case 'GUILD_DELETE': {
+				const deletedGuild = data as { id: string };
+				removeGuild(deletedGuild.id);
+				invalidatePermissions(deletedGuild.id);
 				break;
+			}
 
 			// --- Channel events ---
 			case 'CHANNEL_CREATE':
@@ -103,26 +131,32 @@ export function connectGateway(token: string) {
 					incrementUnread(msg.channel_id, isMention);
 
 					// Build notification for mentions, replies, and DMs.
+					// Skip notification if channel or guild is muted (unreads still tracked above).
 					const channel = get(channelsStore).get(msg.channel_id);
-					const isDM = channel?.channel_type === 'dm' || channel?.channel_type === 'group';
-					const isReply = msg.message_type === 'reply' || (msg.reply_to_ids && msg.reply_to_ids.length > 0);
-					const senderName = msg.author?.display_name ?? msg.author?.username ?? 'Unknown';
+					const channelMuted = isChannelMuted(msg.channel_id);
+					const guildMuted = channel?.guild_id ? isGuildMuted(channel.guild_id) : false;
 
-					if (isMention || isDM || isReply) {
-						const guildId = channel?.guild_id ?? null;
-						const guild = guildId ? get(guildsStore).get(guildId) ?? null : null;
+					if (!channelMuted && !guildMuted) {
+						const isDM = channel?.channel_type === 'dm' || channel?.channel_type === 'group';
+						const isReply = msg.message_type === 'reply' || (msg.reply_to_ids && msg.reply_to_ids.length > 0);
+						const senderName = msg.author?.display_name ?? msg.author?.username ?? 'Unknown';
 
-						addNotification({
-							type: isDM ? 'dm' : isReply ? 'reply' : 'mention',
-							guild_id: guildId,
-							guild_name: guild?.name ?? null,
-							channel_id: msg.channel_id,
-							channel_name: channel?.name ?? null,
-							message_id: msg.id,
-							sender_id: msg.author_id,
-							sender_name: senderName,
-							content: msg.content ? msg.content.slice(0, 200) : null
-						});
+						if (isMention || isDM || isReply) {
+							const guildId = channel?.guild_id ?? null;
+							const guild = guildId ? get(guildsStore).get(guildId) ?? null : null;
+
+							addNotification({
+								type: isDM ? 'dm' : isReply ? 'reply' : 'mention',
+								guild_id: guildId,
+								guild_name: guild?.name ?? null,
+								channel_id: msg.channel_id,
+								channel_name: channel?.name ?? null,
+								message_id: msg.id,
+								sender_id: msg.author_id,
+								sender_name: senderName,
+								content: msg.content ? msg.content.slice(0, 200) : null
+							});
+						}
 					}
 				}
 				break;
@@ -178,6 +212,29 @@ export function connectGateway(token: string) {
 				break;
 
 			// --- Relationship events (friend requests) ---
+			// --- Guild member events ---
+			case 'GUILD_MEMBER_UPDATE': {
+				const memberData = data as { guild_id: string; user_id: string; action?: string };
+				// When the current user's roles/member data changes, reload permissions.
+				let selfId: string | undefined;
+				currentUser.subscribe((u) => (selfId = u?.id))();
+				if (memberData.user_id === selfId && memberData.guild_id) {
+					loadPermissions(memberData.guild_id);
+				}
+				break;
+			}
+
+			case 'GUILD_ROLE_UPDATE':
+			case 'GUILD_ROLE_DELETE': {
+				// When a role is updated or deleted, reload permissions for the guild
+				// since the role's permission bits may have changed.
+				const roleData = data as { guild_id: string };
+				if (roleData.guild_id) {
+					loadPermissions(roleData.guild_id);
+				}
+				break;
+			}
+
 			case 'RELATIONSHIP_ADD': {
 				const rel = data as Relationship;
 				addOrUpdateRelationship(rel);

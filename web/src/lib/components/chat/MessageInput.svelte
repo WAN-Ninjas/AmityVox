@@ -7,6 +7,7 @@
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentUser } from '$lib/stores/auth';
 	import { addToast } from '$lib/stores/toast';
+	import { e2ee } from '$lib/encryption/e2eeManager';
 	import EmojiPicker from '$components/common/EmojiPicker.svelte';
 	import GiphyPicker from '$components/common/GiphyPicker.svelte';
 	import StickerPicker from '$components/common/StickerPicker.svelte';
@@ -23,6 +24,41 @@
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
 	let showVoiceRecorder = $state(false);
+
+	// --- E2EE passphrase prompt ---
+	let needsPassphrase = $state(false);
+	let channelPassphrase = $state('');
+	let settingPassphrase = $state(false);
+
+	$effect(() => {
+		const ch = $currentChannel;
+		if (ch?.encrypted) {
+			const channelId = ch.id;
+			e2ee.hasChannelKey(channelId).then((has) => {
+				if ($currentChannel?.id === channelId) {
+					needsPassphrase = !has;
+				}
+			});
+		} else {
+			needsPassphrase = false;
+		}
+	});
+
+	async function handleSetPassphrase() {
+		const channelId = $currentChannelId;
+		if (!channelId || !channelPassphrase.trim()) return;
+		settingPassphrase = true;
+		try {
+			await e2ee.setPassphrase(channelId, channelPassphrase);
+			needsPassphrase = false;
+			channelPassphrase = '';
+			addToast('Channel unlocked', 'success');
+		} catch {
+			addToast('Failed to set passphrase', 'error');
+		} finally {
+			settingPassphrase = false;
+		}
+	}
 
 	// --- File attachment state ---
 	let pendingFiles = $state<File[]>([]);
@@ -102,7 +138,7 @@
 		}
 
 		// Normal send (possibly with reply).
-		const opts: { reply_to_ids?: string[]; silent?: boolean } = {};
+		const opts: { reply_to_ids?: string[]; silent?: boolean; encrypted?: boolean } = {};
 		if (isReplying && $replyingTo) {
 			opts.reply_to_ids = [$replyingTo.id];
 		}
@@ -113,7 +149,21 @@
 		cancelReply();
 
 		try {
-			const sent = await api.sendMessage(channelId, msg, opts);
+			let sendContent = msg;
+
+			// Encrypt the message if the channel is encrypted
+			if ($currentChannel?.encrypted) {
+				try {
+					sendContent = await e2ee.encryptMessage(channelId, msg);
+					opts.encrypted = true;
+				} catch (encErr) {
+					content = msg;
+					addToast('Failed to encrypt message. Do you have the channel key?', 'error');
+					return;
+				}
+			}
+
+			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
 		} catch (e) {
 			content = msg;
@@ -409,6 +459,30 @@
 
 {#if $currentChannelId}
 	<div class="border-t border-bg-floating px-4 pb-4 pt-2">
+		<!-- Passphrase prompt for encrypted channels without a key -->
+		{#if needsPassphrase}
+			<div class="mb-2 flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 px-3 py-2">
+				<svg class="h-4 w-4 shrink-0 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+				</svg>
+				<span class="text-xs text-yellow-400">Enter passphrase to send messages</span>
+				<input
+					type="password"
+					class="ml-auto min-w-0 flex-1 max-w-48 rounded border border-bg-modifier bg-bg-primary px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+					placeholder="Channel passphrase"
+					bind:value={channelPassphrase}
+					onkeydown={(e) => e.key === 'Enter' && handleSetPassphrase()}
+				/>
+				<button
+					class="shrink-0 rounded bg-brand-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+					onclick={handleSetPassphrase}
+					disabled={settingPassphrase || !channelPassphrase.trim()}
+				>
+					{settingPassphrase ? '...' : 'Unlock'}
+				</button>
+			</div>
+		{/if}
+
 		<!-- Reply bar -->
 		{#if $replyingTo}
 			<div class="mb-2 flex items-center gap-2 rounded-t-lg bg-bg-secondary px-3 py-2 text-sm">

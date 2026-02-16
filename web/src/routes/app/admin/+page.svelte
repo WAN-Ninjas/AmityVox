@@ -5,13 +5,19 @@
 	import { addToast } from '$lib/stores/toast';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
+	import HealthMonitor from '$lib/components/admin/HealthMonitor.svelte';
+	import StorageDashboard from '$lib/components/admin/StorageDashboard.svelte';
+	import BackupScheduler from '$lib/components/admin/BackupScheduler.svelte';
+	import DomainSettings from '$lib/components/admin/DomainSettings.svelte';
+	import RetentionSettings from '$lib/components/admin/RetentionSettings.svelte';
+	import UpdateNotifications from '$lib/components/admin/UpdateNotifications.svelte';
 	import type {
 		AdminStats, InstanceInfo, User, FederationPeer,
 		InstanceBan, RegistrationSettings, RegistrationToken,
 		Announcement, AnnouncementSeverity
 	} from '$lib/types';
 
-	type Tab = 'dashboard' | 'users' | 'guilds' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha';
+	type Tab = 'dashboard' | 'users' | 'guilds' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha' | 'health' | 'storage' | 'backups' | 'domains' | 'retention' | 'updates';
 	let currentTab = $state<Tab>('dashboard');
 
 	// --- Dashboard ---
@@ -953,7 +959,13 @@
 		{ id: 'content_safety', label: 'Content Safety' },
 		{ id: 'captcha', label: 'CAPTCHA' },
 		{ id: 'instance', label: 'Instance' },
-		{ id: 'federation', label: 'Federation' }
+		{ id: 'federation', label: 'Federation' },
+		{ id: 'health', label: 'Health' },
+		{ id: 'storage', label: 'Storage' },
+		{ id: 'backups', label: 'Backups' },
+		{ id: 'domains', label: 'Domains' },
+		{ id: 'retention', label: 'Retention' },
+		{ id: 'updates', label: 'Updates' }
 	];
 </script>
 
@@ -2481,6 +2493,29 @@
 						{/each}
 					</div>
 				{/if}
+			<!-- ==================== HEALTH ==================== -->
+			{:else if currentTab === 'health'}
+				<HealthMonitor />
+
+			<!-- ==================== STORAGE ==================== -->
+			{:else if currentTab === 'storage'}
+				<StorageDashboard />
+
+			<!-- ==================== BACKUPS ==================== -->
+			{:else if currentTab === 'backups'}
+				<BackupScheduler />
+
+			<!-- ==================== DOMAINS ==================== -->
+			{:else if currentTab === 'domains'}
+				<DomainSettings />
+
+			<!-- ==================== RETENTION ==================== -->
+			{:else if currentTab === 'retention'}
+				<RetentionSettings />
+
+			<!-- ==================== UPDATES ==================== -->
+			{:else if currentTab === 'updates'}
+				<UpdateNotifications />
 			{/if}
 		</div>
 	</div>

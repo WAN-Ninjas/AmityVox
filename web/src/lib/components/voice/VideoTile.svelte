@@ -6,12 +6,15 @@
 	interface Props {
 		trackInfo: VideoTrackInfo | null;
 		participant: VoiceParticipant;
+		pinned?: boolean;
 		onclick?: () => void;
 	}
 
-	let { trackInfo, participant, onclick }: Props = $props();
+	let { trackInfo, participant, pinned = false, onclick }: Props = $props();
 
 	let videoContainer = $state<HTMLDivElement | undefined>(undefined);
+	let tileElement = $state<HTMLDivElement | undefined>(undefined);
+	let isFullscreen = $state(false);
 
 	$effect(() => {
 		if (!videoContainer) return;
@@ -23,12 +26,32 @@
 			trackInfo.videoElement.play().catch(() => {});
 		}
 	});
+
+	function handleFullscreen(e: MouseEvent) {
+		e.stopPropagation();
+		if (!tileElement) return;
+		if (document.fullscreenElement) {
+			document.exitFullscreen();
+		} else {
+			tileElement.requestFullscreen().catch(() => {});
+		}
+	}
+
+	function handleFocus(e: MouseEvent) {
+		e.stopPropagation();
+		onclick?.();
+	}
+
+	function onFullscreenChange() {
+		isFullscreen = document.fullscreenElement === tileElement;
+	}
 </script>
 
-<button
-	type="button"
-	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''} {onclick ? 'cursor-pointer' : 'cursor-default'}"
-	{onclick}
+<svelte:document onfullscreenchange={onFullscreenChange} />
+
+<div
+	bind:this={tileElement}
+	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''}"
 >
 	{#if trackInfo}
 		<div bind:this={videoContainer} class="absolute inset-0 [&>video]:h-full [&>video]:w-full [&>video]:object-cover"></div>
@@ -40,6 +63,35 @@
 			/>
 		</div>
 	{/if}
+
+	<!-- Pin icon (top-right) -->
+	{#if pinned}
+		<div class="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-brand-500/80 text-white">
+			<svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+				<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
+			</svg>
+		</div>
+	{/if}
+
+	<!-- Hover actions: Focus + Fullscreen -->
+	<div class="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 rounded-xl bg-black/0 opacity-0 transition-all group-hover:bg-black/30 group-hover:opacity-100">
+		{#if onclick}
+			<button
+				type="button"
+				class="pointer-events-auto rounded-md bg-black/70 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-black/90"
+				onclick={handleFocus}
+			>
+				{pinned ? 'Unfocus' : 'Focus'}
+			</button>
+		{/if}
+		<button
+			type="button"
+			class="pointer-events-auto rounded-md bg-black/70 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-black/90"
+			onclick={handleFullscreen}
+		>
+			{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+		</button>
+	</div>
 
 	<!-- Speaking pulse animation -->
 	{#if participant.speaking}
@@ -69,7 +121,7 @@
 			{/if}
 		</div>
 	</div>
-</button>
+</div>
 
 <style>
 	@keyframes speaking-pulse {

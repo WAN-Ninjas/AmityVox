@@ -23,6 +23,8 @@ export async function loadGuilds() {
 
 export function setGuild(id: string | null) {
 	currentGuildId.set(id);
+	// Dynamic import to avoid circular dependency (permissions.ts imports currentGuildId from this module).
+	if (id) import('./permissions').then(({ loadPermissions }) => loadPermissions(id));
 }
 
 export function updateGuild(guild: Guild) {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -66,24 +67,69 @@ type updateMemberRequest struct {
 	Roles        []string   `json:"roles"`
 }
 
+// flexInt64 unmarshals from both JSON numbers and strings, so JavaScript
+// clients can safely send int64 permission values (bit 63 overflows Number).
+type flexInt64 struct {
+	Value int64
+	Set   bool
+}
+
+func (f *flexInt64) UnmarshalJSON(data []byte) error {
+	f.Set = true
+	s := string(data)
+	if s == "null" {
+		f.Set = false
+		return nil
+	}
+	// Strip quotes if sent as a string.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	// Allow signed values for backward compatibility (bit 63 set = negative).
+	if len(s) > 0 && s[0] == '-' {
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid permission value: %s", string(data))
+		}
+		f.Value = v
+		return nil
+	}
+	// Parse as uint64 first so bit 63 (Administrator) is preserved,
+	// then reinterpret as int64 for storage. The permission system uses
+	// uint64 constants but PostgreSQL stores them as int64/bigint.
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid permission value: %s", string(data))
+	}
+	f.Value = int64(v)
+	return nil
+}
+
+func (f *flexInt64) Int64Ptr() *int64 {
+	if !f.Set {
+		return nil
+	}
+	return &f.Value
+}
+
 type createRoleRequest struct {
-	Name             string  `json:"name"`
-	Color            *string `json:"color"`
-	Hoist            *bool   `json:"hoist"`
-	Mentionable      *bool   `json:"mentionable"`
-	Position         *int    `json:"position"`
-	PermissionsAllow *int64  `json:"permissions_allow"`
-	PermissionsDeny  *int64  `json:"permissions_deny"`
+	Name             string    `json:"name"`
+	Color            *string   `json:"color"`
+	Hoist            *bool     `json:"hoist"`
+	Mentionable      *bool     `json:"mentionable"`
+	Position         *int      `json:"position"`
+	PermissionsAllow flexInt64 `json:"permissions_allow"`
+	PermissionsDeny  flexInt64 `json:"permissions_deny"`
 }
 
 type updateRoleRequest struct {
-	Name             *string `json:"name"`
-	Color            *string `json:"color"`
-	Hoist            *bool   `json:"hoist"`
-	Mentionable      *bool   `json:"mentionable"`
-	Position         *int    `json:"position"`
-	PermissionsAllow *int64  `json:"permissions_allow"`
-	PermissionsDeny  *int64  `json:"permissions_deny"`
+	Name             *string   `json:"name"`
+	Color            *string   `json:"color"`
+	Hoist            *bool     `json:"hoist"`
+	Mentionable      *bool     `json:"mentionable"`
+	Position         *int      `json:"position"`
+	PermissionsAllow flexInt64 `json:"permissions_allow"`
+	PermissionsDeny  flexInt64 `json:"permissions_deny"`
 }
 
 type banRequest struct {
@@ -939,11 +985,11 @@ func (h *Handler) HandleCreateGuildRole(w http.ResponseWriter, r *http.Request) 
 		position = *req.Position
 	}
 	var permAllow, permDeny int64
-	if req.PermissionsAllow != nil {
-		permAllow = *req.PermissionsAllow
+	if req.PermissionsAllow.Set {
+		permAllow = req.PermissionsAllow.Value
 	}
-	if req.PermissionsDeny != nil {
-		permDeny = *req.PermissionsDeny
+	if req.PermissionsDeny.Set {
+		permDeny = req.PermissionsDeny.Value
 	}
 
 	var role models.Role
@@ -998,7 +1044,7 @@ func (h *Handler) HandleUpdateGuildRole(w http.ResponseWriter, r *http.Request) 
 		 WHERE id = $1 AND guild_id = $2
 		 RETURNING id, guild_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at`,
 		roleID, guildID, req.Name, req.Color, req.Hoist, req.Mentionable, req.Position,
-		req.PermissionsAllow, req.PermissionsDeny,
+		req.PermissionsAllow.Int64Ptr(), req.PermissionsDeny.Int64Ptr(),
 	).Scan(
 		&role.ID, &role.GuildID, &role.Name, &role.Color, &role.Hoist, &role.Mentionable,
 		&role.Position, &role.PermissionsAllow, &role.PermissionsDeny, &role.CreatedAt,
@@ -2809,6 +2855,80 @@ func (h *Handler) HandleGetBumpStatus(w http.ResponseWriter, r *http.Request) {
 		NextBumpAt: nextBumpAt,
 		LastBump:   lastBumpStr,
 		BumpCount:  bumpCount,
+	})
+}
+
+// HandleGetMyPermissions returns the computed guild-level permission bitfield
+// for the authenticated user. The permissions value is returned as a string to
+// avoid JSON number precision loss for high bits (e.g., bit 63 = Administrator).
+// GET /api/v1/guilds/{guildID}/members/@me/permissions
+func (h *Handler) HandleGetMyPermissions(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	// Verify membership.
+	var exists bool
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, userID).Scan(&exists); err != nil || !exists {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	// Check if owner.
+	var ownerID string
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		return
+	}
+	if userID == ownerID {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"permissions": strconv.FormatUint(permissions.AllPermissions, 10),
+		})
+		return
+	}
+
+	// Check admin flag on user.
+	var userFlags int
+	h.Pool.QueryRow(r.Context(), `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
+	if userFlags&models.UserFlagAdmin != 0 {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"permissions": strconv.FormatUint(permissions.AllPermissions, 10),
+		})
+		return
+	}
+
+	// Get guild default permissions.
+	var defaultPerms int64
+	h.Pool.QueryRow(r.Context(), `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms)
+	computedPerms := uint64(defaultPerms)
+
+	// Apply member's role permissions.
+	rows, _ := h.Pool.Query(r.Context(),
+		`SELECT r.permissions_allow, r.permissions_deny
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		guildID, userID,
+	)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var allow, deny int64
+			rows.Scan(&allow, &deny)
+			computedPerms |= uint64(allow)
+			computedPerms &^= uint64(deny)
+		}
+	}
+
+	if computedPerms&permissions.Administrator != 0 {
+		computedPerms = permissions.AllPermissions
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"permissions": strconv.FormatUint(computedPerms, 10),
 	})
 }
 

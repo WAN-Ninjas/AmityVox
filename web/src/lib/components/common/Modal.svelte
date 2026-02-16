@@ -29,7 +29,8 @@
 		aria-modal="true"
 		tabindex="-1"
 	>
-		<div class="w-full max-w-md rounded-lg bg-bg-secondary p-6 shadow-xl">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="w-full max-w-md rounded-lg bg-bg-secondary p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
 			{#if title}
 				<h2 class="mb-4 text-xl font-semibold text-text-primary">{title}</h2>
 			{/if}

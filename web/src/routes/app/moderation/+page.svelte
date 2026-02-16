@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { currentUser } from '$lib/stores/auth';
 	import type {
 		ModerationStats,
 		ModerationMessageReport,
@@ -151,11 +152,25 @@
 		if (currentTab === 'issues' && !issuesLoaded) loadIssues();
 	});
 
+	// GlobalMod = 1<<5 = 32, Admin = 1<<2 = 4
+	const isGlobalMod = $derived(($currentUser?.flags ?? 0) & 32);
+	const isAdmin = $derived(($currentUser?.flags ?? 0) & 4);
+	const canAccessModeration = $derived(isGlobalMod || isAdmin);
+
 	onMount(() => {
 		loadStats();
 	});
 </script>
 
+{#if !canAccessModeration}
+<div class="flex h-full items-center justify-center bg-bg-tertiary">
+	<div class="text-center">
+		<h1 class="mb-2 text-2xl font-bold text-text-primary">Access Denied</h1>
+		<p class="text-sm text-text-muted">You don't have permission to view the moderation panel.</p>
+		<a href="/app" class="mt-4 inline-block text-sm text-brand-400 hover:text-brand-300">Back to app</a>
+	</div>
+</div>
+{:else}
 <div class="flex h-full">
 	<!-- Sidebar -->
 	<nav class="flex w-48 shrink-0 flex-col overflow-y-auto bg-bg-secondary p-4">
@@ -407,4 +422,5 @@
 			</div>
 		</div>
 	</div>
+{/if}
 {/if}

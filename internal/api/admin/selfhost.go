@@ -531,7 +531,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 	var totalFiles int64
 	var totalBytes int64
 	h.Pool.QueryRow(r.Context(),
-		`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM files`).Scan(&totalFiles, &totalBytes)
+		`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM attachments`).Scan(&totalFiles, &totalBytes)
 
 	// Breakdown by content type category.
 	type mediaBreakdown struct {
@@ -553,7 +553,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 			END AS category,
 			COUNT(*) AS file_count,
 			COALESCE(SUM(size_bytes), 0) AS total_bytes
-		 FROM files
+		 FROM attachments
 		 GROUP BY category
 		 ORDER BY total_bytes DESC`)
 	if err != nil {
@@ -616,11 +616,11 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 	}
 
 	uploaderRows, err := h.Pool.Query(r.Context(),
-		`SELECT f.uploader_id, u.username, COUNT(*) AS file_count, COALESCE(SUM(f.size_bytes), 0) AS total_bytes
-		 FROM files f
-		 JOIN users u ON u.id = f.uploader_id
-		 WHERE f.uploader_id IS NOT NULL
-		 GROUP BY f.uploader_id, u.username
+		`SELECT a.uploader_id, u.username, COUNT(*) AS file_count, COALESCE(SUM(a.size_bytes), 0) AS total_bytes
+		 FROM attachments a
+		 JOIN users u ON u.id = a.uploader_id
+		 WHERE a.uploader_id IS NOT NULL
+		 GROUP BY a.uploader_id, u.username
 		 ORDER BY total_bytes DESC
 		 LIMIT 10`)
 
@@ -649,7 +649,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 			DATE(created_at) AS upload_date,
 			COUNT(*) AS file_count,
 			COALESCE(SUM(size_bytes), 0) AS total_bytes
-		 FROM files
+		 FROM attachments
 		 WHERE created_at >= now() - INTERVAL '30 days'
 		 GROUP BY upload_date
 		 ORDER BY upload_date ASC`)

@@ -44,7 +44,7 @@
 
 	async function loadHealth() {
 		try {
-			const res = await fetch('/api/v1/admin/health', {
+			const res = await fetch('/api/v1/admin/health/dashboard', {
 				headers: { 'Authorization': `Bearer ${api.getToken()}` }
 			});
 			const json = await res.json();

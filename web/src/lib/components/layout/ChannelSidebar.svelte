@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
 	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
-	import { channelVoiceUsers } from '$lib/stores/voice';
+	import { channelVoiceUsers, voiceChannelId } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
@@ -18,8 +18,11 @@
 	import { onMount } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 	import ChannelGroups from '$components/layout/ChannelGroups.svelte';
+	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
 	import VoiceConnectionBar from '$components/layout/VoiceConnectionBar.svelte';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
+	import { canManageChannels, canManageGuild, canManageThreads } from '$lib/stores/permissions';
+	import { channelMutePrefs, guildMutePrefs, isChannelMuted, isGuildMuted, muteChannel, unmuteChannel, muteGuild, unmuteGuild } from '$lib/stores/muting';
 	import type { Channel, GuildEvent } from '$lib/types';
 
 	// Report issue modal
@@ -133,6 +136,7 @@
 	let editChannelName = $state('');
 	let editChannelTopic = $state('');
 	let editChannelNsfw = $state(false);
+	let editChannelEncrypted = $state(false);
 	let editChannelType = $state<'text' | 'voice'>('text');
 	let editChannelUserLimit = $state(0);
 	let editChannelBitrate = $state(64000);
@@ -155,6 +159,20 @@
 
 	// DM context menu
 	let dmContextMenu = $state<{ x: number; y: number; channel: Channel } | null>(null);
+
+	// Guild context menu
+	let guildContextMenu = $state<{ x: number; y: number } | null>(null);
+
+	// Mute duration submenu state
+	let showMuteSubmenu = $state<'channel' | 'dm' | 'guild' | null>(null);
+
+	const muteDurations = [
+		{ label: '15 Minutes', ms: 15 * 60 * 1000 },
+		{ label: '1 Hour', ms: 60 * 60 * 1000 },
+		{ label: '8 Hours', ms: 8 * 60 * 60 * 1000 },
+		{ label: '24 Hours', ms: 24 * 60 * 60 * 1000 },
+		{ label: 'Until I turn it back on', ms: 0 }
+	];
 
 	// Thread activity filter state — triggers reactivity when changed.
 	let threadFilterVersion = $state(0);
@@ -259,6 +277,7 @@
 				updateData.user_limit = editChannelUserLimit;
 				updateData.bitrate = editChannelBitrate;
 			}
+			// Encryption is now managed via EncryptionPanel, not here
 			const updated = await api.updateChannel(editChannelId, updateData as any);
 			updateChannelStore(updated);
 			showEditChannel = false;
@@ -297,7 +316,9 @@
 	function closeContextMenu() {
 		channelContextMenu = null;
 		threadContextMenu = null;
+		guildContextMenu = null;
 		showThreadFilterSubmenu = false;
+		showMuteSubmenu = null;
 	}
 
 	function markDMRead(channelId: string) {
@@ -338,6 +359,7 @@
 		const allChannels = [...$textChannels, ...$voiceChannels];
 		const ch = allChannels.find(c => c.id === channelId);
 		editChannelNsfw = ch?.nsfw ?? false;
+		editChannelEncrypted = ch?.encrypted ?? false;
 		editChannelType = (ch?.channel_type === 'voice' ? 'voice' : 'text');
 		editChannelUserLimit = ch?.user_limit ?? 0;
 		editChannelBitrate = ch?.bitrate ?? 64000;
@@ -353,12 +375,15 @@
 	}
 </script>
 
-<svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; }} />
+<svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; }} />
 
 <aside class="flex h-full w-56 shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" aria-label="Channel list">
 	<!-- Guild header -->
 	{#if $currentGuild}
-		<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
+		<div
+			class="flex h-12 items-center justify-between border-b border-bg-floating px-4"
+			oncontextmenu={(e) => { e.preventDefault(); guildContextMenu = { x: e.clientX, y: e.clientY }; channelContextMenu = null; dmContextMenu = null; }}
+		>
 			<h2 class="truncate text-sm font-semibold text-text-primary">{$currentGuild.name}</h2>
 			<div class="flex items-center gap-1">
 				{#if $totalUnreads > 0}
@@ -381,6 +406,7 @@
 						<path d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
 					</svg>
 				</button>
+				{#if $canManageGuild}
 				<button
 					class="text-text-muted hover:text-text-primary"
 					onclick={() => goto(`/app/guilds/${$currentGuild?.id}/settings`)}
@@ -390,6 +416,7 @@
 						<path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
 					</svg>
 				</button>
+			{/if}
 			</div>
 		</div>
 	{:else}
@@ -431,19 +458,26 @@
 					{#each activeTextChannels as channel (channel.id)}
 						{@const unread = $unreadCounts.get(channel.id) ?? 0}
 						{@const mentions = $mentionCounts.get(channel.id) ?? 0}
+						{@const chMuted = isChannelMuted(channel.id)}
 						<button
-							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {chMuted ? 'opacity-60' : ''} {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 && !chMuted ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => handleChannelClick(channel.id)}
 							oncontextmenu={(e) => openContextMenu(e, channel)}
 						>
 							<span class="text-lg leading-none text-brand-500 font-mono">#</span>
 							<span class="flex-1 truncate font-mono">{channel.name}</span>
+							{#if chMuted}
+								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
+									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+									<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+								</svg>
+							{/if}
 							{#if mentions > 0 && $currentChannelId !== channel.id}
-								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{mentions} mention{mentions !== 1 ? 's' : ''}">
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full {chMuted ? 'bg-text-muted/50' : 'bg-red-500'} px-1 text-2xs font-bold text-white" title="{mentions} mention{mentions !== 1 ? 's' : ''}">
 									@{mentions > 99 ? '99+' : mentions}
 								</span>
 							{:else if unread > 0 && $currentChannelId !== channel.id}
-								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full {chMuted ? 'bg-text-muted/30' : 'bg-text-muted'} px-1 text-2xs font-bold text-white">
 									{unread > 99 ? '99+' : unread}
 								</span>
 							{/if}
@@ -527,11 +561,8 @@
 							<div class="mb-1 ml-3 space-y-0.5 border-l border-bg-floating pl-3">
 								{#each [...voiceUsers.values()] as participant (participant.userId)}
 									<div class="flex items-center gap-1.5 py-0.5">
-										<div class="relative">
+										<div class="{participant.speaking && $voiceChannelId === channel.id ? 'ring-2 ring-green-500 rounded-full' : ''}">
 											<Avatar name={participant.displayName ?? participant.username} size="sm" />
-											{#if participant.speaking}
-												<span class="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg-secondary bg-green-500"></span>
-											{/if}
 										</div>
 										<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
 										{#if participant.muted}
@@ -643,19 +674,26 @@
 						{@const dmMentions = $mentionCounts.get(dm.id) ?? 0}
 						{@const dmName = getDMDisplayName(dm, $currentUser?.id)}
 						{@const dmRecipient = getDMRecipient(dm, $currentUser?.id)}
+						{@const dmMuted = isChannelMuted(dm.id)}
 						<button
-							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+							class="mb-0.5 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors {dmMuted ? 'opacity-60' : ''} {$currentChannelId === dm.id ? 'bg-bg-modifier text-text-primary' : dmUnread > 0 && !dmMuted ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
 							<Avatar name={dmName} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 							<span class="flex-1 truncate">{dmName}</span>
+							{#if dmMuted}
+								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
+									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+									<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+								</svg>
+							{/if}
 							{#if dmMentions > 0}
-								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white" title="{dmMentions} mention{dmMentions !== 1 ? 's' : ''}">
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full {dmMuted ? 'bg-text-muted/50' : 'bg-red-500'} px-1 text-2xs font-bold text-white" title="{dmMentions} mention{dmMentions !== 1 ? 's' : ''}">
 									@{dmMentions > 99 ? '99+' : dmMentions}
 								</span>
 							{:else if dmUnread > 0}
-								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-text-muted px-1 text-2xs font-bold text-white">
+								<span class="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full {dmMuted ? 'bg-text-muted/30' : 'bg-text-muted'} px-1 text-2xs font-bold text-white">
 									{dmUnread > 99 ? '99+' : dmUnread}
 								</span>
 							{/if}
@@ -712,6 +750,7 @@
 		style="left: {channelContextMenu.x}px; top: {channelContextMenu.y}px;"
 		onclick={(e) => e.stopPropagation()}
 	>
+		{#if $canManageChannels}
 		<button
 			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
 			onclick={() => openEditModal(channelContextMenu!.channelId, channelContextMenu!.channelName)}
@@ -721,6 +760,7 @@
 			</svg>
 			Edit Channel
 		</button>
+		{/if}
 		<!-- Show Threads submenu -->
 		<div class="relative">
 			<button
@@ -757,6 +797,48 @@
 				</div>
 			{/if}
 		</div>
+		<!-- Mute / Unmute -->
+		{#if isChannelMuted(channelContextMenu.channelId)}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => { unmuteChannel(channelContextMenu!.channelId); closeContextMenu(); }}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+				</svg>
+				Unmute Channel
+			</button>
+		{:else}
+			<div class="relative">
+				<button
+					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+					onclick={() => (showMuteSubmenu = showMuteSubmenu === 'channel' ? null : 'channel')}
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+						<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+					</svg>
+					Mute Channel
+					<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M9 5l7 7-7 7" />
+					</svg>
+				</button>
+				{#if showMuteSubmenu === 'channel'}
+					{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
+					<div class="absolute top-0 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}">
+						{#each muteDurations as opt}
+							<button
+								class="flex w-full items-center rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+								onclick={() => { muteChannel(channelContextMenu!.channelId, opt.ms || undefined); closeContextMenu(); }}
+							>
+								{opt.label}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+		{#if $canManageChannels}
 		<button
 			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
 			onclick={() => { handleDeleteChannel(channelContextMenu!.channelId); closeContextMenu(); }}
@@ -766,6 +848,7 @@
 			</svg>
 			Delete Channel
 		</button>
+		{/if}
 	</div>
 {/if}
 
@@ -794,6 +877,7 @@
 			</svg>
 			Hide Thread
 		</button>
+		{#if $canManageThreads}
 		{#if threadContextMenu.thread.archived}
 			<button
 				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
@@ -814,6 +898,7 @@
 				</svg>
 				Archive Thread
 			</button>
+		{/if}
 		{/if}
 	</div>
 {/if}
@@ -836,8 +921,90 @@
 			{/if}
 		{/if}
 		<ContextMenuDivider />
+		{@const dmCtxMuted = isChannelMuted(dmContextMenu.channel.id)}
+		{#if dmCtxMuted}
+			<ContextMenuItem label="Unmute Conversation" onclick={() => { unmuteChannel(dmContextMenu!.channel.id); dmContextMenu = null; }} />
+		{:else}
+			<ContextMenuItem label="Mute for 15 Minutes" onclick={() => { muteChannel(dmContextMenu!.channel.id, 15 * 60 * 1000); dmContextMenu = null; }} />
+			<ContextMenuItem label="Mute for 1 Hour" onclick={() => { muteChannel(dmContextMenu!.channel.id, 60 * 60 * 1000); dmContextMenu = null; }} />
+			<ContextMenuItem label="Mute for 8 Hours" onclick={() => { muteChannel(dmContextMenu!.channel.id, 8 * 60 * 60 * 1000); dmContextMenu = null; }} />
+			<ContextMenuItem label="Mute for 24 Hours" onclick={() => { muteChannel(dmContextMenu!.channel.id, 24 * 60 * 60 * 1000); dmContextMenu = null; }} />
+			<ContextMenuItem label="Mute Until I Turn It Back On" onclick={() => { muteChannel(dmContextMenu!.channel.id); dmContextMenu = null; }} />
+		{/if}
+		<ContextMenuDivider />
 		<ContextMenuItem label="Close DM" danger onclick={() => { closeDM(dmContextMenu!.channel.id); dmContextMenu = null; }} />
 	</ContextMenu>
+{/if}
+
+<!-- Guild context menu (mute/unmute) -->
+{#if guildContextMenu && $currentGuild}
+	{@const gMuted = isGuildMuted($currentGuild.id)}
+	<div
+		class="fixed z-50 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg"
+		style="left: {guildContextMenu.x}px; top: {guildContextMenu.y}px;"
+		onclick={(e) => e.stopPropagation()}
+	>
+		{#if gMuted}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => { unmuteGuild($currentGuild!.id); closeContextMenu(); }}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+				</svg>
+				Unmute Guild
+			</button>
+		{:else}
+			<div class="relative">
+				<button
+					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+					onclick={() => (showMuteSubmenu = showMuteSubmenu === 'guild' ? null : 'guild')}
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+						<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+					</svg>
+					Mute Guild
+					<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M9 5l7 7-7 7" />
+					</svg>
+				</button>
+				{#if showMuteSubmenu === 'guild'}
+					{@const submenuLeft = guildContextMenu.x + 300 < window.innerWidth}
+					<div class="absolute top-0 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}">
+						{#each muteDurations as opt}
+							<button
+								class="flex w-full items-center rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+								onclick={() => { muteGuild($currentGuild!.id, opt.ms || undefined); closeContextMenu(); }}
+							>
+								{opt.label}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+		<button
+			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+			onclick={() => { showInvite = true; closeContextMenu(); }}
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+			</svg>
+			Invite People
+		</button>
+		{#if $canManageGuild}
+			<button
+				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+				onclick={() => { goto(`/app/guilds/${$currentGuild?.id}/settings`); closeContextMenu(); }}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+				</svg>
+				Guild Settings
+			</button>
+		{/if}
+	</div>
 {/if}
 
 <!-- Invite Modal -->
@@ -942,6 +1109,17 @@
 			</div>
 		</label>
 	</div>
+
+	<!-- Encryption (text channels only) -->
+	{#if editChannelType === 'text' && editChannelId}
+		<div class="mb-4">
+			<EncryptionPanel
+				channelId={editChannelId}
+				encrypted={editChannelEncrypted}
+				onchange={() => { showEditChannel = false; }}
+			/>
+		</div>
+	{/if}
 
 	{#if editChannelType === 'voice'}
 		<!-- Voice channel configuration -->

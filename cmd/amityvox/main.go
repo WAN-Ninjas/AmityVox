@@ -246,16 +246,15 @@ func runServe() error {
 		Logger: logger,
 	})
 
-	// Create push notification service (optional — only when VAPID keys are configured).
-	var notifSvc *notifications.Service
+	// Create notification service (always — handles preferences; push is optional).
+	notifSvc := notifications.NewService(notifications.Config{
+		Pool:              db.Pool,
+		Logger:            logger,
+		VAPIDPublicKey:    cfg.Push.VAPIDPublicKey,
+		VAPIDPrivateKey:   cfg.Push.VAPIDPrivateKey,
+		VAPIDContactEmail: cfg.Push.VAPIDContactEmail,
+	})
 	if cfg.Push.VAPIDPublicKey != "" && cfg.Push.VAPIDPrivateKey != "" {
-		notifSvc = notifications.NewService(notifications.Config{
-			Pool:              db.Pool,
-			Logger:            logger,
-			VAPIDPublicKey:    cfg.Push.VAPIDPublicKey,
-			VAPIDPrivateKey:   cfg.Push.VAPIDPrivateKey,
-			VAPIDContactEmail: cfg.Push.VAPIDContactEmail,
-		})
 		logger.Info("push notifications enabled")
 	}
 
@@ -301,6 +300,9 @@ func runServe() error {
 	srv.Notifications = notifSvc
 	srv.Version = version
 
+	// Register API routes after all optional services are set.
+	srv.RegisterRoutes()
+
 	// Mount federation endpoints (rate limited by IP — no auth context).
 	fedRL := srv.RateLimitGlobal()
 	srv.Router.With(fedRL).Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
@@ -330,6 +332,7 @@ func runServe() error {
 		EventBus:          bus,
 		Cache:             cache,
 		Pool:              db.Pool,
+		Voice:             voiceSvc,
 		HeartbeatInterval: heartbeatInterval,
 		HeartbeatTimeout:  heartbeatTimeout,
 		ListenAddr:        cfg.WebSocket.Listen,

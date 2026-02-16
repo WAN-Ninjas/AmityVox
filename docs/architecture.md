@@ -21,7 +21,7 @@ A self-hosted, federated, optionally-encrypted communication platform that combi
 | Backend language | Go | Performant, scalable, single-binary deployment, excellent concurrency |
 | Frontend framework | SvelteKit | Smallest bundle, fastest runtime for reactive chat UI |
 | Desktop client | Tauri (Phase 2) | 5-10MB vs Electron's 150MB+, native system access |
-| Database | PostgreSQL (always) | Relational data needs relational DB. No SQLite mode — one engine, portable everywhere |
+| Database | PostgreSQL (always) | Relational data needs relational DB. One engine, portable everywhere |
 | Message broker | NATS + JetStream | Real-time pub/sub + persistent streams + federation queuing in one system |
 | Voice/Video | LiveKit | Open source SFU, WebRTC, screen sharing, Go-native, battle-tested |
 | File storage | Garage (S3-compatible) | Lightest self-hosted S3, ~30MB RAM. Swappable to MinIO/AWS S3/Wasabi |

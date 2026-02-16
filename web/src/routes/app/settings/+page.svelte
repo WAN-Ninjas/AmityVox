@@ -4,6 +4,10 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
+	import { e2ee } from '$lib/encryption/e2eeManager';
+	import { getMutedChannels, getMutedGuilds, unmuteChannel, unmuteGuild } from '$lib/stores/muting';
+	import { channels as channelsStore } from '$lib/stores/channels';
+	import { guilds as guildsStore } from '$lib/stores/guilds';
 	import type { Session } from '$lib/types';
 	import {
 		customThemes,
@@ -42,7 +46,7 @@
 
 	import type { User, BotToken, SlashCommand } from '$lib/types';
 
-	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'bots' | 'data';
+	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'encryption' | 'bots' | 'data';
 	let currentTab = $state<Tab>('account');
 
 	// --- Account tab state ---
@@ -1024,6 +1028,7 @@
 		{ id: 'notifications', label: 'Notifications' },
 		{ id: 'privacy', label: 'Privacy' },
 		{ id: 'appearance', label: 'Appearance' },
+		{ id: 'encryption', label: 'Encryption' },
 		{ id: 'bots', label: 'Bots' },
 		{ id: 'data', label: 'Data & Privacy' }
 	];
@@ -1537,6 +1542,74 @@
 								{dndSaving ? 'Saving...' : 'Save DND Schedule'}
 							</button>
 						</div>
+					</div>
+
+					<!-- ==================== MUTED ITEMS ==================== -->
+					<div class="border-t border-bg-modifier pt-6">
+						<h2 class="mb-4 text-lg font-bold text-text-primary">Muted Channels & Guilds</h2>
+
+						{#if getMutedChannels().length === 0 && getMutedGuilds().length === 0}
+							<p class="text-sm text-text-muted">No muted channels or guilds.</p>
+						{:else}
+							<div class="space-y-2">
+								{#each getMutedGuilds() as guildPref}
+									{@const guild = $guildsStore.get(guildPref.guild_id ?? '')}
+									<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
+										<div class="min-w-0 flex-1">
+											<p class="truncate text-sm font-medium text-text-primary">
+												{guild?.name ?? guildPref.guild_id ?? 'Unknown Guild'}
+											</p>
+											<p class="text-xs text-text-muted">
+												Guild
+												{#if guildPref.muted_until}
+													&mdash; until {new Date(guildPref.muted_until).toLocaleString()}
+												{:else}
+													&mdash; indefinitely
+												{/if}
+											</p>
+										</div>
+										<button
+											class="rounded bg-bg-tertiary px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
+											onclick={() => unmuteGuild(guildPref.guild_id ?? '')}
+										>
+											Unmute
+										</button>
+									</div>
+								{/each}
+								{#each getMutedChannels() as chPref}
+									{@const ch = $channelsStore.get(chPref.channel_id)}
+									{@const chGuild = ch?.guild_id ? $guildsStore.get(ch.guild_id) : null}
+									<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
+										<div class="min-w-0 flex-1">
+											<p class="truncate text-sm font-medium text-text-primary">
+												{#if ch?.channel_type === 'dm' || ch?.channel_type === 'group'}
+													DM: {ch?.name ?? 'Direct Message'}
+												{:else}
+													#{ch?.name ?? chPref.channel_id}
+												{/if}
+												{#if chGuild}
+													<span class="text-text-muted"> in {chGuild.name}</span>
+												{/if}
+											</p>
+											<p class="text-xs text-text-muted">
+												Channel
+												{#if chPref.muted_until}
+													&mdash; until {new Date(chPref.muted_until).toLocaleString()}
+												{:else}
+													&mdash; indefinitely
+												{/if}
+											</p>
+										</div>
+										<button
+											class="rounded bg-bg-tertiary px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
+											onclick={() => unmuteChannel(chPref.channel_id)}
+										>
+											Unmute
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				</div>
 
@@ -2424,6 +2497,43 @@
 				{/if}
 
 			<!-- ==================== DATA & PRIVACY ==================== -->
+			{:else if currentTab === 'encryption'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Encryption</h1>
+
+				<!-- E2EE info -->
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<div class="flex items-center gap-3">
+						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-status-online/15">
+							<svg class="h-5 w-5 text-status-online" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+							</svg>
+						</div>
+						<div>
+							<h3 class="text-sm font-semibold text-text-primary">End-to-End Encryption</h3>
+							<p class="text-xs text-text-muted">
+								Encryption is managed per-channel using passphrases. When you enable encryption on a channel,
+								you set a passphrase that is used to derive the encryption key. Share the passphrase with channel
+								members out-of-band. The server never sees the passphrase or the encryption key.
+							</p>
+						</div>
+					</div>
+				</div>
+
+				<!-- Reset all keys -->
+				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
+					<h3 class="mb-1 text-sm font-semibold text-text-primary">Clear All Keys</h3>
+					<p class="mb-3 text-xs text-text-muted">
+						Remove all stored encryption keys from this device. You will need to re-enter
+						passphrases for any encrypted channels.
+					</p>
+					<button
+						class="rounded-md bg-red-500 px-4 py-2 text-xs font-medium text-white hover:bg-red-600"
+						onclick={() => { e2ee.reset(); addToast('All encryption keys cleared', 'success'); }}
+					>
+						Clear All Keys
+					</button>
+				</div>
+
 			{:else if currentTab === 'data'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Data & Privacy</h1>
 

@@ -22,15 +22,19 @@
 	import { currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { addToast } from '$lib/stores/toast';
 	import { blockedUserIds } from '$lib/stores/blocked';
+	import { canManageMessages, canCreateThreads } from '$lib/stores/permissions';
+	import { e2ee } from '$lib/encryption/e2eeManager';
 
 	interface Props {
 		message: Message;
 		isCompact?: boolean;
+		isLastInGroup?: boolean;
+		groupMessageIds?: string[];
 		onscrollto?: (messageId: string) => void;
 		onopenthread?: (threadChannel: Channel, parentMessage: Message) => void;
 	}
 
-	let { message, isCompact = false, onscrollto, onopenthread }: Props = $props();
+	let { message, isCompact = false, isLastInGroup = true, groupMessageIds, onscrollto, onopenthread }: Props = $props();
 
 	let contextMenu = $state<{ x: number; y: number } | null>(null);
 	let attachmentContextMenu = $state<{ x: number; y: number; attachment: any } | null>(null);
@@ -51,6 +55,53 @@
 	// --- Blocked user support ---
 	const isAuthorBlocked = $derived($blockedUserIds.has(message.author_id));
 	let showBlockedContent = $state(false);
+
+	// --- E2EE decryption ---
+	let decryptedContent = $state<string | null>(null);
+	let decryptionFailed = $state(false);
+	let decrypting = $state(false);
+	let inlinePassphrase = $state('');
+	let inlineUnlocking = $state(false);
+	let decryptRetry = $state(0);
+
+	$effect(() => {
+		// Track retry counter to re-trigger decryption after passphrase entry
+		const _retry = decryptRetry;
+		if (message.encrypted && message.content) {
+			decryptedContent = null;
+			decryptionFailed = false;
+			decrypting = true;
+			e2ee.decryptMessage(message.channel_id, message.content)
+				.then((plaintext) => {
+					decryptedContent = plaintext;
+				})
+				.catch(() => {
+					decryptionFailed = true;
+				})
+				.finally(() => {
+					decrypting = false;
+				});
+		}
+	});
+
+	async function handleInlineUnlock() {
+		if (!inlinePassphrase.trim()) return;
+		inlineUnlocking = true;
+		try {
+			await e2ee.setPassphrase(message.channel_id, inlinePassphrase);
+			inlinePassphrase = '';
+			decryptRetry++;
+		} catch {
+			addToast('Failed to set passphrase', 'error');
+		} finally {
+			inlineUnlocking = false;
+		}
+	}
+
+	/** The content to render: decrypted if encrypted, otherwise raw. */
+	const displayContent = $derived(
+		message.encrypted ? decryptedContent : message.content
+	);
 
 	// --- NSFW content filter ---
 	const isNsfwChannel = $derived($currentChannel?.nsfw ?? false);
@@ -481,7 +532,41 @@
 				</div>
 			{/if}
 
-			{#if imageOnlyUrl}
+			{#if message.encrypted && decrypting}
+				<!-- Decryption in progress -->
+				<div class="flex items-center gap-2 text-sm text-text-muted">
+					<svg class="h-3.5 w-3.5 text-status-online" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+					</svg>
+					<span class="inline-block h-3 w-32 animate-pulse rounded bg-bg-modifier"></span>
+				</div>
+			{:else if message.encrypted && decryptionFailed}
+				<!-- Decryption failed — inline passphrase prompt -->
+				<div class="rounded bg-red-500/10 px-2 py-1.5">
+					<div class="flex items-center gap-2 text-sm text-red-400">
+						<svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+						</svg>
+						Unable to decrypt — enter passphrase
+					</div>
+					<div class="mt-1.5 flex gap-1.5">
+						<input
+							type="password"
+							class="min-w-0 flex-1 rounded border border-bg-modifier bg-bg-primary px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+							placeholder="Channel passphrase"
+							bind:value={inlinePassphrase}
+							onkeydown={(e) => e.key === 'Enter' && handleInlineUnlock()}
+						/>
+						<button
+							class="shrink-0 rounded bg-brand-500 px-2 py-1 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+							onclick={handleInlineUnlock}
+							disabled={inlineUnlocking || !inlinePassphrase.trim()}
+						>
+							{inlineUnlocking ? '...' : 'Unlock'}
+						</button>
+					</div>
+				</div>
+			{:else if imageOnlyUrl}
 				<!-- Message is a single image/GIF URL — render inline -->
 				<button class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl)}>
 					<img
@@ -492,11 +577,20 @@
 						onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
 					/>
 				</button>
-			{:else if message.content}
+			{:else if displayContent}
 				<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
-					<MarkdownRenderer content={message.content} />
+					{#if message.encrypted}
+						<span class="mr-1 inline-flex items-center text-status-online" title="End-to-end encrypted">
+							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+							</svg>
+						</span>
+					{/if}
+					<MarkdownRenderer content={displayContent} />
 				</div>
-				<TranslateButton channelId={message.channel_id} messageId={message.id} />
+				{#if !message.encrypted && isLastInGroup}
+					<TranslateButton channelId={message.channel_id} messageIds={groupMessageIds ?? [message.id]} />
+				{/if}
 			{/if}
 
 			<!-- Cross-channel quote embed -->
@@ -657,15 +751,17 @@
 					<path d="M3 10h10a5 5 0 015 5v6M3 10l6 6m-6-6l6-6" />
 				</svg>
 			</button>
-			<button
-				class="p-1.5 text-text-muted hover:text-text-primary"
-				title="Create Thread"
-				onclick={handleCreateThread}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-				</svg>
-			</button>
+			{#if $canCreateThreads}
+				<button
+					class="p-1.5 text-text-muted hover:text-text-primary"
+					title="Create Thread"
+					onclick={handleCreateThread}
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+					</svg>
+				</button>
+			{/if}
 			{#if isOwnMessage}
 				<button
 					class="p-1.5 text-text-muted hover:text-text-primary"
@@ -703,9 +799,13 @@
 		{#if isOwnMessage}
 			<ContextMenuItem label="Edit Message" onclick={handleEdit} />
 		{/if}
-		<ContextMenuItem label={message.pinned ? 'Unpin Message' : 'Pin Message'} onclick={handlePin} />
+		{#if isOwnMessage || $canManageMessages}
+			<ContextMenuItem label={message.pinned ? 'Unpin Message' : 'Pin Message'} onclick={handlePin} />
+		{/if}
 		{#if !message.thread_id}
-			<ContextMenuItem label="Create Thread" onclick={handleCreateThread} />
+			{#if $canCreateThreads}
+				<ContextMenuItem label="Create Thread" onclick={handleCreateThread} />
+			{/if}
 		{:else}
 			<ContextMenuItem label="View Thread" onclick={handleViewThread} />
 		{/if}
@@ -719,7 +819,7 @@
 			<ContextMenuDivider />
 			<ContextMenuItem label="Report Message" danger onclick={handleReportMessage} />
 		{/if}
-		{#if isOwnMessage}
+		{#if isOwnMessage || $canManageMessages}
 			<ContextMenuDivider />
 			<ContextMenuItem label="Delete Message" danger onclick={handleDelete} />
 		{/if}

@@ -170,7 +170,7 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 			}
 		}
 
-		if !m.notifications.ShouldNotify(ctx, uid, msg.GuildID, isMention, isDM, msg.MentionEveryone) {
+		if !m.notifications.ShouldNotify(ctx, uid, msg.GuildID, msg.ChannelID, isMention, isDM, msg.MentionEveryone) {
 			continue
 		}
 

@@ -57,6 +57,14 @@
 				<span class="text-lg text-text-muted">#</span>
 			{/if}
 			<h1 class="shrink-0 font-semibold text-text-primary">{$currentChannel.name ?? 'Unknown Channel'}</h1>
+			{#if $currentChannel.encrypted}
+				<span class="flex items-center gap-1 rounded-full bg-status-online/10 px-2 py-0.5 text-2xs font-medium text-status-online" title="End-to-end encrypted">
+					<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+					</svg>
+					Encrypted
+				</span>
+			{/if}
 			{#if $currentChannel.topic}
 				<span class="mx-1 text-text-muted">|</span>
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
