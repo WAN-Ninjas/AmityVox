@@ -14,6 +14,7 @@ coverage.txt
 
 # Claude Code / AI prompts
 CLAUDE.md
+CURRENT_SPRINT.md
 KICKOFF_PROMPT.md
 TODO.md
 .claude/

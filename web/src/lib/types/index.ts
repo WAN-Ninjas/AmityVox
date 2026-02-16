@@ -88,6 +88,7 @@ export interface Message {
 	masquerade_avatar: string | null;
 	masquerade_color: string | null;
 	encrypted: boolean;
+	encryption_session_id: string | null;
 	voice_duration_ms?: number | null;
 	voice_waveform?: number[] | null;
 	attachments: Attachment[];
@@ -238,6 +239,16 @@ export interface ReadyEvent {
 	guild_ids: string[];
 	session_id: string;
 	presences?: Record<string, string>;
+	voice_states?: Array<{
+		user_id: string;
+		channel_id: string;
+		guild_id: string;
+		self_mute: boolean;
+		self_deaf: boolean;
+		username?: string;
+		display_name?: string | null;
+		avatar_id?: string | null;
+	}>;
 }
 
 export interface TypingEvent {
@@ -596,6 +607,15 @@ export interface NotificationPreference {
 	muted_until: string | null;
 }
 
+// --- Channel Notification Preferences ---
+
+export interface ChannelNotificationPreference {
+	user_id: string;
+	channel_id: string;
+	level: 'all' | 'mentions' | 'none';
+	muted_until: string | null;
+}
+
 // --- Webhook ---
 
 export interface Webhook {
@@ -797,4 +817,54 @@ export interface ModerationMessageReport {
 	resolved_at: string | null;
 	created_at: string;
 	reporter_name?: string;
+}
+
+// --- Permission bitfield constants (must match internal/permissions/permissions.go) ---
+
+export const Permission = {
+	// Server-scoped (bits 0-16)
+	ManageChannels:    1n << 0n,
+	ManageGuild:       1n << 1n,
+	ManagePermissions: 1n << 2n,
+	ManageRoles:       1n << 3n,
+	ManageEmoji:       1n << 4n,
+	ManageWebhooks:    1n << 5n,
+	KickMembers:       1n << 6n,
+	BanMembers:        1n << 7n,
+	TimeoutMembers:    1n << 8n,
+	AssignRoles:       1n << 9n,
+	ChangeNickname:    1n << 10n,
+	ManageNicknames:   1n << 11n,
+	ChangeAvatar:      1n << 12n,
+	RemoveAvatars:     1n << 13n,
+	ViewAuditLog:      1n << 14n,
+	ViewGuildInsights: 1n << 15n,
+	MentionEveryone:   1n << 16n,
+	// Channel-scoped (bits 20-39)
+	ViewChannel:       1n << 20n,
+	ReadHistory:       1n << 21n,
+	SendMessages:      1n << 22n,
+	ManageMessages:    1n << 23n,
+	EmbedLinks:        1n << 24n,
+	UploadFiles:       1n << 25n,
+	AddReactions:      1n << 26n,
+	UseExternalEmoji:  1n << 27n,
+	Connect:           1n << 28n,
+	Speak:             1n << 29n,
+	MuteMembers:       1n << 30n,
+	DeafenMembers:     1n << 31n,
+	MoveMembers:       1n << 32n,
+	UseVAD:            1n << 33n,
+	PrioritySpeaker:   1n << 34n,
+	Stream:            1n << 35n,
+	Masquerade:        1n << 36n,
+	CreateInvites:     1n << 37n,
+	ManageThreads:     1n << 38n,
+	CreateThreads:     1n << 39n,
+	// Special
+	Administrator:     1n << 63n,
+} as const;
+
+export function hasPermission(perms: bigint, perm: bigint): boolean {
+	return (perms & perm) === perm;
 }

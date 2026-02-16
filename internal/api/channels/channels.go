@@ -135,20 +135,23 @@ type updateChannelRequest struct {
 	UserLimit                  *int      `json:"user_limit"`
 	Bitrate                    *int      `json:"bitrate"`
 	Archived                   *bool     `json:"archived"`
+	Encrypted                  *bool     `json:"encrypted"`
 	ReadOnly                   *bool     `json:"read_only"`
 	ReadOnlyRoleIDs            []string  `json:"read_only_role_ids"`
 	DefaultAutoArchiveDuration *int      `json:"default_auto_archive_duration"`
 }
 
 type createMessageRequest struct {
-	Content         *string  `json:"content"`
-	Nonce           *string  `json:"nonce"`
-	AttachmentIDs   []string `json:"attachment_ids"`
-	ReplyToIDs      []string `json:"reply_to_ids"`
-	MentionUserIDs  []string `json:"mention_user_ids"`
-	MentionRoleIDs  []string `json:"mention_role_ids"`
-	MentionEveryone bool     `json:"mention_everyone"`
-	Silent          bool     `json:"silent"`
+	Content             *string  `json:"content"`
+	Nonce               *string  `json:"nonce"`
+	AttachmentIDs       []string `json:"attachment_ids"`
+	ReplyToIDs          []string `json:"reply_to_ids"`
+	MentionUserIDs      []string `json:"mention_user_ids"`
+	MentionRoleIDs      []string `json:"mention_role_ids"`
+	MentionEveryone     bool     `json:"mention_everyone"`
+	Silent              bool     `json:"silent"`
+	Encrypted           bool     `json:"encrypted"`
+	EncryptionSessionID *string  `json:"encryption_session_id"`
 }
 
 type scheduleMessageRequest struct {
@@ -209,6 +212,17 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate encryption toggle: only text, DM, and group channels support encryption.
+	if req.Encrypted != nil {
+		var channelType string
+		h.Pool.QueryRow(r.Context(), `SELECT channel_type FROM channels WHERE id = $1`, channelID).Scan(&channelType)
+		if channelType != "text" && channelType != "dm" && channelType != "group" {
+			writeError(w, http.StatusBadRequest, "encryption_not_supported",
+				"Encryption is only supported for text, DM, and group channels")
+			return
+		}
+	}
+
 	// Validate auto-archive duration if provided.
 	if req.DefaultAutoArchiveDuration != nil {
 		valid := map[int]bool{0: true, 60: true, 1440: true, 4320: true, 10080: true}
@@ -230,16 +244,17 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 			user_limit = COALESCE($7, user_limit),
 			bitrate = COALESCE($8, bitrate),
 			archived = COALESCE($9, archived),
-			read_only = COALESCE($10, read_only),
-			read_only_role_ids = COALESCE($11, read_only_role_ids),
-			default_auto_archive_duration = COALESCE($12, default_auto_archive_duration)
+			encrypted = COALESCE($10, encrypted),
+			read_only = COALESCE($11, read_only),
+			read_only_role_ids = COALESCE($12, read_only_role_ids),
+			default_auto_archive_duration = COALESCE($13, default_auto_archive_duration)
 		 WHERE id = $1
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
 		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
 		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
 		channelID, req.Name, req.Topic, req.Position, req.NSFW, req.SlowmodeSeconds,
-		req.UserLimit, req.Bitrate, req.Archived, req.ReadOnly, req.ReadOnlyRoleIDs,
+		req.UserLimit, req.Bitrate, req.Archived, req.Encrypted, req.ReadOnly, req.ReadOnlyRoleIDs,
 		req.DefaultAutoArchiveDuration,
 	).Scan(
 		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
@@ -504,6 +519,20 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate encryption consistency: encrypted channels require encrypted messages and vice versa.
+	var channelEncrypted bool
+	h.Pool.QueryRow(r.Context(), `SELECT encrypted FROM channels WHERE id = $1`, channelID).Scan(&channelEncrypted)
+	if channelEncrypted && !req.Encrypted {
+		writeError(w, http.StatusBadRequest, "encryption_required",
+			"This channel is encrypted. Messages must be sent with encrypted: true")
+		return
+	}
+	if req.Encrypted && !channelEncrypted {
+		writeError(w, http.StatusBadRequest, "channel_not_encrypted",
+			"Cannot send encrypted messages to an unencrypted channel")
+		return
+	}
+
 	// Enforce slowmode: check if the user posted too recently in this channel.
 	// Users with ManageMessages or ManageChannels bypass slowmode.
 	var slowmodeSec int
@@ -583,14 +612,16 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	var msg models.Message
 	err := h.Pool.QueryRow(r.Context(),
 		`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags,
-		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                       encrypted, encryption_session_id, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		           encrypted, encryption_session_id, created_at`,
 		msgID, channelID, userID, req.Content, req.Nonce, msgType, flags,
 		req.ReplyToIDs, req.MentionUserIDs, req.MentionRoleIDs, req.MentionEveryone,
+		req.Encrypted, req.EncryptionSessionID,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
@@ -2714,6 +2745,56 @@ func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID st
 func mustMarshal(v interface{}) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// HandleBatchDecryptMessages accepts decrypted content for encrypted messages,
+// storing the plaintext and clearing the encrypted flag.
+// POST /api/v1/channels/{channelID}/decrypt-messages
+func (h *Handler) HandleBatchDecryptMessages(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		return
+	}
+
+	var req struct {
+		Messages []struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if len(req.Messages) == 0 {
+		writeError(w, http.StatusBadRequest, "empty_messages", "No messages provided")
+		return
+	}
+	if len(req.Messages) > 100 {
+		writeError(w, http.StatusBadRequest, "too_many_messages", "Maximum 100 messages per request")
+		return
+	}
+
+	ctx := r.Context()
+	updated := 0
+	for _, msg := range req.Messages {
+		tag, err := h.Pool.Exec(ctx,
+			`UPDATE messages SET content = $1, encrypted = false, encryption_session_id = NULL
+			 WHERE id = $2 AND channel_id = $3 AND encrypted = true`,
+			msg.Content, msg.ID, channelID,
+		)
+		if err != nil {
+			h.Logger.Error("failed to decrypt message", slog.String("message_id", msg.ID), slog.Any("error", err))
+			continue
+		}
+		updated += int(tag.RowsAffected())
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{"updated": updated})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

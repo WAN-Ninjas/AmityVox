@@ -222,6 +222,32 @@
 		return diff < 5 * 60 * 1000;
 	}
 
+	// Returns true if this message is the last in its author group.
+	function isLastInGroup(msg: Message, idx: number): boolean {
+		if (idx === messages.length - 1) return true;
+		const next = messages[idx + 1];
+		return !isCompact(next, idx + 1);
+	}
+
+	// Returns all message IDs in the same author group as the message at idx.
+	function getGroupMessageIds(idx: number): string[] {
+		const ids: string[] = [];
+		// Walk backward to find the start of the group.
+		let start = idx;
+		while (start > 0 && isCompact(messages[start], start)) {
+			start--;
+		}
+		// Walk forward from start to collect all group members.
+		for (let i = start; i < messages.length; i++) {
+			if (i === start || isCompact(messages[i], i)) {
+				ids.push(messages[i].id);
+			} else {
+				break;
+			}
+		}
+		return ids;
+	}
+
 	// Check if a date separator should appear before this message.
 	function showDateSeparator(msg: Message, idx: number): string | null {
 		const msgDate = new Date(msg.created_at);
@@ -376,6 +402,8 @@
 							<MessageItem
 								message={msg}
 								isCompact={isCompact(msg, i)}
+								isLastInGroup={isLastInGroup(msg, i)}
+								groupMessageIds={getGroupMessageIds(i)}
 								onscrollto={scrollToMessage}
 								{onopenthread}
 							/>
@@ -385,6 +413,8 @@
 					<MessageItem
 						message={msg}
 						isCompact={isCompact(msg, i)}
+						isLastInGroup={isLastInGroup(msg, i)}
+						groupMessageIds={getGroupMessageIds(i)}
 						onscrollto={scrollToMessage}
 						{onopenthread}
 					/>

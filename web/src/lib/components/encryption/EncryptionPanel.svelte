@@ -1,72 +1,193 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { addToast } from '$lib/stores/toast';
+	import { updateChannel as updateChannelStore } from '$lib/stores/channels';
 
 	interface Props {
 		channelId: string;
 		encrypted: boolean;
+		onchange?: () => void;
 	}
 
-	let { channelId, encrypted }: Props = $props();
+	let { channelId, encrypted, onchange }: Props = $props();
 
-	let groupEpoch = $state<number | null>(null);
-	let groupState = $state<string | null>(null);
-	let loadingState = $state(false);
-	let stateError = $state('');
-	let uploading = $state(false);
+	// --- State ---
+	let passphrase = $state('');
+	let passphraseConfirm = $state('');
+	let unlockPassphrase = $state('');
+	let hasKey = $state(false);
+	let checkingKey = $state(true);
+	let enabling = $state(false);
+	let unlocking = $state(false);
+	let disabling = $state(false);
+	let showPassphraseResult = $state('');
+	let showChangePassphrase = $state(false);
+	let newPassphrase = $state('');
+	let newPassphraseConfirm = $state('');
+	let changingPassphrase = $state(false);
+	let showDisableOptions = $state(false);
+	let decryptProgress = $state<{ current: number; total: number } | null>(null);
 
-	// Fetch group state when channelId changes and channel is encrypted
+	// Check if we have a key when channelId changes
 	$effect(() => {
 		const id = channelId;
-		const isEncrypted = encrypted;
-		groupEpoch = null;
-		groupState = null;
-		stateError = '';
-
-		if (isEncrypted) {
-			loadingState = true;
-			api.getGroupState(id)
-				.then((result) => {
-					groupEpoch = result.epoch;
-					groupState = result.state;
-				})
-				.catch((err) => {
-					stateError = err.message || 'Failed to load group state';
-				})
-				.finally(() => {
-					loadingState = false;
-				});
-		}
+		checkingKey = true;
+		hasKey = false;
+		e2ee.hasChannelKey(id).then((has) => {
+			hasKey = has;
+		}).finally(() => {
+			checkingKey = false;
+		});
 	});
 
-	async function handleUploadKeyPackage() {
-		uploading = true;
+	async function handleEnable() {
+		if (!passphrase.trim()) {
+			addToast('Enter a passphrase', 'error');
+			return;
+		}
+		if (passphrase !== passphraseConfirm) {
+			addToast('Passphrases do not match', 'error');
+			return;
+		}
+
+		enabling = true;
 		try {
-			// Generate a placeholder key package. In a real implementation this
-			// would come from the MLS library running in the client. For now,
-			// we send an empty string and let the server handle key generation
-			// or the user can paste a key package in DeviceVerification.
-			const result = await api.uploadKeyPackage('');
-			addToast(`Key package uploaded (ID: ${result.id})`, 'success');
+			// Derive and store the key
+			await e2ee.setPassphrase(channelId, passphrase);
+
+			// Enable encryption on the server
+			await api.updateChannel(channelId, { encrypted: true } as any);
+
+			// Show the passphrase one time
+			showPassphraseResult = passphrase;
+			hasKey = true;
+			passphrase = '';
+			passphraseConfirm = '';
+			onchange?.();
 		} catch (err: any) {
-			addToast(err.message || 'Failed to upload key package', 'error');
+			addToast(err.message || 'Failed to enable encryption', 'error');
 		} finally {
-			uploading = false;
+			enabling = false;
 		}
 	}
 
-	async function refreshGroupState() {
-		loadingState = true;
-		stateError = '';
-		try {
-			const result = await api.getGroupState(channelId);
-			groupEpoch = result.epoch;
-			groupState = result.state;
-		} catch (err: any) {
-			stateError = err.message || 'Failed to refresh group state';
-		} finally {
-			loadingState = false;
+	async function handleUnlock() {
+		if (!unlockPassphrase.trim()) {
+			addToast('Enter the channel passphrase', 'error');
+			return;
 		}
+
+		unlocking = true;
+		try {
+			await e2ee.setPassphrase(channelId, unlockPassphrase);
+			hasKey = true;
+			unlockPassphrase = '';
+			addToast('Channel unlocked', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to set passphrase', 'error');
+		} finally {
+			unlocking = false;
+		}
+	}
+
+	async function handleChangePassphrase() {
+		if (!newPassphrase.trim()) {
+			addToast('Enter a new passphrase', 'error');
+			return;
+		}
+		if (newPassphrase !== newPassphraseConfirm) {
+			addToast('Passphrases do not match', 'error');
+			return;
+		}
+
+		changingPassphrase = true;
+		try {
+			await e2ee.setPassphrase(channelId, newPassphrase);
+			showChangePassphrase = false;
+			newPassphrase = '';
+			newPassphraseConfirm = '';
+			addToast('Passphrase changed. Only future messages will use the new key.', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to change passphrase', 'error');
+		} finally {
+			changingPassphrase = false;
+		}
+	}
+
+	async function handleDisableKeepEncrypted() {
+		disabling = true;
+		try {
+			await api.updateChannel(channelId, { encrypted: false } as any);
+			await e2ee.clearChannelKey(channelId);
+			hasKey = false;
+			showDisableOptions = false;
+			addToast('Encryption disabled. Old messages remain encrypted.', 'success');
+			onchange?.();
+		} catch (err: any) {
+			addToast(err.message || 'Failed to disable encryption', 'error');
+		} finally {
+			disabling = false;
+		}
+	}
+
+	async function handleDisableDecryptAll() {
+		disabling = true;
+		decryptProgress = { current: 0, total: 0 };
+		try {
+			// Fetch all encrypted messages and decrypt them in batches
+			let before = '';
+			let totalDecrypted = 0;
+
+			while (true) {
+				const params: Record<string, string> = { limit: '100' };
+				if (before) params.before = before;
+				const messages = await api.getMessages(channelId, params);
+
+				const encrypted = messages.filter((m: any) => m.encrypted && m.content);
+				if (encrypted.length === 0 && messages.length === 0) break;
+
+				if (encrypted.length > 0) {
+					const decrypted: { id: string; content: string }[] = [];
+					for (const msg of encrypted) {
+						try {
+							const plaintext = await e2ee.decryptMessage(channelId, msg.content);
+							decrypted.push({ id: msg.id, content: plaintext });
+						} catch {
+							// Skip messages we can't decrypt (wrong key)
+						}
+					}
+
+					if (decrypted.length > 0) {
+						await api.batchDecryptMessages(channelId, decrypted);
+						totalDecrypted += decrypted.length;
+						decryptProgress = { current: totalDecrypted, total: totalDecrypted };
+					}
+				}
+
+				if (messages.length < 100) break;
+				before = messages[messages.length - 1].id;
+			}
+
+			// Disable encryption on the channel
+			await api.updateChannel(channelId, { encrypted: false } as any);
+			await e2ee.clearChannelKey(channelId);
+			hasKey = false;
+			showDisableOptions = false;
+			decryptProgress = null;
+			addToast(`Encryption disabled. ${totalDecrypted} message(s) decrypted.`, 'success');
+			onchange?.();
+		} catch (err: any) {
+			addToast(err.message || 'Failed to decrypt messages', 'error');
+			decryptProgress = null;
+		} finally {
+			disabling = false;
+		}
+	}
+
+	function copyPassphrase() {
+		navigator.clipboard.writeText(showPassphraseResult);
+		addToast('Passphrase copied to clipboard', 'success');
 	}
 </script>
 
@@ -81,7 +202,7 @@
 			</div>
 			<div>
 				<p class="text-sm font-semibold text-text-primary">End-to-End Encrypted</p>
-				<p class="text-xs text-text-muted">Messages in this channel are encrypted with MLS.</p>
+				<p class="text-xs text-text-muted">Messages are encrypted with a shared passphrase.</p>
 			</div>
 		{:else}
 			<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-bg-modifier">
@@ -96,80 +217,211 @@
 		{/if}
 	</div>
 
-	{#if encrypted}
-		<!-- Divider -->
-		<div class="border-t border-bg-modifier"></div>
-
-		<!-- Group state info -->
-		<div>
-			<div class="flex items-center justify-between">
-				<h4 class="text-xs font-bold uppercase tracking-wide text-text-muted">Group State</h4>
-				<button
-					class="text-xs text-text-muted transition-colors hover:text-text-primary"
-					onclick={refreshGroupState}
-					disabled={loadingState}
-					title="Refresh group state"
-				>
-					<svg
-						class="h-4 w-4 {loadingState ? 'animate-spin' : ''}"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						viewBox="0 0 24 24"
-					>
-						<path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+	{#if showPassphraseResult}
+		<!-- One-time passphrase display -->
+		<div class="border-t border-bg-modifier pt-4">
+			<div class="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4">
+				<div class="mb-2 flex items-center gap-2">
+					<svg class="h-4 w-4 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
 					</svg>
+					<p class="text-sm font-semibold text-yellow-400">Save Your Passphrase</p>
+				</div>
+				<p class="mb-3 text-xs text-text-muted">
+					Share this passphrase with channel members securely. It will not be shown again.
+				</p>
+				<div class="flex items-center gap-2">
+					<code class="flex-1 rounded bg-bg-primary px-3 py-2 font-mono text-sm text-text-primary">
+						{showPassphraseResult}
+					</code>
+					<button
+						class="shrink-0 rounded bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-600"
+						onclick={copyPassphrase}
+					>
+						Copy
+					</button>
+				</div>
+				<button
+					class="mt-3 text-xs text-text-muted hover:text-text-primary"
+					onclick={() => (showPassphraseResult = '')}
+				>
+					I've saved it, dismiss
 				</button>
 			</div>
-			{#if loadingState}
-				<div class="mt-2 flex items-center gap-2 text-xs text-text-muted">
-					<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></span>
-					Loading group state...
+		</div>
+	{/if}
+
+	{#if encrypted}
+		<div class="border-t border-bg-modifier"></div>
+
+		{#if checkingKey}
+			<div class="flex items-center gap-2 text-xs text-text-muted">
+				<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></span>
+				Checking encryption key...
+			</div>
+		{:else if !hasKey}
+			<!-- Passphrase unlock prompt -->
+			<div>
+				<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Unlock Channel</h4>
+				<p class="mb-3 text-xs text-text-muted">
+					Enter the passphrase to decrypt messages in this channel.
+				</p>
+				<div class="flex gap-2">
+					<input
+						type="password"
+						class="flex-1 rounded-md border border-bg-modifier bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+						placeholder="Channel passphrase"
+						bind:value={unlockPassphrase}
+						onkeydown={(e) => e.key === 'Enter' && handleUnlock()}
+					/>
+					<button
+						class="shrink-0 rounded-md bg-brand-500 px-4 py-2 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+						onclick={handleUnlock}
+						disabled={unlocking || !unlockPassphrase.trim()}
+					>
+						{unlocking ? 'Unlocking...' : 'Unlock'}
+					</button>
 				</div>
-			{:else if stateError}
-				<p class="mt-2 text-xs text-red-400">{stateError}</p>
-			{:else if groupEpoch !== null}
-				<div class="mt-2 space-y-1">
-					<div class="flex items-center justify-between rounded bg-bg-primary px-3 py-2">
-						<span class="text-xs text-text-muted">Epoch</span>
-						<span class="font-mono text-xs text-text-primary">{groupEpoch}</span>
+			</div>
+		{:else}
+			<!-- Channel is unlocked -->
+			<div class="flex items-center gap-2 rounded bg-status-online/10 px-3 py-2">
+				<svg class="h-4 w-4 text-status-online" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M5 13l4 4L19 7" />
+				</svg>
+				<span class="text-xs text-status-online">You have the encryption key for this channel</span>
+			</div>
+
+			<!-- Change passphrase -->
+			{#if !showChangePassphrase}
+				<button
+					class="text-xs text-text-muted hover:text-text-primary"
+					onclick={() => (showChangePassphrase = true)}
+				>
+					Change passphrase...
+				</button>
+			{:else}
+				<div class="rounded-lg border border-bg-modifier bg-bg-primary p-3">
+					<h4 class="mb-1 text-xs font-bold uppercase tracking-wide text-text-muted">Change Passphrase</h4>
+					<p class="mb-3 text-xs text-yellow-400">
+						Only future messages will use the new key. Old messages still need the previous passphrase.
+					</p>
+					<input
+						type="password"
+						class="mb-2 w-full rounded-md border border-bg-modifier bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+						placeholder="New passphrase"
+						bind:value={newPassphrase}
+					/>
+					<input
+						type="password"
+						class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+						placeholder="Confirm new passphrase"
+						bind:value={newPassphraseConfirm}
+						onkeydown={(e) => e.key === 'Enter' && handleChangePassphrase()}
+					/>
+					<div class="flex gap-2">
+						<button
+							class="rounded-md bg-brand-500 px-4 py-2 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+							onclick={handleChangePassphrase}
+							disabled={changingPassphrase || !newPassphrase.trim()}
+						>
+							{changingPassphrase ? 'Changing...' : 'Change'}
+						</button>
+						<button
+							class="rounded-md px-4 py-2 text-xs text-text-muted hover:text-text-primary"
+							onclick={() => { showChangePassphrase = false; newPassphrase = ''; newPassphraseConfirm = ''; }}
+						>
+							Cancel
+						</button>
 					</div>
-					{#if groupState}
-						<div class="flex items-center justify-between rounded bg-bg-primary px-3 py-2">
-							<span class="text-xs text-text-muted">State</span>
-							<span class="max-w-[180px] truncate font-mono text-xs text-text-secondary" title={groupState}>
-								{groupState}
-							</span>
+				</div>
+			{/if}
+
+			<div class="border-t border-bg-modifier"></div>
+
+			<!-- Disable encryption -->
+			{#if !showDisableOptions}
+				<button
+					class="text-xs text-red-400 hover:text-red-300"
+					onclick={() => (showDisableOptions = true)}
+				>
+					Disable encryption...
+				</button>
+			{:else}
+				<div class="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+					<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-red-400">Disable Encryption</h4>
+
+					{#if decryptProgress}
+						<div class="mb-3">
+							<div class="mb-1 text-xs text-text-muted">
+								Decrypting messages... {decryptProgress.current} processed
+							</div>
+							<div class="h-1.5 w-full overflow-hidden rounded-full bg-bg-modifier">
+								<div class="h-full rounded-full bg-brand-500 transition-all" style="width: 100%"></div>
+							</div>
+						</div>
+					{:else}
+						<div class="flex flex-col gap-2">
+							<button
+								class="rounded-md bg-red-500 px-4 py-2 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+								onclick={handleDisableDecryptAll}
+								disabled={disabling}
+							>
+								Decrypt all messages & turn off
+							</button>
+							<button
+								class="rounded-md border border-red-500/30 px-4 py-2 text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+								onclick={handleDisableKeepEncrypted}
+								disabled={disabling}
+							>
+								Turn off (keep old messages encrypted)
+							</button>
+							<button
+								class="text-xs text-text-muted hover:text-text-primary"
+								onclick={() => (showDisableOptions = false)}
+								disabled={disabling}
+							>
+								Cancel
+							</button>
 						</div>
 					{/if}
 				</div>
-			{:else}
-				<p class="mt-2 text-xs text-text-muted">No group state available. The encryption group may not be initialized yet.</p>
 			{/if}
-		</div>
+		{/if}
 
-		<!-- Divider -->
-		<div class="border-t border-bg-modifier"></div>
-
-		<!-- Key package upload -->
-		<div>
-			<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Key Management</h4>
+	{:else}
+		<!-- Enable encryption -->
+		<div class="border-t border-bg-modifier pt-4">
+			<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Enable Encryption</h4>
 			<p class="mb-3 text-xs text-text-muted">
-				Upload a key package so other members can add you to encrypted channels.
+				Set a passphrase to encrypt all future messages. Share the passphrase with channel members out-of-band.
 			</p>
+			<input
+				type="password"
+				class="mb-2 w-full rounded-md border border-bg-modifier bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+				placeholder="Enter a passphrase"
+				bind:value={passphrase}
+			/>
+			<input
+				type="password"
+				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+				placeholder="Confirm passphrase"
+				bind:value={passphraseConfirm}
+				onkeydown={(e) => e.key === 'Enter' && handleEnable()}
+			/>
 			<button
-				class="flex items-center gap-2 rounded-md bg-brand-500 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
-				onclick={handleUploadKeyPackage}
-				disabled={uploading}
+				class="flex items-center gap-2 rounded-md bg-status-online px-4 py-2 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+				onclick={handleEnable}
+				disabled={enabling || !passphrase.trim() || !passphraseConfirm.trim()}
 			>
-				{#if uploading}
+				{#if enabling}
 					<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
-					Uploading...
+					Enabling...
 				{:else}
 					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+						<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
 					</svg>
-					Upload Key Package
+					Enable Encryption
 				{/if}
 			</button>
 		</div>

@@ -24,6 +24,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/presence"
+	"github.com/amityvox/amityvox/internal/voice"
 )
 
 // Opcodes define the WebSocket protocol operation codes per Section 8.2.
@@ -82,6 +83,7 @@ type Client struct {
 	seq           int64
 	identified    bool
 	guildIDs      map[string]bool // guilds this user is a member of
+	friendIDs     map[string]bool // accepted friends for presence dispatch
 	mu            sync.Mutex
 	done          chan struct{}
 	replayBuf     []GatewayMessage // buffer for resume replay
@@ -95,6 +97,7 @@ type Server struct {
 	eventBus          *events.Bus
 	cache             *presence.Cache
 	pool              *pgxpool.Pool
+	voice             *voice.Service
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
 	listenAddr        string
@@ -116,6 +119,7 @@ type ServerConfig struct {
 	EventBus          *events.Bus
 	Cache             *presence.Cache
 	Pool              *pgxpool.Pool
+	Voice             *voice.Service
 	HeartbeatInterval time.Duration
 	HeartbeatTimeout  time.Duration
 	ListenAddr        string
@@ -129,6 +133,7 @@ func NewServer(cfg ServerConfig) *Server {
 		eventBus:          cfg.EventBus,
 		cache:             cfg.Cache,
 		pool:              cfg.Pool,
+		voice:             cfg.Voice,
 		heartbeatInterval: cfg.HeartbeatInterval,
 		heartbeatTimeout:  cfg.HeartbeatTimeout,
 		listenAddr:        cfg.ListenAddr,
@@ -196,9 +201,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn:     conn,
-		done:     make(chan struct{}),
-		guildIDs: make(map[string]bool),
+		conn:      conn,
+		done:      make(chan struct{}),
+		guildIDs:  make(map[string]bool),
+		friendIDs: make(map[string]bool),
 	}
 
 	// Send HELLO with heartbeat interval.
@@ -340,6 +346,31 @@ func (s *Server) loadGuildMemberships(ctx context.Context, client *Client) {
 	}
 }
 
+// loadFriendships queries the database to populate the client's friend list
+// for presence dispatch to friends who may share no guilds.
+func (s *Server) loadFriendships(ctx context.Context, client *Client) {
+	if s.pool == nil {
+		return
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT target_id FROM user_relationships WHERE user_id = $1 AND status = 'friend'`,
+		client.userID)
+	if err != nil {
+		s.logger.Error("failed to load friendships", slog.String("error", err.Error()))
+		return
+	}
+	defer rows.Close()
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for rows.Next() {
+		var friendID string
+		if rows.Scan(&friendID) == nil {
+			client.friendIDs[friendID] = true
+		}
+	}
+}
+
 // waitForIdentify reads the first client message expecting an IDENTIFY op
 // with a valid session token.
 func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
@@ -373,6 +404,9 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 	// Load guild memberships for event filtering.
 	s.loadGuildMemberships(ctx, client)
 
+	// Load friendships for presence dispatch to friends outside shared guilds.
+	s.loadFriendships(ctx, client)
+
 	// Send READY dispatch.
 	user, err := s.authService.GetUser(ctx, userID)
 	if err != nil {
@@ -403,7 +437,26 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 		}
 	}
 
-	// Get presence for all guild co-members.
+	// Merge friend IDs into member list so friends' presences are included in READY.
+	client.mu.Lock()
+	friendIDsCopy := make([]string, 0, len(client.friendIDs))
+	for fid := range client.friendIDs {
+		friendIDsCopy = append(friendIDsCopy, fid)
+	}
+	client.mu.Unlock()
+	memberSet := make(map[string]bool, len(memberUserIDs)+len(friendIDsCopy))
+	for _, uid := range memberUserIDs {
+		memberSet[uid] = true
+	}
+	for _, fid := range friendIDsCopy {
+		memberSet[fid] = true
+	}
+	memberUserIDs = make([]string, 0, len(memberSet))
+	for uid := range memberSet {
+		memberUserIDs = append(memberUserIDs, uid)
+	}
+
+	// Get presence for all guild co-members and friends.
 	presences := make(map[string]string)
 	if len(memberUserIDs) > 0 {
 		bulkPresence, err := s.cache.GetBulkPresence(ctx, memberUserIDs)
@@ -416,11 +469,61 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 		}
 	}
 
+	// Collect voice states for all guilds the user is in.
+	voiceStates := make([]map[string]interface{}, 0)
+	if s.voice != nil {
+		voiceUserIDs := make(map[string]bool)
+		for gid := range client.guildIDs {
+			for _, vs := range s.voice.GetGuildVoiceStates(gid) {
+				voiceUserIDs[vs.UserID] = true
+				voiceStates = append(voiceStates, map[string]interface{}{
+					"user_id":    vs.UserID,
+					"channel_id": vs.ChannelID,
+					"guild_id":   vs.GuildID,
+					"self_mute":  vs.SelfMute,
+					"self_deaf":  vs.SelfDeaf,
+				})
+			}
+		}
+		// Enrich voice states with user info.
+		if len(voiceUserIDs) > 0 && s.pool != nil {
+			ids := make([]string, 0, len(voiceUserIDs))
+			for uid := range voiceUserIDs {
+				ids = append(ids, uid)
+			}
+			rows, err := s.pool.Query(ctx,
+				`SELECT id, username, display_name, avatar_id FROM users WHERE id = ANY($1)`, ids)
+			if err == nil {
+				defer rows.Close()
+				userInfo := make(map[string]map[string]interface{})
+				for rows.Next() {
+					var uid, username string
+					var displayName, avatarID *string
+					if rows.Scan(&uid, &username, &displayName, &avatarID) == nil {
+						userInfo[uid] = map[string]interface{}{
+							"username":     username,
+							"display_name": displayName,
+							"avatar_id":    avatarID,
+						}
+					}
+				}
+				for i, vs := range voiceStates {
+					if info, ok := userInfo[vs["user_id"].(string)]; ok {
+						voiceStates[i]["username"] = info["username"]
+						voiceStates[i]["display_name"] = info["display_name"]
+						voiceStates[i]["avatar_id"] = info["avatar_id"]
+					}
+				}
+			}
+		}
+	}
+
 	readyData, _ := json.Marshal(map[string]interface{}{
-		"user":       user,
-		"guild_ids":  guildIDList,
-		"session_id": client.sessionID,
-		"presences":  presences,
+		"user":         user,
+		"guild_ids":    guildIDList,
+		"session_id":   client.sessionID,
+		"presences":    presences,
+		"voice_states": voiceStates,
 	})
 
 	s.sendMessage(client, GatewayMessage{
@@ -686,6 +789,9 @@ func (s *Server) handleRequestMembers(ctx context.Context, client *Client, data 
 // dispatchEvent routes a NATS event to the appropriate connected clients based
 // on event type and guild/channel membership.
 func (s *Server) dispatchEvent(subject string, event events.Event) {
+	// Update in-memory friend ID caches when relationships change.
+	s.handleRelationshipEvent(subject, event)
+
 	msg := GatewayMessage{
 		Op:   OpDispatch,
 		Type: event.Type,
@@ -740,6 +846,14 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		}
 		s.clientsMu.RUnlock()
 
+		client.mu.Lock()
+		// Check if the event user is a friend of the target client.
+		isFriend := client.friendIDs[event.UserID]
+		client.mu.Unlock()
+		if isFriend {
+			return true
+		}
+
 		if len(eventUserGuildIDs) == 0 {
 			return false
 		}
@@ -773,9 +887,8 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		return isMember
 	}
 
-	// If the subject indicates a guild event, try to extract guild context from subject.
-	if strings.HasPrefix(subject, "amityvox.guild.") {
-		// Guild events without GuildID in payload — look at the data for guild_id.
+	// If the subject indicates a guild or voice event, try to extract guild context from data.
+	if strings.HasPrefix(subject, "amityvox.guild.") || strings.HasPrefix(subject, "amityvox.voice.") {
 		var data struct {
 			GuildID string `json:"guild_id"`
 		}
@@ -860,6 +973,89 @@ func (s *Server) NotifyGuildLeave(userID, guildID string) {
 		client.mu.Lock()
 		delete(client.guildIDs, guildID)
 		client.mu.Unlock()
+	}
+}
+
+// NotifyFriendAdd updates all connected clients for a user when they gain a new friend.
+// Also sends an immediate PRESENCE_UPDATE for the new friend so the user sees their
+// status without waiting for the next heartbeat.
+func (s *Server) NotifyFriendAdd(userID, friendID string) {
+	s.userClientsMu.RLock()
+	clients := s.userClients[userID]
+	s.userClientsMu.RUnlock()
+
+	for client := range clients {
+		client.mu.Lock()
+		client.friendIDs[friendID] = true
+		client.mu.Unlock()
+	}
+
+	// Send an immediate PRESENCE_UPDATE for the new friend so the user
+	// sees their online status right away.
+	ctx := context.Background()
+	if s.cache != nil {
+		status, err := s.cache.GetPresence(ctx, friendID)
+		if err == nil && status != "" && status != "offline" {
+			data, _ := json.Marshal(map[string]string{
+				"user_id": friendID,
+				"status":  status,
+			})
+			msg := GatewayMessage{
+				Op:   OpDispatch,
+				Type: "PRESENCE_UPDATE",
+				Data: data,
+			}
+			for client := range clients {
+				s.sendMessage(client, msg)
+			}
+		}
+	}
+}
+
+// NotifyFriendRemove updates all connected clients for a user when a friendship ends.
+func (s *Server) NotifyFriendRemove(userID, friendID string) {
+	s.userClientsMu.RLock()
+	clients := s.userClients[userID]
+	s.userClientsMu.RUnlock()
+
+	for client := range clients {
+		client.mu.Lock()
+		delete(client.friendIDs, friendID)
+		client.mu.Unlock()
+	}
+}
+
+// handleRelationshipEvent intercepts RELATIONSHIP_UPDATE and RELATIONSHIP_REMOVE
+// events from the event bus and updates the in-memory friendIDs on connected clients.
+// This keeps the gateway's friend cache in sync without needing a direct reference
+// from the users Handler to the gateway Server.
+func (s *Server) handleRelationshipEvent(subject string, event events.Event) {
+	switch subject {
+	case events.SubjectRelationshipUpdate:
+		// When a friend request is accepted (status becomes "friend"), update both users.
+		var payload struct {
+			UserID   string `json:"user_id"`
+			TargetID string `json:"target_id"`
+			Type     string `json:"type"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return
+		}
+		if payload.Type == "friend" {
+			// The event is dispatched to UserID, so update that user's clients
+			// to include TargetID as a friend.
+			s.NotifyFriendAdd(payload.UserID, payload.TargetID)
+		}
+
+	case events.SubjectRelationshipRemove:
+		var payload struct {
+			UserID   string `json:"user_id"`
+			TargetID string `json:"target_id"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return
+		}
+		s.NotifyFriendRemove(payload.UserID, payload.TargetID)
 	}
 }
 

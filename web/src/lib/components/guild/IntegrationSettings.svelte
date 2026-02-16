@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
-	import RSSFeedSettings from './RSSFeedSettings.svelte';
-	import CalendarSync from './CalendarSync.svelte';
 
 	let { guildId, channels = [] }: { guildId: string; channels: Channel[] } = $props();
 
@@ -44,7 +42,7 @@
 
 	// Create integration form.
 	let showCreateForm = $state(false);
-	let newType = $state<string>('rss');
+	let newType = $state<string>('activitypub');
 	let newName = $state('');
 	let newChannelId = $state('');
 	let creating = $state(false);
@@ -77,10 +75,6 @@
 
 	const integrationTypes = [
 		{ value: 'activitypub', label: 'ActivityPub (Mastodon/Lemmy)' },
-		{ value: 'rss', label: 'RSS Feed' },
-		{ value: 'calendar', label: 'Calendar Sync' },
-		{ value: 'email', label: 'Email Gateway' },
-		{ value: 'sms', label: 'SMS Bridge' },
 	];
 
 	const bridgeTypes = [
@@ -226,10 +220,6 @@
 	function typeIcon(type_: string): string {
 		const icons: Record<string, string> = {
 			activitypub: 'AP',
-			rss: 'RSS',
-			calendar: 'CAL',
-			email: 'EM',
-			sms: 'SMS',
 			telegram: 'TG',
 			slack: 'SL',
 			irc: 'IRC',
@@ -314,11 +304,7 @@
 				</div>
 
 				<!-- Type-specific settings -->
-				{#if selectedIntegration.integration_type === 'rss'}
-					<RSSFeedSettings {guildId} integrationId={selectedIntegration.id} />
-				{:else if selectedIntegration.integration_type === 'calendar'}
-					<CalendarSync {guildId} integrationId={selectedIntegration.id} />
-				{:else if selectedIntegration.integration_type === 'activitypub'}
+				{#if selectedIntegration.integration_type === 'activitypub'}
 					<div class="bg-bg-secondary rounded-lg p-4">
 						<h4 class="font-medium text-text-primary mb-2">ActivityPub Follows</h4>
 						<p class="text-sm text-text-muted">
@@ -327,28 +313,6 @@
 						</p>
 						<p class="text-xs text-text-muted mt-3">
 							Use the API to manage follows: POST /guilds/{guildId}/integrations/{selectedIntegration.id}/activitypub/follows
-						</p>
-					</div>
-				{:else if selectedIntegration.integration_type === 'email'}
-					<div class="bg-bg-secondary rounded-lg p-4">
-						<h4 class="font-medium text-text-primary mb-2">Email Gateway</h4>
-						<p class="text-sm text-text-muted">
-							Receive emails as messages in the linked channel. A unique email address will be
-							generated for this integration.
-						</p>
-						<p class="text-xs text-text-muted mt-3">
-							Configure via API: POST /guilds/{guildId}/integrations/{selectedIntegration.id}/email/gateway
-						</p>
-					</div>
-				{:else if selectedIntegration.integration_type === 'sms'}
-					<div class="bg-bg-secondary rounded-lg p-4">
-						<h4 class="font-medium text-text-primary mb-2">SMS Bridge</h4>
-						<p class="text-sm text-text-muted">
-							Send and receive SMS messages via Twilio or Vonage. Inbound SMS will appear as
-							messages in the linked channel.
-						</p>
-						<p class="text-xs text-text-muted mt-3">
-							Configure via API: POST /guilds/{guildId}/integrations/{selectedIntegration.id}/sms/bridge
 						</p>
 					</div>
 				{/if}
@@ -400,7 +364,7 @@
 			{:else if integrations.length === 0}
 				<div class="bg-bg-secondary rounded-lg p-6 text-center text-text-muted">
 					<p>No integrations configured yet.</p>
-					<p class="text-sm mt-1">Add ActivityPub, RSS, Calendar, Email, or SMS integrations.</p>
+					<p class="text-sm mt-1">Add ActivityPub integrations to follow Mastodon and Lemmy accounts.</p>
 				</div>
 			{:else}
 				<div class="space-y-2">

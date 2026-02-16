@@ -108,9 +108,14 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 	}
 
 	s.registerMiddleware()
-	s.registerRoutes()
 
 	return s
+}
+
+// RegisterRoutes mounts all API route groups. Must be called after all optional
+// services (Notifications, Encryption, AutoMod, etc.) are set on the Server.
+func (s *Server) RegisterRoutes() {
+	s.registerRoutes()
 }
 
 // registerMiddleware adds global middleware to the router.
@@ -394,7 +399,8 @@ func (s *Server) registerRoutes() {
 					r.Delete("/{templateID}", guildH.HandleDeleteGuildTemplate)
 					r.Post("/{templateID}/apply", guildH.HandleApplyGuildTemplate)
 				})
-				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
+				r.Get("/{guildID}/members/@me/permissions", guildH.HandleGetMyPermissions)
+			r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
 				r.Get("/{guildID}/members/search", guildH.HandleSearchGuildMembers)
 				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)
 				r.Patch("/{guildID}/members/{memberID}", guildH.HandleUpdateGuildMember)
@@ -521,6 +527,7 @@ func (s *Server) registerRoutes() {
 				r.Put("/{channelID}/pins/{messageID}", channelH.HandlePinMessage)
 				r.Delete("/{channelID}/pins/{messageID}", channelH.HandleUnpinMessage)
 				r.Post("/{channelID}/typing", channelH.HandleTriggerTyping)
+				r.Post("/{channelID}/decrypt-messages", channelH.HandleBatchDecryptMessages)
 				r.Post("/{channelID}/ack", channelH.HandleAckChannel)
 				r.Put("/{channelID}/permissions/{overrideID}", channelH.HandleSetChannelPermission)
 				r.Delete("/{channelID}/permissions/{overrideID}", channelH.HandleDeleteChannelPermission)
@@ -845,15 +852,23 @@ func (s *Server) registerRoutes() {
 				})
 			}
 
-			// Push notification routes.
+			// Notification routes (preferences always available; push requires VAPID).
 			if s.Notifications != nil {
 				r.Route("/notifications", func(r chi.Router) {
-					r.Get("/vapid-key", s.Notifications.HandleGetVAPIDKey)
-					r.Post("/subscriptions", s.Notifications.HandleSubscribe)
-					r.Get("/subscriptions", s.Notifications.HandleListSubscriptions)
-					r.Delete("/subscriptions/{subscriptionID}", s.Notifications.HandleUnsubscribe)
+					// Preference management (always available).
 					r.Get("/preferences", s.Notifications.HandleGetPreferences)
 					r.Patch("/preferences", s.Notifications.HandleUpdatePreferences)
+					r.Get("/preferences/channels", s.Notifications.HandleGetChannelPreferences)
+					r.Patch("/preferences/channels", s.Notifications.HandleUpdateChannelPreference)
+					r.Delete("/preferences/channels/{channelID}", s.Notifications.HandleDeleteChannelPreference)
+
+					// Push subscription routes (require VAPID keys).
+					if s.Notifications.Enabled() {
+						r.Get("/vapid-key", s.Notifications.HandleGetVAPIDKey)
+						r.Post("/subscriptions", s.Notifications.HandleSubscribe)
+						r.Get("/subscriptions", s.Notifications.HandleListSubscriptions)
+						r.Delete("/subscriptions/{subscriptionID}", s.Notifications.HandleUnsubscribe)
+					}
 				})
 			}
 

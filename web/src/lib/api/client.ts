@@ -22,6 +22,7 @@ import type {
 	AdminStats,
 	InstanceInfo,
 	NotificationPreference,
+	ChannelNotificationPreference,
 	Webhook,
 	UserSettings,
 	Category,
@@ -191,6 +192,10 @@ class ApiClient {
 		return this.get(`/guilds/${guildId}`);
 	}
 
+	getMyPermissions(guildId: string): Promise<{ permissions: string }> {
+		return this.get(`/guilds/${guildId}/members/@me/permissions`);
+	}
+
 	updateGuild(guildId: string, data: Partial<Guild>): Promise<Guild> {
 		return this.patch(`/guilds/${guildId}`, data);
 	}
@@ -240,8 +245,13 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages${qs ? '?' + qs : ''}`);
 	}
 
-	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[] }): Promise<Message> {
+	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[]; encrypted?: boolean; encryption_session_id?: string }): Promise<Message> {
 		return this.post(`/channels/${channelId}/messages`, { content, ...opts });
+	}
+
+	/** Batch-decrypt messages: send decrypted plaintext for encrypted messages. */
+	batchDecryptMessages(channelId: string, messages: { id: string; content: string }[]): Promise<void> {
+		return this.post(`/channels/${channelId}/decrypt-messages`, { messages });
 	}
 
 	// --- Scheduled Messages ---
@@ -348,6 +358,14 @@ class ApiClient {
 		return this.del(`/guilds/${guildId}/members/${memberId}`);
 	}
 
+	updateMember(guildId: string, memberId: string, data: { nickname?: string | null; timeout_until?: string | null; deaf?: boolean; mute?: boolean }): Promise<GuildMember> {
+		return this.patch(`/guilds/${guildId}/members/${memberId}`, data);
+	}
+
+	getMemberRoles(guildId: string, memberId: string): Promise<Role[]> {
+		return this.get(`/guilds/${guildId}/members/${memberId}/roles`);
+	}
+
 	banUser(guildId: string, userId: string, reason?: string): Promise<void> {
 		return this.put(`/guilds/${guildId}/bans/${userId}`, { reason });
 	}
@@ -362,8 +380,8 @@ class ApiClient {
 		return this.get(`/guilds/${guildId}/roles`);
 	}
 
-	createRole(guildId: string, name: string): Promise<Role> {
-		return this.post(`/guilds/${guildId}/roles`, { name });
+	createRole(guildId: string, name: string, opts?: { color?: string; hoist?: boolean; mentionable?: boolean; permissions_allow?: number; permissions_deny?: number }): Promise<Role> {
+		return this.post(`/guilds/${guildId}/roles`, { name, ...opts });
 	}
 
 	// --- Invites ---
@@ -542,8 +560,8 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages/${messageId}/edits`);
 	}
 
-	translateMessage(channelId: string, messageId: string, targetLang: string): Promise<{ message_id: string; source_lang: string; target_lang: string; translated_text: string; cached: boolean }> {
-		return this.post(`/channels/${channelId}/messages/${messageId}/translate`, { target_lang: targetLang });
+	translateMessage(channelId: string, messageId: string, targetLang: string, force = false): Promise<{ message_id: string; source_lang: string; target_lang: string; translated_text: string; cached: boolean }> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/translate`, { target_lang: targetLang, force });
 	}
 
 	// --- User Notes ---
@@ -716,6 +734,20 @@ class ApiClient {
 		return this.patch('/notifications/preferences', data);
 	}
 
+	// --- Channel Notification Preferences ---
+
+	getChannelNotificationPreferences(): Promise<ChannelNotificationPreference[]> {
+		return this.get('/notifications/preferences/channels');
+	}
+
+	updateChannelNotificationPreference(data: { channel_id: string; level: string; muted_until?: string | null }): Promise<ChannelNotificationPreference> {
+		return this.patch('/notifications/preferences/channels', data);
+	}
+
+	deleteChannelNotificationPreference(channelId: string): Promise<void> {
+		return this.delete(`/notifications/preferences/channels/${channelId}`);
+	}
+
 	// --- User Settings (privacy/prefs) ---
 
 	getUserSettings(): Promise<UserSettings> {
@@ -772,20 +804,6 @@ class ApiClient {
 		return this.post(`/channels/${channelId}/messages/${messageId}/crosspost`, { target_channel_id: targetChannelId });
 	}
 
-	// --- Message Translation ---
-
-	translateMessage(channelId: string, messageId: string, targetLang: string): Promise<{
-		message_id: string;
-		source_lang: string;
-		target_lang: string;
-		translated_text: string;
-		cached: boolean;
-	}> {
-		return this.post(`/channels/${channelId}/messages/${messageId}/translate`, {
-			target_lang: targetLang
-		});
-	}
-
 	// --- Emoji Upload ---
 
 	async uploadEmoji(guildId: string, name: string, file: File): Promise<CustomEmoji> {
@@ -839,6 +857,14 @@ class ApiClient {
 
 	updateGroupState(channelId: string, epoch: number, state: string): Promise<void> {
 		return this.put(`/encryption/channels/${channelId}/group-state`, { epoch, state });
+	}
+
+	ackWelcome(welcomeId: string): Promise<void> {
+		return this.post(`/encryption/welcome/${welcomeId}/ack`);
+	}
+
+	deleteKeyPackage(keyPackageId: string): Promise<void> {
+		return this.del(`/encryption/key-packages/${keyPackageId}`);
 	}
 
 	// --- Push Notifications ---

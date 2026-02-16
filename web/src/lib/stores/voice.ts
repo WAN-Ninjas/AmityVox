@@ -250,6 +250,11 @@ export function handleVoiceStateUpdate(data: {
 // Map of channelId → Map<userId, VoiceParticipant>
 export const channelVoiceUsers = writable<Map<string, Map<string, VoiceParticipant>>>(new Map());
 
+/** Clear all channel voice users — call on gateway READY to flush stale state. */
+export function clearChannelVoiceUsers() {
+	channelVoiceUsers.set(new Map());
+}
+
 function updateChannelVoiceParticipants(
 	channelId: string,
 	userId: string,
@@ -532,6 +537,30 @@ function handleActiveSpeakersChanged(speakers: Participant[]) {
 			}
 		}
 		return next;
+	});
+
+	// Sync speaking state to the sidebar's channelVoiceUsers store.
+	const currentChannel = get(voiceChannelId);
+	if (!currentChannel) return;
+
+	channelVoiceUsers.update((outer) => {
+		const channelMap = outer.get(currentChannel);
+		if (!channelMap) return outer;
+
+		let changed = false;
+		const nextInner = new Map(channelMap);
+		for (const [userId, participant] of nextInner) {
+			const isSpeaking = speakerIds.has(userId);
+			if (participant.speaking !== isSpeaking) {
+				nextInner.set(userId, { ...participant, speaking: isSpeaking });
+				changed = true;
+			}
+		}
+		if (!changed) return outer;
+
+		const nextOuter = new Map(outer);
+		nextOuter.set(currentChannel, nextInner);
+		return nextOuter;
 	});
 }
 

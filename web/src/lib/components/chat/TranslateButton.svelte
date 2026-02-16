@@ -4,15 +4,13 @@
 
 	interface Props {
 		channelId: string;
-		messageId: string;
+		messageIds: string[];
 	}
 
-	let { channelId, messageId }: Props = $props();
+	let { channelId, messageIds }: Props = $props();
 
 	let loading = $state(false);
-	let translatedText = $state<string | null>(null);
-	let sourceLang = $state<string | null>(null);
-	let targetLang = $state<string | null>(null);
+	let translations = $state<Array<{ translated_text: string; source_lang: string; target_lang: string }>>([]);
 	let showTranslation = $state(false);
 	let showLangPicker = $state(false);
 
@@ -45,15 +43,15 @@
 	}
 	let preferredLang = $state(getStoredLang());
 
-	async function translate(lang?: string) {
+	async function translate(lang?: string, force = false) {
 		const target = lang ?? preferredLang;
 		loading = true;
 		showLangPicker = false;
 		try {
-			const result = await api.translateMessage(channelId, messageId, target);
-			translatedText = result.translated_text;
-			sourceLang = result.source_lang;
-			targetLang = result.target_lang;
+			const results = await Promise.all(
+				messageIds.map((id) => api.translateMessage(channelId, id, target, force))
+			);
+			translations = results;
 			showTranslation = true;
 
 			// Save preferred language.
@@ -83,7 +81,7 @@
 			class="flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-text-muted hover:bg-bg-modifier hover:text-text-secondary transition-colors"
 			onclick={() => translate()}
 			disabled={loading}
-			title="Translate message"
+			title="Translate {messageIds.length > 1 ? `${messageIds.length} messages` : 'message'}"
 		>
 			{#if loading}
 				<div class="h-3 w-3 animate-spin rounded-full border border-text-muted border-t-transparent"></div>
@@ -92,7 +90,7 @@
 					<path d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
 				</svg>
 			{/if}
-			<span>Translate</span>
+			<span>Translate{messageIds.length > 1 ? ` (${messageIds.length})` : ''}</span>
 		</button>
 		<button
 			class="rounded p-0.5 text-text-muted hover:bg-bg-modifier hover:text-text-secondary transition-colors"
@@ -126,12 +124,15 @@
 	{/if}
 </div>
 
-<!-- Translation result shown below -->
-{#if showTranslation && translatedText}
+<!-- Translation results shown below -->
+{#if showTranslation && translations.length > 0}
 	<div class="mt-1 rounded border-l-2 border-blue-500/50 bg-blue-500/5 px-2.5 py-1.5">
 		<div class="mb-0.5 flex items-center gap-2">
 			<span class="text-2xs text-blue-400">
-				{sourceLang ?? 'auto'} &rarr; {targetLang ?? preferredLang}
+				{translations[0].source_lang ?? 'auto'} &rarr; {translations[0].target_lang ?? preferredLang}
+				{#if translations.length > 1}
+					&middot; {translations.length} messages
+				{/if}
 			</span>
 			<button
 				class="text-2xs text-text-muted hover:text-text-secondary"
@@ -141,11 +142,23 @@
 			</button>
 			<button
 				class="text-2xs text-text-muted hover:text-text-secondary"
+				onclick={() => translate(undefined, true)}
+				disabled={loading}
+			>
+				{loading ? 'Retrying...' : 'Retry'}
+			</button>
+			<button
+				class="text-2xs text-text-muted hover:text-text-secondary"
 				onclick={toggleLangPicker}
 			>
 				Change language
 			</button>
 		</div>
-		<p class="text-sm text-text-secondary leading-relaxed break-words">{translatedText}</p>
+		{#each translations as t, i}
+			{#if i > 0}
+				<div class="my-1 border-t border-blue-500/20"></div>
+			{/if}
+			<p class="text-sm text-text-secondary leading-relaxed break-words">{t.translated_text}</p>
+		{/each}
 	</div>
 {/if}

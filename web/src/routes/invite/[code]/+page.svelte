@@ -6,6 +6,7 @@
 	import { updateGuild } from '$lib/stores/guilds';
 
 	let guildName = $state('');
+	let guildId = $state('');
 	let memberCount = $state(0);
 	let loading = $state(true);
 	let joining = $state(false);
@@ -33,6 +34,7 @@
 			// The API returns { invite, guild_name, member_count } wrapped in data envelope
 			// but api.get() already unwraps the data envelope
 			guildName = (data as any).guild_name ?? 'Unknown Server';
+			guildId = (data as any).guild_id ?? '';
 			memberCount = (data as any).member_count ?? 0;
 		} catch (err: any) {
 			error = err.message || 'Invite not found or has expired';
@@ -54,7 +56,7 @@
 		} catch (err: any) {
 			if (err.message?.includes('already a member')) {
 				addToast('You are already a member of this server', 'info');
-				goto('/app');
+				goto(guildId ? `/app/guilds/${guildId}` : '/app', { replaceState: true });
 			} else {
 				error = err.message || 'Failed to join server';
 			}

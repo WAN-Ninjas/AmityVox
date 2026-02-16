@@ -39,6 +39,7 @@
 	let showScreenShare = $state(false);
 	let textCollapsed = $state(false);
 	let cameraToggling = $state(false);
+	let pinnedId = $state<string | null>(null);
 
 	const connected = $derived($voiceState === 'connected');
 	const connecting = $derived($voiceState === 'connecting');
@@ -67,6 +68,14 @@
 				speaking: false
 			}
 		);
+	}
+
+	function tileId(track: (typeof allTracks)[number] | null, userId: string): string {
+		return track ? track.trackSid : `user:${userId}`;
+	}
+
+	function togglePin(id: string) {
+		pinnedId = pinnedId === id ? null : id;
 	}
 
 	async function handleJoin() {
@@ -101,99 +110,166 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<!-- Voice area -->
-	<div class="flex min-h-0 flex-1 flex-col">
-		{#if !connected && !connecting}
-			<!-- Disconnected state: Join button -->
-			<div class="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-				<div class="flex flex-col items-center gap-3 text-center">
-					<div class="flex h-20 w-20 items-center justify-center rounded-full bg-bg-modifier">
-						<svg class="h-10 w-10 text-text-muted" fill="currentColor" viewBox="0 0 24 24">
-							<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
-						</svg>
-					</div>
-					<h2 class="text-xl font-bold text-text-primary">{$currentChannel?.name ?? 'Voice Channel'}</h2>
-					{#if $currentChannel?.topic}
-						<p class="max-w-md text-sm text-text-muted">{$currentChannel.topic}</p>
-					{/if}
-					<div class="flex items-center gap-3 text-xs text-text-muted">
-						{#if $currentChannel && $currentChannel.user_limit > 0}
-							<span>{$currentChannel.user_limit} user limit</span>
-							<span>&middot;</span>
-						{/if}
-						{#if $currentChannel}
-							<span>{Math.floor($currentChannel.bitrate / 1000)}kbps</span>
-						{/if}
-					</div>
-				</div>
-
-				{#if $participantList.length > 0}
-					<div class="flex flex-col items-center gap-2">
-						<p class="text-xs font-medium text-text-muted">{$participantList.length} connected</p>
-						<div class="flex -space-x-2">
-							{#each $participantList.slice(0, 8) as p (p.userId)}
-								<div class="relative" title={p.displayName ?? p.username}>
-									<Avatar name={p.displayName ?? p.username} size="sm" />
-								</div>
-							{/each}
-							{#if $participantList.length > 8}
-								<div class="flex h-8 w-8 items-center justify-center rounded-full bg-bg-modifier text-xs font-medium text-text-muted">
-									+{$participantList.length - 8}
-								</div>
-							{/if}
-						</div>
-					</div>
-				{/if}
-
-				<button
-					class="rounded-lg bg-green-600 px-8 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
-					onclick={handleJoin}
-					disabled={joining}
-				>
-					{#if joining}
-						<span class="flex items-center gap-2">
-							<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-							</svg>
-							Connecting...
-						</span>
-					{:else}
-						Join Voice
-					{/if}
-				</button>
-			</div>
-		{:else if connecting}
-			<!-- Connecting state -->
-			<div class="flex flex-1 items-center justify-center">
-				<div class="flex flex-col items-center gap-3">
-					<svg class="h-8 w-8 animate-spin text-brand-400" fill="none" viewBox="0 0 24 24">
-						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+	{#if !connected && !connecting}
+		<!-- Disconnected state: Join button (full-width centered) -->
+		<div class="flex flex-1 flex-col items-center justify-center gap-6 p-8">
+			<div class="flex flex-col items-center gap-3 text-center">
+				<div class="flex h-20 w-20 items-center justify-center rounded-full bg-bg-modifier">
+					<svg class="h-10 w-10 text-text-muted" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
 					</svg>
-					<p class="text-sm text-text-muted">Connecting to voice...</p>
+				</div>
+				<h2 class="text-xl font-bold text-text-primary">{$currentChannel?.name ?? 'Voice Channel'}</h2>
+				{#if $currentChannel?.topic}
+					<p class="max-w-md text-sm text-text-muted">{$currentChannel.topic}</p>
+				{/if}
+				<div class="flex items-center gap-3 text-xs text-text-muted">
+					{#if $currentChannel && $currentChannel.user_limit > 0}
+						<span>{$currentChannel.user_limit} user limit</span>
+						<span>&middot;</span>
+					{/if}
+					{#if $currentChannel}
+						<span>{Math.floor($currentChannel.bitrate / 1000)}kbps</span>
+					{/if}
 				</div>
 			</div>
-		{:else}
-			<!-- Connected state: equal-sized participant grid -->
-			<div class="grid min-h-0 flex-1 auto-rows-fr gap-1.5 p-1.5 {gridCols}">
-				{#each allTracks as track (track.trackSid)}
-					<VideoTile
-						trackInfo={track}
-						participant={getParticipant(track.userId)}
-					/>
-				{/each}
-				{#each audioOnlyParticipants as participant (participant.userId)}
-					<VideoTile
-						trackInfo={null}
-						{participant}
-					/>
-				{/each}
-			</div>
 
-			<!-- Voice control bar -->
+			{#if $participantList.length > 0}
+				<div class="flex flex-col items-center gap-2">
+					<p class="text-xs font-medium text-text-muted">{$participantList.length} connected</p>
+					<div class="flex -space-x-2">
+						{#each $participantList.slice(0, 8) as p (p.userId)}
+							<div class="relative" title={p.displayName ?? p.username}>
+								<Avatar name={p.displayName ?? p.username} size="sm" />
+							</div>
+						{/each}
+						{#if $participantList.length > 8}
+							<div class="flex h-8 w-8 items-center justify-center rounded-full bg-bg-modifier text-xs font-medium text-text-muted">
+								+{$participantList.length - 8}
+							</div>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
+			<button
+				class="rounded-lg bg-green-600 px-8 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+				onclick={handleJoin}
+				disabled={joining}
+			>
+				{#if joining}
+					<span class="flex items-center gap-2">
+						<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+						</svg>
+						Connecting...
+					</span>
+				{:else}
+					Join Voice
+				{/if}
+			</button>
+		</div>
+
+		<!-- Text-in-voice (disconnected: stacked below) -->
+		<div class="flex flex-col border-t border-bg-floating {textCollapsed ? '' : 'min-h-0 flex-1'}">
+			<button
+				class="flex items-center gap-2 bg-bg-secondary px-4 py-1.5 text-xs font-medium text-text-muted hover:text-text-secondary"
+				onclick={() => (textCollapsed = !textCollapsed)}
+			>
+				<svg
+					class="h-3 w-3 transition-transform duration-200 {textCollapsed ? '-rotate-90' : ''}"
+					fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+				>
+					<path d="M19 9l-7 7-7-7" />
+				</svg>
+				Text Chat
+			</button>
+			{#if !textCollapsed}
+				<div class="flex min-h-0 flex-1 flex-col">
+					<MessageList />
+					<MessageInput />
+				</div>
+			{/if}
+		</div>
+	{:else if connecting}
+		<!-- Connecting state (full-width centered) -->
+		<div class="flex flex-1 items-center justify-center">
+			<div class="flex flex-col items-center gap-3">
+				<svg class="h-8 w-8 animate-spin text-brand-400" fill="none" viewBox="0 0 24 24">
+					<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+					<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+				</svg>
+				<p class="text-sm text-text-muted">Connecting to voice...</p>
+			</div>
+		</div>
+	{:else}
+		<!-- Connected state: two rows, top row = full-width video, bottom row = video left + chat right -->
+		<!-- Top row: takes ~50% height -->
+		<div class="flex min-h-0 flex-1 flex-col">
+			<!-- Participant grid — fills all available space above controls -->
+			{#if pinnedId}
+				{@const pinnedTrack = allTracks.find(t => t.trackSid === pinnedId)}
+				{@const pinnedAudio = !pinnedTrack ? audioOnlyParticipants.find(p => `user:${p.userId}` === pinnedId) : null}
+				<div class="flex min-h-0 flex-1 gap-1.5 p-1.5">
+					<div class="min-h-0 flex-[3]">
+						{#if pinnedTrack}
+							<VideoTile
+								trackInfo={pinnedTrack}
+								participant={getParticipant(pinnedTrack.userId)}
+								pinned={true}
+								onclick={() => togglePin(pinnedId!)}
+							/>
+						{:else if pinnedAudio}
+							<VideoTile
+								trackInfo={null}
+								participant={pinnedAudio}
+								pinned={true}
+								onclick={() => togglePin(pinnedId!)}
+							/>
+						{/if}
+					</div>
+					<div class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+						{#each allTracks.filter(t => t.trackSid !== pinnedId) as track (track.trackSid)}
+							<VideoTile
+								trackInfo={track}
+								participant={getParticipant(track.userId)}
+								onclick={() => togglePin(tileId(track, track.userId))}
+							/>
+						{/each}
+						{#each audioOnlyParticipants.filter(p => `user:${p.userId}` !== pinnedId) as participant (participant.userId)}
+							<VideoTile
+								trackInfo={null}
+								{participant}
+								onclick={() => togglePin(tileId(null, participant.userId))}
+							/>
+						{/each}
+					</div>
+				</div>
+			{:else}
+				<div class="grid min-h-0 flex-1 auto-rows-fr gap-1.5 p-1.5 {gridCols}">
+					{#each allTracks as track (track.trackSid)}
+						<VideoTile
+							trackInfo={track}
+							participant={getParticipant(track.userId)}
+							onclick={() => togglePin(tileId(track, track.userId))}
+						/>
+					{/each}
+					{#each audioOnlyParticipants as participant (participant.userId)}
+						<VideoTile
+							trackInfo={null}
+							{participant}
+							onclick={() => togglePin(tileId(null, participant.userId))}
+						/>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
+		<!-- Bottom section: controls bar + optional text chat side-by-side -->
+		<div class="flex {textCollapsed ? '' : 'min-h-0 flex-1'} flex-col">
+			<!-- Controls bar spans full width -->
 			<div class="flex items-center justify-center gap-2 border-t border-bg-floating bg-bg-secondary px-4 py-3">
-				<!-- Mute -->
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {$selfMute ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'bg-bg-modifier text-text-secondary hover:bg-bg-floating hover:text-text-primary'}"
 					onclick={toggleMute}
@@ -210,7 +286,6 @@
 					{/if}
 				</button>
 
-				<!-- Deafen -->
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {$selfDeaf ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'bg-bg-modifier text-text-secondary hover:bg-bg-floating hover:text-text-primary'}"
 					onclick={toggleDeafen}
@@ -228,7 +303,6 @@
 					{/if}
 				</button>
 
-				<!-- Camera -->
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {$selfCamera ? 'bg-brand-500/20 text-brand-400 hover:bg-brand-500/30' : 'bg-bg-modifier text-text-secondary hover:bg-bg-floating hover:text-text-primary'}"
 					onclick={handleToggleCamera}
@@ -251,7 +325,6 @@
 					{/if}
 				</button>
 
-				<!-- Screen Share -->
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
 					onclick={() => (showScreenShare = !showScreenShare)}
@@ -262,7 +335,6 @@
 					</svg>
 				</button>
 
-				<!-- Soundboard -->
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
 					onclick={() => (showSoundboard = !showSoundboard)}
@@ -273,7 +345,16 @@
 					</svg>
 				</button>
 
-				<!-- Settings -->
+				<button
+					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {textCollapsed ? 'bg-bg-modifier text-text-secondary' : 'bg-brand-500/20 text-brand-400'} hover:bg-bg-floating hover:text-text-primary"
+					onclick={() => (textCollapsed = !textCollapsed)}
+					title={textCollapsed ? 'Show Text Chat' : 'Hide Text Chat'}
+				>
+					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+					</svg>
+				</button>
+
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
 					onclick={() => (showSettings = !showSettings)}
@@ -285,7 +366,6 @@
 					</svg>
 				</button>
 
-				<!-- Disconnect -->
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/20 text-red-400 transition-colors hover:bg-red-500/30"
 					onclick={handleLeave}
@@ -296,92 +376,86 @@
 					</svg>
 				</button>
 			</div>
-		{/if}
-	</div>
 
-	<!-- Settings / Soundboard / Screen Share / Camera Settings panels -->
-	{#if connected && showSettings}
-		<div class="border-t border-bg-floating">
-			<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
-				<h3 class="text-sm font-semibold text-text-primary">Voice Settings</h3>
-				<button class="text-text-muted hover:text-text-primary" onclick={() => (showSettings = false)}>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-			<div class="max-h-80 overflow-y-auto bg-bg-primary p-4">
-				<VoiceControls
-					{channelId}
-					{guildId}
-					{connected}
-					selfMute={$selfMute}
-					selfDeaf={$selfDeaf}
-				/>
-				<div class="mt-3 border-t border-bg-floating pt-3">
-					<h4 class="mb-2 text-2xs font-medium uppercase tracking-wide text-text-secondary">Camera Settings</h4>
-					<CameraSettings />
+			<!-- Settings / Soundboard / Screen Share panels -->
+			{#if showSettings}
+				<div class="border-t border-bg-floating">
+					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
+						<h3 class="text-sm font-semibold text-text-primary">Voice Settings</h3>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showSettings = false)}>
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M6 18L18 6M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+					<div class="max-h-80 overflow-y-auto bg-bg-primary p-4">
+						<VoiceControls
+							{channelId}
+							{guildId}
+							{connected}
+							selfMute={$selfMute}
+							selfDeaf={$selfDeaf}
+						/>
+						<div class="mt-3 border-t border-bg-floating pt-3">
+							<h4 class="mb-2 text-2xs font-medium uppercase tracking-wide text-text-secondary">Camera Settings</h4>
+							<CameraSettings />
+						</div>
+					</div>
 				</div>
-			</div>
+			{/if}
+
+			{#if showSoundboard}
+				<div class="border-t border-bg-floating">
+					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
+						<h3 class="text-sm font-semibold text-text-primary">Soundboard</h3>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showSoundboard = false)}>
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M6 18L18 6M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+					<div class="max-h-60 overflow-y-auto bg-bg-primary p-4">
+						<Soundboard {guildId} {channelId} />
+					</div>
+				</div>
+			{/if}
+
+			{#if showScreenShare}
+				<div class="border-t border-bg-floating">
+					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
+						<h3 class="text-sm font-semibold text-text-primary">Screen Share</h3>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showScreenShare = false)}>
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M6 18L18 6M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+					<div class="max-h-60 overflow-y-auto bg-bg-primary p-4">
+						<ScreenShareControls
+							{channelId}
+							{guildId}
+							{connected}
+							currentUserId={$currentUser?.id ?? ''}
+						/>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Text chat (bottom half, below controls) -->
+			{#if !textCollapsed}
+				<div class="flex min-h-0 flex-1 flex-col border-t border-bg-floating">
+					<div class="flex items-center gap-2 bg-bg-secondary px-4 py-1.5 text-xs font-medium text-text-muted">
+						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+						</svg>
+						Text Chat
+					</div>
+					<div class="flex min-h-0 flex-1 flex-col">
+						<MessageList />
+						<MessageInput />
+					</div>
+				</div>
+			{/if}
 		</div>
 	{/if}
-
-	{#if connected && showSoundboard}
-		<div class="border-t border-bg-floating">
-			<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
-				<h3 class="text-sm font-semibold text-text-primary">Soundboard</h3>
-				<button class="text-text-muted hover:text-text-primary" onclick={() => (showSoundboard = false)}>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-			<div class="max-h-60 overflow-y-auto bg-bg-primary p-4">
-				<Soundboard {guildId} {channelId} />
-			</div>
-		</div>
-	{/if}
-
-	{#if connected && showScreenShare}
-		<div class="border-t border-bg-floating">
-			<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
-				<h3 class="text-sm font-semibold text-text-primary">Screen Share</h3>
-				<button class="text-text-muted hover:text-text-primary" onclick={() => (showScreenShare = false)}>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-			<div class="max-h-60 overflow-y-auto bg-bg-primary p-4">
-				<ScreenShareControls
-					{channelId}
-					{guildId}
-					{connected}
-					currentUserId={$currentUser?.id ?? ''}
-				/>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Text-in-voice section -->
-	<div class="flex flex-col border-t border-bg-floating {textCollapsed ? '' : 'min-h-0 flex-1'}">
-		<button
-			class="flex items-center gap-2 bg-bg-secondary px-4 py-1.5 text-xs font-medium text-text-muted hover:text-text-secondary"
-			onclick={() => (textCollapsed = !textCollapsed)}
-		>
-			<svg
-				class="h-3 w-3 transition-transform duration-200 {textCollapsed ? '-rotate-90' : ''}"
-				fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-			>
-				<path d="M19 9l-7 7-7-7" />
-			</svg>
-			Text Chat
-		</button>
-		{#if !textCollapsed}
-			<div class="flex min-h-0 flex-1 flex-col">
-				<MessageList />
-				<MessageInput />
-			</div>
-		{/if}
-	</div>
 </div>

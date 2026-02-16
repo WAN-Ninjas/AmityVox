@@ -6,9 +6,20 @@
 	import { goto } from '$app/navigation';
 	import Avatar from '$components/common/Avatar.svelte';
 	import WebhookPanel from '$components/guild/WebhookPanel.svelte';
+	import SoundboardSettings from '$lib/components/guild/SoundboardSettings.svelte';
+	import AutoRoleSettings from '$lib/components/guild/AutoRoleSettings.svelte';
+	import LevelingSettings from '$lib/components/guild/LevelingSettings.svelte';
+	import StarboardSettings from '$lib/components/guild/StarboardSettings.svelte';
+	import WelcomeSettings from '$lib/components/guild/WelcomeSettings.svelte';
+	import BoostPanel from '$lib/components/guild/BoostPanel.svelte';
+	import GuildInsights from '$lib/components/guild/GuildInsights.svelte';
+	import GuildTemplates from '$lib/components/guild/GuildTemplates.svelte';
+	import { canManageGuild, canManageRoles, canBanMembers, canKickMembers, canViewAuditLog } from '$lib/stores/permissions';
+	import RoleEditor from '$components/guild/RoleEditor.svelte';
+	import MembersPanel from '$components/guild/MembersPanel.svelte';
 	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt, BanList, BanListEntry, BanListSubscription, StickerPack, Sticker } from '$lib/types';
 
-	type Tab = 'overview' | 'roles' | 'categories' | 'invites' | 'bans' | 'emoji' | 'stickers' | 'webhooks' | 'audit' | 'automod' | 'moderation' | 'raid' | 'onboarding' | 'ban-lists' | 'templates';
+	type Tab = 'overview' | 'boosts' | 'roles' | 'auto-roles' | 'members' | 'categories' | 'invites' | 'bans' | 'emoji' | 'soundboard' | 'stickers' | 'webhooks' | 'audit' | 'insights' | 'automod' | 'moderation' | 'leveling' | 'raid' | 'onboarding' | 'starboard' | 'welcome' | 'ban-lists' | 'templates';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -30,8 +41,6 @@
 	// --- Roles ---
 	let roles = $state<Role[]>([]);
 	let loadingRoles = $state(false);
-	let newRoleName = $state('');
-	let creatingRole = $state(false);
 
 	// --- Invites ---
 	let invites = $state<Invite[]>([]);
@@ -783,21 +792,7 @@
 		}
 	}
 
-	// --- Role actions ---
-
-	async function handleCreateRole() {
-		if (!$currentGuild || !newRoleName.trim()) return;
-		creatingRole = true;
-		try {
-			const role = await api.createRole($currentGuild.id, newRoleName.trim());
-			roles = [...roles, role];
-			newRoleName = '';
-		} catch (err: any) {
-			error = err.message || 'Failed to create role';
-		} finally {
-			creatingRole = false;
-		}
-	}
+	// (Role create/delete/edit handled by RoleEditor component)
 
 	// --- Invite actions ---
 
@@ -1061,17 +1056,7 @@
 		}
 	}
 
-	// --- Role actions (edit/delete) ---
-
-	async function handleDeleteRole(roleId: string) {
-		if (!$currentGuild || !confirm('Delete this role?')) return;
-		try {
-			await api.deleteRole($currentGuild.id, roleId);
-			roles = roles.filter((r) => r.id !== roleId);
-		} catch (err: any) {
-			error = err.message || 'Failed to delete role';
-		}
-	}
+	// (Role delete handled by RoleEditor component)
 
 	// --- AutoMod actions ---
 
@@ -1355,23 +1340,48 @@
 
 	// --- Helpers ---
 
-	const tabs: { id: Tab; label: string }[] = [
+	const allTabs: { id: Tab; label: string }[] = [
 		{ id: 'overview', label: 'Overview' },
+		{ id: 'boosts', label: 'Boosts' },
 		{ id: 'roles', label: 'Roles' },
+		{ id: 'members', label: 'Members' },
+		{ id: 'auto-roles', label: 'Auto Roles' },
 		{ id: 'categories', label: 'Categories' },
 		{ id: 'invites', label: 'Invites' },
 		{ id: 'bans', label: 'Bans' },
 		{ id: 'emoji', label: 'Emoji' },
+		{ id: 'soundboard', label: 'Soundboard' },
 		{ id: 'stickers', label: 'Stickers' },
 		{ id: 'webhooks', label: 'Webhooks' },
 		{ id: 'audit', label: 'Audit Log' },
+		{ id: 'insights', label: 'Insights' },
 		{ id: 'automod', label: 'AutoMod' },
 		{ id: 'moderation', label: 'Moderation' },
+		{ id: 'leveling', label: 'Leveling' },
 		{ id: 'raid', label: 'Raid Protection' },
 		{ id: 'onboarding', label: 'Onboarding' },
+		{ id: 'starboard', label: 'Starboard' },
+		{ id: 'welcome', label: 'Welcome' },
 		{ id: 'ban-lists', label: 'Ban Lists' },
 		{ id: 'templates', label: 'Templates' }
 	];
+
+	// Permission-gated tabs: only show tabs the user has permissions for.
+	const permissionGatedTabs: Record<string, () => boolean> = {
+		'roles': () => isOwner || $canManageRoles,
+		'members': () => isOwner || $canManageRoles || $canKickMembers,
+		'bans': () => isOwner || $canBanMembers,
+		'ban-lists': () => isOwner || $canBanMembers,
+		'audit': () => isOwner || $canViewAuditLog,
+	};
+
+	const tabs = $derived(allTabs.filter((tab) => {
+		const gate = permissionGatedTabs[tab.id];
+		return !gate || gate();
+	}));
+
+	// Tabs that need full width instead of max-w-xl.
+	const wideContentTabs = new Set<Tab>(['roles', 'members', 'webhooks', 'audit', 'automod', 'moderation', 'ban-lists', 'onboarding']);
 
 	const expiryOptions = [
 		{ label: '30 minutes', value: 1800 },
@@ -1421,6 +1431,7 @@
 	<title>Guild Settings — AmityVox</title>
 </svelte:head>
 
+{#if isOwner || $canManageGuild}
 <div class="flex h-full">
 	<nav class="w-52 shrink-0 overflow-y-auto bg-bg-secondary p-4">
 		<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Guild Settings</h3>
@@ -1446,7 +1457,7 @@
 	</nav>
 
 	<div class="flex-1 overflow-y-auto bg-bg-tertiary p-8">
-		<div class="max-w-xl">
+		<div class={wideContentTabs.has(currentTab) ? '' : 'max-w-xl'}>
 			{#if error}
 				<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>
 			{/if}
@@ -1576,48 +1587,25 @@
 			<!-- ==================== ROLES ==================== -->
 			{:else if currentTab === 'roles'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Roles</h1>
-
-				<div class="mb-6 flex gap-2">
-					<input
-						type="text" class="input flex-1" placeholder="New role name..."
-						bind:value={newRoleName} maxlength="100"
-						onkeydown={(e) => e.key === 'Enter' && handleCreateRole()}
-					/>
-					<button class="btn-primary" onclick={handleCreateRole} disabled={creatingRole || !newRoleName.trim()}>
-						{creatingRole ? 'Creating...' : 'Create Role'}
-					</button>
-				</div>
-
 				{#if loadingRoles}
 					<p class="text-sm text-text-muted">Loading roles...</p>
-				{:else if roles.length === 0}
-					<p class="text-sm text-text-muted">No custom roles yet.</p>
 				{:else}
-					<div class="space-y-2">
-						{#each roles as role (role.id)}
-							<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
-								<div class="flex items-center gap-3">
-									<div class="h-3 w-3 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></div>
-									<span class="text-sm font-medium text-text-primary">{role.name}</span>
-								</div>
-								<div class="flex items-center gap-2 text-xs text-text-muted">
-									{#if role.hoist}<span class="rounded bg-bg-modifier px-1.5 py-0.5">Hoisted</span>{/if}
-									{#if role.mentionable}<span class="rounded bg-bg-modifier px-1.5 py-0.5">Mentionable</span>{/if}
-									<span>Pos: {role.position}</span>
-									<button
-										class="text-red-400 hover:text-red-300"
-										onclick={() => handleDeleteRole(role.id)}
-										title="Delete role"
-									>
-										<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-											<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-										</svg>
-									</button>
-								</div>
-							</div>
-						{/each}
-					</div>
+					<RoleEditor
+						guildId={$currentGuild?.id ?? ''}
+						bind:roles
+						onError={(msg) => { error = msg; }}
+						onSuccess={(msg) => { success = msg; setTimeout(() => (success = ''), 3000); }}
+					/>
 				{/if}
+
+			<!-- ==================== MEMBERS ==================== -->
+			{:else if currentTab === 'members'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Members</h1>
+				<MembersPanel
+					guildId={$currentGuild?.id ?? ''}
+					onError={(msg) => { error = msg; }}
+					onSuccess={(msg) => { success = msg; setTimeout(() => (success = ''), 3000); }}
+				/>
 
 			<!-- ==================== CATEGORIES ==================== -->
 			{:else if currentTab === 'categories'}
@@ -3050,6 +3038,34 @@
 					{/if}
 				</div>
 
+			<!-- ==================== SOUNDBOARD ==================== -->
+			{:else if currentTab === 'soundboard'}
+				<SoundboardSettings guildId={$page.params.guildId} />
+
+			<!-- ==================== AUTO ROLES ==================== -->
+			{:else if currentTab === 'auto-roles'}
+				<AutoRoleSettings guildId={$page.params.guildId} />
+
+			<!-- ==================== LEVELING ==================== -->
+			{:else if currentTab === 'leveling'}
+				<LevelingSettings guildId={$page.params.guildId} />
+
+			<!-- ==================== STARBOARD ==================== -->
+			{:else if currentTab === 'starboard'}
+				<StarboardSettings guildId={$page.params.guildId} />
+
+			<!-- ==================== WELCOME ==================== -->
+			{:else if currentTab === 'welcome'}
+				<WelcomeSettings guildId={$page.params.guildId} />
+
+			<!-- ==================== BOOSTS ==================== -->
+			{:else if currentTab === 'boosts'}
+				<BoostPanel guildId={$page.params.guildId} />
+
+			<!-- ==================== INSIGHTS ==================== -->
+			{:else if currentTab === 'insights'}
+				<GuildInsights guildId={$page.params.guildId} />
+
 			<!-- ==================== TEMPLATES ==================== -->
 			{:else if currentTab === 'templates'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Channel Templates</h1>
@@ -3188,7 +3204,16 @@
 						{/each}
 					</div>
 				{/if}
+
+				<!-- Guild Templates (export/import) -->
+				<hr class="my-6 border-bg-modifier" />
+				<GuildTemplates guildId={$page.params.guildId} />
 			{/if}
 		</div>
 	</div>
 </div>
+{:else}
+<div class="flex h-full items-center justify-center">
+	<p class="text-text-muted">You don't have permission to view guild settings.</p>
+</div>
+{/if}

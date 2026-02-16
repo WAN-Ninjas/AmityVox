@@ -2,7 +2,7 @@
 // Implements a stale-while-revalidate strategy for static assets
 // and a network-first strategy for API calls.
 
-const CACHE_VERSION = 'amityvox-v1';
+const CACHE_VERSION = 'amityvox-v2';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 

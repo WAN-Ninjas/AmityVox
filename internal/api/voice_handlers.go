@@ -174,11 +174,12 @@ func (s *Server) handleVoiceLeave(w http.ResponseWriter, r *http.Request) {
 	// Clear voice state.
 	s.Voice.UpdateVoiceState(userID, gID, "", false, false)
 
-	// Publish VOICE_STATE_UPDATE with nil channel (disconnected).
+	// Publish VOICE_STATE_UPDATE with the channel the user left.
 	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
 		"user_id":    userID,
 		"guild_id":   gID,
-		"channel_id": nil,
+		"channel_id": channelID,
+		"action":     "leave",
 	})
 
 	WriteNoContent(w)
@@ -248,6 +249,7 @@ func (s *Server) handleVoiceServerMute(w http.ResponseWriter, r *http.Request) {
 		"self_deaf":  vs.SelfDeaf,
 		"muted":      req.Muted,
 		"deafened":   vs.Deafened,
+		"action":     "update",
 	})
 
 	WriteNoContent(w)
@@ -317,6 +319,7 @@ func (s *Server) handleVoiceServerDeafen(w http.ResponseWriter, r *http.Request)
 		"self_deaf":  vs.SelfDeaf,
 		"muted":      vs.Muted,
 		"deafened":   req.Deafened,
+		"action":     "update",
 	})
 
 	WriteNoContent(w)
@@ -397,7 +400,15 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 	// Update voice state.
 	s.Voice.UpdateVoiceState(targetUserID, *guildID, req.TargetChannelID, vs.SelfMute, vs.SelfDeaf)
 
-	// Publish VOICE_STATE_UPDATE for the move (new channel).
+	// Publish leave for old channel so sidebar removes the user.
+	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+		"user_id":    targetUserID,
+		"guild_id":   *guildID,
+		"channel_id": sourceChannelID,
+		"action":     "leave",
+	})
+
+	// Publish join for the new channel.
 	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
 		"user_id":    targetUserID,
 		"guild_id":   *guildID,
@@ -406,6 +417,7 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 		"self_deaf":  vs.SelfDeaf,
 		"muted":      vs.Muted,
 		"deafened":   vs.Deafened,
+		"action":     "join",
 	})
 
 	// Generate a new token for the target channel so the client can reconnect.
@@ -594,6 +606,7 @@ func (s *Server) handleSetInputMode(w http.ResponseWriter, r *http.Request) {
 		"guild_id":   gID,
 		"channel_id": channelID,
 		"input_mode": req.Mode,
+		"action":     "update",
 	})
 
 	WriteNoContent(w)
@@ -663,6 +676,7 @@ func (s *Server) handleSetPrioritySpeaker(w http.ResponseWriter, r *http.Request
 		"guild_id":         *guildID,
 		"channel_id":       channelID,
 		"priority_speaker": req.Priority,
+		"action":           "update",
 	})
 
 	WriteNoContent(w)
