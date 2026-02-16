@@ -317,6 +317,10 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 			err = h.Pool.QueryRow(r.Context(), q.sql).Scan(q.dest)
 		}
 		if err != nil {
+			h.Logger.Warn("stats query failed",
+				slog.String("sql", q.sql),
+				slog.String("error", err.Error()),
+			)
 			*q.dest = 0
 		}
 	}

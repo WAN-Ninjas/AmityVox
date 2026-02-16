@@ -215,7 +215,14 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	// Validate encryption toggle: only text, DM, and group channels support encryption.
 	if req.Encrypted != nil {
 		var channelType string
-		h.Pool.QueryRow(r.Context(), `SELECT channel_type FROM channels WHERE id = $1`, channelID).Scan(&channelType)
+		if err := h.Pool.QueryRow(r.Context(), `SELECT channel_type FROM channels WHERE id = $1`, channelID).Scan(&channelType); err != nil {
+			if err == pgx.ErrNoRows {
+				writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get channel type")
+			return
+		}
 		if channelType != "text" && channelType != "dm" && channelType != "group" {
 			writeError(w, http.StatusBadRequest, "encryption_not_supported",
 				"Encryption is only supported for text, DM, and group channels")
@@ -2777,6 +2784,13 @@ func (h *Handler) HandleBatchDecryptMessages(w http.ResponseWriter, r *http.Requ
 	if len(req.Messages) > 100 {
 		writeError(w, http.StatusBadRequest, "too_many_messages", "Maximum 100 messages per request")
 		return
+	}
+
+	for _, msg := range req.Messages {
+		if len(msg.Content) > 4000 {
+			writeError(w, http.StatusBadRequest, "content_too_long", "Message content must be at most 4000 characters")
+			return
+		}
 	}
 
 	ctx := r.Context()

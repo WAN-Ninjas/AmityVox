@@ -33,9 +33,9 @@
 	// Role assignment
 	let togglingRole = $state(false);
 
-	// --- Filtering (exported for testing) ---
+	// --- Filtering ---
 
-	export function filterMembers(members: GuildMember[], query: string): GuildMember[] {
+	function filterMembers(members: GuildMember[], query: string): GuildMember[] {
 		if (!query.trim()) return members;
 		const q = query.toLowerCase();
 		return members.filter((m) => {
@@ -120,7 +120,12 @@
 		if (!timeoutDuration) return;
 		applyingTimeout = true;
 		try {
-			const until = new Date(Date.now() + parseInt(timeoutDuration) * 1000).toISOString();
+			const seconds = Number(timeoutDuration);
+			if (!Number.isFinite(seconds) || seconds <= 0) {
+				onError('Invalid timeout duration');
+				return;
+			}
+			const until = new Date(Date.now() + seconds * 1000).toISOString();
 			await api.updateMember(guildId, memberId, { timeout_until: until });
 			members = members.map((m) =>
 				m.user_id === memberId ? { ...m, timeout_until: until } : m

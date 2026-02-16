@@ -85,6 +85,15 @@ func (f *flexInt64) UnmarshalJSON(data []byte) error {
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		s = s[1 : len(s)-1]
 	}
+	// Allow signed values for backward compatibility (bit 63 set = negative).
+	if len(s) > 0 && s[0] == '-' {
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid permission value: %s", string(data))
+		}
+		f.Value = v
+		return nil
+	}
 	// Parse as uint64 first so bit 63 (Administrator) is preserved,
 	// then reinterpret as int64 for storage. The permission system uses
 	// uint64 constants but PostgreSQL stores them as int64/bigint.

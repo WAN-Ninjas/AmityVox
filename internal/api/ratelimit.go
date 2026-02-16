@@ -90,11 +90,15 @@ func (s *Server) RateLimitGlobal() func(http.Handler) http.Handler {
 					used := result.Limit - result.Remaining
 					windowStart := time.Now().Add(-window)
 					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						defer cancel()
 						id := models.NewULID().String()
-						_, _ = s.DB.Pool.Exec(context.Background(),
+						if _, err := s.DB.Pool.Exec(ctx,
 							`INSERT INTO rate_limit_log (id, ip_address, endpoint, requests_count, window_start, blocked, created_at)
 							 VALUES ($1, $2, $3, $4, $5, true, now())`,
-							id, ip, endpoint, used, windowStart)
+							id, ip, endpoint, used, windowStart); err != nil {
+							s.Logger.Debug("rate limit log insert failed", slog.String("error", err.Error()))
+						}
 					}()
 				}
 				writeRateLimitResponse(w, window)

@@ -1,4 +1,4 @@
--- Migration 041: Channel-level notification preferences (muting).
+-- Migration 043: Channel-level notification preferences (muting).
 -- Supports per-channel and per-DM muting with optional timed expiry.
 
 CREATE TABLE IF NOT EXISTS channel_notification_preferences (

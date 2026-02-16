@@ -29,14 +29,18 @@
 	let showDisableOptions = $state(false);
 	let decryptProgress = $state<{ current: number; total: number } | null>(null);
 
+	let keyCheckToken = 0;
 	// Check if we have a key when channelId changes
 	$effect(() => {
 		const id = channelId;
+		const token = ++keyCheckToken;
 		checkingKey = true;
 		hasKey = false;
 		e2ee.hasChannelKey(id).then((has) => {
+			if (token !== keyCheckToken) return;
 			hasKey = has;
 		}).finally(() => {
+			if (token !== keyCheckToken) return;
 			checkingKey = false;
 		});
 	});
@@ -135,7 +139,9 @@
 		disabling = true;
 		decryptProgress = { current: 0, total: 0 };
 		try {
-			// Fetch all encrypted messages and decrypt them in batches
+			// Fetch all encrypted messages and decrypt them in batches.
+			// NOTE: Messages created during this loop may be missed since encryption
+			// remains enabled until the sweep completes. This is an accepted limitation.
 			let before = '';
 			let totalDecrypted = 0;
 

@@ -230,6 +230,7 @@
 	}
 
 	// Returns all message IDs in the same author group as the message at idx.
+	// O(n) per call; acceptable for typical group sizes but could be precomputed if needed.
 	function getGroupMessageIds(idx: number): string[] {
 		const ids: string[] = [];
 		// Walk backward to find the start of the group.

@@ -953,10 +953,14 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 // NotifyGuildJoin updates all connected clients for a user when they join a new guild.
 func (s *Server) NotifyGuildJoin(userID, guildID string) {
 	s.userClientsMu.RLock()
-	clients := s.userClients[userID]
+	clientMap := s.userClients[userID]
+	clients := make([]*Client, 0, len(clientMap))
+	for c := range clientMap {
+		clients = append(clients, c)
+	}
 	s.userClientsMu.RUnlock()
 
-	for client := range clients {
+	for _, client := range clients {
 		client.mu.Lock()
 		client.guildIDs[guildID] = true
 		client.mu.Unlock()
@@ -966,10 +970,14 @@ func (s *Server) NotifyGuildJoin(userID, guildID string) {
 // NotifyGuildLeave updates all connected clients for a user when they leave a guild.
 func (s *Server) NotifyGuildLeave(userID, guildID string) {
 	s.userClientsMu.RLock()
-	clients := s.userClients[userID]
+	clientMap := s.userClients[userID]
+	clients := make([]*Client, 0, len(clientMap))
+	for c := range clientMap {
+		clients = append(clients, c)
+	}
 	s.userClientsMu.RUnlock()
 
-	for client := range clients {
+	for _, client := range clients {
 		client.mu.Lock()
 		delete(client.guildIDs, guildID)
 		client.mu.Unlock()
@@ -981,10 +989,14 @@ func (s *Server) NotifyGuildLeave(userID, guildID string) {
 // status without waiting for the next heartbeat.
 func (s *Server) NotifyFriendAdd(userID, friendID string) {
 	s.userClientsMu.RLock()
-	clients := s.userClients[userID]
+	clientMap := s.userClients[userID]
+	clients := make([]*Client, 0, len(clientMap))
+	for c := range clientMap {
+		clients = append(clients, c)
+	}
 	s.userClientsMu.RUnlock()
 
-	for client := range clients {
+	for _, client := range clients {
 		client.mu.Lock()
 		client.friendIDs[friendID] = true
 		client.mu.Unlock()
@@ -1005,7 +1017,7 @@ func (s *Server) NotifyFriendAdd(userID, friendID string) {
 				Type: "PRESENCE_UPDATE",
 				Data: data,
 			}
-			for client := range clients {
+			for _, client := range clients {
 				s.sendMessage(client, msg)
 			}
 		}
@@ -1015,10 +1027,14 @@ func (s *Server) NotifyFriendAdd(userID, friendID string) {
 // NotifyFriendRemove updates all connected clients for a user when a friendship ends.
 func (s *Server) NotifyFriendRemove(userID, friendID string) {
 	s.userClientsMu.RLock()
-	clients := s.userClients[userID]
+	clientMap := s.userClients[userID]
+	clients := make([]*Client, 0, len(clientMap))
+	for c := range clientMap {
+		clients = append(clients, c)
+	}
 	s.userClientsMu.RUnlock()
 
-	for client := range clients {
+	for _, client := range clients {
 		client.mu.Lock()
 		delete(client.friendIDs, friendID)
 		client.mu.Unlock()
@@ -1033,15 +1049,21 @@ func (s *Server) handleRelationshipEvent(subject string, event events.Event) {
 	switch subject {
 	case events.SubjectRelationshipUpdate:
 		// When a friend request is accepted (status becomes "friend"), update both users.
+		// Block/unblock events use "status" field; friend events use "type" field.
 		var payload struct {
 			UserID   string `json:"user_id"`
 			TargetID string `json:"target_id"`
 			Type     string `json:"type"`
+			Status   string `json:"status"`
 		}
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			return
 		}
-		if payload.Type == "friend" {
+		relType := payload.Type
+		if relType == "" {
+			relType = payload.Status
+		}
+		if relType == "friend" {
 			// The event is dispatched to UserID, so update that user's clients
 			// to include TargetID as a friend.
 			s.NotifyFriendAdd(payload.UserID, payload.TargetID)

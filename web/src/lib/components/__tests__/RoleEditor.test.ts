@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { Permission } from '$lib/types';
 
 /**
  * Tests for RoleEditor permission toggle logic.
@@ -27,49 +28,6 @@ function toggleDeny(allow: bigint, deny: bigint, bit: bigint): { allow: bigint; 
 	}
 	return { allow: allow & ~bit, deny: deny | bit };
 }
-
-// --- Permission bit definitions (must match types/index.ts) ---
-
-const Permission = {
-	ManageChannels:    1n << 0n,
-	ManageGuild:       1n << 1n,
-	ManagePermissions: 1n << 2n,
-	ManageRoles:       1n << 3n,
-	ManageEmoji:       1n << 4n,
-	ManageWebhooks:    1n << 5n,
-	KickMembers:       1n << 6n,
-	BanMembers:        1n << 7n,
-	TimeoutMembers:    1n << 8n,
-	AssignRoles:       1n << 9n,
-	ChangeNickname:    1n << 10n,
-	ManageNicknames:   1n << 11n,
-	ChangeAvatar:      1n << 12n,
-	RemoveAvatars:     1n << 13n,
-	ViewAuditLog:      1n << 14n,
-	ViewGuildInsights: 1n << 15n,
-	MentionEveryone:   1n << 16n,
-	ViewChannel:       1n << 20n,
-	ReadHistory:       1n << 21n,
-	SendMessages:      1n << 22n,
-	ManageMessages:    1n << 23n,
-	EmbedLinks:        1n << 24n,
-	UploadFiles:       1n << 25n,
-	AddReactions:      1n << 26n,
-	UseExternalEmoji:  1n << 27n,
-	Connect:           1n << 28n,
-	Speak:             1n << 29n,
-	MuteMembers:       1n << 30n,
-	DeafenMembers:     1n << 31n,
-	MoveMembers:       1n << 32n,
-	UseVAD:            1n << 33n,
-	PrioritySpeaker:   1n << 34n,
-	Stream:            1n << 35n,
-	Masquerade:        1n << 36n,
-	CreateInvites:     1n << 37n,
-	ManageThreads:     1n << 38n,
-	CreateThreads:     1n << 39n,
-	Administrator:     1n << 63n,
-} as const;
 
 // --- Permission groups from RoleEditor (for completeness check) ---
 

@@ -380,7 +380,7 @@ class ApiClient {
 		return this.get(`/guilds/${guildId}/roles`);
 	}
 
-	createRole(guildId: string, name: string, opts?: { color?: string; hoist?: boolean; mentionable?: boolean; permissions_allow?: number; permissions_deny?: number }): Promise<Role> {
+	createRole(guildId: string, name: string, opts?: { color?: string; hoist?: boolean; mentionable?: boolean; permissions_allow?: string; permissions_deny?: string }): Promise<Role> {
 		return this.post(`/guilds/${guildId}/roles`, { name, ...opts });
 	}
 
@@ -745,7 +745,7 @@ class ApiClient {
 	}
 
 	deleteChannelNotificationPreference(channelId: string): Promise<void> {
-		return this.delete(`/notifications/preferences/channels/${channelId}`);
+		return this.del(`/notifications/preferences/channels/${channelId}`);
 	}
 
 	// --- User Settings (privacy/prefs) ---

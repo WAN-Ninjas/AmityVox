@@ -375,6 +375,20 @@ func (s *Service) HandleUpdateChannelPreference(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Ensure the user can access this channel.
+	var allowed bool
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT EXISTS(
+			SELECT 1
+			FROM channels c
+			JOIN guild_members gm ON gm.guild_id = c.guild_id
+			WHERE c.id = $1 AND gm.user_id = $2
+		)`, req.ChannelID, userID).Scan(&allowed)
+	if err != nil || !allowed {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this channel's guild")
+		return
+	}
+
 	if req.Level == "" {
 		req.Level = LevelMentions
 	}
@@ -384,7 +398,7 @@ func (s *Service) HandleUpdateChannelPreference(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	_, err := s.pool.Exec(r.Context(),
+	_, err = s.pool.Exec(r.Context(),
 		`INSERT INTO channel_notification_preferences (user_id, channel_id, level, muted_until)
 		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT (user_id, channel_id) DO UPDATE SET
@@ -414,6 +428,19 @@ func (s *Service) HandleDeleteChannelPreference(w http.ResponseWriter, r *http.R
 
 	if channelID == "" {
 		writeError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+		return
+	}
+
+	// Ensure the user can access this channel.
+	var allowed bool
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT EXISTS(
+			SELECT 1
+			FROM channels c
+			JOIN guild_members gm ON gm.guild_id = c.guild_id
+			WHERE c.id = $1 AND gm.user_id = $2
+		)`, channelID, userID).Scan(&allowed); err != nil || !allowed {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this channel's guild")
 		return
 	}
 

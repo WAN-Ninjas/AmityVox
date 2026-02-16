@@ -44,6 +44,7 @@
 	let preferredLang = $state(getStoredLang());
 
 	async function translate(lang?: string, force = false) {
+		if (messageIds.length === 0) return;
 		const target = lang ?? preferredLang;
 		loading = true;
 		showLangPicker = false;
@@ -52,7 +53,7 @@
 				messageIds.map((id) => api.translateMessage(channelId, id, target, force))
 			);
 			translations = results;
-			showTranslation = true;
+			showTranslation = results.length > 0;
 
 			// Save preferred language.
 			localStorage.setItem('av-translate-lang', target);

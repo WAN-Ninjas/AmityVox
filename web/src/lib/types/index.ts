@@ -172,8 +172,8 @@ export interface Role {
 	hoist: boolean;
 	mentionable: boolean;
 	position: number;
-	permissions_allow: number;
-	permissions_deny: number;
+	permissions_allow: string;
+	permissions_deny: string;
 	created_at: string;
 }
 

@@ -6,6 +6,18 @@ import { describe, it, expect } from 'vitest';
  * we test the pure filtering function as a standalone function.
  */
 
+// --- Inline copy of the component's filterMembers logic ---
+function filterMembers(members: GuildMember[], query: string): GuildMember[] {
+	if (!query.trim()) return members;
+	const q = query.toLowerCase();
+	return members.filter((m) => {
+		const username = m.user?.username?.toLowerCase() ?? '';
+		const displayName = m.user?.display_name?.toLowerCase() ?? '';
+		const nickname = m.nickname?.toLowerCase() ?? '';
+		return username.includes(q) || displayName.includes(q) || nickname.includes(q);
+	});
+}
+
 // --- Type (minimal subset for testing) ---
 
 interface User {
@@ -25,19 +37,6 @@ interface GuildMember {
 	mute: boolean;
 	user?: User;
 	roles?: string[];
-}
-
-// --- Filter function (replicated from MembersPanel.svelte) ---
-
-function filterMembers(members: GuildMember[], query: string): GuildMember[] {
-	if (!query.trim()) return members;
-	const q = query.toLowerCase();
-	return members.filter((m) => {
-		const username = m.user?.username?.toLowerCase() ?? '';
-		const displayName = m.user?.display_name?.toLowerCase() ?? '';
-		const nickname = m.nickname?.toLowerCase() ?? '';
-		return username.includes(q) || displayName.includes(q) || nickname.includes(q);
-	});
 }
 
 // --- Test data ---

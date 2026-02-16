@@ -32,9 +32,11 @@
 				headers: { 'Authorization': `Bearer ${api.getToken()}` }
 			});
 			const json = await res.json();
-			if (res.ok) {
-				updateInfo = json.data ?? json;
+			if (!res.ok) {
+				addToast('Failed to load update info', 'error');
+				return;
 			}
+			updateInfo = json.data ?? json;
 		} catch {
 			addToast('Failed to load update info', 'error');
 		}
@@ -46,18 +48,21 @@
 				headers: { 'Authorization': `Bearer ${api.getToken()}` }
 			});
 			const json = await res.json();
-			if (res.ok) {
-				const data = json.data ?? json;
-				config = {
-					auto_check: data.auto_check ?? true,
-					channel: data.channel ?? 'stable',
-					notify_admins: data.notify_admins ?? true
-				};
+			if (!res.ok) {
+				addToast('Failed to load update config', 'error');
+				return;
 			}
+			const data = json.data ?? json;
+			config = {
+				auto_check: data.auto_check ?? true,
+				channel: data.channel ?? 'stable',
+				notify_admins: data.notify_admins ?? true
+			};
 		} catch {
 			addToast('Failed to load update config', 'error');
+		} finally {
+			loading = false;
 		}
-		loading = false;
 	}
 
 	async function saveConfig() {

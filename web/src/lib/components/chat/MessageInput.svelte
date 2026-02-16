@@ -33,8 +33,11 @@
 	$effect(() => {
 		const ch = $currentChannel;
 		if (ch?.encrypted) {
-			e2ee.hasChannelKey(ch.id).then((has) => {
-				needsPassphrase = !has;
+			const channelId = ch.id;
+			e2ee.hasChannelKey(channelId).then((has) => {
+				if ($currentChannel?.id === channelId) {
+					needsPassphrase = !has;
+				}
 			});
 		} else {
 			needsPassphrase = false;
