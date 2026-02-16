@@ -196,7 +196,7 @@ func TestCreateRoleRequest(t *testing.T) {
 	if req.Position == nil || *req.Position != 3 {
 		t.Error("expected position to be 3")
 	}
-	if req.PermissionsAllow == nil || *req.PermissionsAllow != 1024 {
+	if !req.PermissionsAllow.Set || req.PermissionsAllow.Value != 1024 {
 		t.Error("expected permissions_allow to be 1024")
 	}
 }

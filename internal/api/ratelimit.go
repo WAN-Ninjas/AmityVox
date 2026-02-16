@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/presence"
 )
 
@@ -81,6 +83,24 @@ func (s *Server) RateLimitGlobal() func(http.Handler) http.Handler {
 			}
 			setRateLimitHeaders(w, result, window)
 			if !result.Allowed {
+				// Log rate-limited request to database for admin dashboard stats.
+				if s.DB != nil {
+					ip := clientIP(r)
+					endpoint := r.URL.Path
+					used := result.Limit - result.Remaining
+					windowStart := time.Now().Add(-window)
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						defer cancel()
+						id := models.NewULID().String()
+						if _, err := s.DB.Pool.Exec(ctx,
+							`INSERT INTO rate_limit_log (id, ip_address, endpoint, requests_count, window_start, blocked, created_at)
+							 VALUES ($1, $2, $3, $4, $5, true, now())`,
+							id, ip, endpoint, used, windowStart); err != nil {
+							s.Logger.Debug("rate limit log insert failed", slog.String("error", err.Error()))
+						}
+					}()
+				}
 				writeRateLimitResponse(w, window)
 				return
 			}

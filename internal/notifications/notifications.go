@@ -317,6 +317,149 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// --- Channel Notification Preferences ---
+
+// ChannelNotificationPreference holds a user's notification settings for a single channel.
+type ChannelNotificationPreference struct {
+	UserID     string     `json:"user_id"`
+	ChannelID  string     `json:"channel_id"`
+	Level      string     `json:"level"`
+	MutedUntil *time.Time `json:"muted_until,omitempty"`
+}
+
+// HandleGetChannelPreferences handles GET /api/v1/notifications/preferences/channels.
+// Returns all per-channel notification preferences for the authenticated user.
+func (s *Service) HandleGetChannelPreferences(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	rows, err := s.pool.Query(r.Context(),
+		`SELECT user_id, channel_id, level, muted_until
+		 FROM channel_notification_preferences WHERE user_id = $1`,
+		userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to query channel preferences")
+		return
+	}
+	defer rows.Close()
+
+	prefs := []ChannelNotificationPreference{}
+	for rows.Next() {
+		var p ChannelNotificationPreference
+		if err := rows.Scan(&p.UserID, &p.ChannelID, &p.Level, &p.MutedUntil); err != nil {
+			continue
+		}
+		prefs = append(prefs, p)
+	}
+
+	writeJSON(w, http.StatusOK, prefs)
+}
+
+// HandleUpdateChannelPreference handles PATCH /api/v1/notifications/preferences/channels.
+// Creates or updates a per-channel notification preference.
+func (s *Service) HandleUpdateChannelPreference(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var req struct {
+		ChannelID  string     `json:"channel_id"`
+		Level      string     `json:"level"`
+		MutedUntil *time.Time `json:"muted_until"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.ChannelID == "" {
+		writeError(w, http.StatusBadRequest, "missing_channel_id", "channel_id is required")
+		return
+	}
+
+	// Ensure the user can access this channel.
+	var allowed bool
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT EXISTS(
+			SELECT 1
+			FROM channels c
+			JOIN guild_members gm ON gm.guild_id = c.guild_id
+			WHERE c.id = $1 AND gm.user_id = $2
+		)`, req.ChannelID, userID).Scan(&allowed)
+	if err != nil || !allowed {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this channel's guild")
+		return
+	}
+
+	if req.Level == "" {
+		req.Level = LevelMentions
+	}
+	validLevels := map[string]bool{LevelAll: true, LevelMentions: true, LevelNone: true}
+	if !validLevels[req.Level] {
+		writeError(w, http.StatusBadRequest, "invalid_level", "Level must be all, mentions, or none")
+		return
+	}
+
+	_, err = s.pool.Exec(r.Context(),
+		`INSERT INTO channel_notification_preferences (user_id, channel_id, level, muted_until)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (user_id, channel_id) DO UPDATE SET
+		   level = EXCLUDED.level,
+		   muted_until = EXCLUDED.muted_until`,
+		userID, req.ChannelID, req.Level, req.MutedUntil,
+	)
+	if err != nil {
+		s.logger.Error("failed to update channel notification preference", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel preference")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, ChannelNotificationPreference{
+		UserID:     userID,
+		ChannelID:  req.ChannelID,
+		Level:      req.Level,
+		MutedUntil: req.MutedUntil,
+	})
+}
+
+// HandleDeleteChannelPreference handles DELETE /api/v1/notifications/preferences/channels/{channelID}.
+// Removes a per-channel preference so the channel inherits from guild/global settings.
+func (s *Service) HandleDeleteChannelPreference(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	if channelID == "" {
+		writeError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+		return
+	}
+
+	// Ensure the user can access this channel.
+	var allowed bool
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT EXISTS(
+			SELECT 1
+			FROM channels c
+			JOIN guild_members gm ON gm.guild_id = c.guild_id
+			WHERE c.id = $1 AND gm.user_id = $2
+		)`, channelID, userID).Scan(&allowed); err != nil || !allowed {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this channel's guild")
+		return
+	}
+
+	result, err := s.pool.Exec(r.Context(),
+		`DELETE FROM channel_notification_preferences WHERE user_id = $1 AND channel_id = $2`,
+		userID, channelID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel preference")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "No channel preference found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Push Delivery ---
 
 // SendToUser sends a push notification to all of a user's registered subscriptions.
@@ -392,10 +535,38 @@ func (s *Service) SendToUser(ctx context.Context, userID string, payload PushPay
 }
 
 // ShouldNotify checks if a user should receive a notification for this event based
-// on their notification preferences.
-func (s *Service) ShouldNotify(ctx context.Context, userID, guildID string, isMention, isDM, isEveryone bool) bool {
+// on their notification preferences. Resolution order: Channel > Guild > Global > Default(mentions).
+func (s *Service) ShouldNotify(ctx context.Context, userID, guildID, channelID string, isMention, isDM, isEveryone bool) bool {
+	// Check channel-level preferences first (most specific).
+	if channelID != "" {
+		var chLevel string
+		var chMutedUntil *time.Time
+		err := s.pool.QueryRow(ctx,
+			`SELECT level, muted_until FROM channel_notification_preferences
+			 WHERE user_id = $1 AND channel_id = $2`,
+			userID, channelID,
+		).Scan(&chLevel, &chMutedUntil)
+
+		if err == nil {
+			// Channel preference exists — check muted_until first.
+			if chMutedUntil != nil && time.Now().Before(*chMutedUntil) {
+				return false
+			}
+			switch chLevel {
+			case LevelNone:
+				return false
+			case LevelAll:
+				return true
+			case LevelMentions:
+				return isMention || isEveryone || isDM
+			}
+		}
+	}
+
+	// No channel-level pref found — fall through to guild/global.
+	// For DMs with no channel-level override, always notify.
 	if isDM {
-		return true // Always notify for DMs.
+		return true
 	}
 
 	// Load guild-specific preferences, falling back to global.

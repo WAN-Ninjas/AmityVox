@@ -292,24 +292,35 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 	var s stats
 
 	queries := []struct {
-		sql  string
-		dest *int64
+		sql      string
+		dest     *int64
+		hasParam bool
 	}{
-		{`SELECT COUNT(*) FROM users WHERE instance_id = $1`, &s.Users},
-		{`SELECT COUNT(*) FROM guilds`, &s.Guilds},
-		{`SELECT COUNT(*) FROM channels`, &s.Channels},
-		{`SELECT COUNT(*) FROM messages`, &s.Messages},
-		{`SELECT COUNT(*) FROM messages WHERE created_at >= CURRENT_DATE`, &s.MessagesToday},
-		{`SELECT COUNT(*) FROM files`, &s.Files},
-		{`SELECT COUNT(*) FROM roles`, &s.Roles},
-		{`SELECT COUNT(*) FROM guild_emoji`, &s.Emoji},
-		{`SELECT COUNT(*) FROM invites WHERE expires_at IS NULL OR expires_at > now()`, &s.Invites},
-		{`SELECT COUNT(*) FROM federation_peers WHERE instance_id = $1`, &s.FedPeers},
-		{`SELECT COUNT(*) FROM user_sessions WHERE expires_at > now()`, &s.OnlineUsers},
+		{`SELECT COUNT(*) FROM users WHERE instance_id = $1`, &s.Users, true},
+		{`SELECT COUNT(*) FROM guilds`, &s.Guilds, false},
+		{`SELECT COUNT(*) FROM channels`, &s.Channels, false},
+		{`SELECT COUNT(*) FROM messages`, &s.Messages, false},
+		{`SELECT COUNT(*) FROM messages WHERE created_at >= CURRENT_DATE`, &s.MessagesToday, false},
+		{`SELECT COUNT(*) FROM files`, &s.Files, false},
+		{`SELECT COUNT(*) FROM roles`, &s.Roles, false},
+		{`SELECT COUNT(*) FROM guild_emoji`, &s.Emoji, false},
+		{`SELECT COUNT(*) FROM invites WHERE expires_at IS NULL OR expires_at > now()`, &s.Invites, false},
+		{`SELECT COUNT(*) FROM federation_peers WHERE instance_id = $1`, &s.FedPeers, true},
+		{`SELECT COUNT(*) FROM user_sessions WHERE expires_at > now()`, &s.OnlineUsers, false},
 	}
 
 	for _, q := range queries {
-		if err := h.Pool.QueryRow(r.Context(), q.sql, h.InstanceID).Scan(q.dest); err != nil {
+		var err error
+		if q.hasParam {
+			err = h.Pool.QueryRow(r.Context(), q.sql, h.InstanceID).Scan(q.dest)
+		} else {
+			err = h.Pool.QueryRow(r.Context(), q.sql).Scan(q.dest)
+		}
+		if err != nil {
+			h.Logger.Warn("stats query failed",
+				slog.String("sql", q.sql),
+				slog.String("error", err.Error()),
+			)
 			*q.dest = 0
 		}
 	}
@@ -391,7 +402,14 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var users []models.User
+	// Use an admin-specific wrapper to re-expose the email field
+	// (models.User has json:"-" on Email to protect it in public endpoints).
+	type adminUser struct {
+		*models.User
+		Email *string `json:"email,omitempty"`
+	}
+
+	var users []adminUser
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(
@@ -402,10 +420,10 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 		); err != nil {
 			continue
 		}
-		users = append(users, u)
+		users = append(users, adminUser{User: &u, Email: u.Email})
 	}
 	if users == nil {
-		users = []models.User{}
+		users = []adminUser{}
 	}
 
 	writeJSON(w, http.StatusOK, users)

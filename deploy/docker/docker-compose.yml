@@ -169,11 +169,13 @@ services:
     image: libretranslate/libretranslate:${LIBRETRANSLATE_TAG:-v1.8.4}
     container_name: amityvox-libretranslate
     restart: unless-stopped
+    entrypoint: ["/fixes/entrypoint.sh"]
     environment:
       LT_LOAD_ONLY: "${LT_LOAD_ONLY:-en,es,fr,de,it,pt,ru,ja,ko,zh,ar,hi,nl,pl,tr,uk}"
       LT_DISABLE_WEB_UI: "true"
     volumes:
       - libretranslate_data:/home/libretranslate/.local
+      - ../../deploy/libretranslate/entrypoint.sh:/fixes/entrypoint.sh:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/languages')"]
       interval: 30s
