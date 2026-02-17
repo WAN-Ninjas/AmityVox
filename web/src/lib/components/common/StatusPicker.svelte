@@ -158,7 +158,10 @@
 					onclick={() => (showCustomStatus = true)}
 				>
 					<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+						<circle cx="12" cy="12" r="9" />
+						<path d="M8.5 14.5c1 1.5 5.5 1.5 7 0" stroke-linecap="round" />
+						<circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
+						<circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
 					</svg>
 					{$currentUser?.status_text ? 'Edit Custom Status' : 'Set Custom Status'}
 				</button>

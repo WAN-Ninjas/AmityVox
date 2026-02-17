@@ -566,7 +566,7 @@
 							oncontextmenu={(e) => openContextMenu(e, channel)}
 						>
 							<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
+								<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 							</svg>
 							<span class="flex-1 truncate">{channel.name}</span>
 							{#if voiceUsers && voiceUsers.size > 0}
@@ -577,8 +577,11 @@
 							<div class="mb-1 ml-3 space-y-0.5 border-l border-bg-floating pl-3">
 								{#each [...voiceUsers.values()] as participant (participant.userId)}
 									<div class="flex items-center gap-1.5 py-0.5">
-										<div class="{participant.speaking && $voiceChannelId === channel.id ? 'ring-2 ring-green-500 ring-offset-1 ring-offset-bg-secondary rounded-full shadow-[0_0_8px_rgba(34,197,94,0.35)]' : ''}">
+										<div class="relative">
 											<Avatar name={participant.displayName ?? participant.username} src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null} size="sm" />
+											{#if participant.speaking && $voiceChannelId === channel.id}
+												<div class="pointer-events-none absolute -inset-0.5 z-10 rounded-full border-2 border-green-500 shadow-[0_0_8px_rgba(34,197,94,0.35)]"></div>
+											{/if}
 										</div>
 										<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
 										{#if participant.muted}
@@ -754,20 +757,22 @@
 					</div>
 				</button>
 				<button
-					class="rounded p-1 text-orange-400 hover:bg-bg-modifier hover:text-orange-300"
+					class="rounded-md p-1.5 text-orange-400 hover:bg-bg-modifier hover:text-orange-300"
 					onclick={() => (showReportIssue = true)}
 					title="Report Issue"
 				>
-					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+					<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+						<path d="M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+						<path d="M12 9v4" stroke-linecap="round" />
+						<circle cx="12" cy="16" r="0.5" fill="currentColor" />
 					</svg>
 				</button>
 				<button
-					class="rounded p-1 text-text-muted hover:bg-bg-modifier hover:text-text-primary"
+					class="rounded-md p-1.5 text-text-muted hover:bg-bg-modifier hover:text-text-primary"
 					onclick={() => goto('/app/settings')}
 					title="User Settings"
 				>
-					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
 						<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
 						<circle cx="12" cy="12" r="3" />
 					</svg>

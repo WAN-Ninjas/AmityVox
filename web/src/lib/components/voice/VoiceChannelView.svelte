@@ -116,7 +116,7 @@
 			<div class="flex flex-col items-center gap-3 text-center">
 				<div class="flex h-20 w-20 items-center justify-center rounded-full bg-bg-modifier">
 					<svg class="h-10 w-10 text-text-muted" fill="currentColor" viewBox="0 0 24 24">
-						<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
+						<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 					</svg>
 				</div>
 				<h2 class="text-xl font-bold text-text-primary">{$currentChannel?.name ?? 'Voice Channel'}</h2>
@@ -281,7 +281,7 @@
 						</svg>
 					{:else}
 						<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-							<path d="M12 3a1 1 0 0 0-1 1v8a3 3 0 1 0 6 0V4a1 1 0 1 0-2 0v8a1 1 0 1 1-2 0V4a1 1 0 0 0-1-1zM7 12a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h-2v-2.08A7 7 0 0 1 5 12h2z" />
+							<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 						</svg>
 					{/if}
 				</button>

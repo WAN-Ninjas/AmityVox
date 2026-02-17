@@ -165,6 +165,7 @@ func (s *Server) registerRoutes() {
 		InstanceID: s.InstanceID,
 		Logger:     s.Logger,
 		Media:      s.Media,
+		EventBus:   s.EventBus,
 	}
 	webhookH := &webhooks.Handler{
 		Pool:     s.DB.Pool,

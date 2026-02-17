@@ -6,7 +6,7 @@
  */
 
 const STORAGE_KEY = 'av-voice-user-volumes';
-const nodes = new Map<string, { gain: GainNode; source: MediaStreamAudioSourceNode; ctx: AudioContext }>();
+const nodes = new Map<string, { gain: GainNode; source: MediaStreamAudioSourceNode; ctx: AudioContext; analyser: AnalyserNode }>();
 
 let cachedVolumes: Record<string, number> | null = null;
 
@@ -65,6 +65,11 @@ export function routeAudioThroughGain(userId: string, audioElement: HTMLAudioEle
 		gain.gain.value = getUserVolume(userId) / 100;
 		source.connect(gain);
 
+		// Add AnalyserNode for real-time audio level detection (speaking indicator).
+		const analyser = ctx.createAnalyser();
+		analyser.fftSize = 256;
+		gain.connect(analyser);
+
 		// Connect gain to a MediaStreamDestination so we can use a regular <audio> element.
 		const dest = ctx.createMediaStreamDestination();
 		gain.connect(dest);
@@ -75,7 +80,7 @@ export function routeAudioThroughGain(userId: string, audioElement: HTMLAudioEle
 		outputEl.id = audioElement.id;
 
 		// Store nodes for live adjustment and cleanup.
-		nodes.set(userId, { gain, source, ctx });
+		nodes.set(userId, { gain, source, ctx, analyser });
 
 		// Mute the original element so we don't hear double audio.
 		audioElement.muted = true;
@@ -88,6 +93,25 @@ export function routeAudioThroughGain(userId: string, audioElement: HTMLAudioEle
 	}
 }
 
+/** Compute RMS audio level from an AnalyserNode (0.0–1.0). */
+export function computeRmsLevel(analyser: AnalyserNode): number {
+	const data = new Uint8Array(analyser.fftSize);
+	analyser.getByteTimeDomainData(data);
+	let sum = 0;
+	for (let i = 0; i < data.length; i++) {
+		const normalized = (data[i] - 128) / 128;
+		sum += normalized * normalized;
+	}
+	return Math.sqrt(sum / data.length);
+}
+
+/** Get the current RMS audio level for a remote participant (0.0–1.0). */
+export function getAudioLevel(userId: string): number {
+	const node = nodes.get(userId);
+	if (!node) return 0;
+	return computeRmsLevel(node.analyser);
+}
+
 /** Clean up gain nodes for a participant (call on track unsubscribe / disconnect). */
 export function cleanupUserAudio(userId: string) {
 	const node = nodes.get(userId);
@@ -95,6 +119,7 @@ export function cleanupUserAudio(userId: string) {
 		try {
 			node.source.disconnect();
 			node.gain.disconnect();
+			node.analyser.disconnect();
 			node.ctx.close();
 		} catch { /* ignore */ }
 		nodes.delete(userId);

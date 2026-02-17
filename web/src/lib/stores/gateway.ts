@@ -20,6 +20,8 @@ import { updateGuildMember, updateUserInMembers } from './members';
 import { startIdleDetection, stopIdleDetection, setManualStatus } from '$lib/utils/idle';
 import { addToast } from './toast';
 import { clearChannelMessages } from './messages';
+import { addAnnouncement, updateAnnouncement, removeAnnouncement } from './announcements';
+import { addIncomingCall, dismissIncomingCall, clearIncomingCalls } from './callRing';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
@@ -237,8 +239,8 @@ export function connectGateway(token: string) {
 			}
 
 			// --- Voice state events ---
-			case 'VOICE_STATE_UPDATE':
-				handleVoiceStateUpdate(data as {
+			case 'VOICE_STATE_UPDATE': {
+				const vs = data as {
 					channel_id: string;
 					user_id: string;
 					username?: string;
@@ -247,8 +249,36 @@ export function connectGateway(token: string) {
 					muted?: boolean;
 					deafened?: boolean;
 					action?: 'join' | 'leave' | 'update';
+				};
+				handleVoiceStateUpdate(vs);
+				// If the caller left, dismiss the incoming call ring.
+				if (vs.action === 'leave' && vs.channel_id) {
+					dismissIncomingCall(vs.channel_id);
+				}
+				break;
+			}
+
+			// --- Incoming call ring (DM/Group calls) ---
+			case 'CALL_RING': {
+				const ring = data as {
+					channel_id: string;
+					caller_id: string;
+					caller_name: string;
+					caller_display_name?: string | null;
+					caller_avatar_id?: string | null;
+					channel_type: 'dm' | 'group';
+				};
+				addIncomingCall({
+					channelId: ring.channel_id,
+					callerId: ring.caller_id,
+					callerName: ring.caller_name,
+					callerDisplayName: ring.caller_display_name,
+					callerAvatarId: ring.caller_avatar_id,
+					channelType: ring.channel_type,
+					timestamp: Date.now()
 				});
 				break;
+			}
 
 			// --- Relationship events (friend requests) ---
 			// --- Guild member events ---
@@ -307,6 +337,17 @@ export function connectGateway(token: string) {
 				removeRelationship(rel.target_id);
 				break;
 			}
+
+			// --- Announcement events (instance-wide) ---
+			case 'ANNOUNCEMENT_CREATE':
+				addAnnouncement(data as { id: string; title: string; content: string; severity: string; active?: boolean; expires_at?: string | null });
+				break;
+			case 'ANNOUNCEMENT_UPDATE':
+				updateAnnouncement(data as { id: string; active?: boolean | null; title?: string | null; content?: string | null });
+				break;
+			case 'ANNOUNCEMENT_DELETE':
+				removeAnnouncement((data as { id: string }).id);
+				break;
 		}
 	});
 
@@ -315,6 +356,7 @@ export function connectGateway(token: string) {
 
 export function disconnectGateway() {
 	stopIdleDetection();
+	clearIncomingCalls();
 	client?.disconnect();
 	client = null;
 	gatewayConnected.set(false);

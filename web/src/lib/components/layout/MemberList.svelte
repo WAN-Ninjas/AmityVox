@@ -17,6 +17,7 @@
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import { canKickMembers, canBanMembers, canTimeoutMembers, canAssignRoles } from '$lib/stores/permissions';
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
+	import { clientNicknames } from '$lib/stores/nicknames';
 	import { goto } from '$app/navigation';
 
 	// Members are derived from the guildMembers store so real-time updates
@@ -311,7 +312,11 @@
 	}
 
 	function getMemberName(member: GuildMember): string {
-		return member.nickname ?? member.user?.display_name ?? member.user?.username ?? '?';
+		return $clientNicknames.get(member.user_id) ?? member.nickname ?? member.user?.display_name ?? member.user?.username ?? '?';
+	}
+
+	function hasClientNickname(member: GuildMember): boolean {
+		return $clientNicknames.has(member.user_id);
 	}
 
 	function isMemberTimedOut(member: GuildMember): boolean {
@@ -346,7 +351,7 @@
 							size="sm"
 							status={isOffline ? 'offline' : ($presenceMap.get(member.user_id) ?? 'online')}
 						/>
-						<span class="flex items-center gap-1 truncate text-sm text-text-secondary" style={memberColor ? `color: ${memberColor}` : ''}>
+						<span class="flex items-center gap-1 truncate text-sm text-text-secondary {hasClientNickname(member) ? 'italic' : ''}" style={memberColor ? `color: ${memberColor}` : ''} title={hasClientNickname(member) ? `Nickname for ${member.user?.display_name ?? member.user?.username ?? member.user_id}` : ''}>
 							{getMemberName(member)}
 							{#if isMemberTimedOut(member)}
 								<svg class="h-3.5 w-3.5 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

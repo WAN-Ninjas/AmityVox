@@ -17,6 +17,7 @@ CLAUDE.md
 CURRENT_SPRINT.md
 KICKOFF_PROMPT.md
 TODO.md
+CHANGELOG_LOCAL.md
 .claude/
 # .github/ — tracked (contains CI workflows)
 

@@ -20,9 +20,10 @@
 		const rect = menuEl.getBoundingClientRect();
 		const vw = window.innerWidth;
 		const vh = window.innerHeight;
+		const PAD = 16;
 
-		adjustedX = x + rect.width > vw ? vw - rect.width - 8 : x;
-		adjustedY = y + rect.height > vh ? vh - rect.height - 8 : y;
+		adjustedX = x + rect.width > vw - PAD ? vw - rect.width - PAD : Math.max(PAD, x);
+		adjustedY = y + rect.height > vh - PAD ? vh - rect.height - PAD : Math.max(PAD, y);
 	});
 
 	function handleKeydown(e: KeyboardEvent) {

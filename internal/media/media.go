@@ -347,10 +347,10 @@ func stripExifData(img image.Image, contentType string) []byte {
 			return nil
 		}
 	default:
-		// For other formats (GIF, WebP, etc.), encode as PNG to strip metadata.
-		if err := png.Encode(&buf, img); err != nil {
-			return nil
-		}
+		// GIF and WebP: skip re-encoding to preserve animation frames.
+		// GIF files don't contain EXIF data, and re-encoding as PNG would
+		// destroy animation. Return nil to keep the original bytes.
+		return nil
 	}
 
 	return buf.Bytes()
