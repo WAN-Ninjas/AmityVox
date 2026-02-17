@@ -21,3 +21,8 @@ CREATE TABLE IF NOT EXISTS gallery_post_tags (
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS gallery_default_sort TEXT DEFAULT 'newest';
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS gallery_post_guidelines TEXT;
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS gallery_require_tags BOOLEAN DEFAULT false;
+
+-- Add 'gallery' to the channel_type check constraint.
+ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_channel_type_check;
+ALTER TABLE channels ADD CONSTRAINT channels_channel_type_check
+    CHECK (channel_type IN ('text', 'voice', 'dm', 'group', 'announcement', 'forum', 'stage', 'gallery'));
