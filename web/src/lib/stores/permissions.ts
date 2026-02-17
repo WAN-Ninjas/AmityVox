@@ -45,5 +45,7 @@ export const canCreateThreads = derived(currentGuildPermissions, ($p) => hasPerm
 export const canKickMembers = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.KickMembers));
 export const canBanMembers = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.BanMembers));
 export const canManageRoles = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.ManageRoles));
+export const canTimeoutMembers = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.TimeoutMembers));
+export const canAssignRoles = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.AssignRoles));
 export const canViewAuditLog = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.ViewAuditLog));
 export const isAdministrator = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.Administrator));

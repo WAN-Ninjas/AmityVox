@@ -24,6 +24,7 @@ export class GatewayClient {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private handlers: EventHandler[] = [];
 	private closed = false;
+	private buildVersion: string | null = null;
 
 	constructor(token: string) {
 		this.token = token;
@@ -82,6 +83,8 @@ export class GatewayClient {
 				return;
 			}
 
+			// Notify listeners immediately so UI can show "Reconnecting..."
+			this.emit('GATEWAY_DISCONNECTED', null);
 			this.scheduleReconnect();
 		};
 
@@ -102,10 +105,20 @@ export class GatewayClient {
 
 	private handleMessage(msg: GatewayMessage) {
 		switch (msg.op) {
-			case GatewayOp.Hello:
-				this.startHeartbeat((msg.d as { heartbeat_interval: number }).heartbeat_interval);
+			case GatewayOp.Hello: {
+				const hello = msg.d as { heartbeat_interval: number; build_version?: string };
+				this.startHeartbeat(hello.heartbeat_interval);
+				if (hello.build_version) {
+					if (this.buildVersion && this.buildVersion !== hello.build_version) {
+						console.log('[GW] New build detected, reloading page');
+						location.reload();
+						return;
+					}
+					this.buildVersion = hello.build_version;
+				}
 				this.identify();
 				break;
+			}
 
 			case GatewayOp.HeartbeatAck:
 				this.heartbeatAcked = true;
@@ -123,6 +136,10 @@ export class GatewayClient {
 				break;
 
 			case GatewayOp.Reconnect:
+				// Server rejected our resume — clear session so next attempt
+				// sends a fresh IDENTIFY instead of looping on RESUME.
+				this.sessionId = null;
+				this.sequence = 0;
 				this.ws?.close();
 				break;
 		}

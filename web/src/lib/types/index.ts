@@ -9,7 +9,7 @@ export interface User {
 	avatar_id: string | null;
 	status_text: string | null;
 	status_emoji: string | null;
-	status_presence: 'online' | 'idle' | 'dnd' | 'invisible' | 'offline';
+	status_presence: 'online' | 'idle' | 'dnd' | 'busy' | 'invisible' | 'offline';
 	status_expires_at: string | null;
 	bio: string | null;
 	bot_owner_id: string | null;
@@ -19,7 +19,25 @@ export interface User {
 	pronouns: string | null;
 	flags: number;
 	handle?: string;
+	last_online: string | null;
 	created_at: string;
+}
+
+export interface UserLink {
+	id: string;
+	user_id: string;
+	platform: string;
+	label: string;
+	url: string;
+	position: number;
+	verified: boolean;
+	created_at: string;
+}
+
+export interface MutualGuild {
+	id: string;
+	name: string;
+	icon_id: string | null;
 }
 
 export interface Guild {
@@ -142,6 +160,16 @@ export interface Attachment {
 	s3_key: string;
 	blurhash: string | null;
 	alt_text?: string;
+	nsfw: boolean;
+	description: string | null;
+	created_at: string;
+}
+
+export interface MediaTag {
+	id: string;
+	name: string;
+	guild_id: string;
+	created_by: string | null;
 	created_at: string;
 }
 
@@ -302,6 +330,7 @@ export interface Ban {
 	guild_id: string;
 	user_id: string;
 	reason: string | null;
+	expires_at: string | null;
 	created_at: string;
 	user?: User;
 }
@@ -817,6 +846,25 @@ export interface ModerationMessageReport {
 	resolved_at: string | null;
 	created_at: string;
 	reporter_name?: string;
+}
+
+// --- Voice Preferences ---
+
+export interface VoicePreferences {
+	user_id: string;
+	input_mode: 'vad' | 'ptt';
+	ptt_key: string;
+	vad_threshold: number;
+	noise_suppression: boolean;
+	echo_cancellation: boolean;
+	auto_gain_control: boolean;
+	input_volume: number;
+	output_volume: number;
+	camera_resolution: '360p' | '720p' | '1080p';
+	camera_framerate: 15 | 30 | 60;
+	screenshare_resolution: '720p' | '1080p' | '4k';
+	screenshare_framerate: 15 | 30 | 60;
+	screenshare_audio: boolean;
 }
 
 // --- Permission bitfield constants (must match internal/permissions/permissions.go) ---

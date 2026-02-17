@@ -1,12 +1,24 @@
 <!-- CameraSettings.svelte — Resolution, frame rate, and facing mode settings for camera. -->
 <script lang="ts">
 	import { selfCamera, getRoom } from '$lib/stores/voice';
+	import { VideoPresets } from 'livekit-client';
+	import { api } from '$lib/api/client';
 
 	let resolution = $state<'360p' | '720p' | '1080p'>('720p');
 	let framerate = $state<15 | 30 | 60>(30);
 	let facingMode = $state<'user' | 'environment'>('user');
 	let applying = $state(false);
 	let error = $state<string | null>(null);
+
+	// Load saved camera defaults from voice preferences.
+	$effect(() => {
+		api.getVoicePreferences().then((prefs) => {
+			if (prefs.camera_resolution) resolution = prefs.camera_resolution;
+			if (prefs.camera_framerate) framerate = prefs.camera_framerate;
+		}).catch(() => {
+			// Use defaults on error.
+		});
+	});
 
 	function getResolutionConstraints(): { width: number; height: number } {
 		switch (resolution) {
@@ -16,6 +28,18 @@
 		}
 	}
 
+	function getVideoEncoding(): { maxBitrate: number; maxFramerate: number } {
+		const bitrateMap: Record<string, Record<number, number>> = {
+			'360p':  { 15: 800_000,    30: 1_000_000,  60: 1_500_000 },
+			'720p':  { 15: 1_500_000,  30: 2_000_000,  60: 3_000_000 },
+			'1080p': { 15: 2_500_000,  30: 5_000_000,  60: 7_000_000 }
+		};
+		return {
+			maxBitrate: bitrateMap[resolution]?.[framerate] ?? 5_000_000,
+			maxFramerate: framerate
+		};
+	}
+
 	async function applySettings() {
 		const room = getRoom();
 		if (!room || !$selfCamera) return;
@@ -23,12 +47,13 @@
 		applying = true;
 		error = null;
 		try {
-			// Toggle off then on with new constraints
+			// Toggle off then on with new constraints and encoding
 			await room.localParticipant.setCameraEnabled(false);
 			const res = getResolutionConstraints();
 			await room.localParticipant.setCameraEnabled(true, {
 				resolution: { width: res.width, height: res.height, frameRate: framerate },
-				facingMode
+				facingMode,
+				videoEncoding: getVideoEncoding()
 			});
 		} catch (err: any) {
 			error = err.message || 'Failed to apply camera settings';

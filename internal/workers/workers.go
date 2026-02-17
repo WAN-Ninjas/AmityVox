@@ -84,6 +84,9 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startPeriodic(ctx, "push-sub-cleanup", 24*time.Hour, m.cleanStalePushSubscriptions)
 	}
 
+	// Periodic ban expiry cleanup.
+	m.startPeriodic(ctx, "ban-expiry", 1*time.Minute, m.cleanExpiredBans)
+
 	// Periodic MLS key package cleanup.
 	m.startPeriodic(ctx, "mls-key-cleanup", 6*time.Hour, m.cleanExpiredKeyPackages)
 

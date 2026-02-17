@@ -336,6 +336,7 @@ func runServe() error {
 		HeartbeatInterval: heartbeatInterval,
 		HeartbeatTimeout:  heartbeatTimeout,
 		ListenAddr:        cfg.WebSocket.Listen,
+		BuildVersion:      version + "-" + commit + "-" + buildDate,
 		Logger:            logger,
 	})
 

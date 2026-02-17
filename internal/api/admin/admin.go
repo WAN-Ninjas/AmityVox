@@ -4,6 +4,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,11 +22,17 @@ import (
 	"github.com/amityvox/amityvox/internal/models"
 )
 
+// MediaDeleter can remove S3 objects. Implemented by media.Service.
+type MediaDeleter interface {
+	DeleteObject(ctx context.Context, bucket, key string) error
+}
+
 // Handler implements admin-related REST API endpoints.
 type Handler struct {
 	Pool       *pgxpool.Pool
 	InstanceID string
 	Logger     *slog.Logger
+	Media      MediaDeleter // optional — enables S3 cleanup on admin media delete
 }
 
 type updateInstanceRequest struct {

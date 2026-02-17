@@ -7,11 +7,16 @@
 	interface Props {
 		open?: boolean;
 		onclose?: () => void;
+		initialMode?: 'create' | 'join';
 	}
 
-	let { open = $bindable(false), onclose }: Props = $props();
+	let { open = $bindable(false), onclose, initialMode = 'create' }: Props = $props();
 
 	let mode = $state<'create' | 'join'>('create');
+
+	$effect(() => {
+		if (open) mode = initialMode;
+	});
 	let guildName = $state('');
 	let inviteCode = $state('');
 	let error = $state('');

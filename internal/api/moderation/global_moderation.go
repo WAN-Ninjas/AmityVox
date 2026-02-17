@@ -265,12 +265,17 @@ func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 
 	var irows pgx.Rows
 	var ierr error
-	if status != "" {
-		query += ` WHERE ri.status = $1 ORDER BY ri.created_at DESC LIMIT 100`
-		irows, ierr = h.Pool.Query(r.Context(), query, status)
-	} else {
+	switch status {
+	case "all":
 		query += ` ORDER BY ri.created_at DESC LIMIT 100`
 		irows, ierr = h.Pool.Query(r.Context(), query)
+	case "":
+		// Default: show only active issues (open + in_progress).
+		query += ` WHERE ri.status IN ('open', 'in_progress') ORDER BY ri.created_at DESC LIMIT 100`
+		irows, ierr = h.Pool.Query(r.Context(), query)
+	default:
+		query += ` WHERE ri.status = $1 ORDER BY ri.created_at DESC LIMIT 100`
+		irows, ierr = h.Pool.Query(r.Context(), query, status)
 	}
 	if ierr != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
@@ -444,6 +449,45 @@ func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Requ
 		reports = []messageReportRow{}
 	}
 	writeJSON(w, http.StatusOK, reports)
+}
+
+// HandleGetMyIssues handles GET /api/v1/users/@me/issues.
+// Returns issues reported by the current user, newest first.
+func (h *Handler) HandleGetMyIssues(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, reporter_id, title, description, category, status,
+			resolved_by, resolved_at, notes, created_at
+		FROM reported_issues
+		WHERE reporter_id = $1
+		ORDER BY created_at DESC LIMIT 50`, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
+		return
+	}
+	defer rows.Close()
+
+	var issues []models.ReportedIssue
+	for rows.Next() {
+		var issue models.ReportedIssue
+		if err := rows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
+			&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
+			&issue.Notes, &issue.CreatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+			return
+		}
+		issues = append(issues, issue)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+		return
+	}
+
+	if issues == nil {
+		issues = []models.ReportedIssue{}
+	}
+	writeJSON(w, http.StatusOK, issues)
 }
 
 // HandleResolveMessageReport handles PATCH /api/v1/moderation/message-reports/{reportID}.

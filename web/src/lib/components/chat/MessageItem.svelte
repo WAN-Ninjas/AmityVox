@@ -16,13 +16,16 @@
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
-	import { memberTimeouts } from '$lib/stores/members';
+	import { guildMembers, guildRolesMap, memberTimeouts } from '$lib/stores/members';
+	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import { startReply, startEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { addToast } from '$lib/stores/toast';
 	import { blockedUserIds } from '$lib/stores/blocked';
-	import { canManageMessages, canCreateThreads } from '$lib/stores/permissions';
+	import { canManageMessages, canCreateThreads, canKickMembers, canBanMembers, canTimeoutMembers } from '$lib/stores/permissions';
+	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
+	import { currentGuild } from '$lib/stores/guilds';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 
 	interface Props {
@@ -128,6 +131,53 @@
 	const authorPresence = $derived($presenceMap.get(message.author_id) ?? undefined);
 
 	const isOwnMessage = $derived($currentUser?.id === message.author_id);
+	const isAuthorOwner = $derived(message.author_id === $currentGuild?.owner_id);
+	const canModerateAuthor = $derived(!isOwnMessage && !isAuthorOwner && !!$currentChannel?.guild_id);
+	const hasAnyAuthorModPerm = $derived($canKickMembers || $canBanMembers || $canTimeoutMembers);
+
+	// Timeout presets for message context menu
+	const msgTimeoutPresets = [
+		{ label: '1 minute', seconds: 60 },
+		{ label: '5 minutes', seconds: 300 },
+		{ label: '15 minutes', seconds: 900 },
+		{ label: '1 hour', seconds: 3600 },
+	];
+	let showMsgTimeoutSubmenu = $state(false);
+
+	async function applyMsgTimeout(seconds: number) {
+		const guildId = $currentChannel?.guild_id;
+		if (!guildId) return;
+		const until = new Date(Date.now() + seconds * 1000).toISOString();
+		try {
+			await api.updateMember(guildId, message.author_id, { timeout_until: until });
+			addToast(`Timed out ${message.author?.display_name ?? message.author?.username ?? 'user'}`, 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to timeout member', 'error');
+		}
+		contextMenu = null;
+	}
+
+	function openAuthorKickModal() {
+		const guildId = $currentChannel?.guild_id;
+		if (!guildId) return;
+		$kickModalTarget = {
+			userId: message.author_id,
+			guildId,
+			displayName: message.author?.display_name ?? message.author?.username ?? 'user',
+		};
+		contextMenu = null;
+	}
+
+	function openAuthorBanModal() {
+		const guildId = $currentChannel?.guild_id;
+		if (!guildId) return;
+		$banModalTarget = {
+			userId: message.author_id,
+			guildId,
+			displayName: message.author?.display_name ?? message.author?.username ?? 'user',
+		};
+		contextMenu = null;
+	}
 
 	// Detect messages that are just a single image/GIF URL (e.g. from Giphy picker).
 	const IMAGE_URL_RE = /^https?:\/\/\S+\.(?:gif|png|jpe?g|webp)(?:\?[^\s]*)?$/i;
@@ -157,6 +207,12 @@
 	const displayName = $derived(
 		message.masquerade_name ?? message.author?.display_name ?? message.author?.username ?? message.author_id
 	);
+
+	const authorRoleColor = $derived.by(() => {
+		const member = $guildMembers.get(message.author_id);
+		if (!member?.roles) return null;
+		return getMemberRoleColor(member.roles, $guildRolesMap);
+	});
 
 	const timestamp = $derived(
 		new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -199,6 +255,7 @@
 
 	function handleContextMenu(e: MouseEvent) {
 		e.preventDefault();
+		showMsgTimeoutSubmenu = false;
 		contextMenu = { x: e.clientX, y: e.clientY };
 	}
 
@@ -456,7 +513,7 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="mt-0.5 shrink-0 cursor-pointer" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>
-			<Avatar name={displayName} status={authorPresence} />
+			<Avatar name={displayName} src={message.author?.avatar_id ? `/api/v1/files/${message.author.avatar_id}` : null} status={authorPresence} />
 		</div>
 	{/if}
 
@@ -479,7 +536,7 @@
 		{:else}
 			{#if !isCompact}
 				<div class="flex items-baseline gap-2">
-					<button class="font-medium text-text-primary hover:underline" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
+					<button class="font-medium text-text-primary hover:underline" style={authorRoleColor ? `color: ${authorRoleColor}` : ''} onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
 					{#if isAuthorBlocked}
 						<span class="text-2xs text-red-400">(blocked)</span>
 					{/if}
@@ -792,6 +849,8 @@
 <!-- Message context menu -->
 {#if contextMenu}
 	<ContextMenu x={contextMenu.x} y={contextMenu.y} onclose={() => contextMenu = null}>
+		<ContextMenuItem label="View Profile" onclick={() => { userPopover = { x: contextMenu!.x, y: contextMenu!.y }; contextMenu = null; }} />
+		<ContextMenuDivider />
 		<ContextMenuItem label="Reply" onclick={handleReply} />
 		{#if message.content}
 			<ContextMenuItem label="Copy Text" onclick={handleCopyText} />
@@ -818,6 +877,44 @@
 		{#if !isOwnMessage}
 			<ContextMenuDivider />
 			<ContextMenuItem label="Report Message" danger onclick={handleReportMessage} />
+		{/if}
+		{#if canModerateAuthor && hasAnyAuthorModPerm}
+			<ContextMenuDivider />
+			{#if $canTimeoutMembers}
+				<div class="relative">
+					<button
+						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-primary hover:bg-brand-500 hover:text-white"
+						onclick={(e) => { e.stopPropagation(); showMsgTimeoutSubmenu = !showMsgTimeoutSubmenu; }}
+					>
+						Timeout User
+						<svg class="ml-auto h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M9 5l7 7-7 7" />
+						</svg>
+					</button>
+					{#if showMsgTimeoutSubmenu && contextMenu}
+						{@const submenuLeft = contextMenu.x + 360 < window.innerWidth}
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div
+							class="absolute top-0 min-w-[140px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}"
+							onclick={(e) => e.stopPropagation()}
+							onkeydown={() => {}}
+						>
+							{#each msgTimeoutPresets as preset}
+								<button
+									class="flex w-full items-center rounded px-2 py-1.5 text-sm text-text-primary hover:bg-brand-500 hover:text-white"
+									onclick={() => applyMsgTimeout(preset.seconds)}
+								>{preset.label}</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+			{#if $canKickMembers}
+				<ContextMenuItem label="Kick User" danger onclick={openAuthorKickModal} />
+			{/if}
+			{#if $canBanMembers}
+				<ContextMenuItem label="Ban User" danger onclick={openAuthorBanModal} />
+			{/if}
 		{/if}
 		{#if isOwnMessage || $canManageMessages}
 			<ContextMenuDivider />

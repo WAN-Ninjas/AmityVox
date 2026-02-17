@@ -197,14 +197,7 @@
 				{ id: 'add', label: 'Add Friend' }
 			] as tab (tab.id)}
 				<button
-					class="flex items-center gap-1 rounded px-3 py-1 text-xs transition-colors"
-					class:bg-brand-500={currentTab === tab.id && tab.id === 'add'}
-					class:text-white={currentTab === tab.id && tab.id === 'add'}
-					class:bg-bg-modifier={currentTab === tab.id && tab.id !== 'add'}
-					class:text-text-primary={currentTab === tab.id && tab.id !== 'add'}
-					class:text-text-muted={currentTab !== tab.id}
-					class:hover:bg-bg-modifier={currentTab !== tab.id}
-					class:hover:text-text-secondary={currentTab !== tab.id}
+					class="flex items-center gap-1 rounded px-3 py-1 text-xs font-medium transition-colors {currentTab === tab.id ? 'bg-status-online text-white' : 'bg-status-online/20 text-status-online hover:bg-status-online/40'}"
 					onclick={() => (currentTab = tab.id as Tab)}
 				>
 					{tab.label}

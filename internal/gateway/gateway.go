@@ -72,23 +72,25 @@ type RequestMembersPayload struct {
 
 // HelloPayload is the data sent in op:10 HELLO.
 type HelloPayload struct {
-	HeartbeatInterval int64 `json:"heartbeat_interval"`
+	HeartbeatInterval int64  `json:"heartbeat_interval"`
+	BuildVersion      string `json:"build_version"`
 }
 
 // Client represents a single connected WebSocket client.
 type Client struct {
-	conn          *websocket.Conn
-	userID        string
-	sessionID     string
-	seq           int64
-	identified    bool
-	guildIDs      map[string]bool // guilds this user is a member of
-	friendIDs     map[string]bool // accepted friends for presence dispatch
-	mu            sync.Mutex
-	done          chan struct{}
-	replayBuf     []GatewayMessage // buffer for resume replay
-	lastHeartbeat time.Time        // tracks when last heartbeat was received
-	cancelRead    context.CancelFunc
+	conn           *websocket.Conn
+	userID         string
+	sessionID      string
+	seq            int64
+	identified     bool
+	statusPresence string          // user's saved status (online/idle/busy/invisible)
+	guildIDs       map[string]bool // guilds this user is a member of
+	friendIDs      map[string]bool // accepted friends for presence dispatch
+	mu             sync.Mutex
+	done           chan struct{}
+	replayBuf      []GatewayMessage // buffer for resume replay
+	lastHeartbeat  time.Time        // tracks when last heartbeat was received
+	cancelRead     context.CancelFunc
 }
 
 // Server manages WebSocket connections and event dispatch.
@@ -101,6 +103,7 @@ type Server struct {
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
 	listenAddr        string
+	buildVersion      string
 	logger            *slog.Logger
 
 	clients   map[*Client]struct{}
@@ -123,6 +126,7 @@ type ServerConfig struct {
 	HeartbeatInterval time.Duration
 	HeartbeatTimeout  time.Duration
 	ListenAddr        string
+	BuildVersion      string
 	Logger            *slog.Logger
 }
 
@@ -137,6 +141,7 @@ func NewServer(cfg ServerConfig) *Server {
 		heartbeatInterval: cfg.HeartbeatInterval,
 		heartbeatTimeout:  cfg.HeartbeatTimeout,
 		listenAddr:        cfg.ListenAddr,
+		buildVersion:      cfg.BuildVersion,
 		logger:            cfg.Logger,
 		clients:           make(map[*Client]struct{}),
 		userClients:       make(map[string]map[*Client]struct{}),
@@ -207,9 +212,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		friendIDs: make(map[string]bool),
 	}
 
-	// Send HELLO with heartbeat interval.
+	// Send HELLO with heartbeat interval and build version.
 	helloData, _ := json.Marshal(HelloPayload{
 		HeartbeatInterval: s.heartbeatInterval.Milliseconds(),
+		BuildVersion:      s.buildVersion,
 	})
 	s.sendMessage(client, GatewayMessage{
 		Op:   OpHello,
@@ -229,9 +235,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Register the client.
 	s.registerClient(client)
 
-	// Set user presence to online and broadcast to guild members.
-	s.cache.SetPresence(r.Context(), client.userID, presence.StatusOnline, s.heartbeatTimeout)
-	s.broadcastPresence(r.Context(), client.userID, presence.StatusOnline)
+	// Set user presence based on saved preference and broadcast to guild members.
+	connectStatus := client.statusPresence
+	if connectStatus == "" || connectStatus == presence.StatusOffline {
+		connectStatus = presence.StatusOnline
+	}
+	broadcastStatus := connectStatus
+	if connectStatus == presence.StatusInvisible {
+		broadcastStatus = presence.StatusOffline
+	}
+	s.cache.SetPresence(r.Context(), client.userID, connectStatus, s.heartbeatTimeout)
+	s.broadcastPresence(r.Context(), client.userID, broadcastStatus)
 
 	client.mu.Lock()
 	client.lastHeartbeat = time.Now()
@@ -258,6 +272,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	s.cache.RemovePresence(context.Background(), client.userID)
 	s.broadcastPresence(context.Background(), client.userID, "offline")
+
+	// Stamp last_online when the user's last connection drops.
+	s.userClientsMu.RLock()
+	remaining := len(s.userClients[client.userID])
+	s.userClientsMu.RUnlock()
+	if remaining == 0 {
+		_, _ = s.pool.Exec(context.Background(),
+			`UPDATE users SET last_online = now() WHERE id = $1`, client.userID)
+	}
 
 	s.logger.Info("client disconnected",
 		slog.String("user_id", client.userID),
@@ -379,20 +402,32 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 		return fmt.Errorf("reading identify message: %w", err)
 	}
 
-	if msg.Op != OpIdentify {
-		return fmt.Errorf("expected op %d (IDENTIFY), got %d", OpIdentify, msg.Op)
+	// Accept either IDENTIFY (op 2) or RESUME (op 5). After a server restart
+	// session state is lost, so Resume is treated as a fresh Identify — the
+	// client will receive a new READY and re-sync.
+	var token string
+	switch msg.Op {
+	case OpIdentify:
+		var payload IdentifyPayload
+		if err := json.Unmarshal(msg.Data, &payload); err != nil {
+			return fmt.Errorf("parsing identify payload: %w", err)
+		}
+		token = payload.Token
+	case OpResume:
+		var payload ResumePayload
+		if err := json.Unmarshal(msg.Data, &payload); err != nil {
+			return fmt.Errorf("parsing resume payload: %w", err)
+		}
+		token = payload.Token
+	default:
+		return fmt.Errorf("expected op %d (IDENTIFY) or %d (RESUME), got %d", OpIdentify, OpResume, msg.Op)
 	}
 
-	var payload IdentifyPayload
-	if err := json.Unmarshal(msg.Data, &payload); err != nil {
-		return fmt.Errorf("parsing identify payload: %w", err)
+	if token == "" {
+		return fmt.Errorf("empty token in identify/resume payload")
 	}
 
-	if payload.Token == "" {
-		return fmt.Errorf("empty token in identify payload")
-	}
-
-	userID, err := s.authService.ValidateSession(ctx, payload.Token)
+	userID, err := s.authService.ValidateSession(ctx, token)
 	if err != nil {
 		return fmt.Errorf("invalid session token: %w", err)
 	}
@@ -411,6 +446,11 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 	user, err := s.authService.GetUser(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("getting user for READY: %w", err)
+	}
+
+	// Cache the user's saved status preference for heartbeat renewal.
+	if user.StatusPresence != "" {
+		client.statusPresence = user.StatusPresence
 	}
 
 	// Include guild IDs in READY payload.
@@ -550,15 +590,28 @@ func (s *Server) readLoop(ctx context.Context, client *Client) {
 			client.mu.Lock()
 			client.lastHeartbeat = time.Now()
 			client.mu.Unlock()
-			s.cache.SetPresence(ctx, client.userID, presence.StatusOnline, s.heartbeatTimeout)
+			// Renew presence with current status instead of resetting to online.
+			currentStatus, _ := s.cache.GetPresence(ctx, client.userID)
+			if currentStatus == "" || currentStatus == presence.StatusOffline {
+				currentStatus = presence.StatusOnline
+			}
+			s.cache.SetPresence(ctx, client.userID, currentStatus, s.heartbeatTimeout)
 
 		case OpPresenceUpdate:
 			var data struct {
 				Status string `json:"status"`
 			}
 			if err := json.Unmarshal(msg.Data, &data); err == nil {
+				client.mu.Lock()
+				client.statusPresence = data.Status
+				client.mu.Unlock()
 				s.cache.SetPresence(ctx, client.userID, data.Status, s.heartbeatTimeout)
-				s.broadcastPresence(ctx, client.userID, data.Status)
+				// Invisible users appear offline to others.
+				broadcastStatus := data.Status
+				if data.Status == presence.StatusInvisible {
+					broadcastStatus = presence.StatusOffline
+				}
+				s.broadcastPresence(ctx, client.userID, broadcastStatus)
 			}
 
 		case OpTyping:
@@ -823,8 +876,9 @@ func (s *Server) dispatchEvent(subject string, event events.Event) {
 // shouldDispatchTo determines if a client should receive a given event based on
 // guild membership and event targeting.
 func (s *Server) shouldDispatchTo(client *Client, subject string, event events.Event) bool {
-	// Presence updates: dispatch to all clients that share a guild with the user.
-	if event.Type == "PRESENCE_UPDATE" && event.UserID != "" {
+	// Presence and user profile updates: dispatch to the user themselves,
+	// plus all clients that share a guild or are friends with the user.
+	if (event.Type == "PRESENCE_UPDATE" || event.Type == "USER_UPDATE") && event.UserID != "" {
 		// Always deliver to the user themselves.
 		if event.UserID == client.userID {
 			return true
@@ -871,8 +925,7 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 
 	// User-specific events: only dispatch to the targeted user.
 	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
-		if event.Type == "USER_UPDATE" ||
-			event.Type == "RELATIONSHIP_ADD" ||
+		if event.Type == "RELATIONSHIP_ADD" ||
 			event.Type == "RELATIONSHIP_UPDATE" ||
 			event.Type == "RELATIONSHIP_REMOVE" {
 			return event.UserID == client.userID

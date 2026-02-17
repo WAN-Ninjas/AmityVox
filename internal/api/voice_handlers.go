@@ -486,14 +486,19 @@ func (s *Server) handleUpdateVoicePreferences(w http.ResponseWriter, r *http.Req
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req struct {
-		InputMode        *string  `json:"input_mode"`
-		PTTKey           *string  `json:"ptt_key"`
-		VADThreshold     *float64 `json:"vad_threshold"`
-		NoiseSuppression *bool    `json:"noise_suppression"`
-		EchoCancellation *bool    `json:"echo_cancellation"`
-		AutoGainControl  *bool    `json:"auto_gain_control"`
-		InputVolume      *float64 `json:"input_volume"`
-		OutputVolume     *float64 `json:"output_volume"`
+		InputMode             *string  `json:"input_mode"`
+		PTTKey                *string  `json:"ptt_key"`
+		VADThreshold          *float64 `json:"vad_threshold"`
+		NoiseSuppression      *bool    `json:"noise_suppression"`
+		EchoCancellation      *bool    `json:"echo_cancellation"`
+		AutoGainControl       *bool    `json:"auto_gain_control"`
+		InputVolume           *float64 `json:"input_volume"`
+		OutputVolume          *float64 `json:"output_volume"`
+		CameraResolution      *string  `json:"camera_resolution"`
+		CameraFramerate       *int     `json:"camera_framerate"`
+		ScreenshareResolution *string  `json:"screenshare_resolution"`
+		ScreenshareFramerate  *int     `json:"screenshare_framerate"`
+		ScreenshareAudio      *bool    `json:"screenshare_audio"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
@@ -517,6 +522,37 @@ func (s *Server) handleUpdateVoicePreferences(w http.ResponseWriter, r *http.Req
 	}
 	if req.OutputVolume != nil && (*req.OutputVolume < 0.0 || *req.OutputVolume > 2.0) {
 		WriteError(w, http.StatusBadRequest, "invalid_volume", "Output volume must be between 0.0 and 2.0")
+		return
+	}
+
+	// Validate camera resolution.
+	if req.CameraResolution != nil {
+		switch *req.CameraResolution {
+		case "360p", "720p", "1080p":
+		default:
+			WriteError(w, http.StatusBadRequest, "invalid_camera_resolution", "Camera resolution must be '360p', '720p', or '1080p'")
+			return
+		}
+	}
+
+	// Validate screenshare resolution.
+	if req.ScreenshareResolution != nil {
+		switch *req.ScreenshareResolution {
+		case "720p", "1080p", "4k":
+		default:
+			WriteError(w, http.StatusBadRequest, "invalid_screenshare_resolution", "Screenshare resolution must be '720p', '1080p', or '4k'")
+			return
+		}
+	}
+
+	// Validate framerates.
+	validFramerates := map[int]bool{15: true, 30: true, 60: true}
+	if req.CameraFramerate != nil && !validFramerates[*req.CameraFramerate] {
+		WriteError(w, http.StatusBadRequest, "invalid_camera_framerate", "Camera framerate must be 15, 30, or 60")
+		return
+	}
+	if req.ScreenshareFramerate != nil && !validFramerates[*req.ScreenshareFramerate] {
+		WriteError(w, http.StatusBadRequest, "invalid_screenshare_framerate", "Screenshare framerate must be 15, 30, or 60")
 		return
 	}
 
@@ -551,6 +587,21 @@ func (s *Server) handleUpdateVoicePreferences(w http.ResponseWriter, r *http.Req
 	}
 	if req.OutputVolume != nil {
 		prefs.OutputVolume = *req.OutputVolume
+	}
+	if req.CameraResolution != nil {
+		prefs.CameraResolution = *req.CameraResolution
+	}
+	if req.CameraFramerate != nil {
+		prefs.CameraFramerate = *req.CameraFramerate
+	}
+	if req.ScreenshareResolution != nil {
+		prefs.ScreenshareResolution = *req.ScreenshareResolution
+	}
+	if req.ScreenshareFramerate != nil {
+		prefs.ScreenshareFramerate = *req.ScreenshareFramerate
+	}
+	if req.ScreenshareAudio != nil {
+		prefs.ScreenshareAudio = *req.ScreenshareAudio
 	}
 
 	if err := s.Voice.UpdateVoicePreferences(r.Context(), prefs); err != nil {

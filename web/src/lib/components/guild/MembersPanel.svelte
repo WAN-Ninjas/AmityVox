@@ -2,6 +2,7 @@
 	import type { GuildMember, Role } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
+	import UserPopover from '$components/common/UserPopover.svelte';
 
 	let {
 		guildId,
@@ -22,6 +23,9 @@
 	let searchQuery = $state('');
 	let expandedMemberId = $state<string | null>(null);
 	let loadingMemberRoles = $state(false);
+
+	// User popover state
+	let popover = $state<{ userId: string; x: number; y: number } | null>(null);
 
 	// Timeout state
 	let timeoutDuration = $state('');
@@ -221,8 +225,9 @@
 					<button
 						class="flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-bg-modifier {expanded ? 'rounded-t-lg' : 'rounded-lg'}"
 						onclick={() => toggleExpand(member.user_id)}
+						oncontextmenu={(e) => { e.preventDefault(); popover = { userId: member.user_id, x: e.clientX, y: e.clientY }; }}
 					>
-						<Avatar user={member.user} size="sm" />
+						<Avatar name={member.user?.display_name ?? member.user?.username ?? '?'} src={member.user?.avatar_id ? `/api/v1/files/${member.user.avatar_id}` : null} size="sm" />
 						<div class="min-w-0 flex-1">
 							<div class="flex items-center gap-2">
 								<span class="truncate text-sm font-medium text-text-primary">
@@ -346,3 +351,12 @@
 		</div>
 	{/if}
 </div>
+
+{#if popover}
+	<UserPopover
+		userId={popover.userId}
+		x={popover.x}
+		y={popover.y}
+		onclose={() => (popover = null)}
+	/>
+{/if}
