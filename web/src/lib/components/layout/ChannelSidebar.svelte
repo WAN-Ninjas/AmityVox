@@ -383,7 +383,7 @@
 		closeContextMenu();
 	}
 
-	function channelTypeButtonClass(type: 'text' | 'voice' | 'forum'): string {
+	function channelTypeButtonClass(type: 'text' | 'voice' | 'forum' | 'gallery'): string {
 		const base = 'rounded-lg border-2 px-4 py-2 text-sm transition-colors';
 		if (newChannelType === type) return `${base} border-brand-500 bg-brand-500/10 text-text-primary`;
 		return `${base} border-bg-modifier text-text-muted`;
@@ -1191,6 +1191,12 @@
 			>
 				Forum
 			</button>
+			<button
+				class={channelTypeButtonClass('gallery')}
+				onclick={() => (newChannelType = 'gallery')}
+			>
+				Gallery
+			</button>
 		</div>
 	</div>
 
@@ -1203,7 +1209,7 @@
 			type="text"
 			class="input w-full"
 			bind:value={newChannelName}
-			placeholder={newChannelType === 'voice' ? 'General' : newChannelType === 'forum' ? 'bug-reports' : 'new-channel'}
+			placeholder={newChannelType === 'voice' ? 'General' : newChannelType === 'forum' ? 'bug-reports' : newChannelType === 'gallery' ? 'screenshots' : 'new-channel'}
 			maxlength="100"
 			onkeydown={(e) => e.key === 'Enter' && handleCreateChannel()}
 		/>
