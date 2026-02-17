@@ -11,6 +11,7 @@
 	import ProfileModal from './ProfileModal.svelte';
 	import { guildMembers, guildRolesMap } from '$lib/stores/members';
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
+	import { clientNicknames, setClientNickname } from '$lib/stores/nicknames';
 
 	interface Props {
 		userId: string;
@@ -27,6 +28,8 @@
 	let note = $state('');
 	let noteLoaded = $state(false);
 	let noteSaving = $state(false);
+	let nickname = $state('');
+	const currentNickname = $derived($clientNicknames.get(userId) ?? '');
 
 	// Mutual data
 	let mutualFriends = $state<User[]>([]);
@@ -59,7 +62,12 @@
 		}
 	}
 
+	function saveNickname() {
+		setClientNickname(userId, nickname);
+	}
+
 	$effect(() => {
+		nickname = $clientNicknames.get(userId) ?? '';
 		api.getUser(userId)
 			.then((u) => (user = u))
 			.catch((e) => (error = e.message || 'Failed to load user'))
@@ -198,7 +206,11 @@
 		<div class="max-h-96 overflow-y-auto px-4 pb-4 pt-2">
 			<div class="flex items-center gap-1.5">
 				<h3 class="text-lg font-bold text-text-primary" style={userRoleColor ? `color: ${userRoleColor}` : ''}>
-					{user.display_name ?? user.username}
+					{#if currentNickname}
+						<span class="italic">{currentNickname}</span>
+					{:else}
+						{user.display_name ?? user.username}
+					{/if}
 				</h3>
 				{#if user.flags & UserFlagVerified}
 					<svg class="h-4 w-4 text-brand-500" viewBox="0 0 24 24" fill="currentColor" title="Verified">
@@ -209,6 +221,9 @@
 					<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-2xs font-bold text-brand-400">BOT</span>
 				{/if}
 			</div>
+			{#if currentNickname}
+				<p class="text-xs text-text-muted">{user.display_name ?? user.username}</p>
+			{/if}
 			<p class="text-sm text-text-muted">{user.handle ?? '@' + user.username}</p>
 			{#if user.pronouns}
 				<p class="text-xs text-text-muted">{user.pronouns}</p>
@@ -307,6 +322,22 @@
 					</p>
 				{/if}
 			</div>
+
+			<!-- Nickname (client-side only) -->
+			{#if !isSelf}
+				<div class="mt-3 border-t border-bg-modifier pt-3">
+					<h4 class="mb-1 text-2xs font-bold uppercase tracking-wide text-text-muted">Nickname</h4>
+					<input
+						type="text"
+						class="w-full rounded bg-bg-primary px-2 py-1.5 text-xs text-text-secondary outline-none placeholder:text-text-muted focus:ring-1 focus:ring-brand-500"
+						placeholder="Set a nickname (only visible to you)"
+						maxlength="64"
+						bind:value={nickname}
+						onblur={saveNickname}
+						onkeydown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+					/>
+				</div>
+			{/if}
 
 			<!-- Note -->
 			{#if !isSelf && noteLoaded}

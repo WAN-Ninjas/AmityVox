@@ -7,6 +7,7 @@
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentUser } from '$lib/stores/auth';
 	import { addToast } from '$lib/stores/toast';
+	import { getDMDisplayName } from '$lib/utils/dm';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import EmojiPicker from '$components/common/EmojiPicker.svelte';
 	import GiphyPicker from '$components/common/GiphyPicker.svelte';
@@ -115,7 +116,12 @@
 
 	const isEditing = $derived(!!$editingMessage);
 	const isReplying = $derived(!!$replyingTo);
-	const channelName = $derived($currentChannel?.name ?? 'channel');
+	const isDM = $derived($currentChannel?.channel_type === 'dm' || $currentChannel?.channel_type === 'group');
+	const channelName = $derived(
+		isDM && $currentChannel
+			? getDMDisplayName($currentChannel, $currentUser?.id)
+			: $currentChannel?.name ?? 'channel'
+	);
 
 	async function handleSubmit() {
 		const channelId = $currentChannelId;
@@ -633,7 +639,7 @@
 					onkeydown={handleKeydown}
 					oninput={handleInput}
 					onpaste={handlePaste}
-					placeholder={isEditing ? 'Edit your message...' : isReplying ? 'Reply...' : silentMode ? `Message #${channelName} (silent)` : `Message #${channelName}`}
+					placeholder={isEditing ? 'Edit your message...' : isReplying ? 'Reply...' : silentMode ? `Message ${isDM ? '@' : '#'}${channelName} (silent)` : `Message ${isDM ? '@' : '#'}${channelName}`}
 					class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted placeholder:font-mono"
 					rows="1"
 				></textarea>
@@ -749,7 +755,10 @@
 							onclick={(e) => { e.stopPropagation(); showEmojiPicker = !showEmojiPicker; showGiphyPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+								<circle cx="12" cy="12" r="9" />
+								<path d="M8.5 14.5c1 1.5 5.5 1.5 7 0" stroke-linecap="round" />
+								<circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
+								<circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
 							</svg>
 						</button>
 						{#if showEmojiPicker}

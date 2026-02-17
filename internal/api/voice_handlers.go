@@ -59,8 +59,9 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if channelType != models.ChannelTypeVoice && channelType != models.ChannelTypeStage {
-		WriteError(w, http.StatusBadRequest, "not_voice_channel", "This is not a voice channel")
+	if channelType != models.ChannelTypeVoice && channelType != models.ChannelTypeStage &&
+		channelType != models.ChannelTypeDM && channelType != models.ChannelTypeGroup {
+		WriteError(w, http.StatusBadRequest, "not_voice_channel", "Voice is not supported in this channel type")
 		return
 	}
 
@@ -139,6 +140,33 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 		voiceEvent["avatar_id"] = *avatarID
 	}
 	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", voiceEvent)
+
+	// For DM/Group channels, ring the other participants so they see an incoming call.
+	// Only ring if this is the first person joining (no ring for joining an active call).
+	channelStates := s.Voice.GetChannelVoiceStates(channelID)
+	if (channelType == models.ChannelTypeDM || channelType == models.ChannelTypeGroup) && len(channelStates) <= 1 {
+		ringEvent := map[string]interface{}{
+			"channel_id":  channelID,
+			"caller_id":   userID,
+			"caller_name": username,
+		}
+		if displayName != nil {
+			ringEvent["caller_display_name"] = *displayName
+		}
+		if avatarID != nil {
+			ringEvent["caller_avatar_id"] = *avatarID
+		}
+		ringEvent["channel_type"] = channelType
+		s.EventBus.Publish(r.Context(), events.SubjectCallRing, events.Event{
+			Type:      "CALL_RING",
+			ChannelID: channelID,
+			UserID:    userID,
+			Data: func() json.RawMessage {
+				b, _ := json.Marshal(ringEvent)
+				return b
+			}(),
+		})
+	}
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"token":      token,

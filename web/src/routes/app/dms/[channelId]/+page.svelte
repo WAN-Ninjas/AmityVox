@@ -10,14 +10,18 @@
 	import { dmList } from '$lib/stores/dms';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
+	import { voiceChannelId, voiceState, joinVoice, leaveVoice } from '$lib/stores/voice';
+	import { dismissIncomingCall } from '$lib/stores/callRing';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import Avatar from '$components/common/Avatar.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
 	import MessageInput from '$components/chat/MessageInput.svelte';
 	import TypingIndicator from '$components/chat/TypingIndicator.svelte';
 	import GroupDMSettingsPanel from '$components/common/GroupDMSettingsPanel.svelte';
+	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
 
 	let showGroupSettings = $state(false);
+	let callLoading = $state(false);
 
 	let isDragging = $state(false);
 	let dragCounter = 0;
@@ -28,6 +32,19 @@
 	const recipient = $derived(dmChannel ? getDMRecipient(dmChannel, $currentUser?.id) : undefined);
 	const recipientStatus = $derived(recipient ? ($presenceMap.get(recipient.id) ?? 'offline') : undefined);
 	const isGroupDM = $derived(dmChannel?.channel_type === 'group');
+	const inCall = $derived($voiceChannelId === $page.params.channelId && $voiceState !== 'disconnected');
+
+	async function startCall(withVideo: boolean = false) {
+		callLoading = true;
+		try {
+			dismissIncomingCall($page.params.channelId);
+			await joinVoice($page.params.channelId, '', recipientName);
+		} catch {
+			addToast('Failed to start call', 'error');
+		} finally {
+			callLoading = false;
+		}
+	}
 
 	// Ensure we're not in a guild context for DMs.
 	$effect(() => {
@@ -140,6 +157,38 @@
 			<div class="min-w-0 flex-1">
 				<h1 class="truncate font-semibold text-text-primary">{recipientName}</h1>
 			</div>
+			{#if inCall}
+				<button
+					class="rounded p-1.5 text-red-400 transition-colors hover:bg-bg-modifier hover:text-red-300"
+					onclick={() => leaveVoice()}
+					title="End Call"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 01-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.996.996 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
+					</svg>
+				</button>
+			{:else}
+				<button
+					class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50"
+					onclick={() => startCall(false)}
+					disabled={callLoading}
+					title="Start Voice Call"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 00-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z" />
+					</svg>
+				</button>
+				<button
+					class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50"
+					onclick={() => startCall(true)}
+					disabled={callLoading}
+					title="Start Video Call"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+					</svg>
+				</button>
+			{/if}
 		{:else if isGroupDM}
 			<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-bold text-white">
 				<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
@@ -150,6 +199,38 @@
 				<h1 class="truncate font-semibold text-text-primary">{recipientName}</h1>
 				<p class="text-xs text-text-muted">{dmChannel?.recipients?.length ?? 0} members</p>
 			</div>
+			{#if inCall}
+				<button
+					class="rounded p-1.5 text-red-400 transition-colors hover:bg-bg-modifier hover:text-red-300"
+					onclick={() => leaveVoice()}
+					title="End Call"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 01-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.996.996 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
+					</svg>
+				</button>
+			{:else}
+				<button
+					class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50"
+					onclick={() => startCall(false)}
+					disabled={callLoading}
+					title="Start Voice Call"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 00-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z" />
+					</svg>
+				</button>
+				<button
+					class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50"
+					onclick={() => startCall(true)}
+					disabled={callLoading}
+					title="Start Video Call"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+					</svg>
+				</button>
+			{/if}
 			<button
 				class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
 				onclick={() => (showGroupSettings = true)}
@@ -167,9 +248,13 @@
 			<h1 class="font-semibold text-text-primary">Direct Message</h1>
 		{/if}
 	</header>
-	<MessageList />
-	<TypingIndicator typingUsers={$currentTypingUsers} />
-	<MessageInput />
+	{#if inCall}
+		<VoiceChannelView channelId={$page.params.channelId} guildId="" />
+	{:else}
+		<MessageList />
+		<TypingIndicator typingUsers={$currentTypingUsers} />
+		<MessageInput />
+	{/if}
 </div>
 
 {#if isGroupDM && dmChannel}
