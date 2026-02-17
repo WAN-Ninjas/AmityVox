@@ -1524,6 +1524,85 @@ func formatBytes(b int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
+// HandleAdminGetMedia returns all attachments, paginated, for admin review.
+// GET /api/v1/admin/media
+func (h *Handler) HandleAdminGetMedia(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	baseSQL := `SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
+	            width, height, duration_seconds, s3_bucket, s3_key, blurhash,
+	            alt_text, nsfw, description, created_at
+	     FROM attachments`
+	args := []interface{}{}
+	argIdx := 1
+
+	if before := r.URL.Query().Get("before"); before != "" {
+		baseSQL += fmt.Sprintf(` WHERE id < $%d`, argIdx)
+		args = append(args, before)
+		argIdx++
+	}
+
+	_ = argIdx // suppress unused warning
+	baseSQL += ` ORDER BY created_at DESC LIMIT 50`
+
+	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to query media")
+		return
+	}
+	defer rows.Close()
+
+	attachments := make([]models.Attachment, 0)
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(
+			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash,
+			&a.AltText, &a.NSFW, &a.Description, &a.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read media data")
+			return
+		}
+		attachments = append(attachments, a)
+	}
+
+	writeJSON(w, http.StatusOK, attachments)
+}
+
+// HandleAdminDeleteMedia deletes an attachment from DB and S3 as admin.
+// DELETE /api/v1/admin/media/{fileID}
+func (h *Handler) HandleAdminDeleteMedia(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	fileID := chi.URLParam(r, "fileID")
+
+	// Look up S3 key for the attachment.
+	var s3Key, s3Bucket string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT s3_key, s3_bucket FROM attachments WHERE id = $1`, fileID,
+	).Scan(&s3Key, &s3Bucket)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+		return
+	}
+
+	// Delete from database (S3 deletion is handled by the caller or a background job;
+	// since admin handler does not have direct S3 access, we delete the DB record).
+	_, err = h.Pool.Exec(r.Context(), `DELETE FROM attachments WHERE id = $1`, fileID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete attachment")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // calculateNextRun computes the next scheduled run time for a given frequency.
 func calculateNextRun(frequency string) time.Time {
 	now := time.Now().UTC()

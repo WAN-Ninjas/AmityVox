@@ -23,12 +23,14 @@ import (
 	"github.com/buckket/go-blurhash"
 	"github.com/go-chi/chi/v5"
 	xdraw "golang.org/x/image/draw"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // Config holds the configuration for the media storage service.
@@ -497,6 +499,229 @@ func (s *Service) HandleGetFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 	io.Copy(w, obj)
+}
+
+// HandleUpdateAttachment updates metadata on an attachment (nsfw, alt_text, description).
+// PATCH /api/v1/files/{fileID}
+func (s *Service) HandleUpdateAttachment(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	fileID := chi.URLParam(r, "fileID")
+
+	// Look up the attachment and its associated channel for permission checks.
+	var uploaderID *string
+	var channelID *string
+	var guildID *string
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT a.uploader_id, m.channel_id, c.guild_id
+		 FROM attachments a
+		 LEFT JOIN messages m ON m.id = a.message_id
+		 LEFT JOIN channels c ON c.id = m.channel_id
+		 WHERE a.id = $1`, fileID,
+	).Scan(&uploaderID, &channelID, &guildID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up attachment")
+		return
+	}
+
+	// Verify requester is the uploader or has ManageMessages permission.
+	isOwner := uploaderID != nil && *uploaderID == userID
+	if !isOwner && guildID != nil {
+		if !s.hasGuildPermission(r.Context(), *guildID, userID, permissions.ManageMessages) {
+			writeError(w, http.StatusForbidden, "forbidden", "You can only edit your own attachments or need ManageMessages permission")
+			return
+		}
+	} else if !isOwner {
+		writeError(w, http.StatusForbidden, "forbidden", "You can only edit your own attachments")
+		return
+	}
+
+	var req struct {
+		NSFW        *bool   `json:"nsfw"`
+		AltText     *string `json:"alt_text"`
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	_, err = s.pool.Exec(r.Context(),
+		`UPDATE attachments SET
+		   nsfw = COALESCE($1, nsfw),
+		   alt_text = COALESCE($2, alt_text),
+		   description = COALESCE($3, description)
+		 WHERE id = $4`,
+		req.NSFW, req.AltText, req.Description, fileID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update attachment")
+		return
+	}
+
+	// Return the updated attachment.
+	var a models.Attachment
+	err = s.pool.QueryRow(r.Context(),
+		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash,
+		        alt_text, nsfw, description, created_at
+		 FROM attachments WHERE id = $1`, fileID,
+	).Scan(
+		&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+		&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash,
+		&a.AltText, &a.NSFW, &a.Description, &a.CreatedAt,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read updated attachment")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, a)
+}
+
+// HandleDeleteAttachment deletes an attachment from the database and S3.
+// DELETE /api/v1/files/{fileID}
+func (s *Service) HandleDeleteAttachment(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	fileID := chi.URLParam(r, "fileID")
+
+	// Look up the attachment and its associated channel for permission checks.
+	var uploaderID *string
+	var guildID *string
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT a.uploader_id, c.guild_id
+		 FROM attachments a
+		 LEFT JOIN messages m ON m.id = a.message_id
+		 LEFT JOIN channels c ON c.id = m.channel_id
+		 WHERE a.id = $1`, fileID,
+	).Scan(&uploaderID, &guildID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up attachment")
+		return
+	}
+
+	// Verify requester is the uploader or has ManageMessages permission.
+	isOwner := uploaderID != nil && *uploaderID == userID
+	if !isOwner && guildID != nil {
+		if !s.hasGuildPermission(r.Context(), *guildID, userID, permissions.ManageMessages) {
+			writeError(w, http.StatusForbidden, "forbidden", "You can only delete your own attachments or need ManageMessages permission")
+			return
+		}
+	} else if !isOwner {
+		writeError(w, http.StatusForbidden, "forbidden", "You can only delete your own attachments")
+		return
+	}
+
+	// Delete from S3 and database using the existing Delete method.
+	if err := s.Delete(r.Context(), fileID); err != nil {
+		s.logger.Error("failed to delete attachment", slog.String("error", err.Error()), slog.String("id", fileID))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete attachment")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleTagAttachment adds a tag to an attachment.
+// PUT /api/v1/files/{fileID}/tags/{tagID}
+func (s *Service) HandleTagAttachment(w http.ResponseWriter, r *http.Request) {
+	fileID := chi.URLParam(r, "fileID")
+	tagID := chi.URLParam(r, "tagID")
+
+	// Verify attachment exists.
+	var exists bool
+	s.pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM attachments WHERE id = $1)`, fileID).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+		return
+	}
+
+	// Verify tag exists.
+	s.pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM media_tags WHERE id = $1)`, tagID).Scan(&exists)
+	if !exists {
+		writeError(w, http.StatusNotFound, "tag_not_found", "Media tag not found")
+		return
+	}
+
+	_, err := s.pool.Exec(r.Context(),
+		`INSERT INTO attachment_tags (attachment_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		fileID, tagID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to tag attachment")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, models.AttachmentTag{AttachmentID: fileID, TagID: tagID})
+}
+
+// HandleUntagAttachment removes a tag from an attachment.
+// DELETE /api/v1/files/{fileID}/tags/{tagID}
+func (s *Service) HandleUntagAttachment(w http.ResponseWriter, r *http.Request) {
+	fileID := chi.URLParam(r, "fileID")
+	tagID := chi.URLParam(r, "tagID")
+
+	_, err := s.pool.Exec(r.Context(),
+		`DELETE FROM attachment_tags WHERE attachment_id = $1 AND tag_id = $2`,
+		fileID, tagID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to untag attachment")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// hasGuildPermission checks if a user has a specific permission in a guild.
+func (s *Service) hasGuildPermission(ctx context.Context, guildID, userID string, perm uint64) bool {
+	// Check if user is the guild owner (owner has all permissions).
+	var ownerID string
+	err := s.pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID)
+	if err != nil {
+		return false
+	}
+	if ownerID == userID {
+		return true
+	}
+
+	// Get guild default permissions.
+	var defaultPerms int64
+	s.pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms)
+	computedPerms := uint64(defaultPerms)
+
+	// Apply member's role permissions.
+	rows, _ := s.pool.Query(ctx,
+		`SELECT r.permissions_allow, r.permissions_deny
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		guildID, userID,
+	)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var allow, deny int64
+			rows.Scan(&allow, &deny)
+			computedPerms |= uint64(allow)
+			computedPerms &^= uint64(deny)
+		}
+	}
+
+	if computedPerms&permissions.Administrator != 0 {
+		return true
+	}
+	return computedPerms&perm != 0
 }
 
 // --- Helpers ---

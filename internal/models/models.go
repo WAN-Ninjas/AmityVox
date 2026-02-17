@@ -41,8 +41,9 @@ type User struct {
 	TOTPSecret     *string   `json:"-"`
 	Email          *string   `json:"-"`
 	Flags          int       `json:"flags"`
-	Handle         string    `json:"handle,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	Handle         string     `json:"handle,omitempty"`
+	LastOnline     *time.Time `json:"last_online,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // SelfUser is a response-only wrapper that includes the email field.
@@ -81,6 +82,19 @@ func (u User) IsBot() bool { return u.Flags&UserFlagBot != 0 }
 
 // IsGlobalMod reports whether the user is a global moderator.
 func (u User) IsGlobalMod() bool { return u.Flags&UserFlagGlobalMod != 0 }
+
+// UserLink represents a social or external link on a user's profile.
+// Corresponds to the user_links table.
+type UserLink struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	Platform  string    `json:"platform"`
+	Label     string    `json:"label"`
+	URL       string    `json:"url"`
+	Position  int       `json:"position"`
+	Verified  bool      `json:"verified"`
+	CreatedAt time.Time `json:"created_at"`
+}
 
 // UserSession represents an active login session. Session tokens are stored as
 // the primary key and used as Bearer tokens for API authentication.
@@ -255,6 +269,7 @@ type GuildMember struct {
 	Deaf         bool       `json:"deaf"`
 	Mute         bool       `json:"mute"`
 	User         *User      `json:"user,omitempty"`
+	Roles        []string   `json:"roles,omitempty"`
 }
 
 // IsTimedOut reports whether the member is currently timed out.
@@ -372,7 +387,24 @@ type Attachment struct {
 	S3Key           string    `json:"s3_key"`
 	Blurhash        *string   `json:"blurhash,omitempty"`
 	AltText         *string   `json:"alt_text,omitempty"`
+	NSFW            bool      `json:"nsfw"`
+	Description     *string   `json:"description,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+// MediaTag represents a guild-scoped tag for categorizing attachments.
+type MediaTag struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	GuildID   string    `json:"guild_id"`
+	CreatedBy *string   `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AttachmentTag represents a tag applied to an attachment.
+type AttachmentTag struct {
+	AttachmentID string `json:"attachment_id"`
+	TagID        string `json:"tag_id"`
 }
 
 // Embed represents rich content extracted from URLs in messages, such as website
@@ -449,11 +481,12 @@ func (i Invite) IsMaxUsesReached() bool {
 
 // GuildBan represents a user ban from a guild. Corresponds to the guild_bans table.
 type GuildBan struct {
-	GuildID   string    `json:"guild_id"`
-	UserID    string    `json:"user_id"`
-	Reason    *string   `json:"reason,omitempty"`
-	BannedBy  *string   `json:"banned_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	GuildID   string     `json:"guild_id"`
+	UserID    string     `json:"user_id"`
+	Reason    *string    `json:"reason,omitempty"`
+	BannedBy  *string    `json:"banned_by,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // CustomEmoji represents a custom emoji uploaded to a guild. Corresponds to the

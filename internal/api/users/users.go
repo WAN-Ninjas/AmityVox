@@ -124,7 +124,13 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectUserUpdate, "USER_UPDATE", user)
+	// Publish with UserID so the gateway can dispatch to shared-guild members and friends.
+	userData, _ := json.Marshal(user)
+	h.EventBus.Publish(r.Context(), events.SubjectUserUpdate, events.Event{
+		Type:   "USER_UPDATE",
+		UserID: userID,
+		Data:   userData,
+	})
 
 	writeJSON(w, http.StatusOK, user.ToSelf())
 }
@@ -1282,14 +1288,14 @@ func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, err
 		`SELECT id, instance_id, username, display_name, avatar_id, status_text,
 		        status_emoji, status_presence, status_expires_at, bio,
 		        banner_id, accent_color, pronouns,
-		        bot_owner_id, email, flags, created_at
+		        bot_owner_id, email, flags, last_online, created_at
 		 FROM users WHERE id = $1`,
 		userID,
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
 		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
 		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
-		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.LastOnline, &user.CreatedAt,
 	)
 	return &user, err
 }
@@ -1312,7 +1318,7 @@ func (h *Handler) updateUser(ctx context.Context, userID string, req updateSelfR
 		 RETURNING id, instance_id, username, display_name, avatar_id, status_text,
 		           status_emoji, status_presence, status_expires_at, bio,
 		           banner_id, accent_color, pronouns,
-		           bot_owner_id, email, flags, created_at`,
+		           bot_owner_id, email, flags, last_online, created_at`,
 		userID, req.DisplayName, req.AvatarID, req.StatusText, req.Bio,
 		req.StatusEmoji, req.StatusPresence, statusExpiresAt,
 		req.BannerID, req.AccentColor, req.Pronouns,
@@ -1320,7 +1326,7 @@ func (h *Handler) updateUser(ctx context.Context, userID string, req updateSelfR
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
 		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
 		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
-		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.CreatedAt,
+		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.LastOnline, &user.CreatedAt,
 	)
 	return &user, err
 }
@@ -1355,6 +1361,271 @@ func (h *Handler) getChannel(ctx context.Context, channelID string) (*models.Cha
 }
 
 // writeJSON and writeError match the api package envelope format.
+// --- Profile Links ---
+
+// HandleGetUserLinks returns the public profile links for a user.
+// GET /api/v1/users/{userID}/links
+func (h *Handler) HandleGetUserLinks(w http.ResponseWriter, r *http.Request) {
+	targetID := chi.URLParam(r, "userID")
+	links, err := h.getUserLinks(r.Context(), targetID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user links")
+		return
+	}
+	writeJSON(w, http.StatusOK, links)
+}
+
+// HandleGetMyLinks returns the authenticated user's own links.
+// GET /api/v1/users/@me/links
+func (h *Handler) HandleGetMyLinks(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	links, err := h.getUserLinks(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get links")
+		return
+	}
+	writeJSON(w, http.StatusOK, links)
+}
+
+// HandleCreateLink adds a profile link for the authenticated user.
+// POST /api/v1/users/@me/links
+func (h *Handler) HandleCreateLink(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var req struct {
+		Platform string `json:"platform"`
+		Label    string `json:"label"`
+		URL      string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.Platform == "" || req.Label == "" || req.URL == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields", "platform, label, and url are required")
+		return
+	}
+
+	id := models.NewULID().String()
+	var link models.UserLink
+	err := h.Pool.QueryRow(r.Context(),
+		`INSERT INTO user_links (id, user_id, platform, label, url, position)
+		 VALUES ($1, $2, $3, $4, $5, COALESCE((SELECT MAX(position) + 1 FROM user_links WHERE user_id = $2), 0))
+		 RETURNING id, user_id, platform, label, url, position, verified, created_at`,
+		id, userID, req.Platform, req.Label, req.URL,
+	).Scan(&link.ID, &link.UserID, &link.Platform, &link.Label, &link.URL, &link.Position, &link.Verified, &link.CreatedAt)
+	if err != nil {
+		h.Logger.Error("failed to create link", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create link")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, link)
+}
+
+// HandleUpdateLink updates a profile link.
+// PATCH /api/v1/users/@me/links/{linkID}
+func (h *Handler) HandleUpdateLink(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	linkID := chi.URLParam(r, "linkID")
+
+	var req struct {
+		Platform *string `json:"platform"`
+		Label    *string `json:"label"`
+		URL      *string `json:"url"`
+		Position *int    `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	var link models.UserLink
+	err := h.Pool.QueryRow(r.Context(),
+		`UPDATE user_links SET
+			platform = COALESCE($3, platform),
+			label = COALESCE($4, label),
+			url = COALESCE($5, url),
+			position = COALESCE($6, position)
+		 WHERE id = $1 AND user_id = $2
+		 RETURNING id, user_id, platform, label, url, position, verified, created_at`,
+		linkID, userID, req.Platform, req.Label, req.URL, req.Position,
+	).Scan(&link.ID, &link.UserID, &link.Platform, &link.Label, &link.URL, &link.Position, &link.Verified, &link.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "link_not_found", "Link not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update link")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, link)
+}
+
+// HandleDeleteLink removes a profile link.
+// DELETE /api/v1/users/@me/links/{linkID}
+func (h *Handler) HandleDeleteLink(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	linkID := chi.URLParam(r, "linkID")
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM user_links WHERE id = $1 AND user_id = $2`, linkID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete link")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "link_not_found", "Link not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) getUserLinks(ctx context.Context, userID string) ([]models.UserLink, error) {
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, user_id, platform, label, url, position, verified, created_at
+		 FROM user_links WHERE user_id = $1 ORDER BY position`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	links := make([]models.UserLink, 0)
+	for rows.Next() {
+		var l models.UserLink
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Platform, &l.Label, &l.URL, &l.Position, &l.Verified, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, l)
+	}
+	return links, nil
+}
+
+// createGroupDMRequest is the JSON body for POST /users/@me/group-dms.
+type createGroupDMRequest struct {
+	UserIDs []string `json:"user_ids"`
+	Name    *string  `json:"name"`
+}
+
+// HandleCreateGroupDM creates a group DM channel with multiple users.
+// POST /api/v1/users/@me/group-dms
+func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+
+	var req createGroupDMRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	// Validate recipient count: 2-9 other users (plus self makes 3-10 total).
+	if len(req.UserIDs) < 2 || len(req.UserIDs) > 9 {
+		writeError(w, http.StatusBadRequest, "invalid_user_count", "Group DMs require between 2 and 9 other users")
+		return
+	}
+
+	// Validate name length if provided.
+	if req.Name != nil && len(*req.Name) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Group DM name must be at most 100 characters")
+		return
+	}
+
+	// Ensure self is not included in user_ids.
+	for _, uid := range req.UserIDs {
+		if uid == userID {
+			writeError(w, http.StatusBadRequest, "self_included", "Do not include yourself in user_ids; you are added automatically")
+			return
+		}
+	}
+
+	// Deduplicate user IDs.
+	seen := make(map[string]bool)
+	unique := make([]string, 0, len(req.UserIDs))
+	for _, uid := range req.UserIDs {
+		if !seen[uid] {
+			seen[uid] = true
+			unique = append(unique, uid)
+		}
+	}
+	req.UserIDs = unique
+
+	// Verify all target users exist.
+	var existCount int
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM users WHERE id = ANY($1)`, req.UserIDs,
+	).Scan(&existCount)
+	if err != nil {
+		h.Logger.Error("failed to verify group DM users", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		return
+	}
+	if existCount != len(req.UserIDs) {
+		writeError(w, http.StatusBadRequest, "user_not_found", "One or more users not found")
+		return
+	}
+
+	// Create the group DM channel in a transaction.
+	newID := models.NewULID().String()
+	now := time.Now()
+
+	tx, err := h.Pool.Begin(r.Context())
+	if err != nil {
+		h.Logger.Error("failed to begin tx for group DM", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	_, err = tx.Exec(r.Context(),
+		`INSERT INTO channels (id, channel_type, name, owner_id, created_at) VALUES ($1, 'group', $2, $3, $4)`,
+		newID, req.Name, userID, now,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create group DM channel", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		return
+	}
+
+	// Insert self as the first recipient.
+	_, err = tx.Exec(r.Context(),
+		`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3)`,
+		newID, userID, now,
+	)
+	if err != nil {
+		h.Logger.Error("failed to add self to group DM", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		return
+	}
+
+	// Insert all other recipients.
+	for _, uid := range req.UserIDs {
+		_, err = tx.Exec(r.Context(),
+			`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3)`,
+			newID, uid, now,
+		)
+		if err != nil {
+			h.Logger.Error("failed to add recipient to group DM",
+				slog.String("user_id", uid), slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		h.Logger.Error("failed to commit group DM", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		return
+	}
+
+	channel, _ := h.getChannel(r.Context(), newID)
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+
+	writeJSON(w, http.StatusCreated, channel)
+}
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

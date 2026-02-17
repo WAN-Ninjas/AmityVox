@@ -170,7 +170,7 @@
 
 	function handleClickOutside(e: MouseEvent) {
 		const target = e.target as HTMLElement;
-		if (!target.closest('.giphy-picker')) onclose();
+		if (!target.isConnected || !target.closest('.giphy-picker')) onclose();
 	}
 
 	function handleKeydown(e: KeyboardEvent) {

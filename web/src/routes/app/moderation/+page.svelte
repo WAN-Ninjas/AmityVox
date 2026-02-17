@@ -32,6 +32,7 @@
 	let issues = $state<ReportedIssue[]>([]);
 	let loadingIssues = $state(false);
 	let issuesLoaded = $state(false);
+	let issueFilter = $state<string>('');  // '' = active (open+in_progress), 'all', 'open', 'in_progress', 'resolved', 'dismissed'
 
 	// --- Resolve modal ---
 	let resolveModalOpen = $state(false);
@@ -85,13 +86,19 @@
 	async function loadIssues() {
 		loadingIssues = true;
 		try {
-			issues = await api.getModerationIssues();
+			issues = await api.getModerationIssues(issueFilter || undefined);
 			issuesLoaded = true;
 		} catch {
 			addToast('Failed to load issues', 'error');
 		} finally {
 			loadingIssues = false;
 		}
+	}
+
+	function setIssueFilter(filter: string) {
+		issueFilter = filter;
+		issuesLoaded = false;
+		loadIssues();
 	}
 
 	function openResolve(type: 'message_report' | 'user_report' | 'issue', id: string) {
@@ -334,11 +341,28 @@
 
 			<!-- ==================== ISSUES ==================== -->
 			{:else if currentTab === 'issues'}
-				<div class="mb-6 flex items-center justify-between">
+				<div class="mb-4 flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-text-primary">Reported Issues</h1>
 					<button class="btn-secondary text-sm" onclick={loadIssues} disabled={loadingIssues}>
 						{loadingIssues ? 'Loading...' : 'Refresh'}
 					</button>
+				</div>
+				<div class="mb-4 flex flex-wrap gap-1.5">
+					{#each [
+						{ value: '', label: 'Active' },
+						{ value: 'open', label: 'Open' },
+						{ value: 'in_progress', label: 'In Progress' },
+						{ value: 'resolved', label: 'Resolved' },
+						{ value: 'dismissed', label: 'Dismissed' },
+						{ value: 'all', label: 'All' }
+					] as filter (filter.value)}
+						<button
+							class="rounded-full px-3 py-1 text-xs font-medium transition-colors {issueFilter === filter.value ? 'bg-brand-500 text-white' : 'bg-bg-modifier text-text-muted hover:text-text-secondary'}"
+							onclick={() => setIssueFilter(filter.value)}
+						>
+							{filter.label}
+						</button>
+					{/each}
 				</div>
 
 				{#if loadingIssues && issues.length === 0}

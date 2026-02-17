@@ -13,6 +13,8 @@
 		online: 'bg-status-online',
 		idle: 'bg-status-idle',
 		dnd: 'bg-status-dnd',
+		busy: 'bg-status-dnd',
+		invisible: 'bg-status-offline',
 		offline: 'bg-status-offline'
 	};
 

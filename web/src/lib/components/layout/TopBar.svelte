@@ -8,11 +8,13 @@
 		onToggleMembers?: () => void;
 		onTogglePins?: () => void;
 		onToggleFollowers?: () => void;
+		onToggleGallery?: () => void;
 		showPins?: boolean;
 		showFollowers?: boolean;
+		showGallery?: boolean;
 	}
 
-	let { onToggleMembers, onTogglePins, onToggleFollowers, showPins = false, showFollowers = false }: Props = $props();
+	let { onToggleMembers, onTogglePins, onToggleFollowers, onToggleGallery, showPins = false, showFollowers = false, showGallery = false }: Props = $props();
 	let showSearch = $state(false);
 	let topicExpanded = $state(false);
 
@@ -106,6 +108,19 @@
 			>
 				<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 					<path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+				</svg>
+			</button>
+		{/if}
+
+		<!-- Gallery toggle -->
+		{#if $currentChannel}
+			<button
+				class="rounded p-1.5 transition-colors {showGallery ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
+				onclick={onToggleGallery}
+				title="Gallery"
+			>
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
 				</svg>
 			</button>
 		{/if}

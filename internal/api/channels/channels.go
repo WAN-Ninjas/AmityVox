@@ -2811,6 +2811,258 @@ func (h *Handler) HandleBatchDecryptMessages(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]int{"updated": updated})
 }
 
+// HandleAddGroupDMRecipient adds a user to a group DM channel.
+// PUT /api/v1/channels/{channelID}/recipients/{userID}
+func (h *Handler) HandleAddGroupDMRecipient(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	if targetUserID == "" {
+		writeError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
+		return
+	}
+
+	// Verify the channel exists and is a group DM.
+	var channelType string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelType)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if channelType != "group" {
+		writeError(w, http.StatusBadRequest, "not_group_dm", "This channel is not a group DM")
+		return
+	}
+
+	// Verify the requesting user is a current member of the group DM.
+	var isMember bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+		channelID, userID,
+	).Scan(&isMember)
+	if !isMember {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this group DM")
+		return
+	}
+
+	// Verify the target user exists.
+	var targetExists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, targetUserID,
+	).Scan(&targetExists)
+	if !targetExists {
+		writeError(w, http.StatusNotFound, "user_not_found", "User not found")
+		return
+	}
+
+	// Check if the target is already a member.
+	var alreadyMember bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+		channelID, targetUserID,
+	).Scan(&alreadyMember)
+	if alreadyMember {
+		writeError(w, http.StatusConflict, "already_member", "User is already a member of this group DM")
+		return
+	}
+
+	// Check recipient count (max 10 members in a group DM).
+	var recipientCount int
+	h.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM channel_recipients WHERE channel_id = $1`, channelID,
+	).Scan(&recipientCount)
+	if recipientCount >= 10 {
+		writeError(w, http.StatusBadRequest, "group_full", "Group DM cannot have more than 10 members")
+		return
+	}
+
+	// Add the recipient.
+	_, err = h.Pool.Exec(r.Context(),
+		`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, now())`,
+		channelID, targetUserID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to add group DM recipient", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add recipient")
+		return
+	}
+
+	channel, err := h.getChannel(r.Context(), channelID)
+	if err != nil {
+		h.Logger.Error("failed to get channel after adding recipient", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated channel")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", channel)
+
+	writeJSON(w, http.StatusOK, channel)
+}
+
+// HandleRemoveGroupDMRecipient removes a user from a group DM channel.
+// If removing self, acts as a leave. If removing another user, requires channel ownership.
+// DELETE /api/v1/channels/{channelID}/recipients/{userID}
+func (h *Handler) HandleRemoveGroupDMRecipient(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	if targetUserID == "" {
+		writeError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
+		return
+	}
+
+	// Verify the channel exists and is a group DM.
+	var channelType string
+	var ownerID *string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT channel_type, owner_id FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelType, &ownerID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if channelType != "group" {
+		writeError(w, http.StatusBadRequest, "not_group_dm", "This channel is not a group DM")
+		return
+	}
+
+	// Verify the requesting user is a current member.
+	var isMember bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+		channelID, userID,
+	).Scan(&isMember)
+	if !isMember {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this group DM")
+		return
+	}
+
+	// If removing someone else, must be the channel owner.
+	if targetUserID != userID {
+		if ownerID == nil || *ownerID != userID {
+			writeError(w, http.StatusForbidden, "not_owner", "Only the group DM owner can remove other members")
+			return
+		}
+	}
+
+	// Verify the target is actually a member.
+	var targetIsMember bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+		channelID, targetUserID,
+	).Scan(&targetIsMember)
+	if !targetIsMember {
+		writeError(w, http.StatusNotFound, "not_member", "User is not a member of this group DM")
+		return
+	}
+
+	// Remove the recipient.
+	_, err = h.Pool.Exec(r.Context(),
+		`DELETE FROM channel_recipients WHERE channel_id = $1 AND user_id = $2`,
+		channelID, targetUserID,
+	)
+	if err != nil {
+		h.Logger.Error("failed to remove group DM recipient", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove recipient")
+		return
+	}
+
+	channel, err := h.getChannel(r.Context(), channelID)
+	if err != nil {
+		h.Logger.Error("failed to get channel after removing recipient", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated channel")
+		return
+	}
+
+	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", channel)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleGetChannelGallery returns media attachments (images/videos) for a channel.
+// GET /api/v1/channels/{channelID}/gallery
+func (h *Handler) HandleGetChannelGallery(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
+
+	// Look up the guild that owns this channel and verify membership.
+	var guildID *string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		return
+	}
+	if guildID != nil {
+		var isMember bool
+		h.Pool.QueryRow(r.Context(),
+			`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+			*guildID, userID).Scan(&isMember)
+		if !isMember {
+			writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+			return
+		}
+	}
+
+	// Build query with optional filters.
+	baseSQL := `SELECT a.id, a.message_id, a.uploader_id, a.filename, a.content_type, a.size_bytes,
+	            a.width, a.height, a.duration_seconds, a.s3_bucket, a.s3_key, a.blurhash,
+	            a.alt_text, a.nsfw, a.description, a.created_at
+	     FROM attachments a
+	     JOIN messages m ON m.id = a.message_id
+	     WHERE m.channel_id = $1`
+	args := []interface{}{channelID}
+	argIdx := 2
+
+	// Filter by media type.
+	mediaType := r.URL.Query().Get("type")
+	switch mediaType {
+	case "image":
+		baseSQL += ` AND a.content_type LIKE 'image/%'`
+	case "video":
+		baseSQL += ` AND a.content_type LIKE 'video/%'`
+	default:
+		baseSQL += ` AND (a.content_type LIKE 'image/%' OR a.content_type LIKE 'video/%')`
+	}
+
+	// Cursor-based pagination.
+	if before := r.URL.Query().Get("before"); before != "" {
+		baseSQL += fmt.Sprintf(` AND a.id < $%d`, argIdx)
+		args = append(args, before)
+		argIdx++
+	}
+
+	_ = argIdx // suppress unused warning
+	baseSQL += ` ORDER BY a.created_at DESC LIMIT 50`
+
+	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to query gallery")
+		return
+	}
+	defer rows.Close()
+
+	attachments := make([]models.Attachment, 0)
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(
+			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash,
+			&a.AltText, &a.NSFW, &a.Description, &a.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read gallery data")
+			return
+		}
+		attachments = append(attachments, a)
+	}
+
+	writeJSON(w, http.StatusOK, attachments)
+}
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

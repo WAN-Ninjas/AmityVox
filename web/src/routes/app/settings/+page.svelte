@@ -8,6 +8,7 @@
 	import { getMutedChannels, getMutedGuilds, unmuteChannel, unmuteGuild } from '$lib/stores/muting';
 	import { channels as channelsStore } from '$lib/stores/channels';
 	import { guilds as guildsStore } from '$lib/stores/guilds';
+	import ProfileLinkEditor from '$components/common/ProfileLinkEditor.svelte';
 	import type { Session } from '$lib/types';
 	import {
 		customThemes,
@@ -44,9 +45,9 @@
 	} from '$lib/stores/settings';
 	import { SOUND_PRESETS, playNotificationSound } from '$lib/utils/sounds';
 
-	import type { User, BotToken, SlashCommand } from '$lib/types';
+	import type { User, BotToken, SlashCommand, VoicePreferences } from '$lib/types';
 
-	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'encryption' | 'bots' | 'data';
+	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'voice' | 'encryption' | 'bots' | 'data';
 	let currentTab = $state<Tab>('account');
 
 	// --- Account tab state ---
@@ -58,6 +59,9 @@
 	let success = $state('');
 	let avatarFile = $state<File | null>(null);
 	let avatarPreview = $state<string | null>(null);
+	let accentColor = $state('#5865f2');
+	let bannerFile = $state<File | null>(null);
+	let bannerPreview = $state<string | null>(null);
 
 	// --- Security tab state ---
 	let currentPassword = $state('');
@@ -165,6 +169,18 @@
 	let newCommandDescription = $state('');
 	let creatingCommand = $state(false);
 
+	// --- Voice & Video tab state ---
+	let voicePrefs = $state<VoicePreferences | null>(null);
+	let voiceLoading = $state(false);
+	let voiceSaving = $state(false);
+	let voiceSuccess = $state('');
+	let voiceError = $state('');
+	let inputDeviceId = $state('');
+	let outputDeviceId = $state('');
+	let availableInputDevices = $state<MediaDeviceInfo[]>([]);
+	let availableOutputDevices = $state<MediaDeviceInfo[]>([]);
+	let recordingVoicePTTKey = $state(false);
+
 	// --- Data & Privacy tab state ---
 	let exportingData = $state(false);
 	let exportDataSuccess = $state('');
@@ -177,11 +193,21 @@
 	let importAccountError = $state('');
 	let accountImportFileInput: HTMLInputElement | undefined;
 
+	function handleBannerSelect(e: Event) {
+		const file = (e.target as HTMLInputElement).files?.[0];
+		if (!file) return;
+		bannerFile = file;
+		const reader = new FileReader();
+		reader.onload = () => { bannerPreview = reader.result as string; };
+		reader.readAsDataURL(file);
+	}
+
 	onMount(() => {
 		if ($currentUser) {
 			displayName = $currentUser.display_name ?? '';
 			bio = $currentUser.bio ?? '';
 			statusText = $currentUser.status_text ?? '';
+			accentColor = $currentUser.accent_color ?? '#5865f2';
 		}
 
 		theme = (localStorage.getItem('av-theme') as ThemeName) ?? 'dark';
@@ -234,17 +260,28 @@
 				avatarId = uploaded.id;
 			}
 
+			// Upload banner if selected.
+			let bannerId: string | undefined;
+			if (bannerFile) {
+				const uploaded = await api.uploadFile(bannerFile);
+				bannerId = uploaded.id;
+			}
+
 			const payload: Record<string, unknown> = {
 				display_name: displayName || undefined,
 				bio: bio || undefined,
-				status_text: statusText || undefined
+				status_text: statusText || undefined,
+				accent_color: accentColor || undefined
 			};
 			if (avatarId) payload.avatar_id = avatarId;
+			if (bannerId) payload.banner_id = bannerId;
 
 			const updated = await api.updateMe(payload as any);
 			currentUser.set(updated);
 			avatarFile = null;
 			avatarPreview = null;
+			bannerFile = null;
+			bannerPreview = null;
 			success = 'Profile updated!';
 			setTimeout(() => (success = ''), 3000);
 		} catch (err: any) {
@@ -893,6 +930,28 @@
 		}
 	});
 
+	// Load voice preferences when switching to the voice tab.
+	$effect(() => {
+		if (currentTab === 'voice') {
+			loadVoicePreferences();
+		}
+	});
+
+	// PTT key recording for voice settings page.
+	$effect(() => {
+		if (recordingVoicePTTKey && voicePrefs) {
+			const handleKeyDown = (e: KeyboardEvent) => {
+				e.preventDefault();
+				if (voicePrefs) {
+					voicePrefs.ptt_key = e.code;
+				}
+				recordingVoicePTTKey = false;
+			};
+			window.addEventListener('keydown', handleKeyDown);
+			return () => window.removeEventListener('keydown', handleKeyDown);
+		}
+	});
+
 	// --- Data Export/Import ---
 
 	async function handleExportData() {
@@ -1003,6 +1062,7 @@
 			displayName = user.display_name ?? '';
 			bio = user.bio ?? '';
 			statusText = user.status_text ?? '';
+			accentColor = user.accent_color ?? '#5865f2';
 			importAccountSuccess = 'Account data imported successfully! Profile updated.';
 			setTimeout(() => (importAccountSuccess = ''), 5000);
 		} catch (err: any) {
@@ -1017,6 +1077,82 @@
 		}
 	}
 
+	// --- Voice & Video actions ---
+
+	async function loadVoicePreferences() {
+		voiceLoading = true;
+		voiceError = '';
+		try {
+			voicePrefs = await api.getVoicePreferences();
+			// Load device IDs from localStorage (browser-specific).
+			inputDeviceId = localStorage.getItem('av-voice-input-device') ?? '';
+			outputDeviceId = localStorage.getItem('av-voice-output-device') ?? '';
+			// Enumerate available devices.
+			if (navigator.mediaDevices?.enumerateDevices) {
+				const devices = await navigator.mediaDevices.enumerateDevices();
+				availableInputDevices = devices.filter(d => d.kind === 'audioinput');
+				availableOutputDevices = devices.filter(d => d.kind === 'audiooutput');
+			}
+		} catch (err: any) {
+			voiceError = err.message || 'Failed to load voice preferences';
+		} finally {
+			voiceLoading = false;
+		}
+	}
+
+	async function saveVoicePreferences() {
+		if (!voicePrefs) return;
+		voiceSaving = true;
+		voiceError = '';
+		voiceSuccess = '';
+		try {
+			voicePrefs = await api.updateVoicePreferences({
+				input_mode: voicePrefs.input_mode,
+				ptt_key: voicePrefs.ptt_key,
+				vad_threshold: voicePrefs.vad_threshold,
+				noise_suppression: voicePrefs.noise_suppression,
+				echo_cancellation: voicePrefs.echo_cancellation,
+				auto_gain_control: voicePrefs.auto_gain_control,
+				input_volume: voicePrefs.input_volume,
+				output_volume: voicePrefs.output_volume,
+				camera_resolution: voicePrefs.camera_resolution,
+				camera_framerate: voicePrefs.camera_framerate,
+				screenshare_resolution: voicePrefs.screenshare_resolution,
+				screenshare_framerate: voicePrefs.screenshare_framerate,
+				screenshare_audio: voicePrefs.screenshare_audio
+			});
+			// Save device IDs to localStorage.
+			localStorage.setItem('av-voice-input-device', inputDeviceId);
+			localStorage.setItem('av-voice-output-device', outputDeviceId);
+			voiceSuccess = 'Voice preferences saved!';
+			setTimeout(() => (voiceSuccess = ''), 3000);
+		} catch (err: any) {
+			voiceError = err.message || 'Failed to save voice preferences';
+		} finally {
+			voiceSaving = false;
+		}
+	}
+
+	function formatVoiceKeyName(code: string): string {
+		return code
+			.replace('Key', '')
+			.replace('Digit', '')
+			.replace('Arrow', '')
+			.replace('Numpad', 'Num ')
+			.replace('Control', 'Ctrl')
+			.replace('Semicolon', ';')
+			.replace('Quote', "'")
+			.replace('BracketLeft', '[')
+			.replace('BracketRight', ']')
+			.replace('Backslash', '\\')
+			.replace('Slash', '/')
+			.replace('Period', '.')
+			.replace('Comma', ',')
+			.replace('Minus', '-')
+			.replace('Equal', '=')
+			.replace('Backquote', '`');
+	}
+
 	async function handleLogout() {
 		await logout();
 		goto('/login');
@@ -1028,6 +1164,7 @@
 		{ id: 'notifications', label: 'Notifications' },
 		{ id: 'privacy', label: 'Privacy' },
 		{ id: 'appearance', label: 'Appearance' },
+		{ id: 'voice', label: 'Voice & Video' },
 		{ id: 'encryption', label: 'Encryption' },
 		{ id: 'bots', label: 'Bots' },
 		{ id: 'data', label: 'Data & Privacy' }
@@ -1123,33 +1260,80 @@
 				<h1 class="mb-6 text-xl font-bold text-text-primary">My Account</h1>
 
 				{#if $currentUser}
-					<!-- Profile card -->
-					<div class="mb-8 rounded-lg bg-bg-secondary p-6">
-						<div class="flex items-center gap-4">
-							<div class="relative">
-								<Avatar
-									name={$currentUser.display_name ?? $currentUser.username}
-									src={avatarPreview ?? ($currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null)}
-									size="lg"
-									status={$currentUser.status_presence}
-								/>
-								<label class="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity hover:opacity-100">
-									<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<!-- Profile card with banner -->
+					<div class="mb-8 overflow-hidden rounded-lg bg-bg-secondary">
+						<!-- Banner area -->
+						<div class="group relative h-28">
+							{#if bannerPreview}
+								<img class="h-full w-full object-cover" src={bannerPreview} alt="Banner preview" />
+							{:else if $currentUser.banner_id}
+								<img class="h-full w-full object-cover" src="/api/v1/files/{$currentUser.banner_id}" alt="Profile banner" />
+							{:else}
+								<div class="h-full w-full" style="background-color: {accentColor}"></div>
+							{/if}
+							<label class="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
+								<div class="flex flex-col items-center gap-1 text-white">
+									<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 										<path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
 										<circle cx="12" cy="13" r="3" />
 									</svg>
-									<input type="file" accept="image/*" class="hidden" onchange={handleAvatarSelect} />
-								</label>
+									<span class="text-xs font-medium">Change Banner</span>
+								</div>
+								<input type="file" accept="image/*" class="hidden" onchange={handleBannerSelect} />
+							</label>
+						</div>
+
+						<!-- Avatar + info, overlapping banner -->
+						<div class="relative px-6 pb-4">
+							<div class="flex items-end gap-4">
+								<div class="relative -mt-10">
+									<div class="rounded-xl bg-bg-secondary p-1">
+										<Avatar
+											name={$currentUser.display_name ?? $currentUser.username}
+											src={avatarPreview ?? ($currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null)}
+											size="lg"
+											status={$currentUser.status_presence}
+										/>
+									</div>
+									<label class="absolute inset-1 flex cursor-pointer items-center justify-center rounded-md bg-black/50 opacity-0 transition-opacity hover:opacity-100">
+										<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+											<circle cx="12" cy="13" r="3" />
+										</svg>
+										<input type="file" accept="image/*" class="hidden" onchange={handleAvatarSelect} />
+									</label>
+								</div>
+								<div class="mb-1">
+									<h2 class="text-lg font-semibold text-text-primary">
+										{$currentUser.display_name ?? $currentUser.username}
+									</h2>
+									<p class="text-sm text-text-muted">{$currentUser.username}</p>
+									{#if $currentUser.email}
+										<p class="text-sm text-text-muted">{$currentUser.email}</p>
+									{/if}
+								</div>
 							</div>
-							<div>
-								<h2 class="text-lg font-semibold text-text-primary">
-									{$currentUser.display_name ?? $currentUser.username}
-								</h2>
-								<p class="text-sm text-text-muted">{$currentUser.username}</p>
-								{#if $currentUser.email}
-									<p class="text-sm text-text-muted">{$currentUser.email}</p>
-								{/if}
-							</div>
+						</div>
+					</div>
+
+					<!-- Banner color -->
+					<div class="mb-4">
+						<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+							Profile Color
+						</label>
+						<p class="mb-2 text-xs text-text-muted">Used as your profile banner background when no banner image is set.</p>
+						<div class="flex items-center gap-3">
+							<input type="color" class="h-9 w-9 cursor-pointer rounded border border-border-primary bg-bg-secondary" bind:value={accentColor} />
+							<input type="text" class="input w-28 font-mono text-xs" bind:value={accentColor} maxlength="7" />
+							{#if $currentUser.banner_id || bannerPreview}
+								<button
+									class="text-xs text-red-400 hover:text-red-300"
+									onclick={() => { bannerFile = null; bannerPreview = null; }}
+									title="Remove banner image to use color instead"
+								>
+									Remove Banner
+								</button>
+							{/if}
 						</div>
 					</div>
 
@@ -1177,6 +1361,11 @@
 					<button class="btn-primary" onclick={handleSaveProfile} disabled={saving}>
 						{saving ? 'Saving...' : 'Save Changes'}
 					</button>
+
+					<!-- Profile Links -->
+					<div class="mt-8 rounded-lg bg-bg-secondary p-6">
+						<ProfileLinkEditor />
+					</div>
 				{/if}
 
 			<!-- ==================== SECURITY ==================== -->
@@ -2494,6 +2683,224 @@
 							</div>
 						{/each}
 					</div>
+				{/if}
+
+			<!-- ==================== VOICE & VIDEO ==================== -->
+			{:else if currentTab === 'voice'}
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Voice & Video</h1>
+
+				{#if voiceLoading}
+					<p class="text-sm text-text-muted">Loading voice preferences...</p>
+				{:else if voicePrefs}
+					{#if voiceError}
+						<div class="mb-4 rounded-lg bg-red-500/10 px-4 py-2 text-sm text-red-400">{voiceError}</div>
+					{/if}
+					{#if voiceSuccess}
+						<div class="mb-4 rounded-lg bg-status-online/10 px-4 py-2 text-sm text-status-online">{voiceSuccess}</div>
+					{/if}
+
+					<!-- Audio Input -->
+					<div class="mb-6">
+						<h2 class="mb-3 text-2xs font-medium uppercase tracking-wide text-text-muted">Audio Input</h2>
+						<div class="flex flex-col gap-4 rounded-lg bg-bg-secondary p-4">
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Input Device</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={inputDeviceId}
+								>
+									<option value="">Default</option>
+									{#each availableInputDevices as device}
+										<option value={device.deviceId}>{device.label || `Microphone ${device.deviceId.slice(0, 8)}`}</option>
+									{/each}
+								</select>
+							</div>
+
+							<div class="flex flex-col gap-1">
+								<label class="flex items-center justify-between text-sm font-medium text-text-secondary">
+									Input Volume
+									<span class="text-xs text-text-muted">{Math.round(voicePrefs.input_volume * 100)}%</span>
+								</label>
+								<input
+									type="range"
+									min="0"
+									max="2"
+									step="0.05"
+									bind:value={voicePrefs.input_volume}
+									class="w-full accent-brand-500"
+								/>
+							</div>
+
+							<label class="flex items-center justify-between">
+								<span class="text-sm text-text-primary">Noise Suppression</span>
+								<input type="checkbox" bind:checked={voicePrefs.noise_suppression} class="accent-brand-500" />
+							</label>
+
+							<label class="flex items-center justify-between">
+								<span class="text-sm text-text-primary">Echo Cancellation</span>
+								<input type="checkbox" bind:checked={voicePrefs.echo_cancellation} class="accent-brand-500" />
+							</label>
+
+							<label class="flex items-center justify-between">
+								<span class="text-sm text-text-primary">Auto Gain Control</span>
+								<input type="checkbox" bind:checked={voicePrefs.auto_gain_control} class="accent-brand-500" />
+							</label>
+						</div>
+					</div>
+
+					<!-- Audio Output -->
+					<div class="mb-6">
+						<h2 class="mb-3 text-2xs font-medium uppercase tracking-wide text-text-muted">Audio Output</h2>
+						<div class="flex flex-col gap-4 rounded-lg bg-bg-secondary p-4">
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Output Device</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={outputDeviceId}
+								>
+									<option value="">Default</option>
+									{#each availableOutputDevices as device}
+										<option value={device.deviceId}>{device.label || `Speaker ${device.deviceId.slice(0, 8)}`}</option>
+									{/each}
+								</select>
+							</div>
+
+							<div class="flex flex-col gap-1">
+								<label class="flex items-center justify-between text-sm font-medium text-text-secondary">
+									Output Volume
+									<span class="text-xs text-text-muted">{Math.round(voicePrefs.output_volume * 100)}%</span>
+								</label>
+								<input
+									type="range"
+									min="0"
+									max="2"
+									step="0.05"
+									bind:value={voicePrefs.output_volume}
+									class="w-full accent-brand-500"
+								/>
+							</div>
+						</div>
+					</div>
+
+					<!-- Voice Activity -->
+					<div class="mb-6">
+						<h2 class="mb-3 text-2xs font-medium uppercase tracking-wide text-text-muted">Voice Activity</h2>
+						<div class="flex flex-col gap-4 rounded-lg bg-bg-secondary p-4">
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Input Mode</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={voicePrefs.input_mode}
+								>
+									<option value="vad">Voice Activity Detection</option>
+									<option value="ptt">Push to Talk</option>
+								</select>
+							</div>
+
+							{#if voicePrefs.input_mode === 'vad'}
+								<div class="flex flex-col gap-1">
+									<label class="flex items-center justify-between text-sm font-medium text-text-secondary">
+										VAD Sensitivity
+										<span class="text-xs text-text-muted">{Math.round(voicePrefs.vad_threshold * 100)}%</span>
+									</label>
+									<input
+										type="range"
+										min="0"
+										max="1"
+										step="0.05"
+										bind:value={voicePrefs.vad_threshold}
+										class="w-full accent-brand-500"
+									/>
+								</div>
+							{:else}
+								<div class="flex flex-col gap-1">
+									<label class="text-sm font-medium text-text-secondary">PTT Keybind</label>
+									<button
+										class="rounded border px-4 py-2 text-sm font-mono {recordingVoicePTTKey ? 'border-brand-500 text-brand-400 animate-pulse' : 'border-bg-tertiary bg-bg-primary text-text-primary'}"
+										onclick={() => recordingVoicePTTKey = !recordingVoicePTTKey}
+									>
+										{recordingVoicePTTKey ? 'Press a key...' : formatVoiceKeyName(voicePrefs.ptt_key)}
+									</button>
+								</div>
+							{/if}
+						</div>
+					</div>
+
+					<!-- Camera Defaults -->
+					<div class="mb-6">
+						<h2 class="mb-3 text-2xs font-medium uppercase tracking-wide text-text-muted">Camera Defaults</h2>
+						<div class="flex flex-col gap-4 rounded-lg bg-bg-secondary p-4">
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Resolution</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={voicePrefs.camera_resolution}
+								>
+									<option value="360p">360p (Low bandwidth)</option>
+									<option value="720p">720p (HD)</option>
+									<option value="1080p">1080p (Full HD)</option>
+								</select>
+							</div>
+
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Frame Rate</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={voicePrefs.camera_framerate}
+								>
+									<option value={15}>15 fps (Low bandwidth)</option>
+									<option value={30}>30 fps (Standard)</option>
+									<option value={60}>60 fps (Smooth)</option>
+								</select>
+							</div>
+						</div>
+					</div>
+
+					<!-- Screen Share Defaults -->
+					<div class="mb-6">
+						<h2 class="mb-3 text-2xs font-medium uppercase tracking-wide text-text-muted">Screen Share Defaults</h2>
+						<div class="flex flex-col gap-4 rounded-lg bg-bg-secondary p-4">
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Resolution</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={voicePrefs.screenshare_resolution}
+								>
+									<option value="720p">720p (HD)</option>
+									<option value="1080p">1080p (Full HD)</option>
+									<option value="4k">4K (Ultra HD)</option>
+								</select>
+							</div>
+
+							<div class="flex flex-col gap-1">
+								<label class="text-sm font-medium text-text-secondary">Frame Rate</label>
+								<select
+									class="rounded border border-bg-tertiary bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+									bind:value={voicePrefs.screenshare_framerate}
+								>
+									<option value={15}>15 fps (Low bandwidth)</option>
+									<option value={30}>30 fps (Standard)</option>
+									<option value={60}>60 fps (Smooth)</option>
+								</select>
+							</div>
+
+							<label class="flex items-center justify-between">
+								<span class="text-sm text-text-primary">Share System Audio</span>
+								<input type="checkbox" bind:checked={voicePrefs.screenshare_audio} class="accent-brand-500" />
+							</label>
+						</div>
+					</div>
+
+					<!-- Save Button -->
+					<button
+						class="rounded bg-brand-500 px-6 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+						onclick={saveVoicePreferences}
+						disabled={voiceSaving}
+					>
+						{voiceSaving ? 'Saving...' : 'Save Changes'}
+					</button>
+				{:else if voiceError}
+					<div class="rounded-lg bg-red-500/10 px-4 py-2 text-sm text-red-400">{voiceError}</div>
 				{/if}
 
 			<!-- ==================== DATA & PRIVACY ==================== -->
