@@ -18,6 +18,8 @@
 	import PinnedMessages from '$components/chat/PinnedMessages.svelte';
 	import ThreadPanel from '$components/chat/ThreadPanel.svelte';
 	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
+	import ForumChannelView from '$components/channels/ForumChannelView.svelte';
+	import GalleryChannelView from '$components/channels/GalleryChannelView.svelte';
 	import GalleryPanel from '$lib/components/gallery/GalleryPanel.svelte';
 
 	let showMembers = $state(true);
@@ -25,6 +27,7 @@
 	let showFollowers = $state(false);
 	let showGallery = $state(false);
 	let activeThread = $state<{ channel: Channel; parentMessage: Message | null } | null>(null);
+	let galleryViewRef: GalleryChannelView | undefined;
 	let isDragging = $state(false);
 	let dragCounter = 0;
 	let isUploading = $state(false);
@@ -59,6 +62,9 @@
 	function handleDragEnter(e: DragEvent) {
 		e.preventDefault();
 		dragCounter++;
+		// Gallery/forum channels handle their own drag UX — don't show the page-level overlay.
+		const ct = $currentChannel?.channel_type;
+		if (ct === 'gallery' || ct === 'forum') return;
 		if (e.dataTransfer?.types.includes('Files')) {
 			isDragging = true;
 		}
@@ -85,6 +91,18 @@
 		dragCounter = 0;
 
 		if (isArchived) return;
+
+		// Gallery channels: forward dropped files to the gallery post creation form.
+		const ct = $currentChannel?.channel_type;
+		if (ct === 'gallery') {
+			const files = e.dataTransfer?.files;
+			if (files?.length && galleryViewRef) {
+				galleryViewRef.addDroppedFiles(Array.from(files));
+			}
+			return;
+		}
+		// Forum channels handle their own uploads via their post creation forms.
+		if (ct === 'forum') return;
 
 		const files = e.dataTransfer?.files;
 		const channelId = $currentChannelId;
@@ -285,6 +303,17 @@
 			<VoiceChannelView
 				channelId={$currentChannelId ?? ''}
 				guildId={$page.params.guildId}
+			/>
+		{:else if $currentChannel?.channel_type === 'forum'}
+			<ForumChannelView
+				channelId={$currentChannelId ?? ''}
+				onopenthread={openThread}
+			/>
+		{:else if $currentChannel?.channel_type === 'gallery'}
+			<GalleryChannelView
+				bind:this={galleryViewRef}
+				channelId={$currentChannelId ?? ''}
+				onopenthread={openThread}
 			/>
 		{:else}
 			{#if isArchived}

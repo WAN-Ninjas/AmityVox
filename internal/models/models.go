@@ -220,6 +220,14 @@ type Channel struct {
 	DefaultAutoArchiveDuration int        `json:"default_auto_archive_duration"`
 	ParentChannelID           *string    `json:"parent_channel_id,omitempty"`
 	LastActivityAt            *time.Time `json:"last_activity_at,omitempty"`
+	ForumDefaultSort          string     `json:"forum_default_sort,omitempty"`
+	ForumPostGuidelines       *string    `json:"forum_post_guidelines,omitempty"`
+	ForumRequireTags          bool       `json:"forum_require_tags,omitempty"`
+	GalleryDefaultSort        string     `json:"gallery_default_sort,omitempty"`
+	GalleryPostGuidelines     *string    `json:"gallery_post_guidelines,omitempty"`
+	GalleryRequireTags        bool       `json:"gallery_require_tags,omitempty"`
+	Pinned                    bool       `json:"pinned,omitempty"`
+	ReplyCount                int        `json:"reply_count,omitempty"`
 	CreatedAt                 time.Time  `json:"created_at"`
 	Recipients                []User     `json:"recipients,omitempty"`
 }
@@ -232,6 +240,7 @@ const (
 	ChannelTypeGroup        = "group"
 	ChannelTypeAnnouncement = "announcement"
 	ChannelTypeForum        = "forum"
+	ChannelTypeGallery      = "gallery"
 	ChannelTypeStage        = "stage"
 )
 
@@ -886,6 +895,61 @@ type ReportedIssue struct {
 	Notes        *string    `json:"notes,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	ReporterName *string    `json:"reporter_name,omitempty"`
+}
+
+// ForumTag represents a tag that can be applied to posts in a forum channel.
+// Corresponds to the forum_tags table.
+type ForumTag struct {
+	ID        string    `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	Name      string    `json:"name"`
+	Emoji     *string   `json:"emoji,omitempty"`
+	Color     *string   `json:"color,omitempty"`
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ForumPost represents a post (thread) in a forum channel with tags and metadata.
+type ForumPost struct {
+	ID             string     `json:"id"`
+	Name           *string    `json:"name,omitempty"`
+	OwnerID        *string    `json:"owner_id,omitempty"`
+	Pinned         bool       `json:"pinned"`
+	Locked         bool       `json:"locked"`
+	ReplyCount     int        `json:"reply_count"`
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	Tags           []ForumTag `json:"tags"`
+	Author         *User      `json:"author,omitempty"`
+	ContentPreview *string    `json:"content_preview,omitempty"`
+}
+
+// GalleryTag represents a tag that can be applied to posts in a gallery channel.
+// Corresponds to the gallery_tags table.
+type GalleryTag struct {
+	ID        string    `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	Name      string    `json:"name"`
+	Emoji     *string   `json:"emoji,omitempty"`
+	Color     *string   `json:"color,omitempty"`
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// GalleryPost represents a post (thread) in a gallery channel with tags, thumbnail, and metadata.
+type GalleryPost struct {
+	ID             string       `json:"id"`
+	Name           *string      `json:"name,omitempty"`
+	OwnerID        *string      `json:"owner_id,omitempty"`
+	Pinned         bool         `json:"pinned"`
+	Locked         bool         `json:"locked"`
+	ReplyCount     int          `json:"reply_count"`
+	LastActivityAt *time.Time   `json:"last_activity_at,omitempty"`
+	CreatedAt      time.Time    `json:"created_at"`
+	Tags           []GalleryTag `json:"tags"`
+	Author         *User        `json:"author,omitempty"`
+	Thumbnail      *Attachment  `json:"thumbnail,omitempty"`
+	Description    *string      `json:"description,omitempty"`
 }
 
 // ModerationStats holds counts of open moderation items.

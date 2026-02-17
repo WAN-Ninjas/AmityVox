@@ -263,6 +263,7 @@ func runServe() error {
 		Pool:          db.Pool,
 		Bus:           bus,
 		Search:        searchSvc,
+		Media:         mediaSvc,
 		AutoMod:       automodSvc,
 		Notifications: notifSvc,
 		Logger:        logger,

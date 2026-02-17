@@ -82,11 +82,21 @@ export interface Channel {
 	archived: boolean;
 	parent_channel_id: string | null;
 	last_activity_at: string | null;
+	// Forum-specific fields.
+	forum_default_sort?: string;
+	forum_post_guidelines?: string | null;
+	forum_require_tags?: boolean;
+	// Gallery-specific fields.
+	gallery_default_sort?: string;
+	gallery_post_guidelines?: string | null;
+	gallery_require_tags?: boolean;
+	pinned?: boolean;
+	reply_count?: number;
 	created_at: string;
 	recipients?: User[];
 }
 
-export type ChannelType = 'text' | 'voice' | 'dm' | 'group' | 'announcement' | 'forum' | 'stage';
+export type ChannelType = 'text' | 'voice' | 'dm' | 'group' | 'announcement' | 'forum' | 'gallery' | 'stage';
 
 export interface Message {
 	id: string;
@@ -865,6 +875,71 @@ export interface VoicePreferences {
 	screenshare_resolution: '720p' | '1080p' | '4k';
 	screenshare_framerate: 15 | 30 | 60;
 	screenshare_audio: boolean;
+}
+
+export interface RetentionPolicy {
+	id: string;
+	channel_id: string | null;
+	guild_id: string | null;
+	max_age_days: number;
+	delete_attachments: boolean;
+	delete_pins: boolean;
+	enabled: boolean;
+	last_run_at: string | null;
+	next_run_at: string | null;
+	messages_deleted: number;
+	created_by: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ForumTag {
+	id: string;
+	channel_id: string;
+	name: string;
+	emoji: string | null;
+	color: string | null;
+	position: number;
+	created_at: string;
+}
+
+export interface ForumPost {
+	id: string;
+	name: string | null;
+	owner_id: string | null;
+	pinned: boolean;
+	locked: boolean;
+	reply_count: number;
+	last_activity_at: string | null;
+	created_at: string;
+	tags: ForumTag[];
+	author?: User;
+	content_preview?: string;
+}
+
+export interface GalleryTag {
+	id: string;
+	channel_id: string;
+	name: string;
+	emoji: string | null;
+	color: string | null;
+	position: number;
+	created_at: string;
+}
+
+export interface GalleryPost {
+	id: string;
+	name: string | null;
+	owner_id: string | null;
+	pinned: boolean;
+	locked: boolean;
+	reply_count: number;
+	last_activity_at: string | null;
+	created_at: string;
+	tags: GalleryTag[];
+	author?: User;
+	thumbnail?: Attachment;
+	description?: string;
 }
 
 // --- Permission bitfield constants (must match internal/permissions/permissions.go) ---
