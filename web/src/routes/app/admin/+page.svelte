@@ -1377,7 +1377,7 @@
 							<div class="grid gap-3 text-sm">
 								<div class="flex justify-between">
 									<span class="text-text-muted">Software</span>
-									<span class="text-text-primary">AmityVox v0.4.0</span>
+									<span class="text-text-primary">AmityVox v0.5.0</span>
 								</div>
 								<div class="flex justify-between">
 									<span class="text-text-muted">Go Version</span>

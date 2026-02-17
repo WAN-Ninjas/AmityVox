@@ -14,12 +14,13 @@
 	import BoostPanel from '$lib/components/guild/BoostPanel.svelte';
 	import GuildInsights from '$lib/components/guild/GuildInsights.svelte';
 	import GuildTemplates from '$lib/components/guild/GuildTemplates.svelte';
+	import GuildRetentionSettings from '$lib/components/guild/GuildRetentionSettings.svelte';
 	import { canManageGuild, canManageRoles, canBanMembers, canKickMembers, canViewAuditLog } from '$lib/stores/permissions';
 	import RoleEditor from '$components/guild/RoleEditor.svelte';
 	import MembersPanel from '$components/guild/MembersPanel.svelte';
 	import type { Role, Invite, Ban, AuditLogEntry, CustomEmoji, Webhook, Category, Channel, AutoModRule, AutoModAction, MemberWarning, MessageReport, RaidConfig, OnboardingConfig, OnboardingPrompt, BanList, BanListEntry, BanListSubscription, StickerPack, Sticker } from '$lib/types';
 
-	type Tab = 'overview' | 'boosts' | 'roles' | 'auto-roles' | 'members' | 'categories' | 'invites' | 'bans' | 'emoji' | 'soundboard' | 'stickers' | 'webhooks' | 'audit' | 'insights' | 'automod' | 'moderation' | 'leveling' | 'raid' | 'onboarding' | 'starboard' | 'welcome' | 'ban-lists' | 'templates';
+	type Tab = 'overview' | 'boosts' | 'roles' | 'auto-roles' | 'members' | 'categories' | 'invites' | 'bans' | 'emoji' | 'soundboard' | 'stickers' | 'webhooks' | 'audit' | 'insights' | 'automod' | 'moderation' | 'leveling' | 'raid' | 'onboarding' | 'starboard' | 'welcome' | 'ban-lists' | 'templates' | 'retention';
 	let currentTab = $state<Tab>('overview');
 
 	// --- Overview ---
@@ -1363,7 +1364,8 @@
 		{ id: 'starboard', label: 'Starboard' },
 		{ id: 'welcome', label: 'Welcome' },
 		{ id: 'ban-lists', label: 'Ban Lists' },
-		{ id: 'templates', label: 'Templates' }
+		{ id: 'templates', label: 'Templates' },
+		{ id: 'retention', label: 'Message Retention' }
 	];
 
 	// Permission-gated tabs: only show tabs the user has permissions for.
@@ -3208,6 +3210,10 @@
 				<!-- Guild Templates (export/import) -->
 				<hr class="my-6 border-bg-modifier" />
 				<GuildTemplates guildId={$page.params.guildId} />
+
+			<!-- ==================== MESSAGE RETENTION ==================== -->
+			{:else if currentTab === 'retention'}
+				<GuildRetentionSettings guildId={$page.params.guildId} />
 			{/if}
 		</div>
 	</div>

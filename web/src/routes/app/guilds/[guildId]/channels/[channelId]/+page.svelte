@@ -18,6 +18,8 @@
 	import PinnedMessages from '$components/chat/PinnedMessages.svelte';
 	import ThreadPanel from '$components/chat/ThreadPanel.svelte';
 	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
+	import ForumChannelView from '$components/channels/ForumChannelView.svelte';
+	import GalleryChannelView from '$components/channels/GalleryChannelView.svelte';
 	import GalleryPanel from '$lib/components/gallery/GalleryPanel.svelte';
 
 	let showMembers = $state(true);
@@ -285,6 +287,16 @@
 			<VoiceChannelView
 				channelId={$currentChannelId ?? ''}
 				guildId={$page.params.guildId}
+			/>
+		{:else if $currentChannel?.channel_type === 'forum'}
+			<ForumChannelView
+				channelId={$currentChannelId ?? ''}
+				onopenthread={openThread}
+			/>
+		{:else if $currentChannel?.channel_type === 'gallery'}
+			<GalleryChannelView
+				channelId={$currentChannelId ?? ''}
+				onopenthread={openThread}
 			/>
 		{:else}
 			{#if isArchived}

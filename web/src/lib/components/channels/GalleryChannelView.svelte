@@ -1,10 +1,10 @@
 <script lang="ts">
-	import type { Channel, ForumPost, ForumTag } from '$lib/types';
+	import type { Channel, GalleryPost, GalleryTag } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { channels } from '$lib/stores/channels';
-	import ForumPostCard from './ForumPostCard.svelte';
-	import ForumPostCreate from './ForumPostCreate.svelte';
+	import GalleryPostCard from './GalleryPostCard.svelte';
+	import GalleryPostCreate from './GalleryPostCreate.svelte';
 
 	interface Props {
 		channelId: string;
@@ -13,8 +13,8 @@
 
 	let { channelId, onopenthread }: Props = $props();
 
-	let posts = $state<ForumPost[]>([]);
-	let forumTags = $state<ForumTag[]>([]);
+	let posts = $state<GalleryPost[]>([]);
+	let galleryTags = $state<GalleryTag[]>([]);
 	let loading = $state(true);
 	let loadingMore = $state(false);
 	let error = $state('');
@@ -22,18 +22,18 @@
 	let showNewPostForm = $state(false);
 
 	// Sort & filter state
-	let sortBy = $state<'latest_activity' | 'creation_date'>('latest_activity');
+	let sortBy = $state<'newest' | 'oldest' | 'most_comments'>('newest');
 	let filterTagId = $state<string | null>(null);
 
-	// Get the current forum channel for metadata
-	let forumChannel = $derived.by(() => {
+	// Get the current gallery channel for metadata
+	let galleryChannel = $derived.by(() => {
 		let ch: Channel | undefined;
 		channels.subscribe((m) => (ch = m.get(channelId)))();
 		return ch;
 	});
 
-	let guidelines = $derived(forumChannel?.forum_post_guidelines ?? null);
-	let requireTags = $derived(forumChannel?.forum_require_tags ?? false);
+	let guidelines = $derived(galleryChannel?.gallery_post_guidelines ?? null);
+	let requireTags = $derived(galleryChannel?.gallery_require_tags ?? false);
 
 	// Reload when channelId, sort, or filter changes
 	$effect(() => {
@@ -46,9 +46,9 @@
 
 	async function loadTags() {
 		try {
-			forumTags = await api.getForumTags(channelId);
+			galleryTags = await api.getGalleryTags(channelId);
 		} catch {
-			forumTags = [];
+			galleryTags = [];
 		}
 	}
 
@@ -62,8 +62,8 @@
 		}
 
 		try {
-			const cursor = !reset && posts.length > 0 ? posts[posts.length - 1].id : undefined;
-			const result = await api.getForumPosts(channelId, {
+			const cursor = !reset && posts.length > 0 ? posts[posts.length - 1].created_at : undefined;
+			const result = await api.getGalleryPosts(channelId, {
 				sort: sortBy,
 				tag: filterTagId ?? undefined,
 				before: cursor,
@@ -77,7 +77,7 @@
 			hasMore = result.length === 25;
 		} catch (err: any) {
 			if (reset) {
-				error = err.message || 'Failed to load forum posts';
+				error = err.message || 'Failed to load gallery posts';
 			} else {
 				addToast('Failed to load more posts', 'error');
 			}
@@ -87,8 +87,8 @@
 		}
 	}
 
-	function openPost(post: ForumPost) {
-		// Forum posts are thread channels — look up the full Channel from the store
+	function openPost(post: GalleryPost) {
+		// Gallery posts are thread channels — look up the full Channel from the store
 		let channel: Channel | undefined;
 		channels.subscribe((m) => (channel = m.get(post.id)))();
 
@@ -98,7 +98,7 @@
 			// Fallback: construct a minimal channel-like object
 			onopenthread?.({
 				id: post.id,
-				guild_id: forumChannel?.guild_id ?? null,
+				guild_id: galleryChannel?.guild_id ?? null,
 				category_id: null,
 				channel_type: 'text',
 				name: post.name,
@@ -129,10 +129,6 @@
 		loadPosts(true);
 	}
 
-	function setSort(sort: 'latest_activity' | 'creation_date') {
-		sortBy = sort;
-	}
-
 	function setFilterTag(tagId: string | null) {
 		filterTagId = filterTagId === tagId ? null : tagId;
 	}
@@ -147,10 +143,13 @@
 	<div class="flex min-h-12 flex-wrap items-center gap-2 border-b border-bg-floating px-4 py-2">
 		<div class="flex items-center gap-2">
 			<svg class="h-5 w-5 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+				<rect x="3" y="3" width="7" height="7" rx="1" />
+				<rect x="14" y="3" width="7" height="7" rx="1" />
+				<rect x="3" y="14" width="7" height="7" rx="1" />
+				<rect x="14" y="14" width="7" height="7" rx="1" />
 			</svg>
 			<h2 class="text-sm font-semibold text-text-primary">
-				{forumChannel?.name ?? 'Forum'}
+				{galleryChannel?.name ?? 'Gallery'}
 			</h2>
 		</div>
 
@@ -160,8 +159,9 @@
 				class="rounded-md border border-bg-modifier bg-bg-tertiary px-2 py-1 text-xs text-text-secondary outline-none focus:border-brand-500"
 				bind:value={sortBy}
 			>
-				<option value="latest_activity">Latest Activity</option>
-				<option value="creation_date">Newest</option>
+				<option value="newest">Newest</option>
+				<option value="oldest">Oldest</option>
+				<option value="most_comments">Most Comments</option>
 			</select>
 
 			<button
@@ -174,10 +174,10 @@
 	</div>
 
 	<!-- Tag filter bar -->
-	{#if forumTags.length > 0}
+	{#if galleryTags.length > 0}
 		<div class="flex items-center gap-1.5 border-b border-bg-floating px-4 py-2 overflow-x-auto">
 			<span class="shrink-0 text-xs text-text-muted">Filter:</span>
-			{#each forumTags as tag (tag.id)}
+			{#each galleryTags as tag (tag.id)}
 				<button
 					class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors {filterTagId === tag.id ? 'border-brand-500 bg-brand-500/15 text-brand-400' : 'border-bg-modifier text-text-secondary hover:border-text-muted'}"
 					onclick={() => setFilterTag(tag.id)}
@@ -199,9 +199,9 @@
 
 	<!-- New post form -->
 	{#if showNewPostForm}
-		<ForumPostCreate
+		<GalleryPostCreate
 			{channelId}
-			tags={forumTags}
+			tags={galleryTags}
 			{requireTags}
 			{guidelines}
 			oncreated={handlePostCreated}
@@ -209,7 +209,7 @@
 		/>
 	{/if}
 
-	<!-- Post list -->
+	<!-- Post grid -->
 	<div class="flex-1 overflow-y-auto">
 		{#if loading}
 			<div class="flex items-center justify-center py-16">
@@ -231,40 +231,47 @@
 		{:else if posts.length === 0}
 			<div class="flex flex-col items-center justify-center py-16">
 				<svg class="mb-3 h-16 w-16 text-text-muted opacity-50" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
-					<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+					<rect x="3" y="3" width="7" height="7" rx="1" />
+					<rect x="14" y="3" width="7" height="7" rx="1" />
+					<rect x="3" y="14" width="7" height="7" rx="1" />
+					<rect x="14" y="14" width="7" height="7" rx="1" />
 				</svg>
 				<p class="text-sm font-medium text-text-secondary">
-					{filterTagId ? 'No posts match this filter' : 'No posts yet'}
+					{filterTagId ? 'No posts match this filter' : 'No gallery posts yet'}
 				</p>
 				<p class="mt-1 text-xs text-text-muted">
-					{filterTagId ? 'Try removing the tag filter.' : 'Be the first to start a discussion.'}
+					{filterTagId ? 'Try removing the tag filter.' : 'Be the first to share an image or video.'}
 				</p>
 			</div>
 		{:else}
-			<div class="mx-auto max-w-3xl space-y-1 p-4">
+			<div class="p-4">
 				<!-- Pinned posts -->
 				{#if pinnedPosts.length > 0}
-					<div class="mb-3">
-						<h3 class="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-muted">
+					<div class="mb-4">
+						<h3 class="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-muted">
 							<svg class="h-3 w-3" fill="currentColor" viewBox="0 0 24 24">
 								<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
 							</svg>
 							Pinned
 						</h3>
-						{#each pinnedPosts as post (post.id)}
-							<ForumPostCard {post} onclick={() => openPost(post)} />
-						{/each}
+						<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+							{#each pinnedPosts as post (post.id)}
+								<GalleryPostCard {post} onclick={() => openPost(post)} />
+							{/each}
+						</div>
 					</div>
 				{/if}
 
 				<!-- Regular posts -->
-				{#each regularPosts as post (post.id)}
-					<ForumPostCard {post} onclick={() => openPost(post)} />
-				{/each}
+				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+					{#each regularPosts as post (post.id)}
+						<GalleryPostCard {post} onclick={() => openPost(post)} />
+					{/each}
+				</div>
 
 				<!-- Load more -->
 				{#if hasMore}
-					<div class="flex justify-center py-4">
+					<div class="flex justify-center py-6">
 						<button
 							class="rounded-md bg-bg-secondary px-4 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-tertiary disabled:opacity-50"
 							onclick={() => loadPosts(false)}
@@ -276,7 +283,7 @@
 									Loading...
 								</span>
 							{:else}
-								Load More Posts
+								Load More
 							{/if}
 						</button>
 					</div>
