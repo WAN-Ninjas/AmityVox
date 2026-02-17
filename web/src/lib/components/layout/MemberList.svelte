@@ -9,6 +9,7 @@
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import UserPopover from '$components/common/UserPopover.svelte';
+	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import { presenceMap } from '$lib/stores/presence';
 	import { addDMChannel } from '$lib/stores/dms';
 	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
@@ -33,6 +34,7 @@
 	let contextMenu = $state<{ x: number; y: number; member: GuildMember } | null>(null);
 	// User popover state
 	let popover = $state<{ userId: string; x: number; y: number } | null>(null);
+	let profileUserId = $state<string | null>(null);
 	// Submenu state
 	let showRolesSubmenu = $state(false);
 	let showTimeoutSubmenu = $state(false);
@@ -541,5 +543,10 @@
 		x={popover.x}
 		y={popover.y}
 		onclose={() => (popover = null)}
+		onviewprofile={(uid) => { popover = null; profileUserId = uid; }}
 	/>
+{/if}
+
+{#if profileUserId}
+	<ProfileModal userId={profileUserId} open={!!profileUserId} onclose={() => (profileUserId = null)} />
 {/if}

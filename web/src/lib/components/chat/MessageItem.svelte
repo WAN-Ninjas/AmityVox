@@ -5,6 +5,7 @@
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import UserPopover from '$components/common/UserPopover.svelte';
+	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import ImageLightbox from '$components/common/ImageLightbox.svelte';
 	import EditHistoryModal from '$components/chat/EditHistoryModal.svelte';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
@@ -44,6 +45,7 @@
 	let attachmentContextMenu = $state<{ x: number; y: number; attachment: any } | null>(null);
 	let showQuickReactions = $state(false);
 	let userPopover = $state<{ x: number; y: number } | null>(null);
+	let profileUserId = $state<string | null>(null);
 	let lightboxSrc = $state<string | null>(null);
 	let showEditHistory = $state(false);
 	let showForward = $state(false);
@@ -972,7 +974,13 @@
 		x={userPopover.x}
 		y={userPopover.y}
 		onclose={() => (userPopover = null)}
+		onviewprofile={(uid) => { userPopover = null; profileUserId = uid; }}
 	/>
+{/if}
+
+<!-- Full profile modal (opened from popover "View Full Profile") -->
+{#if profileUserId}
+	<ProfileModal userId={profileUserId} open={!!profileUserId} onclose={() => (profileUserId = null)} />
 {/if}
 
 <!-- Image lightbox -->
