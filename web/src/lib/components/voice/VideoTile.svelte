@@ -2,8 +2,9 @@
 <script lang="ts">
 	import type { VideoTrackInfo, VoiceParticipant } from '$lib/stores/voice';
 	import Avatar from '$components/common/Avatar.svelte';
+	import ParticipantContextMenu from './ParticipantContextMenu.svelte';
 	import { currentUser } from '$lib/stores/auth';
-	import { isNoiseReductionEnabled, setNoiseReduction } from '$lib/utils/noiseReduction';
+	import { isNoiseReductionEnabled } from '$lib/utils/noiseReduction';
 
 	interface Props {
 		trackInfo: VideoTrackInfo | null;
@@ -18,11 +19,7 @@
 	let tileElement = $state<HTMLDivElement | undefined>(undefined);
 	let isFullscreen = $state(false);
 	let contextMenu = $state<{ x: number; y: number } | null>(null);
-	let noiseEnabled = $state(false);
-
-	$effect(() => {
-		noiseEnabled = isNoiseReductionEnabled(participant.userId);
-	});
+	const noiseEnabled = $derived(isNoiseReductionEnabled(participant.userId));
 
 	$effect(() => {
 		if (!videoContainer) return;
@@ -55,14 +52,10 @@
 	}
 
 	function handleContextMenu(e: MouseEvent) {
+		// Only show context menu for remote participants (not self).
 		if (participant.userId === $currentUser?.id) return;
 		e.preventDefault();
 		contextMenu = { x: e.clientX, y: e.clientY };
-	}
-
-	function toggleNoise() {
-		noiseEnabled = !noiseEnabled;
-		setNoiseReduction(participant.userId, noiseEnabled);
 	}
 </script>
 
@@ -153,27 +146,14 @@
 	</div>
 </div>
 
-<!-- Participant context menu (noise reduction toggle) -->
 {#if contextMenu}
-	<svelte:window onclick={() => (contextMenu = null)} />
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div
-		class="fixed z-[60] min-w-[180px] rounded-lg bg-bg-floating p-1 shadow-xl"
-		style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
-		onclick={(e) => e.stopPropagation()}
-		onkeydown={(e) => { if (e.key === 'Escape') contextMenu = null; }}
-	>
-		<p class="mb-1 truncate px-2 py-1 text-xs font-semibold text-text-primary">{participant.displayName ?? participant.username}</p>
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-			onclick={() => { toggleNoise(); contextMenu = null; }}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-			</svg>
-			{noiseEnabled ? 'Disable' : 'Enable'} Noise Reduction
-		</button>
-	</div>
+	<ParticipantContextMenu
+		userId={participant.userId}
+		displayName={participant.displayName ?? participant.username}
+		x={contextMenu.x}
+		y={contextMenu.y}
+		onclose={() => (contextMenu = null)}
+	/>
 {/if}
 
 <style>
