@@ -6,9 +6,9 @@ export function isEmojiOnly(text: string, maxEmoji: number = 10): boolean {
 	if (!text || !text.trim()) return false;
 
 	// Match emoji sequences: emoji characters, variation selectors, ZWJ, skin tones,
-	// regional indicators (flags), and combining marks.
+	// regional indicators (flags), combining marks, and keycap sequences.
 	const emojiRegex =
-		/(?:\p{Regional_Indicator}{2}|\p{Emoji_Presentation}\p{Emoji_Modifier}?(?:\u{FE0F}?\u{20E3})?(?:\u{200D}\p{Emoji_Presentation}\p{Emoji_Modifier}?)*|\p{Emoji}\u{FE0F}\p{Emoji_Modifier}?(?:\u{200D}\p{Emoji_Presentation}\p{Emoji_Modifier}?)*)/gu;
+		/(?:\p{Regional_Indicator}{2}|[0-9#*]\u{FE0F}\u{20E3}|\p{Emoji_Presentation}\p{Emoji_Modifier}?(?:\u{FE0F}?\u{20E3})?(?:\u{200D}\p{Emoji_Presentation}\p{Emoji_Modifier}?)*|\p{Emoji}\u{FE0F}\p{Emoji_Modifier}?(?:\u{200D}\p{Emoji_Presentation}\p{Emoji_Modifier}?)*)/gu;
 
 	// Remove all emoji sequences from the string
 	const withoutEmoji = text.replace(emojiRegex, '');

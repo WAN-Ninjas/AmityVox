@@ -87,4 +87,20 @@ describe('isEmojiOnly', () => {
 		expect(isEmojiOnly('😮')).toBe(true);
 		expect(isEmojiOnly('😢')).toBe(true);
 	});
+
+	it('returns true for keycap emoji sequences', () => {
+		expect(isEmojiOnly('1️⃣')).toBe(true);
+		expect(isEmojiOnly('0️⃣')).toBe(true);
+		expect(isEmojiOnly('#️⃣')).toBe(true);
+		expect(isEmojiOnly('*️⃣')).toBe(true);
+	});
+
+	it('returns true for multiple keycap emoji', () => {
+		expect(isEmojiOnly('1️⃣2️⃣')).toBe(true);
+	});
+
+	it('counts keycap sequences correctly for maxEmoji', () => {
+		expect(isEmojiOnly('1️⃣2️⃣3️⃣', 3)).toBe(true);
+		expect(isEmojiOnly('1️⃣2️⃣3️⃣', 2)).toBe(false);
+	});
 });
