@@ -58,6 +58,7 @@ const (
 	// Voice events.
 	SubjectVoiceStateUpdate  = "amityvox.voice.state_update"
 	SubjectVoiceServerUpdate = "amityvox.voice.server_update"
+	SubjectCallRing          = "amityvox.voice.call_ring"
 
 	// Read state events.
 	SubjectChannelAck = "amityvox.channel.ack"
@@ -77,6 +78,11 @@ const (
 
 	// Moderation events.
 	SubjectRaidLockdown = "amityvox.guild.raid_lockdown"
+
+	// Announcement events (instance-wide, broadcast to all clients).
+	SubjectAnnouncementCreate = "amityvox.announcement.create"
+	SubjectAnnouncementUpdate = "amityvox.announcement.update"
+	SubjectAnnouncementDelete = "amityvox.announcement.delete"
 
 	// Federation events.
 	SubjectFederationRetry = "amityvox.federation.retry"
@@ -153,6 +159,7 @@ func (b *Bus) EnsureStreams() error {
 				"amityvox.voice.>",
 				"amityvox.automod.>",
 				"amityvox.poll.>",
+				"amityvox.announcement.>",
 			},
 			Retention: nats.LimitsPolicy,
 			MaxAge:    24 * time.Hour,

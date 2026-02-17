@@ -940,6 +940,20 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		return isMember
 	}
 
+	// Call ring events: dispatch to channel recipients EXCEPT the caller.
+	// Must be checked before the generic voice/channel dispatch paths below.
+	if subject == events.SubjectCallRing && event.ChannelID != "" && s.pool != nil {
+		// Don't ring the caller themselves.
+		if event.UserID == client.userID {
+			return false
+		}
+		var isRecipient bool
+		s.pool.QueryRow(context.Background(),
+			`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+			event.ChannelID, client.userID).Scan(&isRecipient)
+		return isRecipient
+	}
+
 	// If the subject indicates a guild or voice event, try to extract guild context from data.
 	if strings.HasPrefix(subject, "amityvox.guild.") || strings.HasPrefix(subject, "amityvox.voice.") {
 		var data struct {
@@ -997,6 +1011,11 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 			return isRecipient
 		}
 		return false
+	}
+
+	// Announcement events: broadcast to ALL identified clients (instance-wide).
+	if strings.HasPrefix(subject, "amityvox.announcement.") {
+		return true
 	}
 
 	// Default: deny dispatch for unrecognized events (fail-closed).

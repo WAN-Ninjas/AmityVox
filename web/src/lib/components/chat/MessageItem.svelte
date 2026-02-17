@@ -27,6 +27,7 @@
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
 	import { currentGuild } from '$lib/stores/guilds';
 	import { e2ee } from '$lib/encryption/e2eeManager';
+	import { clientNicknames } from '$lib/stores/nicknames';
 
 	interface Props {
 		message: Message;
@@ -204,9 +205,11 @@
 		return new Date(until).getTime() > Date.now();
 	});
 
+	const clientNick = $derived($clientNicknames.get(message.author_id));
 	const displayName = $derived(
-		message.masquerade_name ?? message.author?.display_name ?? message.author?.username ?? message.author_id
+		clientNick ?? message.masquerade_name ?? message.author?.display_name ?? message.author?.username ?? message.author_id
 	);
+	const isClientNickname = $derived(!!clientNick);
 
 	const authorRoleColor = $derived.by(() => {
 		const member = $guildMembers.get(message.author_id);
@@ -536,7 +539,7 @@
 		{:else}
 			{#if !isCompact}
 				<div class="flex items-baseline gap-2">
-					<button class="font-medium text-text-primary hover:underline" style={authorRoleColor ? `color: ${authorRoleColor}` : ''} onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>{displayName}</button>
+					<button class="font-medium text-text-primary hover:underline {isClientNickname ? 'italic' : ''}" style={authorRoleColor ? `color: ${authorRoleColor}` : ''} onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }} title={isClientNickname ? `Nickname for ${message.author?.display_name ?? message.author?.username ?? message.author_id}` : ''}>{displayName}</button>
 					{#if isAuthorBlocked}
 						<span class="text-2xs text-red-400">(blocked)</span>
 					{/if}
@@ -796,7 +799,10 @@
 				onclick={() => (showQuickReactions = !showQuickReactions)}
 			>
 				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+					<circle cx="12" cy="12" r="9" />
+					<path d="M8.5 14.5c1 1.5 5.5 1.5 7 0" stroke-linecap="round" />
+					<circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
+					<circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
 				</svg>
 			</button>
 			<button

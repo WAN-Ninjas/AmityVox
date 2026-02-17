@@ -19,7 +19,7 @@ import {
 	type Participant
 } from 'livekit-client';
 import { routeAudioThroughNoiseFilter, cleanupNoiseFilter, cleanupAllNoiseFilters } from '$lib/utils/noiseReduction';
-import { routeAudioThroughGain, cleanupUserAudio, cleanupAllAudio } from '$lib/utils/voiceVolume';
+import { routeAudioThroughGain, cleanupUserAudio, cleanupAllAudio, getAudioLevel, computeRmsLevel } from '$lib/utils/voiceVolume';
 
 export interface VoiceParticipant {
 	userId: string;
@@ -146,6 +146,9 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		// Enable microphone
 		await room.localParticipant.setMicrophoneEnabled(true);
 
+		// Set up local audio level monitoring for instant speaking detection.
+		setupLocalAudioMonitor();
+
 		// Add self to participants
 		addLocalParticipant(room.localParticipant);
 
@@ -155,6 +158,9 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		}
 
 		voiceState.set('connected');
+
+		// Start audio level polling for responsive speaking indicators.
+		startAudioLevelPolling();
 		playVoiceSound('voice-join');
 	} catch (err) {
 		console.error('[Voice] Failed to join:', err);
@@ -182,6 +188,10 @@ export function toggleMute() {
 
 	if (room?.localParticipant) {
 		room.localParticipant.setMicrophoneEnabled(!muted);
+		// Refresh local audio monitor when unmuting (track may change).
+		if (!muted) {
+			setTimeout(() => setupLocalAudioMonitor(), 100);
+		}
 	}
 
 	// Update self in participants map
@@ -320,6 +330,157 @@ function updateChannelVoiceParticipants(
 	});
 }
 
+// --- Audio level monitoring for instant speaking detection ---
+
+const SPEAKING_THRESHOLD = 0.015;
+const SPEAKING_TIMEOUT_MS = 200;
+let audioLevelFrameId: number | null = null;
+let localAnalyserCtx: AudioContext | null = null;
+let localAnalyserSource: MediaStreamAudioSourceNode | null = null;
+let localAnalyser: AnalyserNode | null = null;
+const lastSpeakingTime = new Map<string, number>();
+
+function getLocalAudioLevel(): number {
+	if (!localAnalyser) return 0;
+	return computeRmsLevel(localAnalyser);
+}
+
+function setupLocalAudioMonitor() {
+	if (!room) return;
+	cleanupLocalAudioMonitor();
+
+	const localPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+	const mediaStreamTrack = localPub?.track?.mediaStreamTrack;
+	if (!mediaStreamTrack) return;
+
+	try {
+		localAnalyserCtx = new AudioContext();
+		const stream = new MediaStream([mediaStreamTrack]);
+		localAnalyserSource = localAnalyserCtx.createMediaStreamSource(stream);
+		localAnalyser = localAnalyserCtx.createAnalyser();
+		localAnalyser.fftSize = 256;
+		localAnalyserSource.connect(localAnalyser);
+	} catch {
+		cleanupLocalAudioMonitor();
+	}
+}
+
+function cleanupLocalAudioMonitor() {
+	try {
+		localAnalyserSource?.disconnect();
+		localAnalyser?.disconnect();
+		localAnalyserCtx?.close();
+	} catch { /* ignore */ }
+	localAnalyserSource = null;
+	localAnalyser = null;
+	localAnalyserCtx = null;
+}
+
+function startAudioLevelPolling() {
+	if (audioLevelFrameId !== null) return;
+	lastSpeakingTime.clear();
+	const POLL_INTERVAL_MS = 50; // ~20fps — sufficient for speaking indicators
+	let lastPollTime = 0;
+
+	function poll() {
+		if (!room) {
+			audioLevelFrameId = null;
+			return;
+		}
+
+		const now = Date.now();
+
+		// Throttle processing to avoid per-frame overhead with many participants.
+		if (now - lastPollTime < POLL_INTERVAL_MS) {
+			audioLevelFrameId = requestAnimationFrame(poll);
+			return;
+		}
+		lastPollTime = now;
+		const updates: { userId: string; speaking: boolean }[] = [];
+		const participants = get(voiceParticipants);
+
+		// Check local participant audio level.
+		const localMeta = parseMetadata(room.localParticipant.metadata);
+		const localUserId = localMeta.userId ?? room.localParticipant.identity;
+		const localLevel = getLocalAudioLevel();
+		if (localLevel > SPEAKING_THRESHOLD) {
+			lastSpeakingTime.set(localUserId, now);
+			const p = participants.get(localUserId);
+			if (p && !p.speaking) updates.push({ userId: localUserId, speaking: true });
+		} else {
+			const lastTime = lastSpeakingTime.get(localUserId);
+			if (lastTime && now - lastTime > SPEAKING_TIMEOUT_MS) {
+				const p = participants.get(localUserId);
+				if (p?.speaking) updates.push({ userId: localUserId, speaking: false });
+			}
+		}
+
+		// Check remote participant audio levels.
+		for (const [userId, p] of participants) {
+			if (userId === localUserId) continue;
+			const level = getAudioLevel(userId);
+			if (level > SPEAKING_THRESHOLD) {
+				lastSpeakingTime.set(userId, now);
+				if (!p.speaking) updates.push({ userId, speaking: true });
+			} else {
+				const lastTime = lastSpeakingTime.get(userId);
+				if (lastTime && now - lastTime > SPEAKING_TIMEOUT_MS) {
+					if (p.speaking) updates.push({ userId, speaking: false });
+				}
+			}
+		}
+
+		// Batch-update the store.
+		if (updates.length > 0) {
+			voiceParticipants.update((map) => {
+				const next = new Map(map);
+				for (const { userId, speaking } of updates) {
+					const existing = next.get(userId);
+					if (existing && existing.speaking !== speaking) {
+						next.set(userId, { ...existing, speaking });
+					}
+				}
+				return next;
+			});
+
+			// Also sync to sidebar channelVoiceUsers store.
+			const currentChannel = get(voiceChannelId);
+			if (currentChannel) {
+				channelVoiceUsers.update((outer) => {
+					const channelMap = outer.get(currentChannel);
+					if (!channelMap) return outer;
+					let changed = false;
+					const nextInner = new Map(channelMap);
+					for (const { userId, speaking } of updates) {
+						const p = nextInner.get(userId);
+						if (p && p.speaking !== speaking) {
+							nextInner.set(userId, { ...p, speaking });
+							changed = true;
+						}
+					}
+					if (!changed) return outer;
+					const nextOuter = new Map(outer);
+					nextOuter.set(currentChannel, nextInner);
+					return nextOuter;
+				});
+			}
+		}
+
+		audioLevelFrameId = requestAnimationFrame(poll);
+	}
+
+	audioLevelFrameId = requestAnimationFrame(poll);
+}
+
+function stopAudioLevelPolling() {
+	if (audioLevelFrameId !== null) {
+		cancelAnimationFrame(audioLevelFrameId);
+		audioLevelFrameId = null;
+	}
+	lastSpeakingTime.clear();
+	cleanupLocalAudioMonitor();
+}
+
 // --- Internal helpers ---
 
 function playVoiceSound(preset: 'voice-join' | 'voice-leave') {
@@ -329,6 +490,8 @@ function playVoiceSound(preset: 'voice-join' | 'voice-leave') {
 }
 
 function cleanup() {
+	// Stop audio level polling before disconnecting.
+	stopAudioLevelPolling();
 	if (room) {
 		room.removeAllListeners();
 		room.disconnect();
@@ -571,48 +734,11 @@ function handleLocalTrackUnpublished(publication: LocalTrackPublication, _partic
 	track.detach().forEach((el) => el.remove());
 }
 
-function handleActiveSpeakersChanged(speakers: Participant[]) {
-	const speakerIds = new Set(
-		speakers.map((s) => {
-			const metadata = parseMetadata(s.metadata);
-			return metadata.userId ?? s.identity;
-		})
-	);
-
-	voiceParticipants.update((map) => {
-		const next = new Map(map);
-		for (const [id, p] of next) {
-			const isSpeaking = speakerIds.has(id);
-			if (p.speaking !== isSpeaking) {
-				next.set(id, { ...p, speaking: isSpeaking });
-			}
-		}
-		return next;
-	});
-
-	// Sync speaking state to the sidebar's channelVoiceUsers store.
-	const currentChannel = get(voiceChannelId);
-	if (!currentChannel) return;
-
-	channelVoiceUsers.update((outer) => {
-		const channelMap = outer.get(currentChannel);
-		if (!channelMap) return outer;
-
-		let changed = false;
-		const nextInner = new Map(channelMap);
-		for (const [userId, participant] of nextInner) {
-			const isSpeaking = speakerIds.has(userId);
-			if (participant.speaking !== isSpeaking) {
-				nextInner.set(userId, { ...participant, speaking: isSpeaking });
-				changed = true;
-			}
-		}
-		if (!changed) return outer;
-
-		const nextOuter = new Map(outer);
-		nextOuter.set(currentChannel, nextInner);
-		return nextOuter;
-	});
+// Speaking detection is handled by the audio level polling loop (startAudioLevelPolling)
+// which monitors actual audio send/receive via Web Audio API AnalyserNodes.
+// This is a no-op kept for the LiveKit event subscription.
+function handleActiveSpeakersChanged(_speakers: Participant[]) {
+	// Intentionally empty — audio level polling handles speaking state.
 }
 
 function handleDisconnected() {

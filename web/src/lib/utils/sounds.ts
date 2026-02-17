@@ -147,6 +147,44 @@ function playVoiceJoin(ctx: AudioContext, volume: number) {
 	osc2.stop(now + 0.2);
 }
 
+function playRingtone(ctx: AudioContext, volume: number) {
+	const now = ctx.currentTime;
+
+	// Classic phone ring: two-tone alternating pattern (440Hz + 480Hz).
+	// Plays 3 ring bursts with gaps for a distinctive incoming call sound.
+	for (let burst = 0; burst < 3; burst++) {
+		const offset = burst * 0.7; // Each burst 0.7s apart
+
+		// First tone: 440Hz
+		const osc1 = ctx.createOscillator();
+		const gain1 = ctx.createGain();
+		osc1.type = 'sine';
+		osc1.frequency.setValueAtTime(440, now + offset);
+		gain1.gain.setValueAtTime(0.001, now);
+		gain1.gain.setValueAtTime(volume * 0.6, now + offset);
+		gain1.gain.setValueAtTime(volume * 0.6, now + offset + 0.4);
+		gain1.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.45);
+		osc1.connect(gain1);
+		gain1.connect(ctx.destination);
+		osc1.start(now + offset);
+		osc1.stop(now + offset + 0.45);
+
+		// Second tone: 480Hz (mixed for richer ring)
+		const osc2 = ctx.createOscillator();
+		const gain2 = ctx.createGain();
+		osc2.type = 'sine';
+		osc2.frequency.setValueAtTime(480, now + offset);
+		gain2.gain.setValueAtTime(0.001, now);
+		gain2.gain.setValueAtTime(volume * 0.4, now + offset);
+		gain2.gain.setValueAtTime(volume * 0.4, now + offset + 0.4);
+		gain2.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.45);
+		osc2.connect(gain2);
+		gain2.connect(ctx.destination);
+		osc2.start(now + offset);
+		osc2.stop(now + offset + 0.45);
+	}
+}
+
 function playVoiceLeave(ctx: AudioContext, volume: number) {
 	const now = ctx.currentTime;
 
@@ -205,6 +243,9 @@ export function playNotificationSound(preset: string, volume: number = 80): void
 			break;
 		case 'voice-leave':
 			playVoiceLeave(ctx, normalizedVolume);
+			break;
+		case 'ringtone':
+			playRingtone(ctx, normalizedVolume);
 			break;
 		case 'default':
 		default:

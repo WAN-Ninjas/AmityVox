@@ -72,6 +72,7 @@
 		<div class="flex items-center justify-center">
 			<Avatar
 				name={participant.displayName ?? participant.username}
+				src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null}
 				size="lg"
 			/>
 		</div>

@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
-	import type { Announcement } from '$lib/types';
+	import { activeAnnouncements, setAnnouncements, type AnnouncementData } from '$lib/stores/announcements';
 
-	let announcements = $state<Announcement[]>([]);
 	let dismissed = $state<Set<string>>(new Set());
 	let loading = $state(true);
 
@@ -11,7 +10,8 @@
 		try {
 			const token = api.getToken();
 			if (token) {
-				announcements = await api.getActiveAnnouncements();
+				const data = await api.getActiveAnnouncements();
+				setAnnouncements(data);
 			}
 		} catch {
 			// Silently fail — announcements are non-critical
@@ -52,7 +52,7 @@
 	}
 
 	const visibleAnnouncements = $derived(
-		announcements.filter(a => !dismissed.has(a.id))
+		$activeAnnouncements.filter(a => !dismissed.has(a.id))
 	);
 </script>
 

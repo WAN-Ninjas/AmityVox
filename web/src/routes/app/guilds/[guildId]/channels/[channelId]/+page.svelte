@@ -420,7 +420,7 @@
 	{/if}
 
 	{#if showMembers && !showPins && !activeThread && !showFollowers && !showGallery}
-		<div class="hidden lg:block">
+		<div class="hidden lg:flex">
 			<ResizeHandle
 				width={$memberListWidth}
 				onresize={(w) => memberListWidth.set(w)}

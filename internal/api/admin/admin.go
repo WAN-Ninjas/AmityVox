@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
 )
 
@@ -33,6 +34,7 @@ type Handler struct {
 	InstanceID string
 	Logger     *slog.Logger
 	Media      MediaDeleter // optional — enables S3 cleanup on admin media delete
+	EventBus   *events.Bus  // optional — enables real-time announcement events
 }
 
 type updateInstanceRequest struct {
@@ -882,14 +884,21 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	announcement := map[string]interface{}{
 		"id":         announcementID,
 		"title":      req.Title,
 		"content":    req.Content,
 		"severity":   req.Severity,
 		"active":     true,
 		"expires_at": expiresAt,
-	})
+	}
+
+	// Publish real-time event so all connected clients see the announcement immediately.
+	if h.EventBus != nil {
+		h.EventBus.PublishJSON(r.Context(), events.SubjectAnnouncementCreate, "ANNOUNCEMENT_CREATE", announcement)
+	}
+
+	writeJSON(w, http.StatusCreated, announcement)
 }
 
 // HandleGetAnnouncements returns active instance announcements.
@@ -1016,6 +1025,16 @@ func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Publish real-time update event.
+	if h.EventBus != nil {
+		h.EventBus.PublishJSON(r.Context(), events.SubjectAnnouncementUpdate, "ANNOUNCEMENT_UPDATE", map[string]interface{}{
+			"id":      announcementID,
+			"active":  req.Active,
+			"title":   req.Title,
+			"content": req.Content,
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -1037,6 +1056,13 @@ func (h *Handler) HandleDeleteAnnouncement(w http.ResponseWriter, r *http.Reques
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "not_found", "Announcement not found")
 		return
+	}
+
+	// Publish real-time delete event.
+	if h.EventBus != nil {
+		h.EventBus.PublishJSON(r.Context(), events.SubjectAnnouncementDelete, "ANNOUNCEMENT_DELETE", map[string]string{
+			"id": announcementID,
+		})
 	}
 
 	w.WriteHeader(http.StatusNoContent)

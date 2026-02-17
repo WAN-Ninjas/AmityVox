@@ -18,6 +18,7 @@
 	import NotificationCenter from '$components/common/NotificationCenter.svelte';
 	import AnnouncementBanner from '$components/common/AnnouncementBanner.svelte';
 	import ModerationModals from '$components/common/ModerationModals.svelte';
+	import IncomingCallModal from '$components/common/IncomingCallModal.svelte';
 	import ResizeHandle from '$components/common/ResizeHandle.svelte';
 	import { channelSidebarWidth } from '$lib/stores/layout';
 
@@ -90,6 +91,7 @@
 <KeyboardShortcuts onToggleSearch={toggleCommandPalette} onToggleQuickSwitcher={toggleQuickSwitcher} />
 <ToastContainer />
 <ModerationModals />
+<IncomingCallModal />
 <CommandPalette bind:open={commandPaletteOpen} />
 <QuickSwitcher bind:open={quickSwitcherOpen} />
 <NotificationCenter bind:open={notificationCenterOpen} />
@@ -151,7 +153,7 @@
 
 			<!-- Resize handle between sidebar and main content -->
 			{#if !mobileSidebarOpen && !$page.url.pathname.startsWith('/app/admin')}
-				<div class="hidden md:block">
+				<div class="hidden md:flex">
 					<ResizeHandle
 						width={$channelSidebarWidth}
 						onresize={(w) => channelSidebarWidth.set(w)}

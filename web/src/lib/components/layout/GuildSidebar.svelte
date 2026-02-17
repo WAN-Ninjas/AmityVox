@@ -7,6 +7,7 @@
 	import { dmChannels } from '$lib/stores/dms';
 	import { currentUser } from '$lib/stores/auth';
 	import { isDndActive } from '$lib/stores/settings';
+	import { incomingCallCount } from '$lib/stores/callRing';
 	import Avatar from '$components/common/Avatar.svelte';
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
 	import { goto } from '$app/navigation';
@@ -32,14 +33,15 @@
 		return false;
 	}
 
-	// Badge count for the Home button: pending friend requests + unread DMs.
+	// Badge count for the Home button: pending friend requests + unread DMs + incoming calls.
 	const homeBadgeCount = $derived.by(() => {
 		let dmUnreads = 0;
 		for (const [channelId, n] of $unreadCounts) {
 			if (n > 0 && $dmChannels.has(channelId)) dmUnreads += n;
 		}
-		return dmUnreads + $pendingIncomingCount;
+		return dmUnreads + $pendingIncomingCount + $incomingCallCount;
 	});
+	const hasIncomingCall = $derived($incomingCallCount > 0);
 
 	let showCreateModal = $state(false);
 
@@ -60,8 +62,8 @@
 			<path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
 		</svg>
 		{#if homeBadgeCount > 0}
-			<span class="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
-				{homeBadgeCount > 99 ? '99+' : homeBadgeCount}
+			<span class="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-2xs font-bold text-white {hasIncomingCall ? 'animate-pulse bg-green-500' : 'bg-red-500'}">
+				{hasIncomingCall ? '!' : homeBadgeCount > 99 ? '99+' : homeBadgeCount}
 			</span>
 		{/if}
 	</button>
@@ -187,7 +189,8 @@
 			title="Moderation Panel"
 		>
 			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+				<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+				<path d="M12 8v4m0 4h.01" />
 			</svg>
 		</button>
 	{/if}
