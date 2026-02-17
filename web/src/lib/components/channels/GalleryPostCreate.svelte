@@ -8,16 +8,17 @@
 		tags: GalleryTag[];
 		requireTags: boolean;
 		guidelines: string | null;
+		initialFiles?: File[];
 		oncreated?: () => void;
 		oncancel?: () => void;
 	}
 
-	let { channelId, tags, requireTags, guidelines, oncreated, oncancel }: Props = $props();
+	let { channelId, tags, requireTags, guidelines, initialFiles, oncreated, oncancel }: Props = $props();
 
 	let title = $state('');
 	let description = $state('');
 	let selectedTagIds = $state<Set<string>>(new Set());
-	let pendingFiles = $state<File[]>([]);
+	let pendingFiles = $state<File[]>(initialFiles ?? []);
 	let creating = $state(false);
 	let showGuidelines = $state(!!guidelines);
 	let fileInput: HTMLInputElement;

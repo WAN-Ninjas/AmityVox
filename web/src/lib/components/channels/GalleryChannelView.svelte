@@ -20,6 +20,17 @@
 	let error = $state('');
 	let hasMore = $state(false);
 	let showNewPostForm = $state(false);
+	let droppedFiles = $state<File[]>([]);
+
+	/** Called by the parent page when files are dropped onto a gallery channel. */
+	export function addDroppedFiles(files: File[]) {
+		const mediaFiles = files.filter(
+			(f) => f.type.startsWith('image/') || f.type.startsWith('video/')
+		);
+		if (mediaFiles.length === 0) return;
+		droppedFiles = mediaFiles;
+		showNewPostForm = true;
+	}
 
 	// Sort & filter state
 	let sortBy = $state<'newest' | 'oldest' | 'most_comments'>('newest');
@@ -204,8 +215,9 @@
 			tags={galleryTags}
 			{requireTags}
 			{guidelines}
-			oncreated={handlePostCreated}
-			oncancel={() => (showNewPostForm = false)}
+			initialFiles={droppedFiles.length > 0 ? droppedFiles : undefined}
+			oncreated={() => { droppedFiles = []; handlePostCreated(); }}
+			oncancel={() => { droppedFiles = []; showNewPostForm = false; }}
 		/>
 	{/if}
 
