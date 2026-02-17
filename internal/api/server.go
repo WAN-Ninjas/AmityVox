@@ -164,6 +164,7 @@ func (s *Server) registerRoutes() {
 		Pool:       s.DB.Pool,
 		InstanceID: s.InstanceID,
 		Logger:     s.Logger,
+		Media:      s.Media,
 	}
 	webhookH := &webhooks.Handler{
 		Pool:     s.DB.Pool,
@@ -315,6 +316,18 @@ func (s *Server) registerRoutes() {
 				r.Post("/@me/emoji", userH.HandleCreateUserEmoji)
 				r.Delete("/@me/emoji/{emojiID}", userH.HandleDeleteUserEmoji)
 
+				// Profile links.
+				r.Get("/@me/links", userH.HandleGetMyLinks)
+				r.Post("/@me/links", userH.HandleCreateLink)
+				r.Patch("/@me/links/{linkID}", userH.HandleUpdateLink)
+				r.Delete("/@me/links/{linkID}", userH.HandleDeleteLink)
+
+				// User's own issues.
+				r.Get("/@me/issues", modH.HandleGetMyIssues)
+
+				// Group DMs.
+				r.Post("/@me/group-dms", userH.HandleCreateGroupDM)
+
 				// User channel groups.
 				r.Route("/@me/channel-groups", func(r chi.Router) {
 					r.Get("/", channelGroupH.HandleGetChannelGroups)
@@ -339,6 +352,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{userID}/mutual-friends", userH.HandleGetMutualFriends)
 				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)
 				r.Get("/{userID}/badges", userH.HandleGetUserBadges)
+				r.Get("/{userID}/links", userH.HandleGetUserLinks)
 				r.Post("/{userID}/report", modH.HandleReportUser)
 			})
 
@@ -492,6 +506,12 @@ func (s *Server) registerRoutes() {
 					r.Get("/{eventID}/rsvps", guildEventH.HandleListRSVPs)
 				})
 
+				// Media gallery and tag routes.
+				r.Get("/{guildID}/gallery", guildH.HandleGetGuildGallery)
+				r.Get("/{guildID}/media-tags", guildH.HandleGetMediaTags)
+				r.Post("/{guildID}/media-tags", guildH.HandleCreateMediaTag)
+				r.Delete("/{guildID}/media-tags/{tagID}", guildH.HandleDeleteMediaTag)
+
 				// AutoMod rules management.
 				if s.AutoMod != nil {
 					r.Route("/{guildID}/automod", func(r chi.Router) {
@@ -542,6 +562,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/unlock", modH.HandleUnlockChannel)
 			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 				r.Get("/{channelID}/export", userH.HandleExportChannelMessages)
+				r.Get("/{channelID}/gallery", channelH.HandleGetChannelGallery)
 
 				// Channel template routes.
 				r.Route("/{channelID}/templates", func(r chi.Router) {
@@ -566,6 +587,10 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/scheduled-messages", channelH.HandleScheduleMessage)
 				r.Get("/{channelID}/scheduled-messages", channelH.HandleGetScheduledMessages)
 				r.Delete("/{channelID}/scheduled-messages/{messageID}", channelH.HandleDeleteScheduledMessage)
+
+				// Group DM recipient routes.
+				r.Put("/{channelID}/recipients/{userID}", channelH.HandleAddGroupDMRecipient)
+				r.Delete("/{channelID}/recipients/{userID}", channelH.HandleRemoveGroupDMRecipient)
 
 				// Poll routes.
 				r.Post("/{channelID}/polls", pollH.HandleCreatePoll)
@@ -820,9 +845,15 @@ func (s *Server) registerRoutes() {
 				r.Delete("/{code}", inviteH.HandleDeleteInvite)
 			})
 
-			// File upload.
+			// File upload and media management.
 			if s.Media != nil {
 				r.Post("/files/upload", s.Media.HandleUpload)
+				r.Route("/files/{fileID}", func(r chi.Router) {
+					r.Patch("/", s.Media.HandleUpdateAttachment)
+					r.Delete("/", s.Media.HandleDeleteAttachment)
+					r.Put("/tags/{tagID}", s.Media.HandleTagAttachment)
+					r.Delete("/tags/{tagID}", s.Media.HandleUntagAttachment)
+				})
 			} else {
 				r.Post("/files/upload", stubHandler("upload_file"))
 			}
@@ -998,6 +1029,10 @@ func (s *Server) registerRoutes() {
 					r.Delete("/{bridgeID}/mappings/{mappingID}", adminH.HandleDeleteBridgeChannelMapping)
 					r.Get("/{bridgeID}/virtual-users", adminH.HandleGetBridgeVirtualUsers)
 				})
+
+				// Admin media management.
+				r.Get("/media", adminH.HandleAdminGetMedia)
+				r.Delete("/media/{fileID}", adminH.HandleAdminDeleteMedia)
 			})
 		})
 

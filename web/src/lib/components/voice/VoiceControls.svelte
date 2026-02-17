@@ -72,21 +72,15 @@
 	async function loadPreferences() {
 		try {
 			loading = true;
-			const res = await fetch('/api/v1/voice/preferences', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				const json = await res.json();
-				const prefs = json.data;
-				inputMode = prefs.input_mode || 'vad';
-				pttKey = prefs.ptt_key || 'Space';
-				vadThreshold = prefs.vad_threshold ?? 0.3;
-				noiseSuppression = prefs.noise_suppression ?? true;
-				echoCancellation = prefs.echo_cancellation ?? true;
-				autoGainControl = prefs.auto_gain_control ?? true;
-				inputVolume = prefs.input_volume ?? 1.0;
-				outputVolume = prefs.output_volume ?? 1.0;
-			}
+			const prefs = await api.getVoicePreferences();
+			inputMode = prefs.input_mode || 'vad';
+			pttKey = prefs.ptt_key || 'Space';
+			vadThreshold = prefs.vad_threshold ?? 0.3;
+			noiseSuppression = prefs.noise_suppression ?? true;
+			echoCancellation = prefs.echo_cancellation ?? true;
+			autoGainControl = prefs.auto_gain_control ?? true;
+			inputVolume = prefs.input_volume ?? 1.0;
+			outputVolume = prefs.output_volume ?? 1.0;
 		} catch (err) {
 			console.error('Failed to load voice preferences:', err);
 		} finally {
@@ -97,22 +91,15 @@
 	async function savePreferences() {
 		try {
 			saving = true;
-			await fetch('/api/v1/voice/preferences', {
-				method: 'PATCH',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({
-					input_mode: inputMode,
-					ptt_key: pttKey,
-					vad_threshold: vadThreshold,
-					noise_suppression: noiseSuppression,
-					echo_cancellation: echoCancellation,
-					auto_gain_control: autoGainControl,
-					input_volume: inputVolume,
-					output_volume: outputVolume
-				})
+			await api.updateVoicePreferences({
+				input_mode: inputMode,
+				ptt_key: pttKey,
+				vad_threshold: vadThreshold,
+				noise_suppression: noiseSuppression,
+				echo_cancellation: echoCancellation,
+				auto_gain_control: autoGainControl,
+				input_volume: inputVolume,
+				output_volume: outputVolume
 			});
 		} catch (err) {
 			console.error('Failed to save voice preferences:', err);

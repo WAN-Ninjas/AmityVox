@@ -55,7 +55,12 @@ import type {
 	UserReport,
 	ReportedIssue,
 	ModerationStats,
-	ModerationMessageReport
+	ModerationMessageReport,
+	VoicePreferences,
+	MutualGuild,
+	UserLink,
+	Attachment,
+	MediaTag
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -125,8 +130,8 @@ class ApiClient {
 	private put<T>(path: string, body?: unknown) {
 		return this.request<T>('PUT', path, body);
 	}
-	private del<T>(path: string) {
-		return this.request<T>('DELETE', path);
+	private del<T>(path: string, body?: unknown) {
+		return this.request<T>('DELETE', path, body);
 	}
 
 	// --- Auth ---
@@ -170,6 +175,26 @@ class ApiClient {
 		return this.get(`/users/${userId}/badges`);
 	}
 
+	getUserLinks(userId: string): Promise<UserLink[]> {
+		return this.get(`/users/${userId}/links`);
+	}
+
+	getMyLinks(): Promise<UserLink[]> {
+		return this.get('/users/@me/links');
+	}
+
+	createLink(platform: string, label: string, url: string): Promise<UserLink> {
+		return this.post('/users/@me/links', { platform, label, url });
+	}
+
+	updateLink(linkId: string, data: Partial<{ platform: string; label: string; url: string; position: number }>): Promise<UserLink> {
+		return this.patch(`/users/@me/links/${linkId}`, data);
+	}
+
+	deleteLink(linkId: string): Promise<void> {
+		return this.del(`/users/@me/links/${linkId}`);
+	}
+
 	getMyGuilds(): Promise<Guild[]> {
 		return this.get('/users/@me/guilds');
 	}
@@ -180,6 +205,18 @@ class ApiClient {
 
 	createDM(userId: string): Promise<Channel> {
 		return this.post(`/users/${userId}/dm`);
+	}
+
+	createGroupDM(userIds: string[], name?: string): Promise<Channel> {
+		return this.post('/users/@me/group-dms', { user_ids: userIds, name });
+	}
+
+	addGroupDMRecipient(channelId: string, userId: string): Promise<Channel> {
+		return this.put(`/channels/${channelId}/recipients/${userId}`);
+	}
+
+	removeGroupDMRecipient(channelId: string, userId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/recipients/${userId}`);
 	}
 
 	// --- Guilds ---
@@ -354,11 +391,11 @@ class ApiClient {
 		return this.get(`/guilds/${guildId}/members/${memberId}`);
 	}
 
-	kickMember(guildId: string, memberId: string): Promise<void> {
-		return this.del(`/guilds/${guildId}/members/${memberId}`);
+	kickMember(guildId: string, memberId: string, reason?: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/members/${memberId}`, reason ? { reason } : undefined);
 	}
 
-	updateMember(guildId: string, memberId: string, data: { nickname?: string | null; timeout_until?: string | null; deaf?: boolean; mute?: boolean }): Promise<GuildMember> {
+	updateMember(guildId: string, memberId: string, data: { nickname?: string | null; timeout_until?: string | null; deaf?: boolean; mute?: boolean; reason?: string }): Promise<GuildMember> {
 		return this.patch(`/guilds/${guildId}/members/${memberId}`, data);
 	}
 
@@ -366,8 +403,8 @@ class ApiClient {
 		return this.get(`/guilds/${guildId}/members/${memberId}/roles`);
 	}
 
-	banUser(guildId: string, userId: string, reason?: string): Promise<void> {
-		return this.put(`/guilds/${guildId}/bans/${userId}`, { reason });
+	banUser(guildId: string, userId: string, options?: { reason?: string; duration_seconds?: number; delete_message_seconds?: number }): Promise<void> {
+		return this.put(`/guilds/${guildId}/bans/${userId}`, options ?? {});
 	}
 
 	unbanUser(guildId: string, userId: string): Promise<void> {
@@ -481,6 +518,14 @@ class ApiClient {
 		return this.post(`/voice/${channelId}/leave`);
 	}
 
+	getVoicePreferences(): Promise<VoicePreferences> {
+		return this.get('/voice/preferences');
+	}
+
+	updateVoicePreferences(prefs: Partial<VoicePreferences>): Promise<VoicePreferences> {
+		return this.patch('/voice/preferences', prefs);
+	}
+
 	// --- File Upload ---
 
 	async uploadFile(file: File, altText?: string): Promise<{ id: string; url: string }> {
@@ -574,6 +619,14 @@ class ApiClient {
 		return this.put(`/users/${userId}/note`, { note });
 	}
 
+	getMutualFriends(userId: string): Promise<User[]> {
+		return this.get(`/users/${userId}/mutual-friends`);
+	}
+
+	getMutualGuilds(userId: string): Promise<MutualGuild[]> {
+		return this.get(`/users/${userId}/mutual-guilds`);
+	}
+
 	// --- Giphy ---
 
 	searchGiphy(query: string, limit = 25, offset = 0): Promise<any> {
@@ -586,6 +639,60 @@ class ApiClient {
 
 	getGiphyCategories(limit = 15): Promise<any> {
 		return this.get(`/giphy/categories?limit=${limit}`);
+	}
+
+	// --- Gallery ---
+
+	getChannelGallery(channelId: string, options?: { before?: string; type?: string }): Promise<Attachment[]> {
+		const params = new URLSearchParams();
+		if (options?.before) params.set('before', options.before);
+		if (options?.type) params.set('type', options.type);
+		const qs = params.toString();
+		return this.get(`/channels/${channelId}/gallery${qs ? '?' + qs : ''}`);
+	}
+
+	getGuildGallery(guildId: string, options?: { before?: string; type?: string }): Promise<Attachment[]> {
+		const params = new URLSearchParams();
+		if (options?.before) params.set('before', options.before);
+		if (options?.type) params.set('type', options.type);
+		const qs = params.toString();
+		return this.get(`/guilds/${guildId}/gallery${qs ? '?' + qs : ''}`);
+	}
+
+	updateAttachment(fileId: string, data: { nsfw?: boolean; alt_text?: string; description?: string }): Promise<Attachment> {
+		return this.patch(`/files/${fileId}`, data);
+	}
+
+	deleteAttachment(fileId: string): Promise<void> {
+		return this.del(`/files/${fileId}`);
+	}
+
+	getMediaTags(guildId: string): Promise<MediaTag[]> {
+		return this.get(`/guilds/${guildId}/media-tags`);
+	}
+
+	createMediaTag(guildId: string, name: string): Promise<MediaTag> {
+		return this.post(`/guilds/${guildId}/media-tags`, { name });
+	}
+
+	deleteMediaTag(guildId: string, tagId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/media-tags/${tagId}`);
+	}
+
+	tagAttachment(fileId: string, tagId: string): Promise<void> {
+		return this.put(`/files/${fileId}/tags/${tagId}`);
+	}
+
+	untagAttachment(fileId: string, tagId: string): Promise<void> {
+		return this.del(`/files/${fileId}/tags/${tagId}`);
+	}
+
+	getAdminMedia(before?: string): Promise<Attachment[]> {
+		return this.get(before ? `/admin/media?before=${before}` : '/admin/media');
+	}
+
+	deleteAdminMedia(fileId: string): Promise<void> {
+		return this.del(`/admin/media/${fileId}`);
 	}
 
 	// --- Admin ---
@@ -1081,6 +1188,10 @@ class ApiClient {
 		return this.del(`/guilds/${guildId}/members/${memberId}/roles/${roleId}`);
 	}
 
+	reorderRoles(guildId: string, positions: { id: string; position: number }[]): Promise<Role[]> {
+		return this.patch(`/guilds/${guildId}/roles`, positions);
+	}
+
 	// --- Onboarding ---
 
 	getOnboarding(guildId: string): Promise<OnboardingConfig> {
@@ -1324,6 +1435,10 @@ class ApiClient {
 
 	createIssue(title: string, description: string, category: string): Promise<{ id: string; status: string }> {
 		return this.post('/issues', { title, description, category });
+	}
+
+	getMyIssues(): Promise<ReportedIssue[]> {
+		return this.get('/users/@me/issues');
 	}
 
 	getModerationStats(): Promise<ModerationStats> {

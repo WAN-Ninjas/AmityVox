@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getRoom } from '$lib/stores/voice';
+	import { api } from '$lib/api/client';
 
 	let {
 		channelId,
@@ -24,12 +25,36 @@
 	let audioEnabled = $state(false);
 	let showSettings = $state(false);
 
+	// Load saved screenshare defaults from voice preferences.
+	$effect(() => {
+		api.getVoicePreferences().then((prefs) => {
+			if (prefs.screenshare_resolution) resolution = prefs.screenshare_resolution;
+			if (prefs.screenshare_framerate) framerate = prefs.screenshare_framerate;
+			audioEnabled = prefs.screenshare_audio ?? false;
+		}).catch(() => {
+			// Use defaults on error.
+		});
+	});
+
 	function getResolutionConstraints(): { width: number; height: number } {
 		switch (resolution) {
 			case '720p': return { width: 1280, height: 720 };
 			case '4k': return { width: 3840, height: 2160 };
 			default: return { width: 1920, height: 1080 };
 		}
+	}
+
+	function getScreenEncoding(): { maxBitrate: number; maxFramerate: number; priority: string } {
+		const bitrateMap: Record<string, Record<number, number>> = {
+			'720p':  { 15: 1_500_000, 30: 2_000_000, 60: 3_000_000 },
+			'1080p': { 15: 2_500_000, 30: 5_000_000, 60: 7_000_000 },
+			'4k':    { 15: 6_000_000, 30: 10_000_000, 60: 14_000_000 }
+		};
+		return {
+			maxBitrate: bitrateMap[resolution]?.[framerate] ?? 5_000_000,
+			maxFramerate: framerate,
+			priority: 'high'
+		};
 	}
 
 	async function startScreenShare() {
@@ -47,7 +72,8 @@
 			await room.localParticipant.setScreenShareEnabled(true, {
 				audio: audioEnabled,
 				resolution: { width: res.width, height: res.height, frameRate: framerate },
-				contentHint: 'detail'
+				contentHint: 'detail',
+				videoEncoding: getScreenEncoding()
 			});
 
 			isSharing = true;

@@ -5,22 +5,27 @@ import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
 import { loadGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
-import { updateChannel, removeChannel, channels as channelsStore } from './channels';
-import { appendMessage, updateMessage, removeMessage, removeMessages } from './messages';
+import { updateChannel, removeChannel, channels as channelsStore, currentChannelId } from './channels';
+import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
-import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel } from './dms';
+import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs } from './dms';
 import { incrementUnread, loadReadState } from './unreads';
 import { addNotification } from './notifications';
 import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
 import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
 import { loadPermissions, invalidatePermissions } from './permissions';
 import { loadChannelMutePrefs, isChannelMuted, isGuildMuted } from './muting';
+import { updateGuildMember, updateUserInMembers } from './members';
+import { startIdleDetection, stopIdleDetection, setManualStatus } from '$lib/utils/idle';
+import { addToast } from './toast';
+import { clearChannelMessages } from './messages';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
 
 let client: GatewayClient | null = null;
+let hasReceivedReady = false;
 
 export function connectGateway(token: string) {
 	if (client) client.disconnect();
@@ -38,14 +43,21 @@ export function connectGateway(token: string) {
 				loadReadState();
 				loadRelationships();
 				loadChannelMutePrefs();
-				updatePresence(ready.user.id, 'online');
+				// Preserve the user's chosen status. The DB defaults status_presence
+				// to 'offline', which just means "never explicitly set" — treat as online.
+				const raw = ready.user.status_presence;
+				const savedStatus = (!raw || raw === 'offline') ? 'online' : raw;
+				const displayStatus = savedStatus === 'invisible' ? 'offline' : savedStatus;
+				updatePresence(ready.user.id, displayStatus);
 				// Load initial presence for all online guild members.
 				if (ready.presences) {
 					for (const [uid, status] of Object.entries(ready.presences)) {
 						updatePresence(uid, status as string);
 					}
 				}
-				client?.updatePresence('online');
+				client?.updatePresence(savedStatus);
+				setManualStatus(savedStatus);
+				startIdleDetection();
 
 				// Clear stale voice state then repopulate from READY payload.
 				clearChannelVoiceUsers();
@@ -65,10 +77,27 @@ export function connectGateway(token: string) {
 				}
 
 				// E2EE is now passphrase-based — no init or welcome processing needed
+
+				// Detect reconnection and refresh active channel data.
+				const isReconnect = hasReceivedReady;
+				hasReceivedReady = true;
+				if (isReconnect) {
+					const activeChannelId = get(currentChannelId);
+					if (activeChannelId) {
+						clearChannelMessages(activeChannelId);
+						loadMessages(activeChannelId);
+					}
+					addToast('Reconnected to server', 'success', 3000);
+				}
 				break;
 			}
 
 			// --- Gateway lifecycle ---
+			case 'GATEWAY_DISCONNECTED':
+				// Connection dropped — mark disconnected immediately for UI feedback.
+				gatewayConnected.set(false);
+				addToast('Connection lost. Reconnecting...', 'warning', 5000);
+				break;
 			case 'GATEWAY_AUTH_FAILED':
 				// Token is invalid — redirect to login.
 				disconnectGateway();
@@ -193,9 +222,19 @@ export function connectGateway(token: string) {
 			}
 
 			// --- User events ---
-			case 'USER_UPDATE':
-				currentUser.set(data as User);
+			case 'USER_UPDATE': {
+				const updatedUser = data as User;
+				let selfId: string | undefined;
+				currentUser.subscribe((u) => (selfId = u?.id))();
+				if (updatedUser.id === selfId) {
+					// Own profile update
+					currentUser.set(updatedUser);
+				}
+				// Update user data across all stores (works for self and others)
+				updateUserInMembers(updatedUser);
+				updateUserInDMs(updatedUser);
 				break;
+			}
 
 			// --- Voice state events ---
 			case 'VOICE_STATE_UPDATE':
@@ -214,12 +253,16 @@ export function connectGateway(token: string) {
 			// --- Relationship events (friend requests) ---
 			// --- Guild member events ---
 			case 'GUILD_MEMBER_UPDATE': {
-				const memberData = data as { guild_id: string; user_id: string; action?: string };
+				const memberData = data as { guild_id: string; user_id: string; action?: string; roles?: string[] };
 				// When the current user's roles/member data changes, reload permissions.
 				let selfId: string | undefined;
 				currentUser.subscribe((u) => (selfId = u?.id))();
 				if (memberData.user_id === selfId && memberData.guild_id) {
 					loadPermissions(memberData.guild_id);
+				}
+				// Update member store for real-time role display.
+				if (memberData.roles !== undefined) {
+					updateGuildMember(memberData.user_id, { roles: memberData.roles });
 				}
 				break;
 			}
@@ -271,9 +314,11 @@ export function connectGateway(token: string) {
 }
 
 export function disconnectGateway() {
+	stopIdleDetection();
 	client?.disconnect();
 	client = null;
 	gatewayConnected.set(false);
+	hasReceivedReady = false;
 }
 
 export function getGatewayClient(): GatewayClient | null {

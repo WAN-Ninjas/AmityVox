@@ -16,10 +16,12 @@
 	import PinnedMessages from '$components/chat/PinnedMessages.svelte';
 	import ThreadPanel from '$components/chat/ThreadPanel.svelte';
 	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
+	import GalleryPanel from '$lib/components/gallery/GalleryPanel.svelte';
 
 	let showMembers = $state(true);
 	let showPins = $state(false);
 	let showFollowers = $state(false);
+	let showGallery = $state(false);
 	let activeThread = $state<{ channel: Channel; parentMessage: Message | null } | null>(null);
 	let isDragging = $state(false);
 	let dragCounter = 0;
@@ -270,10 +272,12 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<TopBar
 			onToggleMembers={() => (showMembers = !showMembers)}
-			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; activeThreadId.set(null); showFollowers = false; } }}
+			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; activeThreadId.set(null); showFollowers = false; showGallery = false; } }}
 			onToggleFollowers={toggleFollowers}
+			onToggleGallery={() => { showGallery = !showGallery; if (showGallery) { showPins = false; showFollowers = false; activeThread = null; activeThreadId.set(null); } }}
 			{showPins}
 			{showFollowers}
+			{showGallery}
 		/>
 		{#if $currentChannel?.channel_type === 'voice' || $currentChannel?.channel_type === 'stage'}
 			<VoiceChannelView
@@ -407,7 +411,13 @@
 		</aside>
 	{/if}
 
-	{#if showMembers && !showPins && !activeThread && !showFollowers}
+	{#if showGallery && !activeThread}
+		<aside class="flex w-80 shrink-0 flex-col border-l border-bg-floating bg-bg-secondary">
+			<GalleryPanel channelId={$currentChannelId ?? undefined} guildId={$page.params.guildId} canManage={true} onclose={() => (showGallery = false)} />
+		</aside>
+	{/if}
+
+	{#if showMembers && !showPins && !activeThread && !showFollowers && !showGallery}
 		<MemberList />
 	{/if}
 </div>

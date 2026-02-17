@@ -108,6 +108,7 @@
 	let editAllow = $state(0n);
 	let editDeny = $state(0n);
 	let saving = $state(false);
+	let reordering = $state(false);
 
 	let newRoleName = $state('');
 	let newRoleColor = $state('#99aab5');
@@ -115,6 +116,7 @@
 
 	const sortedRoles = $derived([...roles].sort((a, b) => b.position - a.position));
 	const selectedRole = $derived(roles.find((r) => r.id === selectedRoleId) ?? null);
+	const isEveryone = $derived(selectedRole?.name === '@everyone' && selectedRole?.position === 0);
 
 	// --- Permission helpers (exported for testing) ---
 
@@ -150,6 +152,132 @@
 		editDeny = BigInt(role.permissions_deny);
 	}
 
+	// --- Reorder helpers ---
+
+	let draggedRoleId = $state<string | null>(null);
+	let dropTargetIdx = $state<number | null>(null);
+
+	async function moveRoleUp(role: Role) {
+		const sorted = sortedRoles;
+		const idx = sorted.findIndex((r) => r.id === role.id);
+		if (idx <= 0) return;
+		await reorderSwap(role, sorted[idx - 1]);
+	}
+
+	async function moveRoleDown(role: Role) {
+		const sorted = sortedRoles;
+		const idx = sorted.findIndex((r) => r.id === role.id);
+		if (idx < 0 || idx >= sorted.length - 1) return;
+		const below = sorted[idx + 1];
+		if (below.name === '@everyone' && below.position === 0) return;
+		await reorderSwap(role, below);
+	}
+
+	async function reorderSwap(a: Role, b: Role) {
+		reordering = true;
+		try {
+			const updated = await api.reorderRoles(guildId, [
+				{ id: a.id, position: b.position },
+				{ id: b.id, position: a.position },
+			]);
+			roles = updated;
+			onSuccess('Roles reordered');
+		} catch (err: any) {
+			onError(err.message || 'Failed to reorder roles');
+		} finally {
+			reordering = false;
+		}
+	}
+
+	function canMoveUp(role: Role): boolean {
+		const idx = sortedRoles.findIndex((r) => r.id === role.id);
+		return idx > 0;
+	}
+
+	function canMoveDown(role: Role): boolean {
+		if (role.name === '@everyone' && role.position === 0) return false;
+		const idx = sortedRoles.findIndex((r) => r.id === role.id);
+		if (idx < 0 || idx >= sortedRoles.length - 1) return false;
+		const below = sortedRoles[idx + 1];
+		return !(below.name === '@everyone' && below.position === 0);
+	}
+
+	// --- Drag-and-drop ---
+
+	function handleDragStart(e: DragEvent, roleId: string) {
+		draggedRoleId = roleId;
+		if (e.dataTransfer) {
+			e.dataTransfer.effectAllowed = 'move';
+			e.dataTransfer.setData('text/plain', roleId);
+		}
+	}
+
+	function handleDragOver(e: DragEvent, idx: number) {
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+		// Don't allow dropping onto @everyone
+		const targetRole = sortedRoles[idx];
+		if (targetRole?.name === '@everyone' && targetRole?.position === 0) return;
+		dropTargetIdx = idx;
+	}
+
+	function handleDragLeave() {
+		dropTargetIdx = null;
+	}
+
+	function handleDragEnd() {
+		draggedRoleId = null;
+		dropTargetIdx = null;
+	}
+
+	async function handleDrop(e: DragEvent, targetIdx: number) {
+		e.preventDefault();
+		if (!draggedRoleId) return;
+		const sorted = sortedRoles;
+		const sourceIdx = sorted.findIndex((r) => r.id === draggedRoleId);
+		if (sourceIdx < 0 || sourceIdx === targetIdx) {
+			handleDragEnd();
+			return;
+		}
+
+		// Don't allow dropping onto @everyone
+		const targetRole = sorted[targetIdx];
+		if (targetRole?.name === '@everyone' && targetRole?.position === 0) {
+			handleDragEnd();
+			return;
+		}
+
+		// Build new position assignments for all affected roles
+		const reordered = [...sorted];
+		const [moved] = reordered.splice(sourceIdx, 1);
+		reordered.splice(targetIdx, 0, moved);
+
+		// Assign positions: highest index in sorted = highest position
+		const updates: { id: string; position: number }[] = [];
+		for (let i = 0; i < reordered.length; i++) {
+			const newPos = reordered.length - 1 - i;
+			// Skip @everyone (always position 0)
+			if (reordered[i].name === '@everyone' && reordered[i].position === 0) continue;
+			if (reordered[i].position !== newPos) {
+				updates.push({ id: reordered[i].id, position: newPos });
+			}
+		}
+
+		handleDragEnd();
+		if (updates.length === 0) return;
+
+		reordering = true;
+		try {
+			const updated = await api.reorderRoles(guildId, updates);
+			roles = updated;
+			onSuccess('Roles reordered');
+		} catch (err: any) {
+			onError(err.message || 'Failed to reorder roles');
+		} finally {
+			reordering = false;
+		}
+	}
+
 	// --- Actions ---
 
 	async function handleCreateRole() {
@@ -174,14 +302,18 @@
 		if (!selectedRoleId || !editName.trim()) return;
 		saving = true;
 		try {
-			const updated = await api.updateRole(guildId, selectedRoleId, {
-				name: editName.trim(),
+			const data: Record<string, any> = {
 				color: editColor,
 				hoist: editHoist,
 				mentionable: editMentionable,
-				permissions_allow: editAllow.toString() as any,
-				permissions_deny: editDeny.toString() as any
-			});
+				permissions_allow: editAllow.toString(),
+				permissions_deny: editDeny.toString()
+			};
+			// Don't allow renaming @everyone
+			if (!isEveryone) {
+				data.name = editName.trim();
+			}
+			const updated = await api.updateRole(guildId, selectedRoleId, data);
 			roles = roles.map((r) => (r.id === selectedRoleId ? updated : r));
 			onSuccess('Role updated');
 		} catch (err: any) {
@@ -235,18 +367,82 @@
 		</div>
 
 		<!-- Role list -->
-		<div class="space-y-1">
+		<div class="space-y-0.5">
 			{#if sortedRoles.length === 0}
 				<p class="py-4 text-center text-sm text-text-muted">No custom roles yet.</p>
 			{/if}
-			{#each sortedRoles as role (role.id)}
-				<button
-					class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors {selectedRoleId === role.id ? 'bg-brand-500/20 text-text-primary' : 'text-text-secondary hover:bg-bg-modifier'}"
-					onclick={() => selectRole(role)}
-				>
-					<div class="h-3 w-3 shrink-0 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></div>
-					<span class="truncate">{role.name}</span>
-				</button>
+			{#each sortedRoles as role, idx (role.id)}
+				{@const isEveryoneRole = role.name === '@everyone' && role.position === 0}
+				{#if isEveryoneRole}
+					<!-- @everyone is always pinned at the bottom, no reordering -->
+					<div class="mt-2 border-t border-bg-modifier pt-2">
+						<button
+							class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors {selectedRoleId === role.id ? 'bg-brand-500/20 text-text-primary' : 'text-text-secondary hover:bg-bg-modifier'}"
+							onclick={() => selectRole(role)}
+						>
+							<div class="h-3 w-3 shrink-0 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></div>
+							<span class="truncate">{role.name}</span>
+							<span class="ml-auto text-2xs text-text-muted">Base</span>
+						</button>
+					</div>
+				{:else}
+					{@const isDragging = draggedRoleId === role.id}
+					{@const isDropTarget = dropTargetIdx === idx && draggedRoleId !== role.id}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						class="flex items-center gap-0.5 rounded-lg transition-all {isDragging ? 'opacity-40' : ''} {isDropTarget ? 'border-t-2 border-brand-500' : 'border-t-2 border-transparent'}"
+						draggable={true}
+						ondragstart={(e) => handleDragStart(e, role.id)}
+						ondragover={(e) => handleDragOver(e, idx)}
+						ondragleave={handleDragLeave}
+						ondrop={(e) => handleDrop(e, idx)}
+						ondragend={handleDragEnd}
+					>
+						<!-- Drag handle -->
+						<div class="flex shrink-0 cursor-grab items-center px-1 text-text-muted/50 hover:text-text-muted active:cursor-grabbing">
+							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+								<circle cx="9" cy="6" r="1.5" />
+								<circle cx="15" cy="6" r="1.5" />
+								<circle cx="9" cy="12" r="1.5" />
+								<circle cx="15" cy="12" r="1.5" />
+								<circle cx="9" cy="18" r="1.5" />
+								<circle cx="15" cy="18" r="1.5" />
+							</svg>
+						</div>
+
+						<button
+							class="flex flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors {selectedRoleId === role.id ? 'bg-brand-500/20 text-text-primary' : 'text-text-secondary hover:bg-bg-modifier'}"
+							onclick={() => selectRole(role)}
+						>
+							<div class="h-3 w-3 shrink-0 rounded-full" style="background-color: {role.color ?? '#99aab5'}"></div>
+							<span class="truncate">{role.name}</span>
+						</button>
+
+						<!-- Reorder arrows -->
+						<div class="flex shrink-0 flex-col">
+							<button
+								class="rounded p-0.5 text-text-muted hover:text-text-primary disabled:opacity-25 disabled:hover:text-text-muted"
+								title="Move up one"
+								disabled={reordering || !canMoveUp(role)}
+								onclick={() => moveRoleUp(role)}
+							>
+								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M5 15l7-7 7 7" />
+								</svg>
+							</button>
+							<button
+								class="rounded p-0.5 text-text-muted hover:text-text-primary disabled:opacity-25 disabled:hover:text-text-muted"
+								title="Move down one"
+								disabled={reordering || !canMoveDown(role)}
+								onclick={() => moveRoleDown(role)}
+							>
+								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M19 9l-7 7-7-7" />
+								</svg>
+							</button>
+						</div>
+					</div>
+				{/if}
 			{/each}
 		</div>
 	</div>
@@ -265,7 +461,11 @@
 					<div class="grid grid-cols-2 gap-4">
 						<div>
 							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
-							<input type="text" class="input w-full" bind:value={editName} maxlength="100" />
+							{#if isEveryone}
+								<input type="text" class="input w-full cursor-not-allowed opacity-60" value="@everyone" disabled />
+							{:else}
+								<input type="text" class="input w-full" bind:value={editName} maxlength="100" />
+							{/if}
 						</div>
 						<div>
 							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Color</label>
@@ -335,12 +535,14 @@
 
 				<!-- Action buttons -->
 				<div class="flex items-center justify-between">
-					<button class="btn-primary" onclick={handleSave} disabled={saving || !editName.trim()}>
+					<button class="btn-primary" onclick={handleSave} disabled={saving || (!isEveryone && !editName.trim())}>
 						{saving ? 'Saving...' : 'Save Changes'}
 					</button>
-					<button class="text-sm text-red-400 hover:text-red-300" onclick={handleDelete}>
-						Delete Role
-					</button>
+					{#if !isEveryone}
+						<button class="text-sm text-red-400 hover:text-red-300" onclick={handleDelete}>
+							Delete Role
+						</button>
+					{/if}
 				</div>
 			</div>
 		{/if}

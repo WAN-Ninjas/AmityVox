@@ -10,7 +10,8 @@ export default defineConfig({
 		setupFiles: ['src/test-setup.ts'],
 		alias: {
 			$lib: '/src/lib',
-			$components: '/src/lib/components'
+			$components: '/src/lib/components',
+			'$app/navigation': '/src/mocks/app-navigation.ts'
 		}
 	}
 });

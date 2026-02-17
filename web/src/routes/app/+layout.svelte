@@ -5,7 +5,7 @@
 	import type { Snippet } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { initAuth, currentUser, isLoading } from '$lib/stores/auth';
-	import { connectGateway, disconnectGateway } from '$lib/stores/gateway';
+	import { connectGateway, disconnectGateway, gatewayConnected } from '$lib/stores/gateway';
 	import { loadSettings, startDndChecker, stopDndChecker, loadSettingsFromApi } from '$lib/stores/settings';
 	import { loadBlockedUsers } from '$lib/stores/blocked';
 	import { pushChannel, setCurrentUrl } from '$lib/stores/navigation';
@@ -17,6 +17,7 @@
 	import QuickSwitcher from '$components/common/QuickSwitcher.svelte';
 	import NotificationCenter from '$components/common/NotificationCenter.svelte';
 	import AnnouncementBanner from '$components/common/AnnouncementBanner.svelte';
+	import ModerationModals from '$components/common/ModerationModals.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -86,6 +87,7 @@
 
 <KeyboardShortcuts onToggleSearch={toggleCommandPalette} onToggleQuickSwitcher={toggleQuickSwitcher} />
 <ToastContainer />
+<ModerationModals />
 <CommandPalette bind:open={commandPaletteOpen} />
 <QuickSwitcher bind:open={quickSwitcherOpen} />
 <NotificationCenter bind:open={notificationCenterOpen} />
@@ -100,6 +102,13 @@
 {:else if $currentUser}
 	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary">
 		<div class="accent-stripe"></div>
+		<!-- Reconnecting banner -->
+		{#if !$gatewayConnected}
+			<div class="flex items-center justify-center gap-2 bg-red-500 px-3 py-1.5 text-sm font-medium text-white">
+				<div class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+				Reconnecting...
+			</div>
+		{/if}
 		<!-- Announcement banner at the very top -->
 		<AnnouncementBanner />
 

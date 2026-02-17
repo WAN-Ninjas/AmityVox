@@ -33,15 +33,20 @@ type VoiceState struct {
 
 // VoicePreferences holds per-user voice settings persisted in the database.
 type VoicePreferences struct {
-	UserID            string  `json:"user_id"`
-	InputMode         string  `json:"input_mode"`          // "vad" or "ptt"
-	PTTKey            string  `json:"ptt_key"`             // keybind for push-to-talk
-	VADThreshold      float64 `json:"vad_threshold"`       // 0.0-1.0
-	NoiseSuppression  bool    `json:"noise_suppression"`
-	EchoCancellation  bool    `json:"echo_cancellation"`
-	AutoGainControl   bool    `json:"auto_gain_control"`
-	InputVolume       float64 `json:"input_volume"`        // 0.0-2.0
-	OutputVolume      float64 `json:"output_volume"`       // 0.0-2.0
+	UserID                string  `json:"user_id"`
+	InputMode             string  `json:"input_mode"`              // "vad" or "ptt"
+	PTTKey                string  `json:"ptt_key"`                 // keybind for push-to-talk
+	VADThreshold          float64 `json:"vad_threshold"`           // 0.0-1.0
+	NoiseSuppression      bool    `json:"noise_suppression"`
+	EchoCancellation      bool    `json:"echo_cancellation"`
+	AutoGainControl       bool    `json:"auto_gain_control"`
+	InputVolume           float64 `json:"input_volume"`            // 0.0-2.0
+	OutputVolume          float64 `json:"output_volume"`           // 0.0-2.0
+	CameraResolution      string  `json:"camera_resolution"`       // "360p", "720p", "1080p"
+	CameraFramerate       int     `json:"camera_framerate"`        // 15, 30, 60
+	ScreenshareResolution string  `json:"screenshare_resolution"`  // "720p", "1080p", "4k"
+	ScreenshareFramerate  int     `json:"screenshare_framerate"`   // 15, 30, 60
+	ScreenshareAudio      bool    `json:"screenshare_audio"`
 }
 
 // SoundboardSound represents a guild soundboard clip.
@@ -365,24 +370,33 @@ func (s *Service) SetScreenSharing(userID string, sharing bool) {
 // GetVoicePreferences loads a user's voice preferences from the database.
 func (s *Service) GetVoicePreferences(ctx context.Context, userID string) (*VoicePreferences, error) {
 	prefs := &VoicePreferences{
-		UserID:           userID,
-		InputMode:        "vad",
-		PTTKey:           "Space",
-		VADThreshold:     0.3,
-		NoiseSuppression: true,
-		EchoCancellation: true,
-		AutoGainControl:  true,
-		InputVolume:      1.0,
-		OutputVolume:     1.0,
+		UserID:                userID,
+		InputMode:             "vad",
+		PTTKey:                "Space",
+		VADThreshold:          0.3,
+		NoiseSuppression:      true,
+		EchoCancellation:      true,
+		AutoGainControl:       true,
+		InputVolume:           1.0,
+		OutputVolume:          1.0,
+		CameraResolution:      "720p",
+		CameraFramerate:       30,
+		ScreenshareResolution: "1080p",
+		ScreenshareFramerate:  30,
+		ScreenshareAudio:      false,
 	}
 
 	err := s.pool.QueryRow(ctx,
 		`SELECT input_mode, ptt_key, vad_threshold, noise_suppression,
-		        echo_cancellation, auto_gain_control, input_volume, output_volume
+		        echo_cancellation, auto_gain_control, input_volume, output_volume,
+		        camera_resolution, camera_framerate, screenshare_resolution,
+		        screenshare_framerate, screenshare_audio
 		 FROM voice_preferences WHERE user_id = $1`, userID,
 	).Scan(&prefs.InputMode, &prefs.PTTKey, &prefs.VADThreshold,
 		&prefs.NoiseSuppression, &prefs.EchoCancellation, &prefs.AutoGainControl,
-		&prefs.InputVolume, &prefs.OutputVolume)
+		&prefs.InputVolume, &prefs.OutputVolume,
+		&prefs.CameraResolution, &prefs.CameraFramerate, &prefs.ScreenshareResolution,
+		&prefs.ScreenshareFramerate, &prefs.ScreenshareAudio)
 
 	if err != nil {
 		// Return defaults if no row exists.
@@ -395,8 +409,10 @@ func (s *Service) GetVoicePreferences(ctx context.Context, userID string) (*Voic
 func (s *Service) UpdateVoicePreferences(ctx context.Context, prefs *VoicePreferences) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO voice_preferences (user_id, input_mode, ptt_key, vad_threshold,
-		    noise_suppression, echo_cancellation, auto_gain_control, input_volume, output_volume, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		    noise_suppression, echo_cancellation, auto_gain_control, input_volume, output_volume,
+		    camera_resolution, camera_framerate, screenshare_resolution, screenshare_framerate,
+		    screenshare_audio, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
 		 ON CONFLICT (user_id) DO UPDATE SET
 		    input_mode = EXCLUDED.input_mode,
 		    ptt_key = EXCLUDED.ptt_key,
@@ -406,10 +422,17 @@ func (s *Service) UpdateVoicePreferences(ctx context.Context, prefs *VoicePrefer
 		    auto_gain_control = EXCLUDED.auto_gain_control,
 		    input_volume = EXCLUDED.input_volume,
 		    output_volume = EXCLUDED.output_volume,
+		    camera_resolution = EXCLUDED.camera_resolution,
+		    camera_framerate = EXCLUDED.camera_framerate,
+		    screenshare_resolution = EXCLUDED.screenshare_resolution,
+		    screenshare_framerate = EXCLUDED.screenshare_framerate,
+		    screenshare_audio = EXCLUDED.screenshare_audio,
 		    updated_at = now()`,
 		prefs.UserID, prefs.InputMode, prefs.PTTKey, prefs.VADThreshold,
 		prefs.NoiseSuppression, prefs.EchoCancellation, prefs.AutoGainControl,
 		prefs.InputVolume, prefs.OutputVolume,
+		prefs.CameraResolution, prefs.CameraFramerate, prefs.ScreenshareResolution,
+		prefs.ScreenshareFramerate, prefs.ScreenshareAudio,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting voice preferences: %w", err)

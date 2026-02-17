@@ -9,6 +9,8 @@ import {
 	RoomEvent,
 	Track,
 	ConnectionState,
+	VideoPresets,
+	ScreenSharePresets,
 	type RemoteParticipant,
 	type RemoteTrack,
 	type LocalParticipant,
@@ -85,10 +87,45 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 		// Get LiveKit token from backend
 		const { token, url } = await api.joinVoice(channelId);
 
+		// Load saved device preferences from localStorage.
+		const savedInputDevice = localStorage.getItem('av-voice-input-device') || undefined;
+		const savedOutputDevice = localStorage.getItem('av-voice-output-device') || undefined;
+
+		// Load voice preferences for audio processing settings.
+		let noiseSuppression = true;
+		let echoCancellation = true;
+		let autoGainControl = true;
+		try {
+			const prefs = await api.getVoicePreferences();
+			noiseSuppression = prefs.noise_suppression ?? true;
+			echoCancellation = prefs.echo_cancellation ?? true;
+			autoGainControl = prefs.auto_gain_control ?? true;
+		} catch {
+			// Use defaults on error.
+		}
+
 		// Create and connect LiveKit room
 		room = new Room({
 			adaptiveStream: true,
-			dynacast: true
+			dynacast: true,
+			audioCaptureDefaults: {
+				deviceId: savedInputDevice,
+				noiseSuppression,
+				echoCancellation,
+				autoGainControl
+			},
+			audioOutput: {
+				deviceId: savedOutputDevice
+			},
+			videoCaptureDefaults: {
+				resolution: VideoPresets.h720.resolution
+			},
+			publishDefaults: {
+				videoEncoding: { maxBitrate: 2_000_000, maxFramerate: 30 },
+				screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
+				simulcast: true,
+				videoSimulcastLayers: [VideoPresets.h360, VideoPresets.h180]
+			}
 		});
 
 		// Wire up room events

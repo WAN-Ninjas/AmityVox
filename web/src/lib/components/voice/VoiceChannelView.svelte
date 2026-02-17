@@ -140,7 +140,7 @@
 					<div class="flex -space-x-2">
 						{#each $participantList.slice(0, 8) as p (p.userId)}
 							<div class="relative" title={p.displayName ?? p.username}>
-								<Avatar name={p.displayName ?? p.username} size="sm" />
+								<Avatar name={p.displayName ?? p.username} src={p.avatarId ? `/api/v1/files/${p.avatarId}` : null} size="sm" />
 							</div>
 						{/each}
 						{#if $participantList.length > 8}

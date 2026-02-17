@@ -74,6 +74,7 @@
 					<div class="flex items-center gap-2">
 						<Avatar
 							name={pin.author?.display_name ?? pin.author?.username ?? '?'}
+							src={pin.author?.avatar_id ? `/api/v1/files/${pin.author.avatar_id}` : null}
 							size="sm"
 						/>
 						<span class="text-sm font-medium text-text-primary">

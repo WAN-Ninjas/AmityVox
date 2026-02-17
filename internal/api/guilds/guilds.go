@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -65,6 +66,7 @@ type updateMemberRequest struct {
 	Mute         *bool      `json:"mute"`
 	TimeoutUntil *time.Time `json:"timeout_until"`
 	Roles        []string   `json:"roles"`
+	Reason       *string    `json:"reason"`
 }
 
 // flexInt64 unmarshals from both JSON numbers and strings, so JavaScript
@@ -133,6 +135,12 @@ type updateRoleRequest struct {
 }
 
 type banRequest struct {
+	Reason               *string `json:"reason"`
+	DurationSeconds      *int64  `json:"duration_seconds"`
+	DeleteMessageSeconds *int64  `json:"delete_message_seconds"`
+}
+
+type kickRequest struct {
 	Reason *string `json:"reason"`
 }
 
@@ -206,6 +214,19 @@ func (h *Handler) HandleCreateGuild(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to create default channel", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
+		return
+	}
+
+	// Create @everyone role at position 0 with default permissions.
+	everyoneRoleID := models.NewULID().String()
+	_, err = tx.Exec(r.Context(),
+		`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at)
+		 VALUES ($1, $2, '@everyone', NULL, false, false, 0, $3, 0, now())`,
+		everyoneRoleID, guildID, defaultPerms,
+	)
+	if err != nil {
+		h.Logger.Error("failed to create @everyone role", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
 		return
 	}
@@ -605,6 +626,26 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 		members = append(members, m)
 	}
 
+	// Batch-load role IDs for all members so the frontend can do hoist grouping.
+	if len(members) > 0 {
+		roleRows, roleErr := h.Pool.Query(r.Context(),
+			`SELECT user_id, role_id FROM member_roles WHERE guild_id = $1`, guildID)
+		if roleErr == nil {
+			defer roleRows.Close()
+			memberRoleMap := make(map[string][]string)
+			for roleRows.Next() {
+				var uid, rid string
+				roleRows.Scan(&uid, &rid)
+				memberRoleMap[uid] = append(memberRoleMap[uid], rid)
+			}
+			for i := range members {
+				if rids, ok := memberRoleMap[members[i].UserID]; ok {
+					members[i].Roles = rids
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, members)
 }
 
@@ -748,7 +789,7 @@ func (h *Handler) HandleUpdateGuildMember(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	h.logAudit(r.Context(), guildID, userID, "member_update", "user", memberID, nil)
+	h.logAudit(r.Context(), guildID, userID, "member_update", "user", memberID, req.Reason)
 	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", m)
 
 	writeJSON(w, http.StatusOK, m)
@@ -774,6 +815,20 @@ func (h *Handler) HandleRemoveGuildMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Hierarchy check: can't kick members with equal or higher roles (unless guild owner).
+	if userID != ownerID {
+		actorPos := h.getHighestRolePosition(r.Context(), guildID, userID)
+		targetPos := h.getHighestRolePosition(r.Context(), guildID, memberID)
+		if targetPos >= actorPos {
+			writeError(w, http.StatusForbidden, "role_hierarchy", "Cannot moderate members with equal or higher roles")
+			return
+		}
+	}
+
+	// Best-effort parse of optional kick reason from body.
+	var req kickRequest
+	json.NewDecoder(r.Body).Decode(&req)
+
 	_, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, memberID)
 	if err != nil {
@@ -781,7 +836,7 @@ func (h *Handler) HandleRemoveGuildMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.logAudit(r.Context(), guildID, userID, "member_kick", "user", memberID, nil)
+	h.logAudit(r.Context(), guildID, userID, "member_kick", "user", memberID, req.Reason)
 	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberRemove, "GUILD_MEMBER_REMOVE", map[string]string{
 		"guild_id": guildID, "user_id": memberID,
 	})
@@ -801,7 +856,7 @@ func (h *Handler) HandleGetGuildBans(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.Pool.Query(r.Context(),
-		`SELECT guild_id, user_id, reason, banned_by, created_at
+		`SELECT guild_id, user_id, reason, banned_by, expires_at, created_at
 		 FROM guild_bans WHERE guild_id = $1
 		 ORDER BY created_at DESC`,
 		guildID,
@@ -815,7 +870,7 @@ func (h *Handler) HandleGetGuildBans(w http.ResponseWriter, r *http.Request) {
 	bans := make([]models.GuildBan, 0)
 	for rows.Next() {
 		var b models.GuildBan
-		if err := rows.Scan(&b.GuildID, &b.UserID, &b.Reason, &b.BannedBy, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.GuildID, &b.UserID, &b.Reason, &b.BannedBy, &b.ExpiresAt, &b.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read bans")
 			return
 		}
@@ -845,8 +900,25 @@ func (h *Handler) HandleCreateGuildBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Hierarchy check: can't ban members with equal or higher roles (unless guild owner).
+	if actorID != ownerID {
+		actorPos := h.getHighestRolePosition(r.Context(), guildID, actorID)
+		targetPos := h.getHighestRolePosition(r.Context(), guildID, targetID)
+		if targetPos >= actorPos {
+			writeError(w, http.StatusForbidden, "role_hierarchy", "Cannot moderate members with equal or higher roles")
+			return
+		}
+	}
+
 	var req banRequest
 	json.NewDecoder(r.Body).Decode(&req)
+
+	// Compute expiry time for timed bans.
+	var expiresAt *time.Time
+	if req.DurationSeconds != nil && *req.DurationSeconds > 0 {
+		t := time.Now().Add(time.Duration(*req.DurationSeconds) * time.Second)
+		expiresAt = &t
+	}
 
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
@@ -858,12 +930,23 @@ func (h *Handler) HandleCreateGuildBan(w http.ResponseWriter, r *http.Request) {
 	// Remove from members.
 	tx.Exec(r.Context(), `DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, targetID)
 
-	// Insert ban.
+	// Insert ban with optional expiry.
 	tx.Exec(r.Context(),
-		`INSERT INTO guild_bans (guild_id, user_id, reason, banned_by, created_at)
-		 VALUES ($1, $2, $3, $4, now())
-		 ON CONFLICT (guild_id, user_id) DO UPDATE SET reason = $3, banned_by = $4`,
-		guildID, targetID, req.Reason, actorID)
+		`INSERT INTO guild_bans (guild_id, user_id, reason, banned_by, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, $5, now())
+		 ON CONFLICT (guild_id, user_id) DO UPDATE SET reason = $3, banned_by = $4, expires_at = $5`,
+		guildID, targetID, req.Reason, actorID, expiresAt)
+
+	// Delete recent messages if requested.
+	if req.DeleteMessageSeconds != nil && *req.DeleteMessageSeconds > 0 {
+		cutoff := time.Now().Add(-time.Duration(*req.DeleteMessageSeconds) * time.Second)
+		tx.Exec(r.Context(),
+			`DELETE FROM messages
+			 WHERE author_id = $1
+			   AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)
+			   AND created_at > $3`,
+			targetID, guildID, cutoff)
+	}
 
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to ban user")
@@ -980,9 +1063,17 @@ func (h *Handler) HandleCreateGuildRole(w http.ResponseWriter, r *http.Request) 
 	if req.Mentionable != nil {
 		mentionable = *req.Mentionable
 	}
+
+	// Auto-position: place new roles above all existing ones (except when explicitly set).
 	position := 0
 	if req.Position != nil {
 		position = *req.Position
+	} else {
+		var maxPos int
+		h.Pool.QueryRow(r.Context(),
+			`SELECT COALESCE(MAX(position), 0) FROM roles WHERE guild_id = $1`, guildID,
+		).Scan(&maxPos)
+		position = maxPos + 1
 	}
 	var permAllow, permDeny int64
 	if req.PermissionsAllow.Set {
@@ -1058,6 +1149,16 @@ func (h *Handler) HandleUpdateGuildRole(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// If this is the @everyone role, sync permissions back to guild.default_permissions.
+	if role.Name == "@everyone" && role.Position == 0 {
+		_, syncErr := h.Pool.Exec(r.Context(),
+			`UPDATE guilds SET default_permissions = $2 WHERE id = $1`,
+			guildID, role.PermissionsAllow)
+		if syncErr != nil {
+			h.Logger.Error("failed to sync @everyone permissions to guild", slog.String("error", syncErr.Error()))
+		}
+	}
+
 	h.logAudit(r.Context(), guildID, userID, "role_update", "role", roleID, nil)
 	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildRoleUpdate, "GUILD_ROLE_UPDATE", role)
 
@@ -1073,6 +1174,20 @@ func (h *Handler) HandleDeleteGuildRole(w http.ResponseWriter, r *http.Request) 
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageRoles) {
 		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_ROLES permission")
+		return
+	}
+
+	// Block deletion of @everyone role.
+	var roleName string
+	var rolePos int
+	if err := h.Pool.QueryRow(r.Context(),
+		`SELECT name, position FROM roles WHERE id = $1 AND guild_id = $2`, roleID, guildID,
+	).Scan(&roleName, &rolePos); err != nil {
+		writeError(w, http.StatusNotFound, "role_not_found", "Role not found")
+		return
+	}
+	if roleName == "@everyone" && rolePos == 0 {
+		writeError(w, http.StatusForbidden, "cannot_delete_everyone", "The @everyone role cannot be deleted")
 		return
 	}
 
@@ -1117,6 +1232,20 @@ func (h *Handler) HandleReorderGuildRoles(w http.ResponseWriter, r *http.Request
 	if len(req) == 0 {
 		writeError(w, http.StatusBadRequest, "empty_array", "At least one role position is required")
 		return
+	}
+
+	// Reject attempts to move the @everyone role away from position 0.
+	var everyoneID string
+	_ = h.Pool.QueryRow(r.Context(),
+		`SELECT id FROM roles WHERE guild_id = $1 AND name = '@everyone' AND position = 0`, guildID,
+	).Scan(&everyoneID)
+	if everyoneID != "" {
+		for _, item := range req {
+			if item.ID == everyoneID && item.Position != 0 {
+				writeError(w, http.StatusBadRequest, "cannot_move_everyone", "The @everyone role must stay at position 0")
+				return
+			}
+		}
 	}
 
 	tx, err := h.Pool.Begin(r.Context())
@@ -2168,6 +2297,27 @@ func (h *Handler) HandleJoinDiscoverableGuild(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// getHighestRolePosition returns the highest position among a user's assigned roles in a guild.
+// Returns 0 if the user has no roles.
+func (h *Handler) getHighestRolePosition(ctx context.Context, guildID, userID string) int {
+	var pos int
+	h.Pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(r.position), 0)
+		 FROM member_roles mr JOIN roles r ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2`,
+		guildID, userID).Scan(&pos)
+	return pos
+}
+
+// isGuildOwner returns whether the user is the owner of the specified guild.
+func (h *Handler) isGuildOwner(ctx context.Context, guildID, userID string) bool {
+	var ownerID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		return false
+	}
+	return userID == ownerID
+}
+
 func (h *Handler) isMember(ctx context.Context, guildID, userID string) bool {
 	var exists bool
 	h.Pool.QueryRow(ctx,
@@ -2238,16 +2388,26 @@ func (h *Handler) HandleAddMemberRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the role belongs to this guild.
-	var exists bool
+	// Verify the role belongs to this guild and get its position.
+	var targetPos int
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1 AND guild_id = $2)`, roleID, guildID).Scan(&exists)
-	if err != nil || !exists {
+		`SELECT position FROM roles WHERE id = $1 AND guild_id = $2`, roleID, guildID).Scan(&targetPos)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "role_not_found", "Role not found in this guild")
 		return
 	}
 
+	// Hierarchy check: non-owners can only assign roles below their own highest role.
+	if !h.isGuildOwner(r.Context(), guildID, userID) {
+		actorPos := h.getHighestRolePosition(r.Context(), guildID, userID)
+		if targetPos >= actorPos {
+			writeError(w, http.StatusForbidden, "role_hierarchy", "Cannot assign a role at or above your highest role")
+			return
+		}
+	}
+
 	// Verify the member exists.
+	var exists bool
 	err = h.Pool.QueryRow(r.Context(),
 		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`, guildID, memberID).Scan(&exists)
 	if err != nil || !exists {
@@ -2264,8 +2424,12 @@ func (h *Handler) HandleAddMemberRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "member_role_add", "role", roleID, nil)
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]string{
+
+	// Fetch current roles list for real-time frontend updates.
+	updatedRoles := h.getMemberRoleIDs(r.Context(), guildID, memberID)
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]interface{}{
 		"guild_id": guildID, "user_id": memberID, "role_id": roleID, "action": "role_add",
+		"roles": updatedRoles,
 	})
 
 	w.WriteHeader(http.StatusNoContent)
@@ -2284,6 +2448,20 @@ func (h *Handler) HandleRemoveMemberRole(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Hierarchy check: non-owners can only remove roles below their own highest role.
+	if !h.isGuildOwner(r.Context(), guildID, userID) {
+		var targetPos int
+		if err := h.Pool.QueryRow(r.Context(),
+			`SELECT position FROM roles WHERE id = $1 AND guild_id = $2`, roleID, guildID,
+		).Scan(&targetPos); err == nil {
+			actorPos := h.getHighestRolePosition(r.Context(), guildID, userID)
+			if targetPos >= actorPos {
+				writeError(w, http.StatusForbidden, "role_hierarchy", "Cannot remove a role at or above your highest role")
+				return
+			}
+		}
+	}
+
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM member_roles WHERE guild_id = $1 AND user_id = $2 AND role_id = $3`,
 		guildID, memberID, roleID)
@@ -2297,8 +2475,12 @@ func (h *Handler) HandleRemoveMemberRole(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "member_role_remove", "role", roleID, nil)
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]string{
+
+	// Fetch current roles list for real-time frontend updates.
+	updatedRoles := h.getMemberRoleIDs(r.Context(), guildID, memberID)
+	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]interface{}{
 		"guild_id": guildID, "user_id": memberID, "role_id": roleID, "action": "role_remove",
+		"roles": updatedRoles,
 	})
 
 	w.WriteHeader(http.StatusNoContent)
@@ -2338,6 +2520,24 @@ func (h *Handler) HandleGetMemberRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, roles)
+}
+
+// getMemberRoleIDs returns all role IDs assigned to a guild member.
+func (h *Handler) getMemberRoleIDs(ctx context.Context, guildID, userID string) []string {
+	rows, err := h.Pool.Query(ctx,
+		`SELECT role_id FROM member_roles WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (h *Handler) logAudit(ctx context.Context, guildID, actorID, action, targetType, targetID string, reason *string) {
@@ -2930,6 +3130,179 @@ func (h *Handler) HandleGetMyPermissions(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"permissions": strconv.FormatUint(computedPerms, 10),
 	})
+}
+
+// HandleGetGuildGallery returns media attachments (images/videos) across all channels in a guild.
+// GET /api/v1/guilds/{guildID}/gallery
+func (h *Handler) HandleGetGuildGallery(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	// Build query with optional filters.
+	baseSQL := `SELECT a.id, a.message_id, a.uploader_id, a.filename, a.content_type, a.size_bytes,
+	            a.width, a.height, a.duration_seconds, a.s3_bucket, a.s3_key, a.blurhash,
+	            a.alt_text, a.nsfw, a.description, a.created_at
+	     FROM attachments a
+	     JOIN messages m ON m.id = a.message_id
+	     JOIN channels c ON c.id = m.channel_id
+	     WHERE c.guild_id = $1`
+	args := []interface{}{guildID}
+	argIdx := 2
+
+	// Filter by media type.
+	mediaType := r.URL.Query().Get("type")
+	switch mediaType {
+	case "image":
+		baseSQL += ` AND a.content_type LIKE 'image/%'`
+	case "video":
+		baseSQL += ` AND a.content_type LIKE 'video/%'`
+	default:
+		baseSQL += ` AND (a.content_type LIKE 'image/%' OR a.content_type LIKE 'video/%')`
+	}
+
+	// Cursor-based pagination.
+	if before := r.URL.Query().Get("before"); before != "" {
+		baseSQL += fmt.Sprintf(` AND a.id < $%d`, argIdx)
+		args = append(args, before)
+		argIdx++
+	}
+
+	_ = argIdx // suppress unused warning
+	baseSQL += ` ORDER BY a.created_at DESC LIMIT 50`
+
+	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to query gallery")
+		return
+	}
+	defer rows.Close()
+
+	attachments := make([]models.Attachment, 0)
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(
+			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash,
+			&a.AltText, &a.NSFW, &a.Description, &a.CreatedAt,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read gallery data")
+			return
+		}
+		attachments = append(attachments, a)
+	}
+
+	writeJSON(w, http.StatusOK, attachments)
+}
+
+// HandleGetMediaTags returns all media tags for a guild.
+// GET /api/v1/guilds/{guildID}/media-tags
+func (h *Handler) HandleGetMediaTags(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, name, guild_id, created_by, created_at FROM media_tags WHERE guild_id = $1 ORDER BY name`,
+		guildID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get media tags")
+		return
+	}
+	defer rows.Close()
+
+	tags := make([]models.MediaTag, 0)
+	for rows.Next() {
+		var t models.MediaTag
+		if err := rows.Scan(&t.ID, &t.Name, &t.GuildID, &t.CreatedBy, &t.CreatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read media tags")
+			return
+		}
+		tags = append(tags, t)
+	}
+
+	writeJSON(w, http.StatusOK, tags)
+}
+
+// HandleCreateMediaTag creates a new media tag for a guild.
+// POST /api/v1/guilds/{guildID}/media-tags
+func (h *Handler) HandleCreateMediaTag(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || len(req.Name) > 50 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Tag name must be between 1 and 50 characters")
+		return
+	}
+
+	tag := models.MediaTag{
+		ID:        models.NewULID().String(),
+		Name:      req.Name,
+		GuildID:   guildID,
+		CreatedBy: &userID,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	_, err := h.Pool.Exec(r.Context(),
+		`INSERT INTO media_tags (id, name, guild_id, created_by, created_at) VALUES ($1, $2, $3, $4, $5)`,
+		tag.ID, tag.Name, tag.GuildID, tag.CreatedBy, tag.CreatedAt,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create media tag")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, tag)
+}
+
+// HandleDeleteMediaTag deletes a media tag from a guild.
+// DELETE /api/v1/guilds/{guildID}/media-tags/{tagID}
+func (h *Handler) HandleDeleteMediaTag(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	guildID := chi.URLParam(r, "guildID")
+	tagID := chi.URLParam(r, "tagID")
+
+	if !h.isMember(r.Context(), guildID, userID) {
+		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		return
+	}
+
+	result, err := h.Pool.Exec(r.Context(),
+		`DELETE FROM media_tags WHERE id = $1 AND guild_id = $2`, tagID, guildID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete media tag")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "tag_not_found", "Media tag not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

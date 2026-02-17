@@ -23,7 +23,15 @@
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import { canManageChannels, canManageGuild, canManageThreads } from '$lib/stores/permissions';
 	import { channelMutePrefs, guildMutePrefs, isChannelMuted, isGuildMuted, muteChannel, unmuteChannel, muteGuild, unmuteGuild } from '$lib/stores/muting';
+	import StatusPicker from '$components/common/StatusPicker.svelte';
+	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
+
+	// Status picker
+	let showStatusPicker = $state(false);
+
+	// Group DM creation modal
+	let showGroupDMCreate = $state(false);
 
 	// Report issue modal
 	let showReportIssue = $state(false);
@@ -375,7 +383,7 @@
 	}
 </script>
 
-<svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; }} />
+<svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }} />
 
 <aside class="flex h-full w-56 shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" aria-label="Channel list">
 	<!-- Guild header -->
@@ -562,7 +570,7 @@
 								{#each [...voiceUsers.values()] as participant (participant.userId)}
 									<div class="flex items-center gap-1.5 py-0.5">
 										<div class="{participant.speaking && $voiceChannelId === channel.id ? 'ring-2 ring-green-500 rounded-full' : ''}">
-											<Avatar name={participant.displayName ?? participant.username} size="sm" />
+											<Avatar name={participant.displayName ?? participant.username} src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null} size="sm" />
 										</div>
 										<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
 										{#if participant.muted}
@@ -663,6 +671,15 @@
 					</svg>
 					Direct Messages
 				</button>
+				<button
+					class="rounded p-0.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+					onclick={() => (showGroupDMCreate = true)}
+					title="Create Group DM"
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+					</svg>
+				</button>
 			</div>
 
 			{#if !isSectionCollapsed('dm-list')}
@@ -680,7 +697,7 @@
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
-							<Avatar name={dmName} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
+							<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
@@ -710,35 +727,44 @@
 	<!-- User panel (bottom) -->
 	{#if $currentUser}
 		{@const myStatus = $presenceMap.get($currentUser.id) ?? $currentUser.status_presence ?? 'online'}
-		<div class="flex items-center gap-2 border-t border-bg-floating bg-bg-primary/50 p-2">
-			<Avatar name={$currentUser.display_name ?? $currentUser.username} size="sm" status={myStatus} />
-			<div class="min-w-0 flex-1">
-				<p class="truncate text-sm font-medium text-text-primary">
-					{$currentUser.display_name ?? $currentUser.username}
-				</p>
-				<p class="truncate text-xs text-text-muted">
-					{$currentUser.status_text ?? myStatus}
-				</p>
+		<div class="relative border-t border-bg-floating bg-bg-primary/50 p-2">
+			<StatusPicker bind:open={showStatusPicker} onclose={() => (showStatusPicker = false)} />
+			<div class="flex items-center gap-2">
+				<button
+					class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 transition-colors hover:bg-bg-modifier"
+					onclick={(e) => { e.stopPropagation(); showStatusPicker = !showStatusPicker; }}
+					title="Set status"
+				>
+					<Avatar name={$currentUser.display_name ?? $currentUser.username} src={$currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null} size="sm" status={myStatus} />
+					<div class="min-w-0 flex-1 text-left">
+						<p class="truncate text-sm font-medium text-text-primary">
+							{$currentUser.display_name ?? $currentUser.username}
+						</p>
+						<p class="truncate text-xs text-text-muted">
+							{$currentUser.status_text ?? myStatus}
+						</p>
+					</div>
+				</button>
+				<button
+					class="text-orange-400 hover:text-orange-300"
+					onclick={() => (showReportIssue = true)}
+					title="Report Issue"
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+					</svg>
+				</button>
+				<button
+					class="text-text-muted hover:text-text-primary"
+					onclick={() => goto('/app/settings')}
+					title="User Settings"
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+						<circle cx="12" cy="12" r="3" />
+					</svg>
+				</button>
 			</div>
-			<button
-				class="text-orange-400 hover:text-orange-300"
-				onclick={() => (showReportIssue = true)}
-				title="Report Issue"
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-				</svg>
-			</button>
-			<button
-				class="text-text-muted hover:text-text-primary"
-				onclick={() => goto('/app/settings')}
-				title="User Settings"
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-					<circle cx="12" cy="12" r="3" />
-				</svg>
-			</button>
 		</div>
 	{/if}
 </aside>
@@ -1169,7 +1195,7 @@
 </Modal>
 
 <!-- Report Issue Modal -->
-<Modal open={showReportIssue} title="Report Issue" onclose={() => (showReportIssue = false)}>
+<Modal open={showReportIssue} title="Report Issue" persistent onclose={() => (showReportIssue = false)}>
 	<div class="mb-4">
 		<label for="issueTitle" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Title</label>
 		<input id="issueTitle" type="text" class="input w-full" bind:value={reportIssueTitle} placeholder="Brief summary" maxlength="200" />
@@ -1194,3 +1220,5 @@
 		</button>
 	</div>
 </Modal>
+
+<GroupDMCreateModal bind:open={showGroupDMCreate} onclose={() => (showGroupDMCreate = false)} />
