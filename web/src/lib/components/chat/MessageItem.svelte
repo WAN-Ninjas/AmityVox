@@ -28,6 +28,7 @@
 	import { currentGuild } from '$lib/stores/guilds';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { clientNicknames } from '$lib/stores/nicknames';
+	import { isEmojiOnly } from '$lib/utils/emoji';
 
 	interface Props {
 		message: Message;
@@ -106,6 +107,9 @@
 	const displayContent = $derived(
 		message.encrypted ? decryptedContent : message.content
 	);
+
+	/** True when the message is emoji-only (render larger). */
+	const emojiOnly = $derived(displayContent ? isEmojiOnly(displayContent) : false);
 
 	// --- NSFW content filter ---
 	const isNsfwChannel = $derived($currentChannel?.nsfw ?? false);
@@ -638,7 +642,7 @@
 					/>
 				</button>
 			{:else if displayContent}
-				<div class="text-sm text-text-secondary leading-relaxed break-words whitespace-pre-wrap">
+				<div class="{emojiOnly ? 'text-3xl leading-snug' : 'text-sm leading-relaxed'} text-text-secondary break-words whitespace-pre-wrap">
 					{#if message.encrypted}
 						<span class="mr-1 inline-flex items-center text-status-online" title="End-to-end encrypted">
 							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
