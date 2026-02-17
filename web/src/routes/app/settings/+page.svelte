@@ -6,6 +6,7 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { getMutedChannels, getMutedGuilds, unmuteChannel, unmuteGuild } from '$lib/stores/muting';
+	import { removeBlockedUser, updateBlockedUserLevel, type BlockLevel } from '$lib/stores/blocked';
 	import { channels as channelsStore } from '$lib/stores/channels';
 	import { guilds as guildsStore } from '$lib/stores/guilds';
 	import ProfileLinkEditor from '$components/common/ProfileLinkEditor.svelte';
@@ -116,6 +117,11 @@
 	let nsfwContentFilter = $state<'blur_all' | 'blur_suspicious' | 'show_all'>('blur_all');
 	let privacyLoading = $state(false);
 	let privacySuccess = $state('');
+
+	// --- Blocked users state ---
+	let blockedList = $state<Array<{ target_id: string; level: string; created_at: string; user?: User }>>([]);
+	let blockedLoading = $state(false);
+	let updatingBlock = $state<string | null>(null);
 
 	// --- Appearance tab state ---
 	type ThemeName = 'dark' | 'light' | 'amoled' | 'nord' | 'dracula' | 'catppuccin' | 'solarized' | 'high-contrast';
@@ -436,6 +442,9 @@
 		if (currentTab === 'notifications' || currentTab === 'privacy') {
 			loadUserSettings();
 		}
+		if (currentTab === 'privacy') {
+			loadBlockedList();
+		}
 	});
 
 	async function loadUserSettings() {
@@ -525,6 +534,43 @@
 	function parseTimeInput(value: string): { hour: number; minute: number } {
 		const [h, m] = value.split(':').map(Number);
 		return { hour: h ?? 0, minute: m ?? 0 };
+	}
+
+	async function loadBlockedList() {
+		blockedLoading = true;
+		try {
+			blockedList = await api.getBlockedUsers();
+		} catch {
+			blockedList = [];
+		} finally {
+			blockedLoading = false;
+		}
+	}
+
+	async function handleChangeBlockLevel(targetId: string, level: BlockLevel) {
+		updatingBlock = targetId;
+		try {
+			await api.updateBlockLevel(targetId, level);
+			updateBlockedUserLevel(targetId, level);
+			blockedList = blockedList.map(b => b.target_id === targetId ? { ...b, level } : b);
+		} catch {
+			// silently fail
+		} finally {
+			updatingBlock = null;
+		}
+	}
+
+	async function handleUnblockUser(targetId: string) {
+		updatingBlock = targetId;
+		try {
+			await api.unblockUser(targetId);
+			removeBlockedUser(targetId);
+			blockedList = blockedList.filter(b => b.target_id !== targetId);
+		} catch {
+			// silently fail
+		} finally {
+			updatingBlock = null;
+		}
 	}
 
 	async function savePrivacy() {
@@ -1890,6 +1936,55 @@
 					<button class="btn-primary" onclick={savePrivacy} disabled={privacyLoading}>
 						{privacyLoading ? 'Saving...' : 'Save Privacy Settings'}
 					</button>
+
+					<!-- Blocked Users -->
+					<div class="mt-2 rounded-lg bg-bg-secondary p-4">
+						<h3 class="mb-1 text-sm font-semibold text-text-primary">Blocked Users</h3>
+						<p class="mb-3 text-xs text-text-muted">Manage users you've blocked or ignored.</p>
+
+						{#if blockedLoading}
+							<div class="flex items-center justify-center py-4">
+								<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+							</div>
+						{:else if blockedList.length === 0}
+							<p class="py-2 text-sm text-text-muted">No blocked users.</p>
+						{:else}
+							<div class="space-y-2">
+								{#each blockedList as blocked (blocked.target_id)}
+									<div class="flex items-center gap-3 rounded-md bg-bg-primary px-3 py-2">
+										<Avatar
+											name={blocked.user?.display_name ?? blocked.user?.username ?? 'Unknown'}
+											src={blocked.user?.avatar_id ? `/api/v1/files/${blocked.user.avatar_id}` : null}
+											size="sm"
+										/>
+										<div class="min-w-0 flex-1">
+											<p class="truncate text-sm font-medium text-text-primary">{blocked.user?.display_name ?? blocked.user?.username ?? 'Unknown'}</p>
+											<p class="text-xs text-text-muted">@{blocked.user?.username ?? 'unknown'}</p>
+										</div>
+										<span class="rounded px-1.5 py-0.5 text-2xs font-bold uppercase {blocked.level === 'block' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}">
+											{blocked.level}
+										</span>
+										<select
+											class="rounded bg-bg-modifier px-2 py-1 text-xs text-text-secondary outline-none"
+											value={blocked.level}
+											onchange={(e) => handleChangeBlockLevel(blocked.target_id, (e.target as HTMLSelectElement).value as BlockLevel)}
+											disabled={updatingBlock === blocked.target_id}
+										>
+											<option value="ignore">Ignore</option>
+											<option value="block">Block</option>
+										</select>
+										<button
+											class="rounded px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
+											onclick={() => handleUnblockUser(blocked.target_id)}
+											disabled={updatingBlock === blocked.target_id}
+										>
+											Unblock
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				</div>
 
 			<!-- ==================== APPEARANCE ==================== -->

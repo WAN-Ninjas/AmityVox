@@ -135,6 +135,7 @@ type UserBlock struct {
 	UserID    string    `json:"user_id"`
 	TargetID  string    `json:"target_id"`
 	Reason    *string   `json:"reason,omitempty"`
+	Level     string    `json:"level"` // "ignore" or "block"
 	CreatedAt time.Time `json:"created_at"`
 	User      *User     `json:"user,omitempty"` // Populated on list (the blocked user's profile)
 }

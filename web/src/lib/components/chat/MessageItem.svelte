@@ -23,7 +23,7 @@
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { addToast } from '$lib/stores/toast';
-	import { blockedUserIds } from '$lib/stores/blocked';
+	import { blockedUserIds, blockedUsers } from '$lib/stores/blocked';
 	import { canManageMessages, canCreateThreads, canKickMembers, canBanMembers, canTimeoutMembers } from '$lib/stores/permissions';
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
 	import { currentGuild } from '$lib/stores/guilds';
@@ -60,6 +60,7 @@
 
 	// --- Blocked user support ---
 	const isAuthorBlocked = $derived($blockedUserIds.has(message.author_id));
+	const blockLevel = $derived($blockedUsers.get(message.author_id) ?? null);
 	let showBlockedContent = $state(false);
 
 	// --- E2EE decryption ---
@@ -467,6 +468,10 @@
 	}
 </script>
 
+<!-- Fully blocked users: render nothing -->
+{#if blockLevel === 'block'}
+<!-- intentionally empty — message completely hidden -->
+{:else}
 <!-- System lockdown message: prominent alert display -->
 {#if message.message_type === 'system_lockdown'}
 <div
@@ -530,7 +535,7 @@
 					<circle cx="12" cy="12" r="10" />
 					<path d="M4.93 4.93l14.14 14.14" />
 				</svg>
-				<span class="text-sm text-text-muted">Blocked message</span>
+				<span class="text-sm text-text-muted">{blockLevel === "ignore" ? "Ignored message" : "Blocked message"}</span>
 				<button
 					class="ml-auto text-xs text-text-muted hover:text-text-secondary"
 					onclick={() => (showBlockedContent = true)}
@@ -543,7 +548,7 @@
 				<div class="flex items-baseline gap-2">
 					<button class="font-medium text-text-primary hover:underline {isClientNickname ? 'italic' : ''}" style={authorRoleColor ? `color: ${authorRoleColor}` : ''} onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }} title={isClientNickname ? `Nickname for ${message.author?.display_name ?? message.author?.username ?? message.author_id}` : ''}>{displayName}</button>
 					{#if isAuthorBlocked}
-						<span class="text-2xs text-red-400">(blocked)</span>
+						<span class="text-2xs text-red-400">{blockLevel === "ignore" ? "(ignored)" : "(blocked)"}</span>
 					{/if}
 					{#if isAuthorTimedOut}
 						<span class="inline-flex items-center" title="This user is timed out">
@@ -1078,3 +1083,4 @@
 		</button>
 	</div>
 </Modal>
+{/if}
