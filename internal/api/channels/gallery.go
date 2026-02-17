@@ -368,11 +368,11 @@ func (h *Handler) HandleGetGalleryPosts(w http.ResponseWriter, r *http.Request) 
 
 	// Batch-load thumbnail (first media attachment) and description (first message content) per post.
 	if len(postIDs) > 0 {
-		// Get first message per thread (the OP).
+		// Get first message per thread (the OP). The OP message has thread_id = the post's thread channel ID.
 		previewRows, err := h.Pool.Query(r.Context(),
-			`SELECT DISTINCT ON (channel_id) channel_id, id, LEFT(content, 500)
-			 FROM messages WHERE channel_id = ANY($1)
-			 ORDER BY channel_id, created_at ASC`, postIDs)
+			`SELECT DISTINCT ON (thread_id) thread_id, id, LEFT(content, 500)
+			 FROM messages WHERE thread_id = ANY($1)
+			 ORDER BY thread_id, created_at ASC`, postIDs)
 		if err == nil {
 			defer previewRows.Close()
 			descMap := make(map[string]string)

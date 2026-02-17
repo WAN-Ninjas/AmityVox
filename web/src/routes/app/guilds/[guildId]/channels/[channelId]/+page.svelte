@@ -27,6 +27,7 @@
 	let showFollowers = $state(false);
 	let showGallery = $state(false);
 	let activeThread = $state<{ channel: Channel; parentMessage: Message | null } | null>(null);
+	let galleryViewRef: GalleryChannelView | undefined;
 	let isDragging = $state(false);
 	let dragCounter = 0;
 	let isUploading = $state(false);
@@ -88,9 +89,17 @@
 
 		if (isArchived) return;
 
-		// Gallery and forum channels handle their own uploads via their post creation forms.
+		// Gallery channels: forward dropped files to the gallery post creation form.
 		const ct = $currentChannel?.channel_type;
-		if (ct === 'gallery' || ct === 'forum') return;
+		if (ct === 'gallery') {
+			const files = e.dataTransfer?.files;
+			if (files?.length && galleryViewRef) {
+				galleryViewRef.addDroppedFiles(Array.from(files));
+			}
+			return;
+		}
+		// Forum channels handle their own uploads via their post creation forms.
+		if (ct === 'forum') return;
 
 		const files = e.dataTransfer?.files;
 		const channelId = $currentChannelId;
@@ -299,6 +308,7 @@
 			/>
 		{:else if $currentChannel?.channel_type === 'gallery'}
 			<GalleryChannelView
+				bind:this={galleryViewRef}
 				channelId={$currentChannelId ?? ''}
 				onopenthread={openThread}
 			/>
