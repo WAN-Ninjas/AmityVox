@@ -14,6 +14,7 @@
 	import { dismissIncomingCall } from '$lib/stores/callRing';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import Avatar from '$components/common/Avatar.svelte';
+	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
 	import MessageInput from '$components/chat/MessageInput.svelte';
 	import TypingIndicator from '$components/chat/TypingIndicator.svelte';
@@ -21,6 +22,7 @@
 	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
 
 	let showGroupSettings = $state(false);
+	let profileUserId = $state<string | null>(null);
 	let callLoading = $state(false);
 
 	let isDragging = $state(false);
@@ -151,15 +153,19 @@
 
 	<header class="flex h-12 items-center gap-3 border-b border-bg-floating bg-bg-tertiary px-4">
 		{#if recipient && !isGroupDM}
-			<Avatar
-				name={recipientName}
-				src={recipient.avatar_id ? `/api/v1/files/${recipient.avatar_id}` : null}
-				size="sm"
-				status={recipientStatus}
-			/>
-			<div class="min-w-0 flex-1">
+			<button
+				class="flex min-w-0 flex-1 items-center gap-3 rounded-md transition-colors hover:bg-bg-modifier"
+				onclick={() => (profileUserId = recipient.id)}
+				title="View profile"
+			>
+				<Avatar
+					name={recipientName}
+					src={recipient.avatar_id ? `/api/v1/files/${recipient.avatar_id}` : null}
+					size="sm"
+					status={recipientStatus}
+				/>
 				<h1 class="truncate font-semibold text-text-primary">{recipientName}</h1>
-			</div>
+			</button>
 			{#if inCall}
 				<button
 					class="rounded p-1.5 text-red-400 transition-colors hover:bg-bg-modifier hover:text-red-300"
@@ -263,3 +269,5 @@
 {#if isGroupDM && dmChannel}
 	<GroupDMSettingsPanel channel={dmChannel} bind:open={showGroupSettings} onclose={() => (showGroupSettings = false)} />
 {/if}
+
+<ProfileModal userId={profileUserId} open={!!profileUserId} onclose={() => (profileUserId = null)} />

@@ -247,9 +247,9 @@ func (s *Server) registerRoutes() {
 		Logger:   s.Logger,
 	}
 
-	// Health check — outside versioned API prefix, IP-based rate limited.
-	s.Router.With(s.RateLimitGlobal()).Get("/health", s.handleHealthCheck)
-	s.Router.With(s.RateLimitGlobal()).Get("/health/deep", s.handleDeepHealthCheck)
+	// Health check — outside versioned API prefix, no rate limit (used by Docker healthcheck).
+	s.Router.Get("/health", s.handleHealthCheck)
+	s.Router.Get("/health/deep", s.handleDeepHealthCheck)
 
 	// Prometheus metrics endpoint.
 	s.Router.With(s.RateLimitGlobal()).Get("/metrics", s.handleMetrics)

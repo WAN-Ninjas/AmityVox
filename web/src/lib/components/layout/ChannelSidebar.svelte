@@ -25,7 +25,10 @@
 	import { channelMutePrefs, guildMutePrefs, isChannelMuted, isGuildMuted, muteChannel, unmuteChannel, muteGuild, unmuteGuild } from '$lib/stores/muting';
 	import StatusPicker from '$components/common/StatusPicker.svelte';
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
+	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
+
+	let dmProfileUserId = $state<string | null>(null);
 
 	interface Props {
 		/** Width in pixels, controlled by the layout store / resize handle. */
@@ -823,7 +826,15 @@
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<span
+							class="cursor-pointer"
+							onclick={(e) => { if (dmRecipient) { e.stopPropagation(); dmProfileUserId = dmRecipient.id; } }}
+							role="button"
+							tabindex="-1"
+						>
 							<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
+						</span>
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
@@ -1362,3 +1373,5 @@
 </Modal>
 
 <GroupDMCreateModal bind:open={showGroupDMCreate} onclose={() => (showGroupDMCreate = false)} />
+
+<ProfileModal userId={dmProfileUserId} open={!!dmProfileUserId} onclose={() => (dmProfileUserId = null)} />
