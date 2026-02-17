@@ -170,7 +170,9 @@
 
 	function handleClickOutside(e: MouseEvent) {
 		const target = e.target as HTMLElement;
-		if (!target.isConnected || !target.closest('.giphy-picker')) onclose();
+		// Ignore clicks on disconnected elements (removed by Svelte reactivity during view changes).
+		if (!target.isConnected) return;
+		if (!target.closest('.giphy-picker')) onclose();
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
