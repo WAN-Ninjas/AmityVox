@@ -40,7 +40,7 @@
 			dismissIncomingCall($page.params.channelId);
 			await joinVoice($page.params.channelId, '', recipientName);
 			if (withVideo) {
-				await toggleCamera();
+				try { await toggleCamera(); } catch { /* camera failure is non-fatal */ }
 			}
 		} catch {
 			addToast('Failed to start call', 'error');

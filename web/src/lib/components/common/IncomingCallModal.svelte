@@ -46,7 +46,7 @@
 		try {
 			await joinVoice(channelId, '', displayName);
 			if (withVideo) {
-				await toggleCamera();
+				try { await toggleCamera(); } catch { /* camera failure is non-fatal */ }
 			}
 			goto(`/app/dms/${channelId}`);
 		} catch {
