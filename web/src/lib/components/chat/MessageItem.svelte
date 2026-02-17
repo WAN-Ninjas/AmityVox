@@ -533,7 +533,7 @@
 					<circle cx="12" cy="12" r="10" />
 					<path d="M4.93 4.93l14.14 14.14" />
 				</svg>
-				<span class="text-sm text-text-muted">Blocked message</span>
+				<span class="text-sm text-text-muted">{blockLevel === "ignore" ? "Ignored message" : "Blocked message"}</span>
 				<button
 					class="ml-auto text-xs text-text-muted hover:text-text-secondary"
 					onclick={() => (showBlockedContent = true)}
@@ -546,7 +546,7 @@
 				<div class="flex items-baseline gap-2">
 					<button class="font-medium text-text-primary hover:underline {isClientNickname ? 'italic' : ''}" style={authorRoleColor ? `color: ${authorRoleColor}` : ''} onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }} title={isClientNickname ? `Nickname for ${message.author?.display_name ?? message.author?.username ?? message.author_id}` : ''}>{displayName}</button>
 					{#if isAuthorBlocked}
-						<span class="text-2xs text-red-400">(blocked)</span>
+						<span class="text-2xs text-red-400">{blockLevel === "ignore" ? "(ignored)" : "(blocked)"}</span>
 					{/if}
 					{#if isAuthorTimedOut}
 						<span class="inline-flex items-center" title="This user is timed out">

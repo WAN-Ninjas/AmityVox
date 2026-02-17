@@ -658,6 +658,7 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 		"user_id":   userID,
 		"target_id": targetID,
 		"status":    models.RelationshipBlocked,
+		"level":     blockLevel,
 	}
 	if req.Reason != nil {
 		result["reason"] = *req.Reason
@@ -667,6 +668,7 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 		"user_id":   userID,
 		"target_id": targetID,
 		"status":    models.RelationshipBlocked,
+		"level":     blockLevel,
 	})
 
 	writeJSON(w, http.StatusOK, result)
