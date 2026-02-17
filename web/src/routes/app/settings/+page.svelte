@@ -1925,6 +1925,15 @@
 							<span>16px</span>
 							<span>20px</span>
 						</div>
+						<div class="mt-3 rounded-md border border-bg-modifier bg-bg-primary p-3">
+							<p class="mb-1 text-2xs font-bold uppercase tracking-wide text-text-muted">Preview</p>
+							<p style="font-size: {fontSize}px; line-height: 1.5" class="text-text-primary">
+								The quick brown fox jumps over the lazy dog.
+							</p>
+							<p style="font-size: {Math.round(fontSize * 0.85)}px; line-height: 1.4" class="mt-1 text-text-muted">
+								This is how smaller text like timestamps will look.
+							</p>
+						</div>
 					</div>
 
 					<div class="rounded-lg bg-bg-secondary p-4">
