@@ -22,7 +22,7 @@
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { addToast } from '$lib/stores/toast';
-	import { blockedUserIds } from '$lib/stores/blocked';
+	import { blockedUserIds, blockedUsers } from '$lib/stores/blocked';
 	import { canManageMessages, canCreateThreads, canKickMembers, canBanMembers, canTimeoutMembers } from '$lib/stores/permissions';
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
 	import { currentGuild } from '$lib/stores/guilds';
@@ -58,6 +58,7 @@
 
 	// --- Blocked user support ---
 	const isAuthorBlocked = $derived($blockedUserIds.has(message.author_id));
+	const blockLevel = $derived($blockedUsers.get(message.author_id) ?? null);
 	let showBlockedContent = $state(false);
 
 	// --- E2EE decryption ---
@@ -465,6 +466,10 @@
 	}
 </script>
 
+<!-- Fully blocked users: render nothing -->
+{#if blockLevel === 'block'}
+<!-- intentionally empty — message completely hidden -->
+{:else}
 <!-- System lockdown message: prominent alert display -->
 {#if message.message_type === 'system_lockdown'}
 <div
@@ -1070,3 +1075,4 @@
 		</button>
 	</div>
 </Modal>
+{/if}

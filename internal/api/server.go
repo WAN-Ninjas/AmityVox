@@ -349,6 +349,7 @@ func (s *Server) registerRoutes() {
 				r.Put("/{userID}/friend", userH.HandleAddFriend)
 				r.Delete("/{userID}/friend", userH.HandleRemoveFriend)
 				r.Put("/{userID}/block", userH.HandleBlockUser)
+				r.Patch("/{userID}/block", userH.HandleUpdateBlockLevel)
 				r.Delete("/{userID}/block", userH.HandleUnblockUser)
 				r.Get("/{userID}/mutual-friends", userH.HandleGetMutualFriends)
 				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)

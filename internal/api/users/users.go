@@ -532,6 +532,12 @@ func (h *Handler) HandleRemoveFriend(w http.ResponseWriter, r *http.Request) {
 // blockUserRequest is the optional JSON body for PUT /api/v1/users/{userID}/block.
 type blockUserRequest struct {
 	Reason *string `json:"reason"`
+	Level  *string `json:"level"` // "ignore" or "block" (default "block")
+}
+
+// updateBlockRequest is the JSON body for PATCH /api/v1/users/{userID}/block.
+type updateBlockRequest struct {
+	Level string `json:"level"` // "ignore" or "block"
 }
 
 // HandleBlockUser blocks another user. This removes any existing friendship or
@@ -568,7 +574,7 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional reason from request body.
+	// Parse optional reason and level from request body.
 	var req blockUserRequest
 	if r.Body != nil && r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -579,6 +585,15 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "reason_too_long", "Block reason must be at most 256 characters")
 			return
 		}
+		if req.Level != nil && *req.Level != "ignore" && *req.Level != "block" {
+			writeError(w, http.StatusBadRequest, "invalid_level", "Block level must be 'ignore' or 'block'")
+			return
+		}
+	}
+
+	blockLevel := "block"
+	if req.Level != nil {
+		blockLevel = *req.Level
 	}
 
 	blockID := models.NewULID().String()
@@ -623,9 +638,9 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 
 	// Insert into user_blocks for richer metadata.
 	_, err = tx.Exec(r.Context(),
-		`INSERT INTO user_blocks (id, user_id, target_id, reason, created_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		blockID, userID, targetID, req.Reason, now)
+		`INSERT INTO user_blocks (id, user_id, target_id, reason, level, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		blockID, userID, targetID, req.Reason, blockLevel, now)
 	if err != nil {
 		h.Logger.Error("failed to insert user_block", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
@@ -716,6 +731,43 @@ func (h *Handler) HandleUnblockUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleUpdateBlockLevel updates the block level for an existing block.
+// PATCH /api/v1/users/{userID}/block
+func (h *Handler) HandleUpdateBlockLevel(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	targetID := chi.URLParam(r, "userID")
+
+	if targetID == "" || targetID == userID {
+		writeError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
+		return
+	}
+
+	var req updateBlockRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if req.Level != "ignore" && req.Level != "block" {
+		writeError(w, http.StatusBadRequest, "invalid_level", "Block level must be 'ignore' or 'block'")
+		return
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE user_blocks SET level = $1 WHERE user_id = $2 AND target_id = $3`,
+		req.Level, userID, targetID)
+	if err != nil {
+		h.Logger.Error("failed to update block level", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update block level")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"level": req.Level})
+}
+
 // HandleGetBlockedUsers returns the list of users blocked by the authenticated
 // user, including their profiles and the block reason/timestamp.
 // GET /api/v1/users/@me/blocked
@@ -723,7 +775,7 @@ func (h *Handler) HandleGetBlockedUsers(w http.ResponseWriter, r *http.Request) 
 	userID := auth.UserIDFromContext(r.Context())
 
 	rows, err := h.Pool.Query(r.Context(),
-		`SELECT ub.id, ub.user_id, ub.target_id, ub.reason, ub.created_at,
+		`SELECT ub.id, ub.user_id, ub.target_id, ub.reason, ub.level, ub.created_at,
 		        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
 		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
 		        u.bio, u.banner_id, u.accent_color, u.pronouns,
@@ -746,7 +798,7 @@ func (h *Handler) HandleGetBlockedUsers(w http.ResponseWriter, r *http.Request) 
 		var b models.UserBlock
 		var u models.User
 		if err := rows.Scan(
-			&b.ID, &b.UserID, &b.TargetID, &b.Reason, &b.CreatedAt,
+			&b.ID, &b.UserID, &b.TargetID, &b.Reason, &b.Level, &b.CreatedAt,
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
 			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
 			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,

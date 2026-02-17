@@ -10,6 +10,7 @@
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import Avatar from './Avatar.svelte';
 	import { goto } from '$app/navigation';
+	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
 
 	interface Props {
 		userId: string;
@@ -28,8 +29,10 @@
 	let noteLoaded = $state(false);
 	let noteSaving = $state(false);
 	let addingFriend = $state(false);
+	let blockingUser = $state(false);
 
 	const isSelf = $derived($currentUser?.id === userId);
+	const currentBlockLevel = $derived($blockedUsers.get(userId) ?? null);
 	const status = $derived($presenceMap.get(userId) ?? 'offline');
 	const relationship = $derived($relationships.get(userId));
 	const roleColor = $derived.by(() => {
@@ -107,6 +110,34 @@
 			addToast('Failed to save note', 'error');
 		} finally {
 			noteSaving = false;
+		}
+	}
+
+	async function handleBlock(level: BlockLevel) {
+		if (blockingUser) return;
+		blockingUser = true;
+		try {
+			await api.blockUser(userId, level);
+			addBlockedUser(userId, level);
+			addToast(level === 'ignore' ? 'User ignored' : 'User blocked', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to block user', 'error');
+		} finally {
+			blockingUser = false;
+		}
+	}
+
+	async function handleUnblock() {
+		if (blockingUser) return;
+		blockingUser = true;
+		try {
+			await api.unblockUser(userId);
+			removeBlockedUser(userId);
+			addToast('User unblocked', 'success');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to unblock user', 'error');
+		} finally {
+			blockingUser = false;
 		}
 	}
 
@@ -343,6 +374,34 @@
 									disabled
 								>
 									Request Sent
+								</button>
+							{/if}
+						</div>
+
+						<!-- Block / Unblock -->
+						<div class="mt-2 flex gap-2">
+							{#if currentBlockLevel}
+								<button
+									class="flex-1 rounded border border-bg-modifier px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier"
+									onclick={handleUnblock}
+									disabled={blockingUser}
+								>
+									{blockingUser ? '...' : 'Unblock'}
+								</button>
+							{:else}
+								<button
+									class="flex-1 rounded px-3 py-1.5 text-xs font-medium text-yellow-500 transition-colors hover:bg-yellow-500/10"
+									onclick={() => handleBlock('ignore')}
+									disabled={blockingUser}
+								>
+									Ignore
+								</button>
+								<button
+									class="flex-1 rounded px-3 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
+									onclick={() => handleBlock('block')}
+									disabled={blockingUser}
+								>
+									Block
 								</button>
 							{/if}
 						</div>
