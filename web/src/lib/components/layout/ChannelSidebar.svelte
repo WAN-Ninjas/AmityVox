@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
 	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
-	import { channelVoiceUsers, voiceChannelId } from '$lib/stores/voice';
+	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
@@ -562,6 +562,7 @@
 						<button
 							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 							onclick={() => handleChannelClick(channel.id)}
+							ondblclick={() => { const gid = $currentGuildId; if (gid) joinVoice(channel.id, gid, channel.name ?? ''); }}
 							oncontextmenu={(e) => openContextMenu(e, channel)}
 						>
 							<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
