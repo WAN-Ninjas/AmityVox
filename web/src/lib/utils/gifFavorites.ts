@@ -44,3 +44,10 @@ export function addFavorite(
 export function removeFavorite(favorites: FavoriteGif[], gifId: string): FavoriteGif[] {
 	return favorites.filter((f) => f.id !== gifId);
 }
+
+/** Filter favorites by title substring match (case-insensitive). */
+export function filterFavoritesByQuery(favorites: FavoriteGif[], query: string): FavoriteGif[] {
+	const q = (query || '').trim().toLowerCase();
+	if (!q) return favorites;
+	return favorites.filter((f) => (f.title ?? '').toLowerCase().includes(q));
+}
