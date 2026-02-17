@@ -62,7 +62,15 @@
 		stopRingtone();
 		dismissIncomingCall(call.channelId);
 	}
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && $activeIncomingCall) {
+			declineCall();
+		}
+	}
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 {#if $activeIncomingCall}
 	{@const call = $activeIncomingCall}

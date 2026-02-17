@@ -1,6 +1,6 @@
 // Announcement store — manages real-time instance announcements.
 
-import { writable, derived } from 'svelte/store';
+import { writable, derived, readable } from 'svelte/store';
 
 export interface AnnouncementData {
 	id: string;
@@ -13,11 +13,16 @@ export interface AnnouncementData {
 
 const announcements = writable<Map<string, AnnouncementData>>(new Map());
 
-export const activeAnnouncements = derived(announcements, ($map) => {
-	const now = Date.now();
+// Tick every 60s so expired announcements auto-dismiss.
+const now = readable(Date.now(), (set) => {
+	const id = setInterval(() => set(Date.now()), 60_000);
+	return () => clearInterval(id);
+});
+
+export const activeAnnouncements = derived([announcements, now], ([$map, $now]) => {
 	return Array.from($map.values()).filter((a) => {
 		if (a.active === false) return false;
-		if (a.expires_at && new Date(a.expires_at).getTime() < now) return false;
+		if (a.expires_at && new Date(a.expires_at).getTime() < $now) return false;
 		return true;
 	});
 });
