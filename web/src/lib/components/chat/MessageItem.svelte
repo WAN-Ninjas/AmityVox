@@ -509,8 +509,8 @@
 	{/if}
 
 	{#if isCompact}
-		<div class="w-10 shrink-0 pt-1 text-right">
-			<span class="hidden text-2xs text-text-muted group-hover:inline" title={fullDateTime}>{timestamp}</span>
+		<div class="w-14 shrink-0 pt-1 text-right">
+			<span class="hidden whitespace-nowrap text-2xs text-text-muted group-hover:inline" title={fullDateTime}>{timestamp}</span>
 		</div>
 	{:else}
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
