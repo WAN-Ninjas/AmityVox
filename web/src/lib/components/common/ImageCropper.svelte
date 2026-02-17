@@ -68,7 +68,7 @@
 		ctx.drawImage(img, ix, iy, iw, ih);
 
 		// Draw semi-transparent overlay outside crop area
-		ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+		ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
 
 		if (shape === 'circle') {
 			// Full overlay, then clear circle
@@ -79,8 +79,8 @@
 			ctx.fill();
 			ctx.globalCompositeOperation = 'source-over';
 			// Draw circle border
-			ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-			ctx.lineWidth = 2;
+			ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+			ctx.lineWidth = 3;
 			ctx.beginPath();
 			ctx.arc(CANVAS_SIZE / 2, CANVAS_SIZE / 2, cropW / 2, 0, Math.PI * 2);
 			ctx.stroke();
@@ -96,8 +96,8 @@
 			// Right
 			ctx.fillRect(rx + cropW, ry, CANVAS_SIZE - rx - cropW, cropH);
 			// Border
-			ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-			ctx.lineWidth = 2;
+			ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+			ctx.lineWidth = 3;
 			ctx.strokeRect(rx, ry, cropW, cropH);
 		}
 	}
