@@ -70,7 +70,7 @@
 
 <div
 	bind:this={tileElement}
-	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {participant.speaking ? 'ring-2 ring-green-500 ring-offset-0' : ''}"
+	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {participant.speaking ? 'ring-3 ring-green-500 ring-offset-2 ring-offset-bg-tertiary shadow-[0_0_12px_rgba(34,197,94,0.4)]' : ''}"
 	oncontextmenu={handleContextMenu}
 >
 	{#if trackInfo}
@@ -178,10 +178,10 @@
 
 <style>
 	@keyframes speaking-pulse {
-		0%, 100% { box-shadow: inset 0 0 0 2px rgba(34, 197, 94, 0.6); }
-		50% { box-shadow: inset 0 0 0 2px rgba(34, 197, 94, 0.2); }
+		0%, 100% { box-shadow: inset 0 0 0 3px rgba(34, 197, 94, 0.7), 0 0 16px rgba(34, 197, 94, 0.3); }
+		50% { box-shadow: inset 0 0 0 3px rgba(34, 197, 94, 0.3), 0 0 8px rgba(34, 197, 94, 0.1); }
 	}
 	.speaking-pulse {
-		animation: speaking-pulse 1.5s ease-in-out infinite;
+		animation: speaking-pulse 1.2s ease-in-out infinite;
 	}
 </style>
