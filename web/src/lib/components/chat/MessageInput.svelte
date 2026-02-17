@@ -370,7 +370,7 @@
 		target.value = '';
 	}
 
-	async function handlePaste(e: ClipboardEvent) {
+	function handlePaste(e: ClipboardEvent) {
 		const items = e.clipboardData?.items;
 		if (!items || !$currentChannelId) return;
 
@@ -387,21 +387,9 @@
 		// Prevent default paste behavior for images.
 		e.preventDefault();
 
-		try {
-			const ids: string[] = [];
-			for (const file of imageFiles) {
-				const uploaded = await api.uploadFile(file);
-				ids.push(uploaded.id);
-			}
-			const msg = content.trim();
-			const sent = await api.sendMessage($currentChannelId, msg, { attachment_ids: ids });
-			appendMessage(sent);
-			content = '';
-			if (inputEl) inputEl.style.height = 'auto';
-			addToast(`${ids.length} image${ids.length > 1 ? 's' : ''} uploaded`, 'success');
-		} catch (err) {
-			addToast('Failed to upload pasted image', 'error');
-		}
+		// Add pasted images to pending files instead of auto-sending.
+		pendingFiles = [...pendingFiles, ...imageFiles];
+		addToast(`${imageFiles.length} image${imageFiles.length > 1 ? 's' : ''} added — press Send to upload`, 'info');
 	}
 
 	function insertEmoji(emoji: string) {
