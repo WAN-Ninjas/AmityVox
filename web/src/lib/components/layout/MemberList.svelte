@@ -337,6 +337,7 @@
 					{@const memberColor = getMemberRoleColor(member.roles, roleMap)}
 					<button
 						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left {isOffline ? 'opacity-50 hover:bg-bg-modifier hover:opacity-75' : 'hover:bg-bg-modifier'}"
+						onclick={(e) => { popover = { userId: member.user_id, x: e.clientX, y: e.clientY }; }}
 						oncontextmenu={(e) => openContextMenu(e, member)}
 					>
 						<Avatar
