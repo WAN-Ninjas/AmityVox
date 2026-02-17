@@ -26,6 +26,14 @@ export const voiceChannels = derived(channelList, ($list) =>
 	$list.filter((c) => c.channel_type === 'voice' || c.channel_type === 'stage')
 );
 
+export const forumChannels = derived(channelList, ($list) =>
+	$list.filter((c) => c.channel_type === 'forum' && !c.parent_channel_id)
+);
+
+export const galleryChannels = derived(channelList, ($list) =>
+	$list.filter((c) => c.channel_type === 'gallery' && !c.parent_channel_id)
+);
+
 export const currentChannel = derived(
 	[channels, currentChannelId],
 	([$channels, $id]) => ($id ? $channels.get($id) ?? null : null)

@@ -5,6 +5,7 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -206,12 +207,13 @@ type SearchRequest struct {
 
 // SearchResult holds results from a search query.
 type SearchResult struct {
-	Hits             []interface{} `json:"hits"`
-	EstimatedTotal   int64         `json:"estimated_total"`
-	ProcessingTimeMs int64         `json:"processing_time_ms"`
+	IDs              []string `json:"ids"`
+	EstimatedTotal   int64    `json:"estimated_total"`
+	ProcessingTimeMs int64    `json:"processing_time_ms"`
 }
 
 // Search executes a full-text search query against the specified index.
+// Returns the IDs of matching documents in relevance order.
 func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult, error) {
 	if req.Limit <= 0 || req.Limit > 100 {
 		req.Limit = 20
@@ -232,14 +234,19 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 		return nil, fmt.Errorf("searching %s: %w", req.Index, err)
 	}
 
-	// Convert meilisearch.Hits to []interface{}.
-	hits := make([]interface{}, len(resp.Hits))
-	for i, h := range resp.Hits {
-		hits[i] = h
+	// Extract IDs from hits. Each hit is map[string]json.RawMessage.
+	ids := make([]string, 0, len(resp.Hits))
+	for _, hit := range resp.Hits {
+		if raw, ok := hit["id"]; ok {
+			var id string
+			if err := json.Unmarshal(raw, &id); err == nil && id != "" {
+				ids = append(ids, id)
+			}
+		}
 	}
 
 	return &SearchResult{
-		Hits:             hits,
+		IDs:              ids,
 		EstimatedTotal:   resp.EstimatedTotalHits,
 		ProcessingTimeMs: resp.ProcessingTimeMs,
 	}, nil

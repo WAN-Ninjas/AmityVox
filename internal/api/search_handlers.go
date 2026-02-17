@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/search"
 )
 
@@ -80,11 +82,54 @@ func (s *Server) handleSearchMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"hits":              result.Hits,
-		"estimated_total":   result.EstimatedTotal,
-		"processing_time_ms": result.ProcessingTimeMs,
-	})
+	if len(result.IDs) == 0 {
+		WriteJSON(w, http.StatusOK, []models.Message{})
+		return
+	}
+
+	// Hydrate from database with full message data.
+	rows, err := s.DB.Pool.Query(r.Context(),
+		`SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+		        reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		        thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		        encrypted, encryption_session_id, created_at
+		 FROM messages WHERE id = ANY($1)`, result.IDs)
+	if err != nil {
+		s.Logger.Error("search messages hydration failed", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "search_error", "Failed to load search results")
+		return
+	}
+	defer rows.Close()
+
+	msgMap := make(map[string]models.Message, len(result.IDs))
+	for rows.Next() {
+		var m models.Message
+		if err := rows.Scan(
+			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
+			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
+			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+		); err != nil {
+			s.Logger.Error("scan search message", "error", err.Error())
+			continue
+		}
+		msgMap[m.ID] = m
+	}
+
+	// Preserve Meilisearch relevance ordering.
+	messages := make([]models.Message, 0, len(result.IDs))
+	for _, id := range result.IDs {
+		if m, ok := msgMap[id]; ok {
+			messages = append(messages, m)
+		}
+	}
+
+	// Enrich with authors, attachments, and embeds.
+	s.enrichSearchMessagesWithAuthors(r.Context(), messages)
+	s.enrichSearchMessagesWithAttachments(r.Context(), messages)
+	s.enrichSearchMessagesWithEmbeds(r.Context(), messages)
+
+	WriteJSON(w, http.StatusOK, messages)
 }
 
 // handleSearchUsers handles GET /api/v1/search/users.
@@ -115,11 +160,45 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"hits":              result.Hits,
-		"estimated_total":   result.EstimatedTotal,
-		"processing_time_ms": result.ProcessingTimeMs,
-	})
+	if len(result.IDs) == 0 {
+		WriteJSON(w, http.StatusOK, []models.User{})
+		return
+	}
+
+	rows, err := s.DB.Pool.Query(r.Context(),
+		`SELECT id, instance_id, username, display_name, avatar_id,
+		        status_text, status_emoji, status_presence, status_expires_at,
+		        bio, banner_id, accent_color, pronouns, flags, created_at
+		 FROM users WHERE id = ANY($1)`, result.IDs)
+	if err != nil {
+		s.Logger.Error("search users hydration failed", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "search_error", "Failed to load search results")
+		return
+	}
+	defer rows.Close()
+
+	userMap := make(map[string]models.User, len(result.IDs))
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			continue
+		}
+		userMap[u.ID] = u
+	}
+
+	// Preserve Meilisearch relevance ordering.
+	users := make([]models.User, 0, len(result.IDs))
+	for _, id := range result.IDs {
+		if u, ok := userMap[id]; ok {
+			users = append(users, u)
+		}
+	}
+
+	WriteJSON(w, http.StatusOK, users)
 }
 
 // handleSearchGuilds handles GET /api/v1/search/guilds.
@@ -150,11 +229,182 @@ func (s *Server) handleSearchGuilds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"hits":              result.Hits,
-		"estimated_total":   result.EstimatedTotal,
-		"processing_time_ms": result.ProcessingTimeMs,
-	})
+	if len(result.IDs) == 0 {
+		WriteJSON(w, http.StatusOK, []models.Guild{})
+		return
+	}
+
+	rows, err := s.DB.Pool.Query(r.Context(),
+		`SELECT id, instance_id, owner_id, name, description, icon_id, banner_id,
+		        default_permissions, flags, nsfw, discoverable,
+		        system_channel_join, system_channel_leave, system_channel_kick, system_channel_ban,
+		        preferred_locale, max_members, vanity_url, verification_level,
+		        afk_channel_id, afk_timeout, tags, member_count, created_at
+		 FROM guilds WHERE id = ANY($1)`, result.IDs)
+	if err != nil {
+		s.Logger.Error("search guilds hydration failed", "error", err.Error())
+		WriteError(w, http.StatusInternalServerError, "search_error", "Failed to load search results")
+		return
+	}
+	defer rows.Close()
+
+	guildMap := make(map[string]models.Guild, len(result.IDs))
+	for rows.Next() {
+		var g models.Guild
+		if err := rows.Scan(
+			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID, &g.BannerID,
+			&g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
+			&g.SystemChannelJoin, &g.SystemChannelLeave, &g.SystemChannelKick, &g.SystemChannelBan,
+			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL, &g.VerificationLevel,
+			&g.AFKChannelID, &g.AFKTimeout, &g.Tags, &g.MemberCount, &g.CreatedAt,
+		); err != nil {
+			continue
+		}
+		guildMap[g.ID] = g
+	}
+
+	// Preserve Meilisearch relevance ordering.
+	guilds := make([]models.Guild, 0, len(result.IDs))
+	for _, id := range result.IDs {
+		if g, ok := guildMap[id]; ok {
+			guilds = append(guilds, g)
+		}
+	}
+
+	WriteJSON(w, http.StatusOK, guilds)
+}
+
+// enrichSearchMessagesWithAuthors batch-loads author data for search results.
+func (s *Server) enrichSearchMessagesWithAuthors(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	authorIDs := make(map[string]struct{})
+	for _, m := range messages {
+		authorIDs[m.AuthorID] = struct{}{}
+	}
+
+	ids := make([]string, 0, len(authorIDs))
+	for id := range authorIDs {
+		ids = append(ids, id)
+	}
+
+	rows, err := s.DB.Pool.Query(ctx,
+		`SELECT id, instance_id, username, display_name, avatar_id,
+		        status_text, status_emoji, status_presence, status_expires_at,
+		        bio, banner_id, accent_color, pronouns, flags, created_at
+		 FROM users WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	userMap := make(map[string]*models.User)
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(
+			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
+			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
+			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
+		); err != nil {
+			continue
+		}
+		userCopy := u
+		userMap[u.ID] = &userCopy
+	}
+
+	for i := range messages {
+		if u, ok := userMap[messages[i].AuthorID]; ok {
+			messages[i].Author = u
+		}
+	}
+}
+
+// enrichSearchMessagesWithAttachments batch-loads attachments for search results.
+func (s *Server) enrichSearchMessagesWithAttachments(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, len(messages))
+	for i, m := range messages {
+		msgIDs[i] = m.ID
+	}
+
+	rows, err := s.DB.Pool.Query(ctx,
+		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash, alt_text, created_at
+		 FROM attachments WHERE message_id = ANY($1)
+		 ORDER BY created_at`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	attachMap := make(map[string][]models.Attachment)
+	for rows.Next() {
+		var a models.Attachment
+		if err := rows.Scan(
+			&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.ContentType, &a.SizeBytes,
+			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash, &a.AltText, &a.CreatedAt,
+		); err != nil {
+			continue
+		}
+		if a.MessageID != nil {
+			attachMap[*a.MessageID] = append(attachMap[*a.MessageID], a)
+		}
+	}
+
+	for i := range messages {
+		if atts, ok := attachMap[messages[i].ID]; ok {
+			messages[i].Attachments = atts
+		}
+	}
+}
+
+// enrichSearchMessagesWithEmbeds batch-loads embeds for search results.
+func (s *Server) enrichSearchMessagesWithEmbeds(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, len(messages))
+	for i, m := range messages {
+		msgIDs[i] = m.ID
+	}
+
+	rows, err := s.DB.Pool.Query(ctx,
+		`SELECT id, message_id, embed_type, url, title, description, site_name,
+		        icon_url, color, image_url, image_width, image_height,
+		        video_url, special_type, special_id, created_at
+		 FROM embeds WHERE message_id = ANY($1)
+		 ORDER BY created_at`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	embedMap := make(map[string][]models.Embed)
+	for rows.Next() {
+		var e models.Embed
+		if err := rows.Scan(
+			&e.ID, &e.MessageID, &e.EmbedType, &e.URL, &e.Title, &e.Description, &e.SiteName,
+			&e.IconURL, &e.Color, &e.ImageURL, &e.ImageWidth, &e.ImageHeight,
+			&e.VideoURL, &e.SpecialType, &e.SpecialID, &e.CreatedAt,
+		); err != nil {
+			continue
+		}
+		if e.MessageID != "" {
+			embedMap[e.MessageID] = append(embedMap[e.MessageID], e)
+		}
+	}
+
+	for i := range messages {
+		if embs, ok := embedMap[messages[i].ID]; ok {
+			messages[i].Embeds = embs
+		}
+	}
 }
 
 // parsePagination extracts limit and offset from query parameters with defaults.

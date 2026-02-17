@@ -127,18 +127,24 @@ func init() {
 }
 
 type updateChannelRequest struct {
-	Name                       *string   `json:"name"`
-	Topic                      *string   `json:"topic"`
-	Position                   *int      `json:"position"`
-	NSFW                       *bool     `json:"nsfw"`
-	SlowmodeSeconds            *int      `json:"slowmode_seconds"`
-	UserLimit                  *int      `json:"user_limit"`
-	Bitrate                    *int      `json:"bitrate"`
-	Archived                   *bool     `json:"archived"`
-	Encrypted                  *bool     `json:"encrypted"`
-	ReadOnly                   *bool     `json:"read_only"`
-	ReadOnlyRoleIDs            []string  `json:"read_only_role_ids"`
-	DefaultAutoArchiveDuration *int      `json:"default_auto_archive_duration"`
+	Name                       *string  `json:"name"`
+	Topic                      *string  `json:"topic"`
+	Position                   *int     `json:"position"`
+	NSFW                       *bool    `json:"nsfw"`
+	SlowmodeSeconds            *int     `json:"slowmode_seconds"`
+	UserLimit                  *int     `json:"user_limit"`
+	Bitrate                    *int     `json:"bitrate"`
+	Archived                   *bool    `json:"archived"`
+	Encrypted                  *bool    `json:"encrypted"`
+	ReadOnly                   *bool    `json:"read_only"`
+	ReadOnlyRoleIDs            []string `json:"read_only_role_ids"`
+	DefaultAutoArchiveDuration *int     `json:"default_auto_archive_duration"`
+	ForumDefaultSort           *string  `json:"forum_default_sort"`
+	ForumPostGuidelines        *string  `json:"forum_post_guidelines"`
+	ForumRequireTags           *bool    `json:"forum_require_tags"`
+	GalleryDefaultSort         *string  `json:"gallery_default_sort"`
+	GalleryPostGuidelines      *string  `json:"gallery_post_guidelines"`
+	GalleryRequireTags         *bool    `json:"gallery_require_tags"`
 }
 
 type createMessageRequest struct {
@@ -254,15 +260,26 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 			encrypted = COALESCE($10, encrypted),
 			read_only = COALESCE($11, read_only),
 			read_only_role_ids = COALESCE($12, read_only_role_ids),
-			default_auto_archive_duration = COALESCE($13, default_auto_archive_duration)
+			default_auto_archive_duration = COALESCE($13, default_auto_archive_duration),
+			forum_default_sort = COALESCE($14, forum_default_sort),
+			forum_post_guidelines = COALESCE($15, forum_post_guidelines),
+			forum_require_tags = COALESCE($16, forum_require_tags),
+			gallery_default_sort = COALESCE($17, gallery_default_sort),
+			gallery_post_guidelines = COALESCE($18, gallery_post_guidelines),
+			gallery_require_tags = COALESCE($19, gallery_require_tags)
 		 WHERE id = $1
 		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
 		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
-		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
+		           archived, read_only, read_only_role_ids, default_auto_archive_duration,
+		           forum_default_sort, forum_post_guidelines, forum_require_tags,
+		           gallery_default_sort, gallery_post_guidelines, gallery_require_tags,
+		           pinned, reply_count, created_at`,
 		channelID, req.Name, req.Topic, req.Position, req.NSFW, req.SlowmodeSeconds,
 		req.UserLimit, req.Bitrate, req.Archived, req.Encrypted, req.ReadOnly, req.ReadOnlyRoleIDs,
 		req.DefaultAutoArchiveDuration,
+		req.ForumDefaultSort, req.ForumPostGuidelines, req.ForumRequireTags,
+		req.GalleryDefaultSort, req.GalleryPostGuidelines, req.GalleryRequireTags,
 	).Scan(
 		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
 		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
@@ -270,7 +287,10 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		&channel.UserLimit, &channel.Bitrate,
 		&channel.Locked, &channel.LockedBy, &channel.LockedAt,
 		&channel.Archived, &channel.ReadOnly, &channel.ReadOnlyRoleIDs,
-		&channel.DefaultAutoArchiveDuration, &channel.CreatedAt,
+		&channel.DefaultAutoArchiveDuration,
+		&channel.ForumDefaultSort, &channel.ForumPostGuidelines, &channel.ForumRequireTags,
+		&channel.GalleryDefaultSort, &channel.GalleryPostGuidelines, &channel.GalleryRequireTags,
+		&channel.Pinned, &channel.ReplyCount, &channel.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -653,9 +673,10 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	h.Pool.Exec(r.Context(),
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
 
-	// Update last_activity_at for thread channels (fire-and-forget).
+	// Update last_activity_at and reply_count for thread channels (fire-and-forget).
 	h.Pool.Exec(r.Context(),
-		`UPDATE channels SET last_activity_at = now() WHERE id = $1 AND parent_channel_id IS NOT NULL`,
+		`UPDATE channels SET last_activity_at = now(), reply_count = reply_count + 1
+		 WHERE id = $1 AND parent_channel_id IS NOT NULL`,
 		channelID)
 
 	// Populate author user data for the response and event.
@@ -861,6 +882,12 @@ func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete message")
 		return
 	}
+
+	// Decrement reply_count for thread channels (fire-and-forget).
+	h.Pool.Exec(r.Context(),
+		`UPDATE channels SET reply_count = GREATEST(reply_count - 1, 0)
+		 WHERE id = $1 AND parent_channel_id IS NOT NULL`,
+		channelID)
 
 	h.EventBus.Publish(r.Context(), events.SubjectMessageDelete, events.Event{
 		Type:      "MESSAGE_DELETE",

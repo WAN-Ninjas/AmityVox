@@ -507,6 +507,14 @@ func (s *Server) registerRoutes() {
 					r.Get("/{eventID}/rsvps", guildEventH.HandleListRSVPs)
 				})
 
+				// Guild retention policy routes.
+				r.Route("/{guildID}/retention", func(r chi.Router) {
+					r.Get("/", guildH.HandleGetGuildRetentionPolicies)
+					r.Post("/", guildH.HandleCreateGuildRetentionPolicy)
+					r.Patch("/{policyID}", guildH.HandleUpdateGuildRetentionPolicy)
+					r.Delete("/{policyID}", guildH.HandleDeleteGuildRetentionPolicy)
+				})
+
 				// Media gallery and tag routes.
 				r.Get("/{guildID}/gallery", guildH.HandleGetGuildGallery)
 				r.Get("/{guildID}/media-tags", guildH.HandleGetMediaTags)
@@ -564,6 +572,30 @@ func (s *Server) registerRoutes() {
 			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 				r.Get("/{channelID}/export", userH.HandleExportChannelMessages)
 				r.Get("/{channelID}/gallery", channelH.HandleGetChannelGallery)
+
+				// Forum tag routes.
+				r.Get("/{channelID}/tags", channelH.HandleGetForumTags)
+				r.Post("/{channelID}/tags", channelH.HandleCreateForumTag)
+				r.Patch("/{channelID}/tags/{tagID}", channelH.HandleUpdateForumTag)
+				r.Delete("/{channelID}/tags/{tagID}", channelH.HandleDeleteForumTag)
+
+				// Forum post routes.
+				r.Get("/{channelID}/posts", channelH.HandleGetForumPosts)
+				r.Post("/{channelID}/posts", channelH.HandleCreateForumPost)
+				r.Post("/{channelID}/posts/{postID}/pin", channelH.HandlePinForumPost)
+				r.Post("/{channelID}/posts/{postID}/close", channelH.HandleCloseForumPost)
+
+				// Gallery tag routes.
+				r.Get("/{channelID}/gallery-tags", channelH.HandleGetGalleryTags)
+				r.Post("/{channelID}/gallery-tags", channelH.HandleCreateGalleryTag)
+				r.Patch("/{channelID}/gallery-tags/{tagID}", channelH.HandleUpdateGalleryTag)
+				r.Delete("/{channelID}/gallery-tags/{tagID}", channelH.HandleDeleteGalleryTag)
+
+				// Gallery post routes.
+				r.Get("/{channelID}/gallery-posts", channelH.HandleGetGalleryPosts)
+				r.Post("/{channelID}/gallery-posts", channelH.HandleCreateGalleryPost)
+				r.Post("/{channelID}/gallery-posts/{postID}/pin", channelH.HandlePinGalleryPost)
+				r.Post("/{channelID}/gallery-posts/{postID}/close", channelH.HandleCloseGalleryPost)
 
 				// Channel template routes.
 				r.Route("/{channelID}/templates", func(r chi.Router) {

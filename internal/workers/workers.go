@@ -15,6 +15,7 @@ import (
 
 	"github.com/amityvox/amityvox/internal/automod"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/search"
 )
@@ -24,6 +25,7 @@ type Manager struct {
 	pool          *pgxpool.Pool
 	bus           *events.Bus
 	search        *search.Service
+	media         *media.Service
 	automod       *automod.Service
 	notifications *notifications.Service
 	logger        *slog.Logger
@@ -36,6 +38,7 @@ type Config struct {
 	Pool          *pgxpool.Pool
 	Bus           *events.Bus
 	Search        *search.Service        // nil if search is disabled
+	Media         *media.Service         // nil if media/S3 is disabled
 	AutoMod       *automod.Service       // nil if automod is disabled
 	Notifications *notifications.Service // nil if push is disabled
 	Logger        *slog.Logger
@@ -47,6 +50,7 @@ func New(cfg Config) *Manager {
 		pool:          cfg.Pool,
 		bus:           cfg.Bus,
 		search:        cfg.Search,
+		media:         cfg.Media,
 		automod:       cfg.AutoMod,
 		notifications: cfg.Notifications,
 		logger:        cfg.Logger,
@@ -83,6 +87,9 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startBookmarkReminderWorker(ctx)
 		m.startPeriodic(ctx, "push-sub-cleanup", 24*time.Hour, m.cleanStalePushSubscriptions)
 	}
+
+	// Periodic data retention cleanup (every 15 minutes).
+	m.startPeriodic(ctx, "retention-cleanup", 15*time.Minute, m.runRetentionPolicies)
 
 	// Periodic ban expiry cleanup.
 	m.startPeriodic(ctx, "ban-expiry", 1*time.Minute, m.cleanExpiredBans)

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
 	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -141,7 +141,7 @@
 	// Create channel modal
 	let showCreateChannel = $state(false);
 	let newChannelName = $state('');
-	let newChannelType = $state<'text' | 'voice'>('text');
+	let newChannelType = $state<'text' | 'voice' | 'forum' | 'gallery'>('text');
 	let creatingChannel = $state(false);
 	let channelError = $state('');
 
@@ -383,7 +383,7 @@
 		closeContextMenu();
 	}
 
-	function channelTypeButtonClass(type: 'text' | 'voice'): string {
+	function channelTypeButtonClass(type: 'text' | 'voice' | 'forum'): string {
 		const base = 'rounded-lg border-2 px-4 py-2 text-sm transition-colors';
 		if (newChannelType === type) return `${base} border-brand-500 bg-brand-500/10 text-text-primary`;
 		return `${base} border-bg-modifier text-text-muted`;
@@ -526,6 +526,121 @@
 								{/each}
 							</div>
 						{/if}
+					{/each}
+				{/if}
+			{/if}
+
+			<!-- Forum Channels -->
+			{#if $forumChannels.length > 0 || $canManageChannels}
+				<div class="mb-1 flex items-center justify-between px-1 pt-4">
+					<button
+						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						onclick={() => toggleSection('forum-channels')}
+						title={isSectionCollapsed('forum-channels') ? 'Expand Forum Channels' : 'Collapse Forum Channels'}
+					>
+						<svg
+							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('forum-channels') ? '-rotate-90' : ''}"
+							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+						>
+							<path d="M19 9l-7 7-7-7" />
+						</svg>
+						Forum Channels
+					</button>
+					{#if $canManageChannels}
+						<button
+							class="text-text-muted hover:text-text-primary"
+							onclick={() => { newChannelType = 'forum'; showCreateChannel = true; channelError = ''; }}
+							title="Create Forum Channel"
+						>
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M12 5v14m-7-7h14" />
+							</svg>
+						</button>
+					{/if}
+				</div>
+				{#if !isSectionCollapsed('forum-channels')}
+					{#each $forumChannels as ch (ch.id)}
+						{@const isActive = $currentChannelId === ch.id}
+						{@const unread = $unreadCounts.get(ch.id) ?? 0}
+						{@const mentions = $mentionCounts.get(ch.id) ?? 0}
+						<button
+							class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
+								{isActive
+									? 'bg-bg-modifier text-text-primary'
+									: unread > 0
+									? 'text-text-primary hover:bg-bg-modifier/50'
+									: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
+							onclick={() => handleChannelClick(ch.id)}
+						>
+							<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+							</svg>
+							<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'forum'}</span>
+							{#if mentions > 0}
+								<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
+							{:else if unread > 0}
+								<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
+							{/if}
+						</button>
+					{/each}
+				{/if}
+			{/if}
+
+			<!-- Gallery Channels -->
+			{#if $galleryChannels.length > 0 || $currentGuild}
+				<div class="mb-1 flex items-center justify-between px-1 pt-4">
+					<button
+						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						onclick={() => toggleSection('gallery-channels')}
+						title={isSectionCollapsed('gallery-channels') ? 'Expand Gallery Channels' : 'Collapse Gallery Channels'}
+					>
+						<svg
+							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('gallery-channels') ? '-rotate-90' : ''}"
+							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+						>
+							<path d="M19 9l-7 7-7-7" />
+						</svg>
+						Gallery Channels
+					</button>
+					{#if $canManageChannels}
+						<button
+							class="text-text-muted hover:text-text-primary"
+							onclick={() => { newChannelType = 'gallery'; showCreateChannel = true; channelError = ''; }}
+							title="Create Gallery Channel"
+						>
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M12 5v14m-7-7h14" />
+							</svg>
+						</button>
+					{/if}
+				</div>
+				{#if !isSectionCollapsed('gallery-channels')}
+					{#each $galleryChannels as ch (ch.id)}
+						{@const isActive = $currentChannelId === ch.id}
+						{@const unread = $unreadCounts.get(ch.id) ?? 0}
+						{@const mentions = $mentionCounts.get(ch.id) ?? 0}
+						<button
+							class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
+								{isActive
+									? 'bg-bg-modifier text-text-primary'
+									: unread > 0
+									? 'text-text-primary hover:bg-bg-modifier/50'
+									: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
+							onclick={() => handleChannelClick(ch.id)}
+						>
+							<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<rect x="3" y="3" width="7" height="7" rx="1" />
+								<rect x="14" y="3" width="7" height="7" rx="1" />
+								<rect x="3" y="14" width="7" height="7" rx="1" />
+								<rect x="14" y="14" width="7" height="7" rx="1" />
+							</svg>
+							<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'gallery'}</span>
+							{#if mentions > 0}
+								<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
+							{:else if unread > 0}
+								<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
+							{/if}
+						</button>
 					{/each}
 				{/if}
 			{/if}
@@ -1070,6 +1185,12 @@
 			>
 				Voice
 			</button>
+			<button
+				class={channelTypeButtonClass('forum')}
+				onclick={() => (newChannelType = 'forum')}
+			>
+				Forum
+			</button>
 		</div>
 	</div>
 
@@ -1082,7 +1203,7 @@
 			type="text"
 			class="input w-full"
 			bind:value={newChannelName}
-			placeholder={newChannelType === 'text' ? 'new-channel' : 'General'}
+			placeholder={newChannelType === 'voice' ? 'General' : newChannelType === 'forum' ? 'bug-reports' : 'new-channel'}
 			maxlength="100"
 			onkeydown={(e) => e.key === 'Enter' && handleCreateChannel()}
 		/>
