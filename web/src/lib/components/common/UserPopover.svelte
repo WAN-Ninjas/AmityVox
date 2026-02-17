@@ -18,9 +18,10 @@
 		x: number;
 		y: number;
 		onclose: () => void;
+		onviewprofile?: (userId: string) => void;
 	}
 
-	let { userId, x, y, onclose }: Props = $props();
+	let { userId, x, y, onclose, onviewprofile }: Props = $props();
 
 	let user = $state<User | null>(null);
 	let loading = $state(true);
@@ -361,7 +362,7 @@
 			<div class="mt-3 border-t border-bg-modifier pt-3">
 				<button
 					class="w-full rounded px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
-					onclick={() => (showFullProfile = true)}
+					onclick={() => { if (onviewprofile) { onviewprofile(userId); } else { showFullProfile = true; } }}
 				>
 					View Full Profile
 				</button>
