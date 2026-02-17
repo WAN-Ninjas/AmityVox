@@ -235,6 +235,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			Content string `json:"content"`
 		}
 		if err := json.Unmarshal(data, &msgData); err != nil {
+			ss.logger.Warn("failed to unmarshal inbound message update", slog.String("error", err.Error()))
 			return
 		}
 		ss.fed.pool.Exec(ctx,
@@ -246,6 +247,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal(data, &msgData); err != nil {
+			ss.logger.Warn("failed to unmarshal inbound message delete", slog.String("error", err.Error()))
 			return
 		}
 		ss.fed.pool.Exec(ctx,
@@ -502,6 +504,10 @@ func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 		url := fmt.Sprintf("https://%s/federation/v1/inbox", retry.Domain)
 		body, err := json.Marshal(retry.Signed)
 		if err != nil {
+			ss.logger.Error("failed to marshal retry payload, dropping message",
+				slog.String("domain", retry.Domain),
+				slog.String("error", err.Error()),
+			)
 			natsMsg.Ack()
 			return
 		}
@@ -565,19 +571,26 @@ func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 
 // insertDeadLetter inserts a permanently failed delivery into the dead letter table.
 func (ss *SyncService) insertDeadLetter(ctx context.Context, retry retryMessage) {
-	payloadJSON, _ := json.Marshal(retry.Signed)
+	payloadJSON, err := json.Marshal(retry.Signed)
+	if err != nil {
+		ss.logger.Error("failed to marshal dead letter payload",
+			slog.String("domain", retry.Domain),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
 	id := models.NewULID().String()
 
-	_, err := ss.fed.pool.Exec(ctx,
+	_, execErr := ss.fed.pool.Exec(ctx,
 		`INSERT INTO federation_dead_letters (id, target_domain, payload, error_message, attempts, created_at)
 		 VALUES ($1, $2, $3, $4, $5, now())`,
 		id, retry.Domain, payloadJSON,
 		fmt.Sprintf("exhausted %d retry attempts", retry.Attempts),
 		retry.Attempts)
-	if err != nil {
+	if execErr != nil {
 		ss.logger.Error("failed to insert dead letter",
 			slog.String("domain", retry.Domain),
-			slog.String("error", err.Error()),
+			slog.String("error", execErr.Error()),
 		)
 		return
 	}
