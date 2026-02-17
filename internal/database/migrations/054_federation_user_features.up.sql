@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS federation_channel_mirrors (
     PRIMARY KEY (local_channel_id, remote_instance_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_federation_channel_mirrors_remote ON federation_channel_mirrors(remote_channel_id, remote_instance_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_federation_channel_mirrors_remote ON federation_channel_mirrors(remote_channel_id, remote_instance_id);
 
 -- ============================================================
 -- FEDERATION GUILD CACHE (per-user cache of remote guild metadata)
