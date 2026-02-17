@@ -201,6 +201,24 @@ func (c *Cache) RemovePresence(ctx context.Context, userID string) error {
 	return nil
 }
 
+// CountOnlineUsers returns the number of users with active presence keys.
+func (c *Cache) CountOnlineUsers(ctx context.Context) (int64, error) {
+	var count int64
+	var cursor uint64
+	for {
+		keys, next, err := c.client.Scan(ctx, cursor, PrefixPresence+"*", 100).Result()
+		if err != nil {
+			return 0, fmt.Errorf("scanning presence keys: %w", err)
+		}
+		count += int64(len(keys))
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return count, nil
+}
+
 // --- Rate Limiting ---
 
 // RateLimitResult contains the result of a rate limit check, including the
