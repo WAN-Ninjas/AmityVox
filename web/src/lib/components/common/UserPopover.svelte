@@ -188,7 +188,7 @@
 	{:else if user}
 		<!-- Banner area — use accent color if set, banner image if available -->
 		{#if user.banner_id}
-			<img class="h-20 w-full object-cover" src="/api/v1/files/{user.banner_id}" alt="" />
+			<img class="w-full object-cover" style="aspect-ratio: 3/1;" src="/api/v1/files/{user.banner_id}" alt="" />
 		{:else}
 			<div class="h-16" style="background: {user.accent_color ?? 'var(--brand-600)'}"></div>
 		{/if}

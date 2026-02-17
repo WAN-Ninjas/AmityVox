@@ -156,7 +156,7 @@
 			{:else if user}
 				<!-- Banner -->
 				{#if user.banner_id}
-					<img class="h-28 w-full object-cover" src="/api/v1/files/{user.banner_id}" alt="" />
+					<img class="w-full object-cover" style="aspect-ratio: 3/1;" src="/api/v1/files/{user.banner_id}" alt="" />
 				{:else}
 					<div class="h-24" style="background: {user.accent_color ?? 'var(--brand-600)'}"></div>
 				{/if}
