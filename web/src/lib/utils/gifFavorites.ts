@@ -47,6 +47,7 @@ export function removeFavorite(favorites: FavoriteGif[], gifId: string): Favorit
 
 /** Filter favorites by title substring match (case-insensitive). */
 export function filterFavoritesByQuery(favorites: FavoriteGif[], query: string): FavoriteGif[] {
-	const q = query.toLowerCase();
-	return favorites.filter(f => f.title.toLowerCase().includes(q));
+	const q = (query || '').trim().toLowerCase();
+	if (!q) return favorites;
+	return favorites.filter((f) => (f.title ?? '').toLowerCase().includes(q));
 }

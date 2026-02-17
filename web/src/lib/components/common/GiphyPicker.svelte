@@ -28,6 +28,7 @@
 	let error = $state('');
 	let browseLabel = $state('');
 	let browsingFavorites = $state(false);
+	let searchingFavorites = $derived(browsingFavorites && search.trim().length > 0);
 	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Favorites (localStorage) ---
@@ -87,8 +88,9 @@
 		}
 	}
 
-	function filterFavorites(query: string) {
-		gifs = filterFavoritesByQuery(favorites, query).map(f => ({
+	/** Convert a FavoriteGif into a Giphy-API-shaped object for rendering. */
+	function favoriteToGif(f: FavoriteGif) {
+		return {
 			id: f.id,
 			title: f.title,
 			images: {
@@ -96,7 +98,11 @@
 				fixed_height_small: { url: f.previewUrl },
 				original: { url: f.url }
 			}
-		}));
+		};
+	}
+
+	function filterFavorites(query: string) {
+		gifs = filterFavoritesByQuery(favorites, query).map(favoriteToGif);
 	}
 
 	async function searchGifs(query: string) {
@@ -149,15 +155,7 @@
 		loading = false;
 		error = '';
 		// Convert favorites to gif-like objects for rendering
-		gifs = favorites.map((f) => ({
-			id: f.id,
-			title: f.title,
-			images: {
-				fixed_height: { url: f.url },
-				fixed_height_small: { url: f.previewUrl },
-				original: { url: f.url }
-			}
-		}));
+		gifs = favorites.map(favoriteToGif);
 	}
 
 	function openCategory(name: string) {
@@ -305,7 +303,7 @@
 				<p class="py-4 text-center text-xs text-text-muted">{error}</p>
 			{:else if gifs.length === 0}
 				<p class="py-4 text-center text-xs text-text-muted">
-					{browsingFavorites ? 'No favorites yet — star some GIFs!' : 'No GIFs found'}
+					{searchingFavorites ? 'No matching favorites' : browsingFavorites ? 'No favorites yet — star some GIFs!' : 'No GIFs found'}
 				</p>
 			{:else}
 				<div class="columns-2 gap-1">
