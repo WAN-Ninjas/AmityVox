@@ -51,9 +51,10 @@ describe('isEmojiOnly', () => {
 		expect(isEmojiOnly('🇯🇵🇫🇷')).toBe(true);
 	});
 
-	it('returns true for ZWJ sequences (family, etc)', () => {
+	it('returns true for variation and ZWJ sequences', () => {
 		expect(isEmojiOnly('❤️')).toBe(true);
 		expect(isEmojiOnly('👨‍👩‍👧‍👦')).toBe(true);
+		expect(isEmojiOnly('👩‍💻')).toBe(true);
 	});
 
 	it('returns false for more than maxEmoji emoji', () => {
