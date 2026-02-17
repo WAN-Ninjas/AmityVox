@@ -523,7 +523,7 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 	}
 
 	validTypes := map[string]bool{
-		"text": true, "voice": true, "announcement": true, "forum": true, "stage": true,
+		"text": true, "voice": true, "announcement": true, "forum": true, "gallery": true, "stage": true,
 	}
 	if !validTypes[req.ChannelType] {
 		writeError(w, http.StatusBadRequest, "invalid_type", "Invalid channel type")

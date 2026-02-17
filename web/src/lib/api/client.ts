@@ -60,7 +60,12 @@ import type {
 	MutualGuild,
 	UserLink,
 	Attachment,
-	MediaTag
+	MediaTag,
+	RetentionPolicy,
+	ForumTag,
+	ForumPost,
+	GalleryTag,
+	GalleryPost
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -1478,6 +1483,138 @@ class ApiClient {
 
 	setGlobalMod(userId: string, globalMod: boolean): Promise<void> {
 		return this.post(`/admin/users/${userId}/set-globalmod`, { global_mod: globalMod });
+	}
+
+	// --- Guild Retention Policies ---
+
+	getGuildRetentionPolicies(guildId: string): Promise<RetentionPolicy[]> {
+		return this.get(`/guilds/${guildId}/retention`);
+	}
+
+	createGuildRetentionPolicy(guildId: string, policy: {
+		channel_id?: string;
+		max_age_days: number;
+		delete_attachments?: boolean;
+		delete_pins?: boolean;
+	}): Promise<RetentionPolicy> {
+		return this.post(`/guilds/${guildId}/retention`, policy);
+	}
+
+	updateGuildRetentionPolicy(guildId: string, policyId: string, update: {
+		max_age_days?: number;
+		delete_attachments?: boolean;
+		delete_pins?: boolean;
+		enabled?: boolean;
+	}): Promise<RetentionPolicy> {
+		return this.patch(`/guilds/${guildId}/retention/${policyId}`, update);
+	}
+
+	deleteGuildRetentionPolicy(guildId: string, policyId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/retention/${policyId}`);
+	}
+
+	// --- Forum Tags ---
+
+	getForumTags(channelId: string): Promise<ForumTag[]> {
+		return this.get(`/channels/${channelId}/tags`);
+	}
+
+	createForumTag(channelId: string, tag: { name: string; emoji?: string; color?: string }): Promise<ForumTag> {
+		return this.post(`/channels/${channelId}/tags`, tag);
+	}
+
+	updateForumTag(channelId: string, tagId: string, update: { name?: string; emoji?: string; color?: string }): Promise<ForumTag> {
+		return this.patch(`/channels/${channelId}/tags/${tagId}`, update);
+	}
+
+	deleteForumTag(channelId: string, tagId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/tags/${tagId}`);
+	}
+
+	// --- Forum Posts ---
+
+	getForumPosts(channelId: string, params?: {
+		sort?: 'latest_activity' | 'creation_date';
+		tag?: string;
+		before?: string;
+		limit?: number;
+	}): Promise<ForumPost[]> {
+		const query = new URLSearchParams();
+		if (params?.sort) query.set('sort', params.sort);
+		if (params?.tag) query.set('tag', params.tag);
+		if (params?.before) query.set('before', params.before);
+		if (params?.limit) query.set('limit', String(params.limit));
+		const qs = query.toString();
+		return this.get(`/channels/${channelId}/posts${qs ? '?' + qs : ''}`);
+	}
+
+	createForumPost(channelId: string, post: {
+		title: string;
+		content: string;
+		tag_ids?: string[];
+		attachment_ids?: string[];
+	}): Promise<ForumPost> {
+		return this.post(`/channels/${channelId}/posts`, post);
+	}
+
+	pinForumPost(channelId: string, postId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/posts/${postId}/pin`);
+	}
+
+	closeForumPost(channelId: string, postId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/posts/${postId}/close`);
+	}
+
+	// --- Gallery Tags ---
+
+	getGalleryTags(channelId: string): Promise<GalleryTag[]> {
+		return this.get(`/channels/${channelId}/gallery-tags`);
+	}
+
+	createGalleryTag(channelId: string, tag: { name: string; emoji?: string; color?: string }): Promise<GalleryTag> {
+		return this.post(`/channels/${channelId}/gallery-tags`, tag);
+	}
+
+	updateGalleryTag(channelId: string, tagId: string, update: { name?: string; emoji?: string; color?: string }): Promise<GalleryTag> {
+		return this.patch(`/channels/${channelId}/gallery-tags/${tagId}`, update);
+	}
+
+	deleteGalleryTag(channelId: string, tagId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/gallery-tags/${tagId}`);
+	}
+
+	// --- Gallery Posts ---
+
+	getGalleryPosts(channelId: string, params?: {
+		sort?: 'newest' | 'oldest' | 'most_comments';
+		tag?: string;
+		before?: string;
+		limit?: number;
+	}): Promise<GalleryPost[]> {
+		const query = new URLSearchParams();
+		if (params?.sort) query.set('sort', params.sort);
+		if (params?.tag) query.set('tag', params.tag);
+		if (params?.before) query.set('before', params.before);
+		if (params?.limit) query.set('limit', String(params.limit));
+		const qs = query.toString();
+		return this.get(`/channels/${channelId}/gallery-posts${qs ? '?' + qs : ''}`);
+	}
+
+	createGalleryPost(channelId: string, post: {
+		title?: string;
+		description?: string;
+		tag_ids?: string[];
+		attachment_ids: string[];
+	}): Promise<GalleryPost> {
+		return this.post(`/channels/${channelId}/gallery-posts`, post);
+	}
+
+	pinGalleryPost(channelId: string, postId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/gallery-posts/${postId}/pin`);
+	}
+
+	closeGalleryPost(channelId: string, postId: string): Promise<void> {
+		return this.post(`/channels/${channelId}/gallery-posts/${postId}/close`);
 	}
 }
 

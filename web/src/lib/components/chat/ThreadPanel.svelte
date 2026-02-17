@@ -1,12 +1,13 @@
 <script lang="ts">
-	import type { Message } from '$lib/types';
+	import type { Message, ForumTag } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { messagesByChannel, loadMessages, appendMessage } from '$lib/stores/messages';
+	import { channels } from '$lib/stores/channels';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { tick } from 'svelte';
 
 	interface Props {
-		threadChannel: { id: string; name: string | null; guild_id: string | null };
+		threadChannel: { id: string; name: string | null; guild_id: string | null; parent_channel_id?: string | null; locked?: boolean; pinned?: boolean };
 		parentMessage?: Message | null;
 		onclose: () => void;
 	}
@@ -16,6 +17,30 @@
 	let content = $state('');
 	let messagesContainer: HTMLDivElement;
 	let loading = $state(true);
+	let forumTags = $state<ForumTag[]>([]);
+
+	// Detect if this thread belongs to a forum channel
+	let isForumPost = $derived.by(() => {
+		if (!threadChannel.parent_channel_id) return false;
+		let parentCh: any;
+		channels.subscribe((m) => (parentCh = m.get(threadChannel.parent_channel_id!)))();
+		return parentCh?.channel_type === 'forum';
+	});
+
+	// Load forum tags if this is a forum post
+	$effect(() => {
+		if (isForumPost && threadChannel.parent_channel_id) {
+			api.getForumTags(threadChannel.parent_channel_id).then((tags) => {
+				// We get all tags for the forum; we'd ideally filter to just this post's tags
+				// but we show all available tags as context
+				forumTags = tags;
+			}).catch(() => {
+				forumTags = [];
+			});
+		} else {
+			forumTags = [];
+		}
+	});
 
 	const threadMessages = $derived.by(() => {
 		return $messagesByChannel.get(threadChannel.id) ?? [];
@@ -75,8 +100,8 @@
 	<!-- Header -->
 	<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
 		<div class="min-w-0">
-			<h3 class="truncate text-sm font-semibold text-text-primary">Thread</h3>
-			<p class="truncate text-2xs text-text-muted">{threadChannel.name ?? 'Thread'}</p>
+			<h3 class="truncate text-sm font-semibold text-text-primary">{isForumPost ? 'Post' : 'Thread'}</h3>
+			<p class="truncate text-2xs text-text-muted">{threadChannel.name ?? (isForumPost ? 'Forum Post' : 'Thread')}</p>
 		</div>
 		<button class="rounded p-1 text-text-muted hover:text-text-primary" onclick={onclose} title="Close Thread">
 			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -84,6 +109,38 @@
 			</svg>
 		</button>
 	</div>
+
+	<!-- Forum post indicators -->
+	{#if isForumPost}
+		<div class="flex flex-wrap items-center gap-1.5 border-b border-bg-floating px-3 py-2">
+			{#if threadChannel.pinned}
+				<span class="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-medium text-brand-400">
+					<svg class="h-3 w-3" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
+					</svg>
+					Pinned
+				</span>
+			{/if}
+			{#if threadChannel.locked}
+				<span class="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-400">
+					<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+						<path d="M7 11V7a5 5 0 0110 0v4" />
+					</svg>
+					Closed
+				</span>
+			{/if}
+			{#each forumTags as tag (tag.id)}
+				<span
+					class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+					style="background-color: {tag.color ? tag.color + '20' : 'var(--bg-modifier)'}; color: {tag.color || 'var(--text-secondary)'}"
+				>
+					{#if tag.emoji}<span>{tag.emoji}</span>{/if}
+					{tag.name}
+				</span>
+			{/each}
+		</div>
+	{/if}
 
 	<!-- Parent message -->
 	{#if parentMessage}
