@@ -25,10 +25,7 @@
 	import { channelMutePrefs, guildMutePrefs, isChannelMuted, isGuildMuted, muteChannel, unmuteChannel, muteGuild, unmuteGuild } from '$lib/stores/muting';
 	import StatusPicker from '$components/common/StatusPicker.svelte';
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
-	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
-
-	let sidebarProfileUserId = $state<string | null>(null);
 
 	interface Props {
 		/** Width in pixels, controlled by the layout store / resize handle. */
@@ -711,9 +708,7 @@
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
-							<button type="button" class="shrink-0" aria-label="View profile" onclick={(e) => { e.stopPropagation(); if (dmRecipient) sidebarProfileUserId = dmRecipient.id; }}>
-								<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
-							</button>
+							<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
@@ -1240,7 +1235,3 @@
 </Modal>
 
 <GroupDMCreateModal bind:open={showGroupDMCreate} onclose={() => (showGroupDMCreate = false)} />
-
-{#if sidebarProfileUserId}
-	<ProfileModal userId={sidebarProfileUserId} open={!!sidebarProfileUserId} onclose={() => (sidebarProfileUserId = null)} />
-{/if}
