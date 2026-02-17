@@ -62,6 +62,9 @@
 	function handleDragEnter(e: DragEvent) {
 		e.preventDefault();
 		dragCounter++;
+		// Gallery/forum channels handle their own drag UX — don't show the page-level overlay.
+		const ct = $currentChannel?.channel_type;
+		if (ct === 'gallery' || ct === 'forum') return;
 		if (e.dataTransfer?.types.includes('Files')) {
 			isDragging = true;
 		}
