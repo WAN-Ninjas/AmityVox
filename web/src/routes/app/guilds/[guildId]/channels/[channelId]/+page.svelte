@@ -10,6 +10,8 @@
 	import { addToast } from '$lib/stores/toast';
 	import TopBar from '$components/layout/TopBar.svelte';
 	import MemberList from '$components/layout/MemberList.svelte';
+	import ResizeHandle from '$components/common/ResizeHandle.svelte';
+	import { memberListWidth } from '$lib/stores/layout';
 	import MessageList from '$components/chat/MessageList.svelte';
 	import MessageInput from '$components/chat/MessageInput.svelte';
 	import TypingIndicator from '$components/chat/TypingIndicator.svelte';
@@ -418,6 +420,14 @@
 	{/if}
 
 	{#if showMembers && !showPins && !activeThread && !showFollowers && !showGallery}
+		<div class="hidden lg:block">
+			<ResizeHandle
+				width={$memberListWidth}
+				onresize={(w) => memberListWidth.set(w)}
+				onreset={() => memberListWidth.reset()}
+				side="right"
+			/>
+		</div>
 		<MemberList />
 	{/if}
 </div>

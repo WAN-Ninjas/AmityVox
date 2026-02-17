@@ -27,6 +27,13 @@
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 
+	interface Props {
+		/** Width in pixels, controlled by the layout store / resize handle. */
+		width?: number;
+	}
+
+	let { width = 224 }: Props = $props();
+
 	// Status picker
 	let showStatusPicker = $state(false);
 
@@ -385,7 +392,7 @@
 
 <svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }} />
 
-<aside class="flex h-full w-56 shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" aria-label="Channel list">
+<aside class="flex h-full shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" style="width: {width}px;" aria-label="Channel list">
 	<!-- Guild header -->
 	{#if $currentGuild}
 		<div
