@@ -1,7 +1,7 @@
 <!-- IncomingCallModal.svelte — Full-screen overlay for incoming DM/Group voice/video calls. -->
 <script lang="ts">
 	import { activeIncomingCall, dismissIncomingCall } from '$lib/stores/callRing';
-	import { joinVoice } from '$lib/stores/voice';
+	import { joinVoice, toggleCamera } from '$lib/stores/voice';
 	import { playNotificationSound } from '$lib/utils/sounds';
 	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
@@ -45,6 +45,9 @@
 		dismissIncomingCall(channelId);
 		try {
 			await joinVoice(channelId, '', displayName);
+			if (withVideo) {
+				await toggleCamera();
+			}
 			goto(`/app/dms/${channelId}`);
 		} catch {
 			addToast('Failed to join call', 'error');

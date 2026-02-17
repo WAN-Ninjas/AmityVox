@@ -93,18 +93,23 @@ export function routeAudioThroughGain(userId: string, audioElement: HTMLAudioEle
 	}
 }
 
-/** Get the current RMS audio level for a remote participant (0.0–1.0). */
-export function getAudioLevel(userId: string): number {
-	const node = nodes.get(userId);
-	if (!node) return 0;
-	const data = new Uint8Array(node.analyser.fftSize);
-	node.analyser.getByteTimeDomainData(data);
+/** Compute RMS audio level from an AnalyserNode (0.0–1.0). */
+export function computeRmsLevel(analyser: AnalyserNode): number {
+	const data = new Uint8Array(analyser.fftSize);
+	analyser.getByteTimeDomainData(data);
 	let sum = 0;
 	for (let i = 0; i < data.length; i++) {
 		const normalized = (data[i] - 128) / 128;
 		sum += normalized * normalized;
 	}
 	return Math.sqrt(sum / data.length);
+}
+
+/** Get the current RMS audio level for a remote participant (0.0–1.0). */
+export function getAudioLevel(userId: string): number {
+	const node = nodes.get(userId);
+	if (!node) return 0;
+	return computeRmsLevel(node.analyser);
 }
 
 /** Clean up gain nodes for a participant (call on track unsubscribe / disconnect). */

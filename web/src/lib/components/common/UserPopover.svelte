@@ -68,6 +68,9 @@
 
 	$effect(() => {
 		nickname = $clientNicknames.get(userId) ?? '';
+	});
+
+	$effect(() => {
 		api.getUser(userId)
 			.then((u) => (user = u))
 			.catch((e) => (error = e.message || 'Failed to load user'))

@@ -46,8 +46,8 @@ export function updateAnnouncement(data: { id: string; active?: boolean | null; 
 		next.set(data.id, {
 			...existing,
 			...(data.active !== undefined && data.active !== null ? { active: data.active } : {}),
-			...(data.title ? { title: data.title } : {}),
-			...(data.content ? { content: data.content } : {})
+			...(data.title !== undefined && data.title !== null ? { title: data.title } : {}),
+			...(data.content !== undefined && data.content !== null ? { content: data.content } : {})
 		});
 		return next;
 	});

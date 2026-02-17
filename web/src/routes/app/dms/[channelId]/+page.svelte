@@ -10,7 +10,7 @@
 	import { dmList } from '$lib/stores/dms';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
-	import { voiceChannelId, voiceState, joinVoice, leaveVoice } from '$lib/stores/voice';
+	import { voiceChannelId, voiceState, joinVoice, leaveVoice, toggleCamera } from '$lib/stores/voice';
 	import { dismissIncomingCall } from '$lib/stores/callRing';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -39,6 +39,9 @@
 		try {
 			dismissIncomingCall($page.params.channelId);
 			await joinVoice($page.params.channelId, '', recipientName);
+			if (withVideo) {
+				await toggleCamera();
+			}
 		} catch {
 			addToast('Failed to start call', 'error');
 		} finally {

@@ -19,7 +19,7 @@ import {
 	type Participant
 } from 'livekit-client';
 import { routeAudioThroughNoiseFilter, cleanupNoiseFilter, cleanupAllNoiseFilters } from '$lib/utils/noiseReduction';
-import { routeAudioThroughGain, cleanupUserAudio, cleanupAllAudio, getAudioLevel } from '$lib/utils/voiceVolume';
+import { routeAudioThroughGain, cleanupUserAudio, cleanupAllAudio, getAudioLevel, computeRmsLevel } from '$lib/utils/voiceVolume';
 
 export interface VoiceParticipant {
 	userId: string;
@@ -342,14 +342,7 @@ const lastSpeakingTime = new Map<string, number>();
 
 function getLocalAudioLevel(): number {
 	if (!localAnalyser) return 0;
-	const data = new Uint8Array(localAnalyser.fftSize);
-	localAnalyser.getByteTimeDomainData(data);
-	let sum = 0;
-	for (let i = 0; i < data.length; i++) {
-		const normalized = (data[i] - 128) / 128;
-		sum += normalized * normalized;
-	}
-	return Math.sqrt(sum / data.length);
+	return computeRmsLevel(localAnalyser);
 }
 
 function setupLocalAudioMonitor() {
@@ -386,6 +379,8 @@ function cleanupLocalAudioMonitor() {
 function startAudioLevelPolling() {
 	if (audioLevelFrameId !== null) return;
 	lastSpeakingTime.clear();
+	const POLL_INTERVAL_MS = 50; // ~20fps — sufficient for speaking indicators
+	let lastPollTime = 0;
 
 	function poll() {
 		if (!room) {
@@ -394,6 +389,13 @@ function startAudioLevelPolling() {
 		}
 
 		const now = Date.now();
+
+		// Throttle processing to avoid per-frame overhead with many participants.
+		if (now - lastPollTime < POLL_INTERVAL_MS) {
+			audioLevelFrameId = requestAnimationFrame(poll);
+			return;
+		}
+		lastPollTime = now;
 		const updates: { userId: string; speaking: boolean }[] = [];
 		const participants = get(voiceParticipants);
 

@@ -4,8 +4,10 @@
 import { writable, get } from 'svelte/store';
 
 const STORAGE_KEY = 'av-client-nicknames';
+const hasStorage = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
 
 function loadFromStorage(): Map<string, string> {
+	if (!hasStorage) return new Map();
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (!raw) return new Map();
@@ -16,7 +18,10 @@ function loadFromStorage(): Map<string, string> {
 }
 
 function saveToStorage(map: Map<string, string>) {
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(map)));
+	if (!hasStorage) return;
+	try {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(map)));
+	} catch { /* ignore storage failures */ }
 }
 
 export const clientNicknames = writable<Map<string, string>>(loadFromStorage());
