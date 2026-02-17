@@ -245,7 +245,14 @@
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
-			handleSubmit();
+			if (uploading) return;
+			if (isEditing) {
+				handleSubmit();
+			} else if (pendingFiles.length > 0) {
+				uploadPendingFiles();
+			} else {
+				handleSubmit();
+			}
 			return;
 		}
 
