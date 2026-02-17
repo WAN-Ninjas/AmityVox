@@ -49,6 +49,7 @@
 
 	function handleDrop(e: DragEvent) {
 		e.preventDefault();
+		e.stopPropagation();
 		if (!e.dataTransfer?.files) return;
 		const newFiles = Array.from(e.dataTransfer.files).filter(
 			(f) => f.type.startsWith('image/') || f.type.startsWith('video/')

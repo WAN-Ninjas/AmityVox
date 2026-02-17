@@ -88,6 +88,10 @@
 
 		if (isArchived) return;
 
+		// Gallery and forum channels handle their own uploads via their post creation forms.
+		const ct = $currentChannel?.channel_type;
+		if (ct === 'gallery' || ct === 'forum') return;
+
 		const files = e.dataTransfer?.files;
 		const channelId = $currentChannelId;
 		if (!files?.length || !channelId) return;
