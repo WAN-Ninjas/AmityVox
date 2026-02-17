@@ -711,10 +711,9 @@
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<span class="shrink-0 cursor-pointer" onclick={(e) => { e.stopPropagation(); if (dmRecipient) sidebarProfileUserId = dmRecipient.id; }}>
-							<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
-						</span>
+							<button type="button" class="shrink-0" aria-label="View profile" onclick={(e) => { e.stopPropagation(); if (dmRecipient) sidebarProfileUserId = dmRecipient.id; }}>
+								<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
+							</button>
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
