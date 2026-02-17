@@ -72,7 +72,8 @@
 		if (banDuration === 'permanent') return undefined;
 		if (banDuration === 'custom') {
 			const mins = parseInt(banCustomMinutes, 10);
-			return mins > 0 ? mins * 60 : undefined;
+			if (!mins || mins <= 0) return -1; // sentinel: invalid custom duration
+			return mins * 60;
 		}
 		return parseInt(banDuration, 10) || undefined;
 	}
@@ -80,9 +81,13 @@
 	async function submitBan() {
 		const target = $banModalTarget;
 		if (!target || !banReason.trim()) return;
+		const durationSeconds = getBanDurationSeconds();
+		if (durationSeconds === -1) {
+			addToast('Please enter a valid number of minutes for the custom ban duration', 'error');
+			return;
+		}
 		banSubmitting = true;
 		try {
-			const durationSeconds = getBanDurationSeconds();
 			const deleteMessageSeconds = parseInt(banCleanup, 10) || undefined;
 			await api.banUser(target.guildId, target.userId, {
 				reason: banReason.trim(),

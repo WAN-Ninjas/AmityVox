@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/amityvox/amityvox/internal/events"
@@ -21,12 +22,16 @@ func (m *Manager) cleanExpiredBans(ctx context.Context) error {
 	for rows.Next() {
 		var guildID, userID string
 		if err := rows.Scan(&guildID, &userID); err != nil {
+			m.logger.Error("failed to scan expired ban row", slog.String("error", err.Error()))
 			continue
 		}
 		m.bus.PublishJSON(ctx, events.SubjectGuildBanRemove, "GUILD_BAN_REMOVE", map[string]string{
 			"guild_id": guildID, "user_id": userID,
 		})
 		count++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating expired bans: %w", err)
 	}
 	if count > 0 {
 		m.logger.Info("cleaned expired bans",

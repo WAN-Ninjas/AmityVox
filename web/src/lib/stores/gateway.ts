@@ -6,10 +6,10 @@ import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
 import { loadGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
 import { updateChannel, removeChannel, channels as channelsStore, currentChannelId } from './channels';
-import { appendMessage, updateMessage, removeMessage, removeMessages } from './messages';
+import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
-import { loadDMs, addDMChannel, updateDMChannel, removeDMChannel, updateUserInDMs } from './dms';
+import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs } from './dms';
 import { incrementUnread, loadReadState } from './unreads';
 import { addNotification } from './notifications';
 import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
@@ -43,10 +43,10 @@ export function connectGateway(token: string) {
 				loadReadState();
 				loadRelationships();
 				loadChannelMutePrefs();
-				// Default to 'online' unless the user explicitly chose idle/busy/invisible.
-				// The DB defaults status_presence to 'offline', which just means "never set".
+				// Preserve the user's chosen status. The DB defaults status_presence
+				// to 'offline', which just means "never explicitly set" — treat as online.
 				const raw = ready.user.status_presence;
-				const savedStatus = (!raw || raw === 'offline' || raw === 'dnd') ? 'online' : raw;
+				const savedStatus = (!raw || raw === 'offline') ? 'online' : raw;
 				const displayStatus = savedStatus === 'invisible' ? 'offline' : savedStatus;
 				updatePresence(ready.user.id, displayStatus);
 				// Load initial presence for all online guild members.
@@ -85,6 +85,7 @@ export function connectGateway(token: string) {
 					const activeChannelId = get(currentChannelId);
 					if (activeChannelId) {
 						clearChannelMessages(activeChannelId);
+						loadMessages(activeChannelId);
 					}
 					addToast('Reconnected to server', 'success', 3000);
 				}

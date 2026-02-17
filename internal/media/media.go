@@ -445,6 +445,11 @@ func (s *Service) Delete(ctx context.Context, attachmentID string) error {
 	return nil
 }
 
+// DeleteObject removes an object from S3 by bucket and key. Satisfies admin.MediaDeleter.
+func (s *Service) DeleteObject(ctx context.Context, bucket, key string) error {
+	return s.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
+}
+
 // HealthCheck verifies S3 connectivity.
 func (s *Service) HealthCheck(ctx context.Context) error {
 	_, err := s.client.BucketExists(ctx, s.bucket)
@@ -632,19 +637,29 @@ func (s *Service) HandleDeleteAttachment(w http.ResponseWriter, r *http.Request)
 // HandleTagAttachment adds a tag to an attachment.
 // PUT /api/v1/files/{fileID}/tags/{tagID}
 func (s *Service) HandleTagAttachment(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	fileID := chi.URLParam(r, "fileID")
 	tagID := chi.URLParam(r, "tagID")
 
-	// Verify attachment exists.
-	var exists bool
-	s.pool.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM attachments WHERE id = $1)`, fileID).Scan(&exists)
-	if !exists {
+	// Verify attachment exists and check authorization (uploader or guild admin).
+	var uploaderID string
+	var guildID *string
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT a.uploader_id, m.guild_id
+		 FROM attachments a
+		 LEFT JOIN messages m ON m.id = a.message_id
+		 WHERE a.id = $1`, fileID).Scan(&uploaderID, &guildID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+		return
+	}
+	if uploaderID != userID && (guildID == nil || !s.hasGuildPermission(r.Context(), *guildID, userID, permissions.ManageMessages)) {
+		writeError(w, http.StatusForbidden, "forbidden", "You can only tag your own attachments")
 		return
 	}
 
 	// Verify tag exists.
+	var exists bool
 	s.pool.QueryRow(r.Context(),
 		`SELECT EXISTS(SELECT 1 FROM media_tags WHERE id = $1)`, tagID).Scan(&exists)
 	if !exists {
@@ -652,7 +667,7 @@ func (s *Service) HandleTagAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := s.pool.Exec(r.Context(),
+	_, err = s.pool.Exec(r.Context(),
 		`INSERT INTO attachment_tags (attachment_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		fileID, tagID,
 	)
@@ -667,10 +682,28 @@ func (s *Service) HandleTagAttachment(w http.ResponseWriter, r *http.Request) {
 // HandleUntagAttachment removes a tag from an attachment.
 // DELETE /api/v1/files/{fileID}/tags/{tagID}
 func (s *Service) HandleUntagAttachment(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 	fileID := chi.URLParam(r, "fileID")
 	tagID := chi.URLParam(r, "tagID")
 
-	_, err := s.pool.Exec(r.Context(),
+	// Verify authorization: uploader or guild admin can untag.
+	var uploaderID string
+	var guildID *string
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT a.uploader_id, m.guild_id
+		 FROM attachments a
+		 LEFT JOIN messages m ON m.id = a.message_id
+		 WHERE a.id = $1`, fileID).Scan(&uploaderID, &guildID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+		return
+	}
+	if uploaderID != userID && (guildID == nil || !s.hasGuildPermission(r.Context(), *guildID, userID, permissions.ManageMessages)) {
+		writeError(w, http.StatusForbidden, "forbidden", "You can only untag your own attachments")
+		return
+	}
+
+	_, err = s.pool.Exec(r.Context(),
 		`DELETE FROM attachment_tags WHERE attachment_id = $1 AND tag_id = $2`,
 		fileID, tagID,
 	)

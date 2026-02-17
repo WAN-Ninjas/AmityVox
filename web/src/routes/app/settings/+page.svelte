@@ -62,6 +62,7 @@
 	let accentColor = $state('#5865f2');
 	let bannerFile = $state<File | null>(null);
 	let bannerPreview = $state<string | null>(null);
+	let bannerRemoved = $state(false);
 
 	// --- Security tab state ---
 	let currentPassword = $state('');
@@ -275,6 +276,7 @@
 			};
 			if (avatarId) payload.avatar_id = avatarId;
 			if (bannerId) payload.banner_id = bannerId;
+			if (bannerRemoved && !bannerId) payload.banner_id = null;
 
 			const updated = await api.updateMe(payload as any);
 			currentUser.set(updated);
@@ -282,6 +284,7 @@
 			avatarPreview = null;
 			bannerFile = null;
 			bannerPreview = null;
+			bannerRemoved = false;
 			success = 'Profile updated!';
 			setTimeout(() => (success = ''), 3000);
 		} catch (err: any) {
@@ -1328,7 +1331,7 @@
 							{#if $currentUser.banner_id || bannerPreview}
 								<button
 									class="text-xs text-red-400 hover:text-red-300"
-									onclick={() => { bannerFile = null; bannerPreview = null; }}
+									onclick={() => { bannerFile = null; bannerPreview = null; bannerRemoved = true; }}
 									title="Remove banner image to use color instead"
 								>
 									Remove Banner

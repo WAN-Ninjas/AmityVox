@@ -3006,6 +3006,16 @@ func (h *Handler) HandleGetChannelGallery(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 			return
 		}
+	} else {
+		// For DM/group DM channels, verify the user is a participant.
+		var isRecipient bool
+		h.Pool.QueryRow(r.Context(),
+			`SELECT EXISTS(SELECT 1 FROM dm_recipients WHERE channel_id = $1 AND user_id = $2)`,
+			channelID, userID).Scan(&isRecipient)
+		if !isRecipient {
+			writeError(w, http.StatusForbidden, "not_recipient", "You are not a member of this conversation")
+			return
+		}
 	}
 
 	// Build query with optional filters.
@@ -3037,7 +3047,7 @@ func (h *Handler) HandleGetChannelGallery(w http.ResponseWriter, r *http.Request
 	}
 
 	_ = argIdx // suppress unused warning
-	baseSQL += ` ORDER BY a.created_at DESC LIMIT 50`
+	baseSQL += ` ORDER BY a.id DESC LIMIT 50`
 
 	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
 	if err != nil {

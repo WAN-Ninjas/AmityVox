@@ -89,7 +89,7 @@
 					{#each group.channels as vc (vc.channelId)}
 						<button
 							class="mb-1 w-full rounded-md bg-bg-primary p-2 text-left transition-colors hover:bg-bg-modifier"
-							onclick={() => goto(`/app/guilds/${group.guildId}/${vc.channelId}`)}
+							onclick={() => goto(group.guildId === 'unknown' ? `/app/dms/${vc.channelId}` : `/app/guilds/${group.guildId}/channels/${vc.channelId}`)}
 						>
 							<div class="mb-1 flex items-center gap-1.5">
 								<svg class="h-3.5 w-3.5 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

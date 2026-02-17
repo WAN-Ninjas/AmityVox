@@ -192,7 +192,7 @@ class ApiClient {
 	}
 
 	deleteLink(linkId: string): Promise<void> {
-		return this.delete(`/users/@me/links/${linkId}`);
+		return this.del(`/users/@me/links/${linkId}`);
 	}
 
 	getMyGuilds(): Promise<Guild[]> {
@@ -216,7 +216,7 @@ class ApiClient {
 	}
 
 	removeGroupDMRecipient(channelId: string, userId: string): Promise<void> {
-		return this.delete(`/channels/${channelId}/recipients/${userId}`);
+		return this.del(`/channels/${channelId}/recipients/${userId}`);
 	}
 
 	// --- Guilds ---
@@ -664,7 +664,7 @@ class ApiClient {
 	}
 
 	deleteAttachment(fileId: string): Promise<void> {
-		return this.delete(`/files/${fileId}`);
+		return this.del(`/files/${fileId}`);
 	}
 
 	getMediaTags(guildId: string): Promise<MediaTag[]> {
@@ -676,7 +676,7 @@ class ApiClient {
 	}
 
 	deleteMediaTag(guildId: string, tagId: string): Promise<void> {
-		return this.delete(`/guilds/${guildId}/media-tags/${tagId}`);
+		return this.del(`/guilds/${guildId}/media-tags/${tagId}`);
 	}
 
 	tagAttachment(fileId: string, tagId: string): Promise<void> {
@@ -684,7 +684,7 @@ class ApiClient {
 	}
 
 	untagAttachment(fileId: string, tagId: string): Promise<void> {
-		return this.delete(`/files/${fileId}/tags/${tagId}`);
+		return this.del(`/files/${fileId}/tags/${tagId}`);
 	}
 
 	getAdminMedia(before?: string): Promise<Attachment[]> {
@@ -692,7 +692,7 @@ class ApiClient {
 	}
 
 	deleteAdminMedia(fileId: string): Promise<void> {
-		return this.delete(`/admin/media/${fileId}`);
+		return this.del(`/admin/media/${fileId}`);
 	}
 
 	// --- Admin ---

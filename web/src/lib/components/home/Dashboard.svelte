@@ -7,6 +7,7 @@
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
 
 	let showCreateModal = $state(false);
+	let createModalMode = $state<'create' | 'join'>('create');
 
 	const greeting = $derived.by(() => {
 		const hour = new Date().getHours();
@@ -39,8 +40,8 @@
 
 	<!-- Quick Actions -->
 	<div class="flex gap-3 px-6 pt-4">
-		<button class="btn-primary text-sm" onclick={() => (showCreateModal = true)}>Create a Guild</button>
-		<button class="btn-secondary text-sm" onclick={() => (showCreateModal = true)}>Join a Guild</button>
+		<button class="btn-primary text-sm" onclick={() => { createModalMode = 'create'; showCreateModal = true; }}>Create a Guild</button>
+		<button class="btn-secondary text-sm" onclick={() => { createModalMode = 'join'; showCreateModal = true; }}>Join a Guild</button>
 	</div>
 
 	<!-- Dashboard Panels -->
@@ -57,4 +58,4 @@
 	</div>
 </div>
 
-<CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />
+<CreateGuildModal bind:open={showCreateModal} initialMode={createModalMode} onclose={() => (showCreateModal = false)} />

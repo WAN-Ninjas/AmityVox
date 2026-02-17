@@ -1588,12 +1588,23 @@ func (h *Handler) HandleAdminDeleteMedia(w http.ResponseWriter, r *http.Request)
 		`SELECT s3_key, s3_bucket FROM attachments WHERE id = $1`, fileID,
 	).Scan(&s3Key, &s3Bucket)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up attachment")
+		}
 		return
 	}
 
-	// Delete from database (S3 deletion is handled by the caller or a background job;
-	// since admin handler does not have direct S3 access, we delete the DB record).
+	// Delete the S3 object if the media service is available.
+	if h.Media != nil && s3Key != "" {
+		if err := h.Media.DeleteObject(r.Context(), s3Bucket, s3Key); err != nil {
+			h.Logger.Error("failed to delete S3 object", slog.String("key", s3Key), slog.String("error", err.Error()))
+			// Continue to delete DB record even if S3 deletion fails.
+		}
+	}
+
+	// Delete from database.
 	_, err = h.Pool.Exec(r.Context(), `DELETE FROM attachments WHERE id = $1`, fileID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete attachment")

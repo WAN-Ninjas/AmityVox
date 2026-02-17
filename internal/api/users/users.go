@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -124,7 +126,7 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Publish with UserID so the gateway can dispatch to shared-guild members and friends.
+	// Publish user data (email is excluded via json:"-" on the User struct).
 	userData, _ := json.Marshal(user)
 	h.EventBus.Publish(r.Context(), events.SubjectUserUpdate, events.Event{
 		Type:   "USER_UPDATE",
@@ -1405,6 +1407,10 @@ func (h *Handler) HandleCreateLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_fields", "platform, label, and url are required")
 		return
 	}
+	if !isValidLinkURL(req.URL) {
+		writeError(w, http.StatusBadRequest, "invalid_url", "URL must use http or https scheme")
+		return
+	}
 
 	id := models.NewULID().String()
 	var link models.UserLink
@@ -1437,6 +1443,11 @@ func (h *Handler) HandleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	if req.URL != nil && !isValidLinkURL(*req.URL) {
+		writeError(w, http.StatusBadRequest, "invalid_url", "URL must use http or https scheme")
 		return
 	}
 
@@ -1500,7 +1511,20 @@ func (h *Handler) getUserLinks(ctx context.Context, userID string) ([]models.Use
 		}
 		links = append(links, l)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return links, nil
+}
+
+// isValidLinkURL checks that a URL uses http or https scheme.
+func isValidLinkURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	return scheme == "http" || scheme == "https"
 }
 
 // createGroupDMRequest is the JSON body for POST /users/@me/group-dms.
@@ -1550,6 +1574,12 @@ func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.UserIDs = unique
+
+	// Re-validate after dedup: still need 2-9 unique recipients.
+	if len(req.UserIDs) < 2 || len(req.UserIDs) > 9 {
+		writeError(w, http.StatusBadRequest, "invalid_recipients", "Group DMs require 2-9 other users (after deduplication)")
+		return
+	}
 
 	// Verify all target users exist.
 	var existCount int

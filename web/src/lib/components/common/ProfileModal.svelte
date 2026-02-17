@@ -220,7 +220,7 @@
 							<div class="flex flex-wrap gap-2">
 								{#each links as link (link.id)}
 									<a
-										href={link.url}
+										href={/^https?:\/\//i.test(link.url) ? link.url : '#'}
 										target="_blank"
 										rel="noopener noreferrer"
 										class="flex items-center gap-1.5 rounded-md bg-bg-primary px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
