@@ -21,6 +21,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/presence"
 )
 
 // MediaDeleter can remove S3 objects. Implemented by media.Service.
@@ -33,8 +34,9 @@ type Handler struct {
 	Pool       *pgxpool.Pool
 	InstanceID string
 	Logger     *slog.Logger
-	Media      MediaDeleter // optional — enables S3 cleanup on admin media delete
-	EventBus   *events.Bus  // optional — enables real-time announcement events
+	Media      MediaDeleter   // optional — enables S3 cleanup on admin media delete
+	EventBus   *events.Bus    // optional — enables real-time announcement events
+	Cache      *presence.Cache // optional — enables accurate online user count
 }
 
 type updateInstanceRequest struct {
@@ -310,12 +312,11 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 		{`SELECT COUNT(*) FROM channels`, &s.Channels, false},
 		{`SELECT COUNT(*) FROM messages`, &s.Messages, false},
 		{`SELECT COUNT(*) FROM messages WHERE created_at >= CURRENT_DATE`, &s.MessagesToday, false},
-		{`SELECT COUNT(*) FROM files`, &s.Files, false},
+		{`SELECT COUNT(*) FROM attachments`, &s.Files, false},
 		{`SELECT COUNT(*) FROM roles`, &s.Roles, false},
-		{`SELECT COUNT(*) FROM guild_emoji`, &s.Emoji, false},
+		{`SELECT COUNT(*) FROM custom_emoji`, &s.Emoji, false},
 		{`SELECT COUNT(*) FROM invites WHERE expires_at IS NULL OR expires_at > now()`, &s.Invites, false},
 		{`SELECT COUNT(*) FROM federation_peers WHERE instance_id = $1`, &s.FedPeers, true},
-		{`SELECT COUNT(*) FROM user_sessions WHERE expires_at > now()`, &s.OnlineUsers, false},
 	}
 
 	for _, q := range queries {
@@ -332,6 +333,17 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 			)
 			*q.dest = 0
 		}
+	}
+
+	// Online users from presence cache (real-time, not sessions).
+	if h.Cache != nil {
+		if count, err := h.Cache.CountOnlineUsers(r.Context()); err == nil {
+			s.OnlineUsers = count
+		}
+	} else {
+		// Fallback: count distinct users with active sessions.
+		_ = h.Pool.QueryRow(r.Context(),
+			`SELECT COUNT(DISTINCT user_id) FROM user_sessions WHERE expires_at > now()`).Scan(&s.OnlineUsers)
 	}
 
 	// Database size.
