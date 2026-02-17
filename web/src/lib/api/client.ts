@@ -355,15 +355,19 @@ class ApiClient {
 		return this.del(`/users/${userId}/friend`);
 	}
 
-	blockUser(userId: string): Promise<void> {
-		return this.put(`/users/${userId}/block`);
+	blockUser(userId: string, level: 'ignore' | 'block' = 'block'): Promise<void> {
+		return this.put(`/users/${userId}/block`, { level });
+	}
+
+	updateBlockLevel(userId: string, level: 'ignore' | 'block'): Promise<void> {
+		return this.patch(`/users/${userId}/block`, { level });
 	}
 
 	unblockUser(userId: string): Promise<void> {
 		return this.del(`/users/${userId}/block`);
 	}
 
-	getBlockedUsers(): Promise<{ id: string; user_id: string; target_id: string; reason: string | null; created_at: string; user?: User }[]> {
+	getBlockedUsers(): Promise<{ id: string; user_id: string; target_id: string; reason: string | null; level: string; created_at: string; user?: User }[]> {
 		return this.get('/users/@me/blocked');
 	}
 
