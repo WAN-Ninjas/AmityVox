@@ -198,6 +198,13 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 		remoteChannelID, remoteInstanceID,
 	).Scan(&localChannelID)
 	if err != nil {
+		if err != pgx.ErrNoRows {
+			ss.logger.Warn("failed to lookup channel mirror",
+				slog.String("remote_channel_id", remoteChannelID),
+				slog.String("remote_instance_id", remoteInstanceID),
+				slog.String("error", err.Error()),
+			)
+		}
 		// No mirror for this channel — skip persistence (channel setup happens in DM/guild PRs).
 		return
 	}
@@ -299,6 +306,9 @@ func (ss *SyncService) DeliverToAllPeers(ctx context.Context, msg FederatedMessa
 			peers = append(peers, p)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		ss.logger.Error("failed to iterate federation peers", slog.String("error", err.Error()))
+	}
 
 	for _, peer := range peers {
 		go ss.deliverToPeer(ctx, peer.domain, peer.peerID, signed)
@@ -345,6 +355,9 @@ func (ss *SyncService) DeliverToChannelPeers(ctx context.Context, msg FederatedM
 		if err := rows.Scan(&p.peerID, &p.domain); err == nil {
 			peers = append(peers, p)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		ss.logger.Error("failed to iterate channel peers", slog.String("error", err.Error()))
 	}
 
 	if len(peers) == 0 {
@@ -472,7 +485,7 @@ func (ss *SyncService) StartRouter(ctx context.Context) {
 func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 	js := ss.bus.JetStream()
 
-	sub, err := js.Subscribe(events.SubjectFederationRetry, func(natsMsg *nats.Msg) {
+	sub, err := js.QueueSubscribe(events.SubjectFederationRetry, "federation-retry", func(natsMsg *nats.Msg) {
 		var evt events.Event
 		if err := json.Unmarshal(natsMsg.Data, &evt); err != nil {
 			ss.logger.Error("failed to unmarshal retry event", slog.String("error", err.Error()))
@@ -523,6 +536,10 @@ func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 
 		req, err := http.NewRequestWithContext(deliverCtx, "POST", url, bytes.NewReader(body))
 		if err != nil {
+			ss.logger.Error("failed to create retry request",
+				slog.String("domain", retry.Domain),
+				slog.String("error", err.Error()),
+			)
 			natsMsg.NakWithDelay(retryDelay(attempt))
 			return
 		}
