@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS federation_guild_cache (
 
 CREATE INDEX IF NOT EXISTS idx_federation_guild_cache_user ON federation_guild_cache(user_id);
 CREATE INDEX IF NOT EXISTS idx_federation_guild_cache_instance ON federation_guild_cache(instance_id);
+CREATE INDEX IF NOT EXISTS idx_federation_guild_cache_guild ON federation_guild_cache(guild_id);
 
 -- ============================================================
 -- FEDERATION DEAD LETTERS (permanently failed deliveries)

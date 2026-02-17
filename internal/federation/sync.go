@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"time"
 
@@ -138,8 +137,16 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 
 	// Persist inbound message events to the local database.
 	if msg.ChannelID != "" {
-		eventData, _ := json.Marshal(msg.Data)
-		ss.persistInboundMessage(r.Context(), signed.SenderID, msg.Type, msg.ChannelID, eventData)
+		eventData, err := json.Marshal(msg.Data)
+		if err != nil {
+			ss.logger.Warn("failed to marshal inbound event data",
+				slog.String("sender_id", signed.SenderID),
+				slog.String("type", msg.Type),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			ss.persistInboundMessage(r.Context(), signed.SenderID, msg.Type, msg.ChannelID, eventData)
+		}
 	}
 
 	// Dispatch to local event bus for gateway and workers.
@@ -399,6 +406,10 @@ func (ss *SyncService) queueForRetry(domain, peerID string, signed *SignedPayloa
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
+		ss.logger.Error("failed to marshal retry message",
+			slog.String("domain", domain),
+			slog.String("error", err.Error()),
+		)
 		return
 	}
 
@@ -503,7 +514,7 @@ func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
 
-		client := &http.Client{Timeout: 15 * time.Second}
+		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
 			delay := retryDelay(attempt)
@@ -647,12 +658,3 @@ func RetryDelay(attempt int) time.Duration {
 	return retryDelay(attempt)
 }
 
-// RetryDelayExp calculates exponential backoff delay (unused — kept for compatibility).
-func RetryDelayExp(attempt int) time.Duration {
-	base := 5.0
-	delay := base * math.Pow(2, float64(attempt))
-	if delay > 3600 {
-		delay = 3600
-	}
-	return time.Duration(delay) * time.Second
-}
