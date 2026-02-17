@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { GuildMember, Role } from '$lib/types';
+	import { memberListWidth } from '$lib/stores/layout';
 	import { currentGuildId, currentGuild } from '$lib/stores/guilds';
 	import { currentUser } from '$lib/stores/auth';
 	import { api } from '$lib/api/client';
@@ -320,7 +321,7 @@
 </script>
 
 {#if visible && $currentGuildId}
-	<aside class="hidden w-60 shrink-0 overflow-y-auto bg-bg-secondary lg:block">
+	<aside class="hidden shrink-0 overflow-y-auto bg-bg-secondary lg:block" style="width: {$memberListWidth}px;">
 		<div class="p-3">
 			{#each memberGroups as group}
 				{@const isOffline = group.label === 'Offline'}
