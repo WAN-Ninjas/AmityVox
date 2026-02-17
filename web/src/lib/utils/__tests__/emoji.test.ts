@@ -39,6 +39,13 @@ describe('isEmojiOnly', () => {
 		expect(isEmojiOnly('👋🏻👋🏿')).toBe(true);
 	});
 
+	it('treats skin-tone sequences as a single emoji for maxEmoji', () => {
+		const ten = '👍🏽'.repeat(10);
+		const eleven = '👍🏽'.repeat(11);
+		expect(isEmojiOnly(ten)).toBe(true);
+		expect(isEmojiOnly(eleven)).toBe(false);
+	});
+
 	it('returns true for flag sequences', () => {
 		expect(isEmojiOnly('🇺🇸')).toBe(true);
 		expect(isEmojiOnly('🇯🇵🇫🇷')).toBe(true);
