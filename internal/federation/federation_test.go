@@ -7,6 +7,9 @@ import (
 	"encoding/pem"
 	"log/slog"
 	"testing"
+	"time"
+
+	"github.com/amityvox/amityvox/internal/events"
 )
 
 func TestSign_And_Verify(t *testing.T) {
@@ -261,6 +264,8 @@ func TestEventTypeToSubject(t *testing.T) {
 		{"MESSAGE_UPDATE", "amityvox.message.update"},
 		{"GUILD_CREATE", "amityvox.guild.create"},
 		{"CHANNEL_DELETE", "amityvox.channel.delete"},
+		{"VOICE_STATE_UPDATE", events.SubjectVoiceStateUpdate},
+		{"CALL_RING", events.SubjectCallRing},
 		{"UNKNOWN_EVENT", ""},
 	}
 
@@ -268,6 +273,160 @@ func TestEventTypeToSubject(t *testing.T) {
 		got := eventTypeToSubject(tt.eventType)
 		if got != tt.want {
 			t.Errorf("eventTypeToSubject(%q) = %q, want %q", tt.eventType, got, tt.want)
+		}
+	}
+}
+
+// --- Retry Queue Tests ---
+
+func TestRetryDelay(t *testing.T) {
+	expected := []time.Duration{
+		5 * time.Second,
+		30 * time.Second,
+		2 * time.Minute,
+		10 * time.Minute,
+		1 * time.Hour,
+	}
+
+	for i, want := range expected {
+		got := RetryDelay(i)
+		if got != want {
+			t.Errorf("RetryDelay(%d) = %v, want %v", i, got, want)
+		}
+	}
+
+	// Beyond the defined delays, should cap at 1 hour.
+	got := RetryDelay(10)
+	if got != 1*time.Hour {
+		t.Errorf("RetryDelay(10) = %v, want %v", got, 1*time.Hour)
+	}
+}
+
+func TestRetryMessage_JSON(t *testing.T) {
+	sp := &SignedPayload{
+		Payload:   json.RawMessage(`{"type":"MESSAGE_CREATE"}`),
+		Signature: "abc123",
+		SenderID:  "inst-1",
+	}
+
+	msg := retryMessage{
+		Domain:   "remote.example.com",
+		PeerID:   "peer-1",
+		Signed:   sp,
+		Attempts: 3,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded retryMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.Domain != "remote.example.com" {
+		t.Errorf("Domain = %q, want %q", decoded.Domain, "remote.example.com")
+	}
+	if decoded.PeerID != "peer-1" {
+		t.Errorf("PeerID = %q, want %q", decoded.PeerID, "peer-1")
+	}
+	if decoded.Attempts != 3 {
+		t.Errorf("Attempts = %d, want %d", decoded.Attempts, 3)
+	}
+	if decoded.Signed.SenderID != "inst-1" {
+		t.Errorf("Signed.SenderID = %q, want %q", decoded.Signed.SenderID, "inst-1")
+	}
+}
+
+func TestMaxRetryAttempts(t *testing.T) {
+	if maxRetryAttempts != 10 {
+		t.Errorf("maxRetryAttempts = %d, want 10", maxRetryAttempts)
+	}
+}
+
+// --- Targeted Delivery Tests ---
+
+func TestPeerTarget(t *testing.T) {
+	p := peerTarget{domain: "example.com", peerID: "peer-123"}
+	if p.domain != "example.com" {
+		t.Errorf("domain = %q, want %q", p.domain, "example.com")
+	}
+	if p.peerID != "peer-123" {
+		t.Errorf("peerID = %q, want %q", p.peerID, "peer-123")
+	}
+}
+
+// --- Voice Event Mapping Tests ---
+
+func TestEventTypeToSubject_VoiceEvents(t *testing.T) {
+	voiceTests := []struct {
+		eventType string
+		want      string
+	}{
+		{"VOICE_STATE_UPDATE", "amityvox.voice.state_update"},
+		{"CALL_RING", "amityvox.voice.call_ring"},
+	}
+
+	for _, tt := range voiceTests {
+		got := eventTypeToSubject(tt.eventType)
+		if got != tt.want {
+			t.Errorf("eventTypeToSubject(%q) = %q, want %q", tt.eventType, got, tt.want)
+		}
+	}
+}
+
+func TestNegotiateProtocol(t *testing.T) {
+	tests := []struct {
+		name   string
+		local  []string
+		remote []string
+		want   string
+	}{
+		{
+			name:   "both support v1.1",
+			local:  SupportedVersions,
+			remote: []string{Version, VersionNext},
+			want:   VersionNext,
+		},
+		{
+			name:   "remote only v1.0",
+			local:  SupportedVersions,
+			remote: []string{Version},
+			want:   Version,
+		},
+		{
+			name:   "no common version",
+			local:  SupportedVersions,
+			remote: []string{"unknown/2.0"},
+			want:   Version,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NegotiateProtocol(tt.local, tt.remote)
+			if got != tt.want {
+				t.Errorf("NegotiateProtocol() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNegotiateCapabilities(t *testing.T) {
+	local := []string{"messages", "presence", "profiles"}
+	remote := []string{"messages", "profiles", "reactions"}
+
+	result := NegotiateCapabilities(local, remote)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 common capabilities, got %d", len(result))
+	}
+
+	expected := map[string]bool{"messages": true, "profiles": true}
+	for _, c := range result {
+		if !expected[c] {
+			t.Errorf("unexpected capability: %q", c)
 		}
 	}
 }

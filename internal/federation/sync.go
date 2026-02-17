@@ -7,27 +7,48 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/nats-io/nats.go"
 
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/models"
 )
+
+// maxRetryAttempts is the maximum number of delivery attempts before moving
+// a message to the dead letter queue.
+const maxRetryAttempts = 10
 
 // FederatedMessage is the envelope for messages sent between federated instances.
 type FederatedMessage struct {
-	Type       string       `json:"type"`                 // Event type (e.g., MESSAGE_CREATE)
-	OriginID   string       `json:"origin_id"`            // Originating instance ID
-	Timestamp  HLCTimestamp `json:"timestamp"`             // HLC timestamp for causal ordering
-	GuildID    string       `json:"guild_id,omitempty"`
-	ChannelID  string       `json:"channel_id,omitempty"`
-	Data       interface{}  `json:"data"`                  // Event payload
+	Type      string       `json:"type"`                  // Event type (e.g., MESSAGE_CREATE)
+	OriginID  string       `json:"origin_id"`             // Originating instance ID
+	Timestamp HLCTimestamp `json:"timestamp"`              // HLC timestamp for causal ordering
+	GuildID   string       `json:"guild_id,omitempty"`
+	ChannelID string       `json:"channel_id,omitempty"`
+	Data      interface{}  `json:"data"`                   // Event payload
 }
 
 // InboxRequest is the incoming request body at /federation/v1/inbox.
 type InboxRequest struct {
 	SignedPayload
+}
+
+// retryMessage is the format for the federation retry queue.
+type retryMessage struct {
+	Domain   string         `json:"domain"`
+	PeerID   string         `json:"peer_id,omitempty"`
+	Signed   *SignedPayload `json:"signed"`
+	Attempts int            `json:"attempts"`
+}
+
+// peerTarget holds a peer's domain and ID for delivery.
+type peerTarget struct {
+	domain string
+	peerID string
 }
 
 // SyncService handles federation message routing and delivery.
@@ -49,10 +70,9 @@ func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger) *SyncSer
 }
 
 // HandleInbox handles POST /federation/v1/inbox — receives signed messages from
-// remote instances, verifies the signature, checks federation permissions, and
-// dispatches the event to the local event bus.
+// remote instances, verifies the signature, checks federation permissions,
+// persists message events to the local database, and dispatches to the event bus.
 func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
-	// Read request body.
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
@@ -71,7 +91,6 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
 	).Scan(&publicKeyPEM)
 	if err == pgx.ErrNoRows {
-		// Unknown instance — try to discover it.
 		ss.logger.Info("unknown sender, attempting discovery", slog.String("sender_id", signed.SenderID))
 		http.Error(w, "Unknown sender instance", http.StatusForbidden)
 		return
@@ -85,9 +104,7 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 	// Verify signature.
 	valid, err := VerifySignature(publicKeyPEM, signed.Payload, signed.Signature)
 	if err != nil || !valid {
-		ss.logger.Warn("invalid federation signature",
-			slog.String("sender_id", signed.SenderID),
-		)
+		ss.logger.Warn("invalid federation signature", slog.String("sender_id", signed.SenderID))
 		http.Error(w, "Invalid signature", http.StatusForbidden)
 		return
 	}
@@ -119,6 +136,12 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		 WHERE instance_id = $1 AND peer_id = $2`,
 		ss.fed.instanceID, signed.SenderID)
 
+	// Persist inbound message events to the local database.
+	if msg.ChannelID != "" {
+		eventData, _ := json.Marshal(msg.Data)
+		ss.persistInboundMessage(r.Context(), msg.Type, msg.ChannelID, eventData)
+	}
+
 	// Dispatch to local event bus for gateway and workers.
 	eventData, err := json.Marshal(msg.Data)
 	if err != nil {
@@ -143,6 +166,9 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Track inbound event count for the sender peer.
+	ss.fed.IncrementPeerEventCount(r.Context(), signed.SenderID, false)
+
 	ss.logger.Debug("received federated event",
 		slog.String("type", msg.Type),
 		slog.String("sender", signed.SenderID),
@@ -150,6 +176,75 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+}
+
+// persistInboundMessage writes inbound federated message events to the local
+// database using federation_channel_mirrors to map remote channel IDs to local ones.
+func (ss *SyncService) persistInboundMessage(ctx context.Context, eventType, remoteChannelID string, data json.RawMessage) {
+	// Look up the local channel ID via mirror mapping.
+	var localChannelID string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT local_channel_id FROM federation_channel_mirrors
+		 WHERE remote_channel_id = $1 LIMIT 1`,
+		remoteChannelID,
+	).Scan(&localChannelID)
+	if err != nil {
+		// No mirror for this channel — skip persistence (channel setup happens in DM/guild PRs).
+		return
+	}
+
+	switch eventType {
+	case "MESSAGE_CREATE":
+		var msgData struct {
+			ID          string          `json:"id"`
+			AuthorID    string          `json:"author_id"`
+			Content     string          `json:"content"`
+			Attachments json.RawMessage `json:"attachments,omitempty"`
+			Embeds      json.RawMessage `json:"embeds,omitempty"`
+			CreatedAt   *time.Time      `json:"created_at,omitempty"`
+		}
+		if err := json.Unmarshal(data, &msgData); err != nil {
+			ss.logger.Warn("failed to unmarshal inbound message", slog.String("error", err.Error()))
+			return
+		}
+		createdAt := time.Now().UTC()
+		if msgData.CreatedAt != nil {
+			createdAt = *msgData.CreatedAt
+		}
+		_, err := ss.fed.pool.Exec(ctx,
+			`INSERT INTO messages (id, channel_id, author_id, content, created_at)
+			 VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (id) DO NOTHING`,
+			msgData.ID, localChannelID, msgData.AuthorID, msgData.Content, createdAt)
+		if err != nil {
+			ss.logger.Warn("failed to persist inbound message",
+				slog.String("message_id", msgData.ID),
+				slog.String("error", err.Error()))
+		}
+
+	case "MESSAGE_UPDATE":
+		var msgData struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(data, &msgData); err != nil {
+			return
+		}
+		ss.fed.pool.Exec(ctx,
+			`UPDATE messages SET content = $1, edited_at = now() WHERE id = $2 AND channel_id = $3`,
+			msgData.Content, msgData.ID, localChannelID)
+
+	case "MESSAGE_DELETE":
+		var msgData struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(data, &msgData); err != nil {
+			return
+		}
+		ss.fed.pool.Exec(ctx,
+			`DELETE FROM messages WHERE id = $1 AND channel_id = $2`,
+			msgData.ID, localChannelID)
+	}
 }
 
 // DeliverToAllPeers sends a signed event to all active federation peers.
@@ -166,9 +261,9 @@ func (ss *SyncService) DeliverToAllPeers(ctx context.Context, msg FederatedMessa
 		return
 	}
 
-	// Get all active peers.
+	// Get all active peers with their IDs and domains.
 	rows, err := ss.fed.pool.Query(ctx,
-		`SELECT i.domain FROM federation_peers fp
+		`SELECT fp.peer_id, i.domain FROM federation_peers fp
 		 JOIN instances i ON i.id = fp.peer_id
 		 WHERE fp.instance_id = $1 AND fp.status = 'active'`,
 		ss.fed.instanceID)
@@ -178,21 +273,69 @@ func (ss *SyncService) DeliverToAllPeers(ctx context.Context, msg FederatedMessa
 	}
 	defer rows.Close()
 
-	var domains []string
+	var peers []peerTarget
 	for rows.Next() {
-		var domain string
-		if err := rows.Scan(&domain); err == nil {
-			domains = append(domains, domain)
+		var p peerTarget
+		if err := rows.Scan(&p.peerID, &p.domain); err == nil {
+			peers = append(peers, p)
 		}
 	}
 
-	for _, domain := range domains {
-		go ss.deliverToPeer(ctx, domain, signed)
+	for _, peer := range peers {
+		go ss.deliverToPeer(ctx, peer.domain, peer.peerID, signed)
+	}
+}
+
+// DeliverToChannelPeers sends a signed event only to instances that have
+// registered interest in a specific channel via federation_channel_peers.
+func (ss *SyncService) DeliverToChannelPeers(ctx context.Context, msg FederatedMessage) {
+	msg.OriginID = ss.fed.instanceID
+	msg.Timestamp = ss.hlc.Now()
+
+	signed, err := ss.fed.Sign(msg)
+	if err != nil {
+		ss.logger.Error("failed to sign federation message",
+			slog.String("type", msg.Type),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	rows, err := ss.fed.pool.Query(ctx,
+		`SELECT i.id, i.domain FROM federation_channel_peers fcp
+		 JOIN instances i ON i.id = fcp.instance_id
+		 WHERE fcp.channel_id = $1`,
+		msg.ChannelID)
+	if err != nil {
+		ss.logger.Error("failed to query channel peers",
+			slog.String("channel_id", msg.ChannelID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	defer rows.Close()
+
+	var peers []peerTarget
+	for rows.Next() {
+		var p peerTarget
+		if err := rows.Scan(&p.peerID, &p.domain); err == nil {
+			peers = append(peers, p)
+		}
+	}
+
+	if len(peers) == 0 {
+		// No channel-specific peers — fall through to broadcast.
+		ss.DeliverToAllPeers(ctx, msg)
+		return
+	}
+
+	for _, peer := range peers {
+		go ss.deliverToPeer(ctx, peer.domain, peer.peerID, signed)
 	}
 }
 
 // deliverToPeer sends a signed payload to a specific peer instance.
-func (ss *SyncService) deliverToPeer(ctx context.Context, domain string, signed *SignedPayload) {
+func (ss *SyncService) deliverToPeer(ctx context.Context, domain, peerID string, signed *SignedPayload) {
 	url := fmt.Sprintf("https://%s/federation/v1/inbox", domain)
 
 	body, err := json.Marshal(signed)
@@ -207,7 +350,7 @@ func (ss *SyncService) deliverToPeer(ctx context.Context, domain string, signed 
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "AmityVox/0.2.0 (+federation)")
+	req.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -216,8 +359,8 @@ func (ss *SyncService) deliverToPeer(ctx context.Context, domain string, signed 
 			slog.String("domain", domain),
 			slog.String("error", err.Error()),
 		)
-		// Queue for retry via NATS JetStream.
-		ss.queueForRetry(domain, signed)
+		ss.fed.IncrementPeerErrors(ctx, peerID)
+		ss.queueForRetry(domain, peerID, signed, 0)
 		return
 	}
 	defer resp.Body.Close()
@@ -227,36 +370,41 @@ func (ss *SyncService) deliverToPeer(ctx context.Context, domain string, signed 
 			slog.String("domain", domain),
 			slog.Int("status", resp.StatusCode),
 		)
+		ss.fed.IncrementPeerErrors(ctx, peerID)
 		if resp.StatusCode >= 500 {
-			ss.queueForRetry(domain, signed)
+			ss.queueForRetry(domain, peerID, signed, 0)
 		}
 		return
 	}
 
-	ss.logger.Debug("federated event delivered",
-		slog.String("domain", domain),
-	)
+	// Delivery succeeded — update health tracking.
+	ss.fed.IncrementPeerEventCount(ctx, peerID, true)
+	ss.fed.UpdatePeerHealth(ctx, peerID, true, 0)
+
+	ss.logger.Debug("federated event delivered", slog.String("domain", domain))
 }
 
 // queueForRetry publishes a failed delivery to the federation JetStream for retry.
-func (ss *SyncService) queueForRetry(domain string, signed *SignedPayload) {
-	retryMsg := map[string]interface{}{
-		"domain": domain,
-		"signed": signed,
+func (ss *SyncService) queueForRetry(domain, peerID string, signed *SignedPayload, attempts int) {
+	msg := retryMessage{
+		Domain:   domain,
+		PeerID:   peerID,
+		Signed:   signed,
+		Attempts: attempts + 1,
 	}
-	data, err := json.Marshal(retryMsg)
+	data, err := json.Marshal(msg)
 	if err != nil {
 		return
 	}
 
-	ss.bus.Publish(context.Background(), "amityvox.federation.retry", events.Event{
+	ss.bus.Publish(context.Background(), events.SubjectFederationRetry, events.Event{
 		Type: "FEDERATION_RETRY",
 		Data: data,
 	})
 }
 
-// StartRouter subscribes to local events that should be federated to peers.
-// It watches message, guild, and channel events and forwards them.
+// StartRouter subscribes to local events that should be federated to peers
+// and starts the JetStream retry queue consumer.
 func (ss *SyncService) StartRouter(ctx context.Context) {
 	// Federated event types and their subjects.
 	subjects := []string{
@@ -270,6 +418,8 @@ func (ss *SyncService) StartRouter(ctx context.Context) {
 		events.SubjectChannelCreate,
 		events.SubjectChannelUpdate,
 		events.SubjectChannelDelete,
+		events.SubjectVoiceStateUpdate,
+		events.SubjectCallRing,
 	}
 
 	for _, subject := range subjects {
@@ -279,10 +429,157 @@ func (ss *SyncService) StartRouter(ctx context.Context) {
 		})
 	}
 
+	// Start the JetStream retry queue consumer.
+	ss.startRetryConsumer(ctx)
+
 	ss.logger.Info("federation router started", slog.Int("subjects", len(subjects)))
 }
 
-// routeEvent converts a local event to a FederatedMessage and delivers it to peers.
+// startRetryConsumer subscribes to the federation retry JetStream subject and
+// processes failed deliveries with exponential backoff.
+func (ss *SyncService) startRetryConsumer(ctx context.Context) {
+	js := ss.bus.JetStream()
+
+	sub, err := js.Subscribe(events.SubjectFederationRetry, func(natsMsg *nats.Msg) {
+		var evt events.Event
+		if err := json.Unmarshal(natsMsg.Data, &evt); err != nil {
+			ss.logger.Error("failed to unmarshal retry event", slog.String("error", err.Error()))
+			natsMsg.Ack()
+			return
+		}
+
+		var retry retryMessage
+		if err := json.Unmarshal(evt.Data, &retry); err != nil {
+			ss.logger.Error("failed to unmarshal retry message", slog.String("error", err.Error()))
+			natsMsg.Ack()
+			return
+		}
+
+		if retry.Attempts >= maxRetryAttempts {
+			// Move to dead letter queue.
+			ss.insertDeadLetter(ctx, retry)
+			natsMsg.Ack()
+			return
+		}
+
+		// Attempt redelivery.
+		ss.logger.Info("retrying federation delivery",
+			slog.String("domain", retry.Domain),
+			slog.Int("attempt", retry.Attempts),
+		)
+
+		deliverCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+
+		url := fmt.Sprintf("https://%s/federation/v1/inbox", retry.Domain)
+		body, err := json.Marshal(retry.Signed)
+		if err != nil {
+			natsMsg.Ack()
+			return
+		}
+
+		req, err := http.NewRequestWithContext(deliverCtx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			delay := retryDelay(retry.Attempts)
+			natsMsg.NakWithDelay(delay)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			delay := retryDelay(retry.Attempts)
+			ss.logger.Warn("federation retry failed",
+				slog.String("domain", retry.Domain),
+				slog.Int("attempt", retry.Attempts),
+				slog.String("error", err.Error()),
+				slog.Duration("next_retry", delay),
+			)
+			natsMsg.NakWithDelay(delay)
+			return
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusOK {
+			// Delivery succeeded.
+			if retry.PeerID != "" {
+				ss.fed.IncrementPeerEventCount(ctx, retry.PeerID, true)
+				ss.fed.UpdatePeerHealth(ctx, retry.PeerID, true, 0)
+			}
+			ss.logger.Info("federation retry succeeded",
+				slog.String("domain", retry.Domain),
+				slog.Int("attempt", retry.Attempts),
+			)
+			natsMsg.Ack()
+			return
+		}
+
+		if resp.StatusCode >= 500 {
+			delay := retryDelay(retry.Attempts)
+			natsMsg.NakWithDelay(delay)
+			return
+		}
+
+		// 4xx — permanent failure, dead letter it.
+		ss.insertDeadLetter(ctx, retry)
+		natsMsg.Ack()
+	}, nats.Durable("federation-retry-consumer"), nats.ManualAck(),
+		nats.AckWait(30*time.Second), nats.MaxDeliver(maxRetryAttempts+5))
+	if err != nil {
+		ss.logger.Error("failed to subscribe to federation retry queue", slog.String("error", err.Error()))
+		return
+	}
+
+	ss.logger.Info("federation retry consumer started", slog.String("subject", events.SubjectFederationRetry))
+	_ = sub // subscription managed by NATS connection lifecycle
+}
+
+// insertDeadLetter inserts a permanently failed delivery into the dead letter table.
+func (ss *SyncService) insertDeadLetter(ctx context.Context, retry retryMessage) {
+	payloadJSON, _ := json.Marshal(retry.Signed)
+	id := models.NewULID().String()
+
+	_, err := ss.fed.pool.Exec(ctx,
+		`INSERT INTO federation_dead_letters (id, target_domain, payload, error_message, attempts, created_at)
+		 VALUES ($1, $2, $3, $4, $5, now())`,
+		id, retry.Domain, payloadJSON,
+		fmt.Sprintf("exhausted %d retry attempts", retry.Attempts),
+		retry.Attempts)
+	if err != nil {
+		ss.logger.Error("failed to insert dead letter",
+			slog.String("domain", retry.Domain),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	ss.logger.Warn("federation delivery moved to dead letters",
+		slog.String("domain", retry.Domain),
+		slog.Int("attempts", retry.Attempts),
+	)
+}
+
+// retryDelay returns the backoff delay for a given attempt number.
+// Schedule: 5s, 30s, 2m, 10m, 1h (capped).
+func retryDelay(attempt int) time.Duration {
+	delays := []time.Duration{
+		5 * time.Second,
+		30 * time.Second,
+		2 * time.Minute,
+		10 * time.Minute,
+		1 * time.Hour,
+	}
+	if attempt < len(delays) {
+		return delays[attempt]
+	}
+	return delays[len(delays)-1]
+}
+
+// routeEvent converts a local event to a FederatedMessage and delivers it to
+// the appropriate peers. If the event has a ChannelID, it uses targeted delivery
+// to only reach instances with members in that channel.
 func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	var data interface{}
 	if err := json.Unmarshal(event.Data, &data); err != nil {
@@ -296,15 +593,16 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 		Data:      data,
 	}
 
-	ss.DeliverToAllPeers(ctx, msg)
+	if event.ChannelID != "" {
+		ss.DeliverToChannelPeers(ctx, msg)
+	} else {
+		ss.DeliverToAllPeers(ctx, msg)
+	}
 }
 
-// ProcessRetryQueue processes the federation retry queue, attempting to redeliver
-// failed messages. Called periodically by the worker manager.
-func (ss *SyncService) ProcessRetryQueue(ctx context.Context) error {
-	// Retry queue is consumed via NATS JetStream WorkQueue policy.
-	// Messages are automatically redelivered after the ack wait period.
-	// This method is a placeholder for any additional retry processing logic.
+// ProcessRetryQueue is a no-op — retry processing is handled by the JetStream
+// consumer started in StartRouter.
+func (ss *SyncService) ProcessRetryQueue(_ context.Context) error {
 	return nil
 }
 
@@ -312,16 +610,33 @@ func (ss *SyncService) ProcessRetryQueue(ctx context.Context) error {
 // received federated events into the local event bus.
 func eventTypeToSubject(eventType string) string {
 	mapping := map[string]string{
-		"MESSAGE_CREATE":     events.SubjectMessageCreate,
-		"MESSAGE_UPDATE":     events.SubjectMessageUpdate,
-		"MESSAGE_DELETE":     events.SubjectMessageDelete,
-		"GUILD_CREATE":       events.SubjectGuildCreate,
-		"GUILD_UPDATE":       events.SubjectGuildUpdate,
-		"GUILD_MEMBER_ADD":   events.SubjectGuildMemberAdd,
-		"GUILD_MEMBER_REMOVE": events.SubjectGuildMemberRemove,
-		"CHANNEL_CREATE":     events.SubjectChannelCreate,
-		"CHANNEL_UPDATE":     events.SubjectChannelUpdate,
-		"CHANNEL_DELETE":     events.SubjectChannelDelete,
+		"MESSAGE_CREATE":       events.SubjectMessageCreate,
+		"MESSAGE_UPDATE":       events.SubjectMessageUpdate,
+		"MESSAGE_DELETE":       events.SubjectMessageDelete,
+		"GUILD_CREATE":         events.SubjectGuildCreate,
+		"GUILD_UPDATE":         events.SubjectGuildUpdate,
+		"GUILD_MEMBER_ADD":     events.SubjectGuildMemberAdd,
+		"GUILD_MEMBER_REMOVE":  events.SubjectGuildMemberRemove,
+		"CHANNEL_CREATE":       events.SubjectChannelCreate,
+		"CHANNEL_UPDATE":       events.SubjectChannelUpdate,
+		"CHANNEL_DELETE":       events.SubjectChannelDelete,
+		"VOICE_STATE_UPDATE":   events.SubjectVoiceStateUpdate,
+		"CALL_RING":            events.SubjectCallRing,
 	}
 	return mapping[eventType]
+}
+
+// RetryDelay is exported for testing.
+func RetryDelay(attempt int) time.Duration {
+	return retryDelay(attempt)
+}
+
+// RetryDelayExp calculates exponential backoff delay (unused — kept for compatibility).
+func RetryDelayExp(attempt int) time.Duration {
+	base := 5.0
+	delay := base * math.Pow(2, float64(attempt))
+	if delay > 3600 {
+		delay = 3600
+	}
+	return time.Duration(delay) * time.Second
 }
