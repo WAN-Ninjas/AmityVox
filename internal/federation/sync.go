@@ -56,6 +56,7 @@ type SyncService struct {
 	bus    *events.Bus
 	hlc    *HLC
 	logger *slog.Logger
+	client *http.Client
 }
 
 // NewSyncService creates a new federation sync service.
@@ -65,6 +66,7 @@ func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger) *SyncSer
 		bus:    bus,
 		hlc:    NewHLC(),
 		logger: logger,
+		client: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -238,9 +240,13 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			ss.logger.Warn("failed to unmarshal inbound message update", slog.String("error", err.Error()))
 			return
 		}
-		ss.fed.pool.Exec(ctx,
+		if _, err := ss.fed.pool.Exec(ctx,
 			`UPDATE messages SET content = $1, edited_at = now() WHERE id = $2 AND channel_id = $3`,
-			msgData.Content, msgData.ID, localChannelID)
+			msgData.Content, msgData.ID, localChannelID); err != nil {
+			ss.logger.Warn("failed to persist inbound message update",
+				slog.String("message_id", msgData.ID),
+				slog.String("error", err.Error()))
+		}
 
 	case "MESSAGE_DELETE":
 		var msgData struct {
@@ -250,9 +256,13 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			ss.logger.Warn("failed to unmarshal inbound message delete", slog.String("error", err.Error()))
 			return
 		}
-		ss.fed.pool.Exec(ctx,
+		if _, err := ss.fed.pool.Exec(ctx,
 			`DELETE FROM messages WHERE id = $1 AND channel_id = $2`,
-			msgData.ID, localChannelID)
+			msgData.ID, localChannelID); err != nil {
+			ss.logger.Warn("failed to persist inbound message delete",
+				slog.String("message_id", msgData.ID),
+				slog.String("error", err.Error()))
+		}
 	}
 }
 
@@ -366,8 +376,7 @@ func (ss *SyncService) deliverToPeer(ctx context.Context, domain, peerID string,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := ss.client.Do(req)
 	if err != nil {
 		ss.logger.Warn("federation delivery failed",
 			slog.String("domain", domain),
@@ -520,8 +529,7 @@ func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
+		resp, err := ss.client.Do(req)
 		if err != nil {
 			delay := retryDelay(attempt)
 			ss.logger.Warn("federation retry failed",
@@ -571,13 +579,15 @@ func (ss *SyncService) startRetryConsumer(ctx context.Context) {
 
 // insertDeadLetter inserts a permanently failed delivery into the dead letter table.
 func (ss *SyncService) insertDeadLetter(ctx context.Context, retry retryMessage) {
-	payloadJSON, err := json.Marshal(retry.Signed)
-	if err != nil {
+	payloadJSON, marshalErr := json.Marshal(retry.Signed)
+	errorMsg := fmt.Sprintf("exhausted %d retry attempts", retry.Attempts)
+	if marshalErr != nil {
 		ss.logger.Error("failed to marshal dead letter payload",
 			slog.String("domain", retry.Domain),
-			slog.String("error", err.Error()),
+			slog.String("error", marshalErr.Error()),
 		)
-		return
+		payloadJSON = []byte(`{"error":"payload marshal failed"}`)
+		errorMsg = fmt.Sprintf("exhausted %d retry attempts; payload marshal error: %s", retry.Attempts, marshalErr.Error())
 	}
 	id := models.NewULID().String()
 
@@ -585,7 +595,7 @@ func (ss *SyncService) insertDeadLetter(ctx context.Context, retry retryMessage)
 		`INSERT INTO federation_dead_letters (id, target_domain, payload, error_message, attempts, created_at)
 		 VALUES ($1, $2, $3, $4, $5, now())`,
 		id, retry.Domain, payloadJSON,
-		fmt.Sprintf("exhausted %d retry attempts", retry.Attempts),
+		errorMsg,
 		retry.Attempts)
 	if execErr != nil {
 		ss.logger.Error("failed to insert dead letter",
