@@ -7,6 +7,7 @@
 		isFavorited,
 		addFavorite,
 		removeFavorite,
+		filterFavoritesByQuery,
 		MAX_FAVORITES
 	} from '$lib/utils/gifFavorites';
 
@@ -86,10 +87,21 @@
 		}
 	}
 
+	function filterFavorites(query: string) {
+		gifs = filterFavoritesByQuery(favorites, query).map(f => ({
+			id: f.id,
+			title: f.title,
+			images: {
+				fixed_height: { url: f.url },
+				fixed_height_small: { url: f.previewUrl },
+				original: { url: f.url }
+			}
+		}));
+	}
+
 	async function searchGifs(query: string) {
 		loading = true;
 		error = '';
-		browsingFavorites = false;
 		try {
 			const data = await api.searchGiphy(query.trim());
 			gifs = data?.data ?? [];
@@ -159,9 +171,15 @@
 		searchTimeout = setTimeout(() => {
 			const q = search.trim();
 			if (q) {
-				view = 'browse';
-				browseLabel = '';
-				searchGifs(q);
+				if (browsingFavorites) {
+					filterFavorites(q);
+				} else {
+					view = 'browse';
+					browseLabel = '';
+					searchGifs(q);
+				}
+			} else if (browsingFavorites) {
+				openFavorites();
 			} else {
 				goHome();
 			}
