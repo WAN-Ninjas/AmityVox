@@ -9,6 +9,8 @@
 	import { channels as channelsStore } from '$lib/stores/channels';
 	import { guilds as guildsStore } from '$lib/stores/guilds';
 	import ProfileLinkEditor from '$components/common/ProfileLinkEditor.svelte';
+	import ImageCropper from '$components/common/ImageCropper.svelte';
+	import Modal from '$components/common/Modal.svelte';
 	import type { Session } from '$lib/types';
 	import {
 		customThemes,
@@ -63,6 +65,10 @@
 	let bannerFile = $state<File | null>(null);
 	let bannerPreview = $state<string | null>(null);
 	let bannerRemoved = $state(false);
+
+	// Image cropper state
+	let cropperFile = $state<File | null>(null);
+	let cropperTarget = $state<'avatar' | 'banner'>('avatar');
 
 	// --- Security tab state ---
 	let currentPassword = $state('');
@@ -195,12 +201,12 @@
 	let accountImportFileInput: HTMLInputElement | undefined;
 
 	function handleBannerSelect(e: Event) {
-		const file = (e.target as HTMLInputElement).files?.[0];
+		const target = e.target as HTMLInputElement;
+		const file = target.files?.[0];
 		if (!file) return;
-		bannerFile = file;
-		const reader = new FileReader();
-		reader.onload = () => { bannerPreview = reader.result as string; };
-		reader.readAsDataURL(file);
+		cropperTarget = 'banner';
+		cropperFile = file;
+		target.value = '';
 	}
 
 	onMount(() => {
@@ -302,8 +308,22 @@
 			error = 'Please select an image file.';
 			return;
 		}
-		avatarFile = file;
-		avatarPreview = URL.createObjectURL(file);
+		cropperTarget = 'avatar';
+		cropperFile = file;
+		// Reset input so re-selecting the same file triggers the event
+		target.value = '';
+	}
+
+	function handleCropComplete(blob: Blob) {
+		const file = new File([blob], `${cropperTarget}.png`, { type: 'image/png' });
+		if (cropperTarget === 'avatar') {
+			avatarFile = file;
+			avatarPreview = URL.createObjectURL(blob);
+		} else {
+			bannerFile = file;
+			bannerPreview = URL.createObjectURL(blob);
+		}
+		cropperFile = null;
 	}
 
 	// --- Security actions ---
@@ -3065,3 +3085,17 @@
 		</div>
 	</div>
 </div>
+
+<!-- Image Cropper Modal -->
+<Modal open={!!cropperFile} title={cropperTarget === 'avatar' ? 'Crop Avatar' : 'Crop Banner'} onclose={() => (cropperFile = null)}>
+	{#if cropperFile}
+		<ImageCropper
+			file={cropperFile}
+			shape={cropperTarget === 'avatar' ? 'circle' : 'rect'}
+			outputWidth={cropperTarget === 'avatar' ? 256 : 960}
+			outputHeight={cropperTarget === 'avatar' ? 256 : 320}
+			oncrop={handleCropComplete}
+			oncancel={() => (cropperFile = null)}
+		/>
+	{/if}
+</Modal>
