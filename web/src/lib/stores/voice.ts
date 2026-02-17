@@ -18,6 +18,7 @@ import {
 	type RemoteTrackPublication,
 	type Participant
 } from 'livekit-client';
+import { routeAudioThroughNoiseFilter, cleanupNoiseFilter, cleanupAllNoiseFilters } from '$lib/utils/noiseReduction';
 
 export interface VoiceParticipant {
 	userId: string;
@@ -332,6 +333,8 @@ function cleanup() {
 		room.disconnect();
 		room = null;
 	}
+	// Clean up noise reduction filter nodes.
+	cleanupAllNoiseFilters();
 	// Remove all attached audio elements.
 	if (audioContainer) {
 		audioContainer.remove();
@@ -460,11 +463,12 @@ function handleTrackSubscribed(
 	const metadata = parseMetadata(participant.metadata);
 	const userId = metadata.userId ?? participant.identity;
 
-	// Attach audio tracks to the DOM so they actually play.
+	// Attach audio tracks to the DOM, routed through noise reduction filter.
 	if (track.kind === Track.Kind.Audio) {
-		const el = track.attach();
-		el.id = `audio-${participant.identity}`;
-		getAudioContainer().appendChild(el);
+		const rawEl = track.attach();
+		rawEl.id = `audio-${participant.identity}`;
+		const outputEl = routeAudioThroughNoiseFilter(userId, rawEl);
+		getAudioContainer().appendChild(outputEl);
 	}
 
 	// Attach video tracks (camera + screen share) to the videoTracks store.
@@ -504,7 +508,7 @@ function handleTrackSubscribed(
 function handleTrackUnsubscribed(
 	track: RemoteTrack,
 	_publication: RemoteTrackPublication,
-	_participant: RemoteParticipant
+	participant: RemoteParticipant
 ) {
 	// Remove video track from store.
 	if (track.kind === Track.Kind.Video) {
@@ -513,6 +517,12 @@ function handleTrackUnsubscribed(
 			next.delete(track.sid);
 			return next;
 		});
+	}
+	// Clean up noise reduction filter nodes for audio tracks.
+	if (track.kind === Track.Kind.Audio) {
+		const metadata = parseMetadata(participant.metadata);
+		const userId = metadata.userId ?? participant.identity;
+		cleanupNoiseFilter(userId);
 	}
 	// Detach all media elements for this track.
 	track.detach().forEach((el) => el.remove());
