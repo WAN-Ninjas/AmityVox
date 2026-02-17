@@ -18,6 +18,8 @@
 	import NotificationCenter from '$components/common/NotificationCenter.svelte';
 	import AnnouncementBanner from '$components/common/AnnouncementBanner.svelte';
 	import ModerationModals from '$components/common/ModerationModals.svelte';
+	import ResizeHandle from '$components/common/ResizeHandle.svelte';
+	import { channelSidebarWidth } from '$lib/stores/layout';
 
 	interface Props {
 		children: Snippet;
@@ -142,10 +144,22 @@
 				<div class="{mobileSidebarOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'contents'}">
 					<GuildSidebar onToggleNotifications={toggleNotificationCenter} />
 					{#if !$page.url.pathname.startsWith('/app/admin')}
-						<ChannelSidebar />
+						<ChannelSidebar width={$channelSidebarWidth} />
 					{/if}
 				</div>
 			</div>
+
+			<!-- Resize handle between sidebar and main content -->
+			{#if !mobileSidebarOpen && !$page.url.pathname.startsWith('/app/admin')}
+				<div class="hidden md:block">
+					<ResizeHandle
+						width={$channelSidebarWidth}
+						onresize={(w) => channelSidebarWidth.set(w)}
+						onreset={() => channelSidebarWidth.reset()}
+						side="left"
+					/>
+				</div>
+			{/if}
 
 			<main class="flex min-w-0 flex-1 flex-col">
 				{@render children()}
