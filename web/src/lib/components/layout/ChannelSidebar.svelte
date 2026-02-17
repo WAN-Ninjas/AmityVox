@@ -577,7 +577,7 @@
 							<div class="mb-1 ml-3 space-y-0.5 border-l border-bg-floating pl-3">
 								{#each [...voiceUsers.values()] as participant (participant.userId)}
 									<div class="flex items-center gap-1.5 py-0.5">
-										<div class="{participant.speaking && $voiceChannelId === channel.id ? 'ring-2 ring-green-500 rounded-full' : ''}">
+										<div class="{participant.speaking && $voiceChannelId === channel.id ? 'ring-2 ring-green-500 ring-offset-1 ring-offset-bg-secondary rounded-full shadow-[0_0_8px_rgba(34,197,94,0.35)]' : ''}">
 											<Avatar name={participant.displayName ?? participant.username} src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null} size="sm" />
 										</div>
 										<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
