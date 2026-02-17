@@ -19,6 +19,7 @@ import {
 	type Participant
 } from 'livekit-client';
 import { routeAudioThroughNoiseFilter, cleanupNoiseFilter, cleanupAllNoiseFilters } from '$lib/utils/noiseReduction';
+import { routeAudioThroughGain, cleanupUserAudio, cleanupAllAudio } from '$lib/utils/voiceVolume';
 
 export interface VoiceParticipant {
 	userId: string;
@@ -333,8 +334,9 @@ function cleanup() {
 		room.disconnect();
 		room = null;
 	}
-	// Clean up noise reduction filter nodes.
+	// Clean up noise reduction filter nodes and per-user audio gain nodes.
 	cleanupAllNoiseFilters();
+	cleanupAllAudio();
 	// Remove all attached audio elements.
 	if (audioContainer) {
 		audioContainer.remove();
@@ -463,11 +465,12 @@ function handleTrackSubscribed(
 	const metadata = parseMetadata(participant.metadata);
 	const userId = metadata.userId ?? participant.identity;
 
-	// Attach audio tracks to the DOM, routed through noise reduction filter.
+	// Attach audio tracks to the DOM, routed through noise filter then per-user volume gain.
 	if (track.kind === Track.Kind.Audio) {
 		const rawEl = track.attach();
 		rawEl.id = `audio-${participant.identity}`;
-		const outputEl = routeAudioThroughNoiseFilter(userId, rawEl);
+		const filteredEl = routeAudioThroughNoiseFilter(userId, rawEl);
+		const outputEl = routeAudioThroughGain(userId, filteredEl);
 		getAudioContainer().appendChild(outputEl);
 	}
 
@@ -518,11 +521,12 @@ function handleTrackUnsubscribed(
 			return next;
 		});
 	}
-	// Clean up noise reduction filter nodes for audio tracks.
+	// Clean up noise reduction and volume gain nodes for audio tracks.
 	if (track.kind === Track.Kind.Audio) {
 		const metadata = parseMetadata(participant.metadata);
 		const userId = metadata.userId ?? participant.identity;
 		cleanupNoiseFilter(userId);
+		cleanupUserAudio(userId);
 	}
 	// Detach all media elements for this track.
 	track.detach().forEach((el) => el.remove());
