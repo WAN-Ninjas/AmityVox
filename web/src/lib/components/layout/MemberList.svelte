@@ -19,11 +19,15 @@
 	import { canKickMembers, canBanMembers, canTimeoutMembers, canAssignRoles } from '$lib/stores/permissions';
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
 	import { clientNicknames } from '$lib/stores/nicknames';
+	import { blockedUsers } from '$lib/stores/blocked';
 	import { goto } from '$app/navigation';
 
 	// Members are derived from the guildMembers store so real-time updates
 	// (e.g. avatar changes via USER_UPDATE) are reflected immediately.
-	const members = $derived(Array.from($guildMembers.values()));
+	// Filter out users with 'block' level — 'ignore' level users still appear.
+	const members = $derived(
+		Array.from($guildMembers.values()).filter(m => $blockedUsers.get(m.user_id) !== 'block')
+	);
 	let visible = $state(true);
 	let loadingGuildId = $state<string | null>(null);
 
