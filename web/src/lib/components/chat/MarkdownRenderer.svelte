@@ -1,11 +1,14 @@
 <script lang="ts">
 	import katex from 'katex';
+	import type { GuildMember, Role } from '$lib/types';
 
 	interface Props {
 		content: string;
+		members?: Map<string, GuildMember>;
+		roles?: Map<string, Role>;
 	}
 
-	let { content }: Props = $props();
+	let { content, members, roles }: Props = $props();
 
 	/**
 	 * Render a LaTeX formula to HTML using KaTeX.
@@ -98,6 +101,33 @@
 			const icon = '<svg style="display:inline;vertical-align:middle;width:14px;height:14px;margin-right:3px;" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>';
 			return addPlaceholder(
 				`<a href="${escapeHtml(href)}" class="inline-flex items-center gap-1 rounded bg-bg-modifier/50 px-1.5 py-0.5 text-xs text-text-link hover:underline hover:bg-bg-modifier">${icon}${escapeHtml(label)}</a>`
+			);
+		});
+
+		// --- Phase 1.6: Extract mention syntax ---
+		// User mentions: <@ULID> → styled pill with display name
+		text = text.replace(/<@([0-9A-Z]{26})>/g, (_match, userId) => {
+			const member = members?.get(userId);
+			const name = member?.nickname ?? member?.user?.display_name ?? member?.user?.username ?? userId.slice(0, 8);
+			return addPlaceholder(
+				`<span class="inline-block rounded bg-brand-500/20 px-1 py-0.5 text-xs font-medium text-brand-300 cursor-pointer hover:bg-brand-500/30">@${escapeHtml(name)}</span>`
+			);
+		});
+
+		// Role mentions: <@&ULID> → styled pill with role name and color
+		text = text.replace(/<@&([0-9A-Z]{26})>/g, (_match, roleId) => {
+			const role = roles?.get(roleId);
+			const name = role?.name ?? 'Unknown Role';
+			const color = role?.color ?? '#99aab5';
+			return addPlaceholder(
+				`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${escapeHtml(color)}20; color: ${escapeHtml(color)}">@${escapeHtml(name)}</span>`
+			);
+		});
+
+		// @here → styled yellow pill
+		text = text.replace(/@here/g, () => {
+			return addPlaceholder(
+				`<span class="inline-block rounded bg-yellow-500/20 px-1 py-0.5 text-xs font-medium text-yellow-300 cursor-pointer hover:bg-yellow-500/30">@here</span>`
 			);
 		});
 

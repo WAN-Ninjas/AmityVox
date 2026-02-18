@@ -110,7 +110,7 @@ export interface Message {
 	reply_to_ids: string[];
 	mention_user_ids: string[];
 	mention_role_ids: string[];
-	mention_everyone: boolean;
+	mention_here: boolean;
 	thread_id: string | null;
 	masquerade_name: string | null;
 	masquerade_avatar: string | null;
@@ -653,7 +653,7 @@ export interface NotificationPreference {
 	user_id: string;
 	guild_id: string | null;
 	level: 'all' | 'mentions' | 'none';
-	suppress_everyone: boolean;
+	suppress_here: boolean;
 	suppress_roles: boolean;
 	muted_until: string | null;
 }
@@ -974,7 +974,7 @@ export const Permission = {
 	RemoveAvatars:     1n << 13n,
 	ViewAuditLog:      1n << 14n,
 	ViewGuildInsights: 1n << 15n,
-	MentionEveryone:   1n << 16n,
+	MentionHere:       1n << 16n,
 	// Channel-scoped (bits 20-39)
 	ViewChannel:       1n << 20n,
 	ReadHistory:       1n << 21n,

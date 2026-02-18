@@ -28,7 +28,7 @@ const (
 	RemoveAvatars     uint64 = 1 << 13
 	ViewAuditLog      uint64 = 1 << 14
 	ViewGuildInsights uint64 = 1 << 15
-	MentionEveryone   uint64 = 1 << 16
+	MentionHere       uint64 = 1 << 16
 )
 
 // Channel-scoped permissions (bits 20-39).
@@ -63,7 +63,7 @@ const AllPermissions uint64 = ManageChannels | ManageGuild | ManagePermissions |
 	ManageRoles | ManageEmoji | ManageWebhooks | KickMembers | BanMembers |
 	TimeoutMembers | AssignRoles | ChangeNickname | ManageNicknames |
 	ChangeAvatar | RemoveAvatars | ViewAuditLog | ViewGuildInsights |
-	MentionEveryone | ViewChannel | ReadHistory | SendMessages |
+	MentionHere | ViewChannel | ReadHistory | SendMessages |
 	ManageMessages | EmbedLinks | UploadFiles | AddReactions |
 	UseExternalEmoji | Connect | Speak | MuteMembers | DeafenMembers |
 	MoveMembers | UseVAD | PrioritySpeaker | Stream | Masquerade |
@@ -91,7 +91,7 @@ var permissionNames = map[uint64]string{
 	RemoveAvatars:     "RemoveAvatars",
 	ViewAuditLog:      "ViewAuditLog",
 	ViewGuildInsights: "ViewGuildInsights",
-	MentionEveryone:   "MentionEveryone",
+	MentionHere:       "MentionHere",
 	ViewChannel:       "ViewChannel",
 	ReadHistory:       "ReadHistory",
 	SendMessages:      "SendMessages",

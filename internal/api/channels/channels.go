@@ -24,6 +24,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/mentions"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/permissions"
 )
@@ -155,7 +156,7 @@ type createMessageRequest struct {
 	ReplyToIDs          []string `json:"reply_to_ids"`
 	MentionUserIDs      []string `json:"mention_user_ids"`
 	MentionRoleIDs      []string `json:"mention_role_ids"`
-	MentionEveryone     bool     `json:"mention_everyone"`
+	MentionHere     bool     `json:"mention_here"`
 	Silent              bool     `json:"silent"`
 	Encrypted           bool     `json:"encrypted"`
 	EncryptionSessionID *string  `json:"encryption_session_id"`
@@ -385,7 +386,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case before != "":
 		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		                reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		                encrypted, encryption_session_id, created_at
 		         FROM messages WHERE channel_id = $1 AND id < $2
@@ -393,7 +394,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		args = []interface{}{channelID, before, limit}
 	case after != "":
 		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		                reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		                encrypted, encryption_session_id, created_at
 		         FROM messages WHERE channel_id = $1 AND id > $2
@@ -402,14 +403,14 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 	case around != "":
 		halfLimit := limit / 2
 		query = `(SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                 thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		                 encrypted, encryption_session_id, created_at
 		          FROM messages WHERE channel_id = $1 AND id <= $2
 		          ORDER BY id DESC LIMIT $3)
 		         UNION ALL
 		         (SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                 thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		                 encrypted, encryption_session_id, created_at
 		          FROM messages WHERE channel_id = $1 AND id > $2
@@ -418,7 +419,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		args = []interface{}{channelID, around, halfLimit, halfLimit}
 	default:
 		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		                reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		                encrypted, encryption_session_id, created_at
 		         FROM messages WHERE channel_id = $1
@@ -439,7 +440,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
-			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+			&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
 			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
 		); err != nil {
 			apiutil.InternalError(w, h.Logger, "Failed to read messages", err)
@@ -588,6 +589,109 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		req.Content = &trimmed
 	}
 
+	// Extract and validate mentions from content.
+	var mentionUserIDs []string
+	var mentionRoleIDs []string
+	var mentionHere bool
+
+	if req.Encrypted {
+		// Encrypted messages: trust client-supplied mention fields (server can't parse ciphertext).
+		mentionUserIDs = req.MentionUserIDs
+		mentionRoleIDs = req.MentionRoleIDs
+		mentionHere = req.MentionHere
+	} else if hasContent {
+		parsed := mentions.Parse(*req.Content)
+		mentionHere = parsed.MentionHere
+		mentionUserIDs = parsed.UserIDs
+		mentionRoleIDs = parsed.RoleIDs
+	}
+
+	// Validate @here permission — silently strip if user lacks MentionHere.
+	if mentionHere && cc.GuildID != nil && !cc.hasPerm(permissions.MentionHere) {
+		mentionHere = false
+	}
+	// No @here in DMs.
+	if mentionHere && cc.GuildID == nil {
+		mentionHere = false
+	}
+
+	// Validate user mentions: only store IDs of actual guild members (or DM recipients).
+	if len(mentionUserIDs) > 0 {
+		if cc.GuildID != nil {
+			rows, qErr := h.Pool.Query(r.Context(),
+				`SELECT user_id FROM guild_members WHERE guild_id = $1 AND user_id = ANY($2)`,
+				*cc.GuildID, mentionUserIDs)
+			if qErr == nil {
+				valid := map[string]bool{}
+				for rows.Next() {
+					var uid string
+					if rows.Scan(&uid) == nil {
+						valid[uid] = true
+					}
+				}
+				rows.Close()
+				filtered := mentionUserIDs[:0]
+				for _, id := range mentionUserIDs {
+					if valid[id] {
+						filtered = append(filtered, id)
+					}
+				}
+				mentionUserIDs = filtered
+			}
+		} else {
+			// DMs: validate against channel recipients.
+			rows, qErr := h.Pool.Query(r.Context(),
+				`SELECT user_id FROM channel_recipients WHERE channel_id = $1 AND user_id = ANY($2)`,
+				channelID, mentionUserIDs)
+			if qErr == nil {
+				valid := map[string]bool{}
+				for rows.Next() {
+					var uid string
+					if rows.Scan(&uid) == nil {
+						valid[uid] = true
+					}
+				}
+				rows.Close()
+				filtered := mentionUserIDs[:0]
+				for _, id := range mentionUserIDs {
+					if valid[id] {
+						filtered = append(filtered, id)
+					}
+				}
+				mentionUserIDs = filtered
+			}
+		}
+	}
+
+	// Validate role mentions: must be mentionable (or user has ManageRoles).
+	if len(mentionRoleIDs) > 0 && cc.GuildID != nil {
+		if !cc.hasPerm(permissions.ManageRoles) {
+			rows, qErr := h.Pool.Query(r.Context(),
+				`SELECT id FROM roles WHERE guild_id = $1 AND id = ANY($2) AND mentionable = true`,
+				*cc.GuildID, mentionRoleIDs)
+			if qErr == nil {
+				valid := map[string]bool{}
+				for rows.Next() {
+					var rid string
+					if rows.Scan(&rid) == nil {
+						valid[rid] = true
+					}
+				}
+				rows.Close()
+				filtered := mentionRoleIDs[:0]
+				for _, id := range mentionRoleIDs {
+					if valid[id] {
+						filtered = append(filtered, id)
+					}
+				}
+				mentionRoleIDs = filtered
+			}
+		}
+	} else if cc.GuildID == nil {
+		// No role mentions in DMs.
+		mentionRoleIDs = nil
+	}
+
 	msgID := models.NewULID().String()
 	msgType := models.MessageTypeDefault
 	if len(req.ReplyToIDs) > 0 {
@@ -597,20 +701,20 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	var msg models.Message
 	err = h.Pool.QueryRow(r.Context(),
 		`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags,
-		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                       encrypted, encryption_session_id, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		           encrypted, encryption_session_id, created_at`,
 		msgID, channelID, userID, req.Content, req.Nonce, msgType, flags,
-		req.ReplyToIDs, req.MentionUserIDs, req.MentionRoleIDs, req.MentionEveryone,
+		req.ReplyToIDs, mentionUserIDs, mentionRoleIDs, mentionHere,
 		req.Encrypted, req.EncryptionSessionID,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
-		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
 		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
 	)
 	if err != nil {
@@ -719,19 +823,45 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 			editID, messageID, *currentContent)
 	}
 
+	// Re-parse mentions from the edited content.
+	var editMentionUserIDs []string
+	var editMentionRoleIDs []string
+	var editMentionHere bool
+
+	// Check if message is encrypted.
+	var encrypted bool
+	var guildID *string
+	h.Pool.QueryRow(r.Context(),
+		`SELECT m.encrypted, c.guild_id FROM messages m JOIN channels c ON c.id = m.channel_id
+		 WHERE m.id = $1`, messageID).Scan(&encrypted, &guildID)
+
+	if !encrypted && req.Content != nil {
+		parsed := mentions.Parse(*req.Content)
+		editMentionUserIDs = parsed.UserIDs
+		editMentionRoleIDs = parsed.RoleIDs
+		editMentionHere = parsed.MentionHere
+
+		// Strip @here if in DMs.
+		if guildID == nil {
+			editMentionHere = false
+			editMentionRoleIDs = nil
+		}
+	}
+
 	var msg models.Message
 	err = h.Pool.QueryRow(r.Context(),
-		`UPDATE messages SET content = $3, edited_at = now()
+		`UPDATE messages SET content = $3, edited_at = now(),
+		        mention_user_ids = $4, mention_role_ids = $5, mention_here = $6
 		 WHERE id = $1 AND channel_id = $2
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		           encrypted, encryption_session_id, created_at`,
-		messageID, channelID, req.Content,
+		messageID, channelID, req.Content, editMentionUserIDs, editMentionRoleIDs, editMentionHere,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
-		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
 		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
 	)
 	if err != nil {
@@ -1065,7 +1195,7 @@ func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type,
 		        m.edited_at, m.flags, m.reply_to_ids, m.mention_user_ids, m.mention_role_ids,
-		        m.mention_everyone, m.thread_id, m.masquerade_name, m.masquerade_avatar,
+		        m.mention_here, m.thread_id, m.masquerade_name, m.masquerade_avatar,
 		        m.masquerade_color, m.encrypted, m.encryption_session_id, m.created_at
 		 FROM messages m
 		 JOIN pins p ON m.id = p.message_id
@@ -1085,7 +1215,7 @@ func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
-			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+			&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
 			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
 		); err != nil {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read pins")
@@ -1773,7 +1903,7 @@ func (h *Handler) getMessage(ctx context.Context, channelID, messageID string) (
 	var m models.Message
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		        reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		        reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		        thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		        encrypted, encryption_session_id, created_at
 		 FROM messages WHERE id = $1 AND channel_id = $2`,
@@ -1781,7 +1911,7 @@ func (h *Handler) getMessage(ctx context.Context, channelID, messageID string) (
 	).Scan(
 		&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 		&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
-		&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+		&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
 		&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
 	)
 	return &m, err
@@ -2039,14 +2169,14 @@ func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request)
 		`INSERT INTO messages (id, channel_id, author_id, content, message_type, flags, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, now())
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		           encrypted, encryption_session_id, created_at`,
 		newMsgID, req.TargetChannelID, userID, content, models.MessageTypeDefault, models.MessageFlagCrosspost,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
-		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
 		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
 	)
 	if err != nil {

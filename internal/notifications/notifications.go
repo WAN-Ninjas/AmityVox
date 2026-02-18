@@ -45,7 +45,7 @@ type NotificationPreferences struct {
 	UserID            string     `json:"user_id"`
 	GuildID           string     `json:"guild_id,omitempty"`
 	Level             string     `json:"level"`
-	SuppressEveryone  bool       `json:"suppress_everyone"`
+	SuppressHere      bool       `json:"suppress_here"`
 	SuppressRoles     bool       `json:"suppress_roles"`
 	MutedUntil        *time.Time `json:"muted_until,omitempty"`
 }
@@ -216,7 +216,7 @@ func (s *Service) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
 	var prefs NotificationPreferences
 	var mutedUntil *time.Time
 
-	query := `SELECT user_id, guild_id, level, suppress_everyone, suppress_roles, muted_until
+	query := `SELECT user_id, guild_id, level, suppress_here, suppress_roles, muted_until
 	          FROM notification_preferences WHERE user_id = $1`
 	args := []interface{}{userID}
 	if guildID != "" {
@@ -228,7 +228,7 @@ func (s *Service) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
 
 	err := s.pool.QueryRow(r.Context(), query, args...).Scan(
 		&prefs.UserID, &prefs.GuildID, &prefs.Level,
-		&prefs.SuppressEveryone, &prefs.SuppressRoles, &mutedUntil,
+		&prefs.SuppressHere, &prefs.SuppressRoles, &mutedUntil,
 	)
 	if err == pgx.ErrNoRows {
 		// Return defaults.
@@ -253,7 +253,7 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 	var req struct {
 		GuildID          *string    `json:"guild_id"`
 		Level            *string    `json:"level"`
-		SuppressEveryone *bool      `json:"suppress_everyone"`
+		SuppressHere *bool      `json:"suppress_here"`
 		SuppressRoles    *bool      `json:"suppress_roles"`
 		MutedUntil       *time.Time `json:"muted_until"`
 	}
@@ -272,9 +272,9 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	suppressEveryone := false
-	if req.SuppressEveryone != nil {
-		suppressEveryone = *req.SuppressEveryone
+	suppressHere := false
+	if req.SuppressHere != nil {
+		suppressHere = *req.SuppressHere
 	}
 	suppressRoles := false
 	if req.SuppressRoles != nil {
@@ -287,14 +287,14 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 	}
 
 	_, err := s.pool.Exec(r.Context(),
-		`INSERT INTO notification_preferences (user_id, guild_id, level, suppress_everyone, suppress_roles, muted_until)
+		`INSERT INTO notification_preferences (user_id, guild_id, level, suppress_here, suppress_roles, muted_until)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (user_id, guild_id) DO UPDATE SET
 		   level = EXCLUDED.level,
-		   suppress_everyone = EXCLUDED.suppress_everyone,
+		   suppress_here = EXCLUDED.suppress_here,
 		   suppress_roles = EXCLUDED.suppress_roles,
 		   muted_until = EXCLUDED.muted_until`,
-		userID, guildIDVal, level, suppressEveryone, suppressRoles, req.MutedUntil,
+		userID, guildIDVal, level, suppressHere, suppressRoles, req.MutedUntil,
 	)
 	if err != nil {
 		s.logger.Error("failed to update notification preferences", slog.String("error", err.Error()))
@@ -311,7 +311,7 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 		UserID:           userID,
 		GuildID:          guildIDStr,
 		Level:            level,
-		SuppressEveryone: suppressEveryone,
+		SuppressHere: suppressHere,
 		SuppressRoles:    suppressRoles,
 		MutedUntil:       req.MutedUntil,
 	})
@@ -536,7 +536,7 @@ func (s *Service) SendToUser(ctx context.Context, userID string, payload PushPay
 
 // ShouldNotify checks if a user should receive a notification for this event based
 // on their notification preferences. Resolution order: Channel > Guild > Global > Default(mentions).
-func (s *Service) ShouldNotify(ctx context.Context, userID, guildID, channelID string, isMention, isDM, isEveryone bool) bool {
+func (s *Service) ShouldNotify(ctx context.Context, userID, guildID, channelID string, isMention, isDM, isHere bool) bool {
 	// Check channel-level preferences first (most specific).
 	if channelID != "" {
 		var chLevel string
@@ -558,7 +558,7 @@ func (s *Service) ShouldNotify(ctx context.Context, userID, guildID, channelID s
 			case LevelAll:
 				return true
 			case LevelMentions:
-				return isMention || isEveryone || isDM
+				return isMention || isHere || isDM
 			}
 		}
 	}
@@ -571,24 +571,24 @@ func (s *Service) ShouldNotify(ctx context.Context, userID, guildID, channelID s
 
 	// Load guild-specific preferences, falling back to global.
 	var level string
-	var suppressEveryone, suppressRoles bool
+	var suppressHere, suppressRoles bool
 	var mutedUntil *time.Time
 
 	err := s.pool.QueryRow(ctx,
-		`SELECT level, suppress_everyone, suppress_roles, muted_until
+		`SELECT level, suppress_here, suppress_roles, muted_until
 		 FROM notification_preferences
 		 WHERE user_id = $1 AND guild_id = $2`,
 		userID, guildID,
-	).Scan(&level, &suppressEveryone, &suppressRoles, &mutedUntil)
+	).Scan(&level, &suppressHere, &suppressRoles, &mutedUntil)
 
 	if err != nil {
 		// No guild preferences — check global.
 		err = s.pool.QueryRow(ctx,
-			`SELECT level, suppress_everyone, suppress_roles, muted_until
+			`SELECT level, suppress_here, suppress_roles, muted_until
 			 FROM notification_preferences
 			 WHERE user_id = $1 AND guild_id = '__global__'`,
 			userID,
-		).Scan(&level, &suppressEveryone, &suppressRoles, &mutedUntil)
+		).Scan(&level, &suppressHere, &suppressRoles, &mutedUntil)
 		if err != nil {
 			level = LevelMentions // Default.
 		}
@@ -605,10 +605,10 @@ func (s *Service) ShouldNotify(ctx context.Context, userID, guildID, channelID s
 	case LevelAll:
 		return true
 	case LevelMentions:
-		if isEveryone && suppressEveryone {
+		if isHere && suppressHere {
 			return false
 		}
-		return isMention || isEveryone
+		return isMention || isHere
 	}
 
 	return isMention
