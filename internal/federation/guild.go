@@ -10,6 +10,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -157,12 +158,16 @@ func (ss *SyncService) HandleFederatedGuildJoin(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Check user is not banned.
+	// Check user is not banned (fail closed on query error).
 	var banned bool
-	ss.fed.pool.QueryRow(ctx,
+	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
 		guildID, req.UserID,
-	).Scan(&banned)
+	).Scan(&banned); err != nil {
+		ss.logger.Error("failed to check guild ban", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 	if banned {
 		http.Error(w, "User is banned from this guild", http.StatusForbidden)
 		return
@@ -271,15 +276,18 @@ func (ss *SyncService) HandleFederatedGuildLeave(w http.ResponseWriter, r *http.
 	}
 
 	// Check if any members from this instance remain.
+	// Only remove channel peers if no members from this instance remain.
+	// On query error, skip removal to avoid breaking federation for remaining members.
 	var remainingCount int
-	ss.fed.pool.QueryRow(ctx,
+	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM guild_members gm
 		 JOIN users u ON u.id = gm.user_id
 		 WHERE gm.guild_id = $1 AND u.instance_id = $2`,
 		guildID, senderID,
-	).Scan(&remainingCount)
-
-	if remainingCount == 0 {
+	).Scan(&remainingCount); err != nil {
+		ss.logger.Warn("failed to count remaining members from instance, skipping peer cleanup",
+			slog.String("error", err.Error()))
+	} else if remainingCount == 0 {
 		ss.fed.pool.Exec(ctx,
 			`DELETE FROM federation_channel_peers
 			 WHERE instance_id = $1 AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)`,
@@ -340,12 +348,16 @@ func (ss *SyncService) HandleFederatedGuildInviteAccept(w http.ResponseWriter, r
 		return
 	}
 
-	// Check ban.
+	// Check ban (fail closed on query error).
 	var banned bool
-	ss.fed.pool.QueryRow(ctx,
+	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
 		guildID, req.UserID,
-	).Scan(&banned)
+	).Scan(&banned); err != nil {
+		ss.logger.Error("failed to check guild ban", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 	if banned {
 		http.Error(w, "User is banned from this guild", http.StatusForbidden)
 		return
@@ -433,10 +445,14 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 
 	// Verify user is a member.
 	var isMember bool
-	ss.fed.pool.QueryRow(ctx,
+	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
 		guildID, req.UserID,
-	).Scan(&isMember)
+	).Scan(&isMember); err != nil {
+		ss.logger.Error("failed to check guild membership", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 	if !isMember {
 		http.Error(w, "Not a guild member", http.StatusForbidden)
 		return
@@ -550,10 +566,14 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 
 	// Verify membership.
 	var isMember bool
-	ss.fed.pool.QueryRow(ctx,
+	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
 		guildID, req.UserID,
-	).Scan(&isMember)
+	).Scan(&isMember); err != nil {
+		ss.logger.Error("failed to check guild membership", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 	if !isMember {
 		http.Error(w, "Not a guild member", http.StatusForbidden)
 		return
@@ -708,25 +728,35 @@ func (ss *SyncService) updateGuildCacheFromEvent(ctx context.Context, senderID, 
 		if json.Unmarshal(data, &update) != nil {
 			return
 		}
+		// Build a single UPDATE with only the changed fields.
+		setClauses := []string{"cached_at = now()"}
+		args := []interface{}{}
+		argN := 1
 		if update.Name != nil {
-			ss.fed.pool.Exec(ctx,
-				`UPDATE federation_guild_cache SET name = $1, cached_at = now() WHERE guild_id = $2`,
-				*update.Name, guildID)
+			setClauses = append(setClauses, fmt.Sprintf("name = $%d", argN))
+			args = append(args, *update.Name)
+			argN++
 		}
 		if update.Description != nil {
-			ss.fed.pool.Exec(ctx,
-				`UPDATE federation_guild_cache SET description = $1, cached_at = now() WHERE guild_id = $2`,
-				*update.Description, guildID)
+			setClauses = append(setClauses, fmt.Sprintf("description = $%d", argN))
+			args = append(args, *update.Description)
+			argN++
 		}
 		if update.IconID != nil {
-			ss.fed.pool.Exec(ctx,
-				`UPDATE federation_guild_cache SET icon_id = $1, cached_at = now() WHERE guild_id = $2`,
-				*update.IconID, guildID)
+			setClauses = append(setClauses, fmt.Sprintf("icon_id = $%d", argN))
+			args = append(args, *update.IconID)
+			argN++
 		}
 		if update.MemberCount != nil {
-			ss.fed.pool.Exec(ctx,
-				`UPDATE federation_guild_cache SET member_count = $1, cached_at = now() WHERE guild_id = $2`,
-				*update.MemberCount, guildID)
+			setClauses = append(setClauses, fmt.Sprintf("member_count = $%d", argN))
+			args = append(args, *update.MemberCount)
+			argN++
+		}
+		if len(args) > 0 {
+			query := fmt.Sprintf("UPDATE federation_guild_cache SET %s WHERE guild_id = $%d",
+				strings.Join(setClauses, ", "), argN)
+			args = append(args, guildID)
+			ss.fed.pool.Exec(ctx, query, args...)
 		}
 
 	case "CHANNEL_CREATE", "CHANNEL_UPDATE", "CHANNEL_DELETE":
