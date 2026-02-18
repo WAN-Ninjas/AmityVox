@@ -6,6 +6,7 @@ package social
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/api/apiutil"
@@ -523,6 +525,11 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 			code, guildID, userID,
 		).Scan(&claimedAt)
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				conflictCode = "code_taken"
+				return nil
+			}
 			return err
 		}
 
