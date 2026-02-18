@@ -22,6 +22,7 @@ We'll have some messaging encryption, but this is not privacy-first like Matrix.
 
 We plan to host a **Master/Public** federation server (joining is optional). Beyond that, three modes:
 
+- **Public** — Public, listed on the master federation server. Reachable/findable by anyone.
 - **Open** — Private, but anyone who knows your server can add it to their federation list and interact with your instance.
 - **Closed** — Requires exchanging keys and whitelisting on both sides.
 - **Disabled** — Completely standalone, no federation.
