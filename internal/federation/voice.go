@@ -77,7 +77,6 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 
 	// Authorization: verify the user has access to this channel.
 	canPublish := true
-	canVideo := true
 	if guildID != nil {
 		// Guild channel — verify membership.
 		var isMember bool
@@ -94,20 +93,31 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 			return
 		}
 
+		// Compute permissions once for all checks.
+		perms, ok := computeFederatedGuildPerms(ctx, ss.fed.pool, *guildID, req.UserID)
+		if !ok {
+			http.Error(w, "Failed to compute permissions", http.StatusInternalServerError)
+			return
+		}
+
 		// Check CONNECT permission.
-		if !checkFederatedGuildPerm(ctx, ss.fed.pool, *guildID, req.UserID, permissions.Connect) {
+		if perms&permissions.Connect == 0 && perms&permissions.Administrator == 0 {
 			http.Error(w, "Missing CONNECT permission", http.StatusForbidden)
 			return
 		}
 
-		// Derive publish/video from SPEAK permission.
-		canPublish = checkFederatedGuildPerm(ctx, ss.fed.pool, *guildID, req.UserID, permissions.Speak)
-		canVideo = canPublish
+		// Derive publish from SPEAK permission.
+		canPublish = perms&permissions.Speak != 0 || perms&permissions.Administrator != 0
 
 		// Check STREAM permission for screen share.
-		if req.ScreenShare && !checkFederatedGuildPerm(ctx, ss.fed.pool, *guildID, req.UserID, permissions.Stream) {
-			http.Error(w, "Missing STREAM permission", http.StatusForbidden)
-			return
+		if req.ScreenShare {
+			hasStream := perms&permissions.Stream != 0 || perms&permissions.Administrator != 0
+			if !hasStream {
+				http.Error(w, "Missing STREAM permission", http.StatusForbidden)
+				return
+			}
+			// Screen share requires publish capability even without Speak.
+			canPublish = true
 		}
 	} else {
 		// DM/Group channel — verify user is a recipient.
@@ -124,11 +134,6 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 			http.Error(w, "Not a channel participant", http.StatusForbidden)
 			return
 		}
-	}
-
-	// Screen share grants video publish even if canVideo was false (DM/group case).
-	if req.ScreenShare {
-		canVideo = true
 	}
 
 	// Ensure the LiveKit room exists.
@@ -154,7 +159,9 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 
 	canSubscribe := true
 
-	token, err := ss.voiceSvc.GenerateToken(req.UserID, req.ChannelID, canPublish, canSubscribe, canVideo, string(metaBytes))
+	// Note: GenerateToken uses canPublish for both audio and video grants.
+	// Pass canPublish for canVideo to match the local voice handler pattern.
+	token, err := ss.voiceSvc.GenerateToken(req.UserID, req.ChannelID, canPublish, canSubscribe, canPublish, string(metaBytes))
 	if err != nil {
 		ss.logger.Error("failed to generate federated voice token", slog.String("error", err.Error()))
 		http.Error(w, "Failed to generate voice token", http.StatusInternalServerError)
@@ -244,8 +251,12 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoin(w http.ResponseWriter, r *h
 		return
 	}
 	if statusCode < 200 || statusCode >= 300 {
+		body := string(respBody)
+		if len(body) > 512 {
+			body = body[:512] + "..."
+		}
 		ss.logger.Warn("remote instance rejected voice token request",
-			slog.Int("status", statusCode), slog.String("body", string(respBody)))
+			slog.Int("status", statusCode), slog.String("body", body))
 		http.Error(w, "Remote instance rejected voice request", statusCode)
 		return
 	}
@@ -354,32 +365,34 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoinByGuild(w http.ResponseWrite
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": voiceResp})
 }
 
-// checkFederatedGuildPerm checks if a user has a specific permission in a guild.
-// This mirrors the logic in internal/api/voice_handlers.go:checkGuildPerm but
-// lives in the federation package to avoid circular imports.
-func checkFederatedGuildPerm(ctx context.Context, pool *pgxpool.Pool, guildID, userID string, perm uint64) bool {
+// computeFederatedGuildPerms computes the effective permission bitfield for a user
+// in a guild. Returns the computed permissions and true on success, or (0, false)
+// if any DB query fails (fail-closed). This mirrors the logic in
+// internal/api/voice_handlers.go:checkGuildPerm but lives in the federation
+// package to avoid circular imports.
+func computeFederatedGuildPerms(ctx context.Context, pool *pgxpool.Pool, guildID, userID string) (uint64, bool) {
 	// Owner has all permissions.
 	var ownerID string
 	if err := pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
-		return false
+		return 0, false
 	}
 	if userID == ownerID {
-		return true
+		return permissions.Administrator, true
 	}
 
 	// Admin flag.
 	var userFlags int
 	if err := pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags); err != nil {
-		return false
+		return 0, false
 	}
 	if userFlags&models.UserFlagAdmin != 0 {
-		return true
+		return permissions.Administrator, true
 	}
 
 	// Compute from default + role permissions.
 	var defaultPerms int64
 	if err := pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms); err != nil {
-		return false
+		return 0, false
 	}
 	computed := uint64(defaultPerms)
 
@@ -392,25 +405,22 @@ func checkFederatedGuildPerm(ctx context.Context, pool *pgxpool.Pool, guildID, u
 		guildID, userID,
 	)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var allow, deny int64
 		if err := rows.Scan(&allow, &deny); err != nil {
-			return false
+			return 0, false
 		}
 		computed |= uint64(allow)
 		computed &^= uint64(deny)
 	}
 	if err := rows.Err(); err != nil {
-		return false
+		return 0, false
 	}
 
-	if computed&permissions.Administrator != 0 {
-		return true
-	}
-	return computed&perm != 0
+	return computed, true
 }
 
 // voiceTokenTestRequest is used by tests.
