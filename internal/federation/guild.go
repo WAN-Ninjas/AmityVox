@@ -434,12 +434,17 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 
 	ctx := r.Context()
 
-	// Verify channel belongs to guild.
+	// Verify channel belongs to guild and is not private.
 	var channelGuildID *string
+	var channelType *string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT guild_id FROM channels WHERE id = $1`, channelID,
-	).Scan(&channelGuildID); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
 		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
 		return
 	}
 
@@ -550,13 +555,18 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 
 	ctx := r.Context()
 
-	// Verify channel belongs to guild and is not locked.
+	// Verify channel belongs to guild, is not private, and is not locked.
 	var channelGuildID *string
 	var locked bool
+	var channelType *string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT guild_id, locked FROM channels WHERE id = $1`, channelID,
-	).Scan(&channelGuildID, &locked); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		`SELECT guild_id, locked, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &locked, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
 		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
 		return
 	}
 	if locked {
@@ -1077,6 +1087,9 @@ func (ss *SyncService) signAndPost(ctx context.Context, targetURL string, payloa
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("reading response from %s: %w", targetURL, err)
+	}
 	return respBody, resp.StatusCode, nil
 }
