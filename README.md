@@ -2,12 +2,30 @@
 
 A self-hosted, federated, optionally-encrypted communication platform. Think Discord, but open source, federated, and designed to run on a Raspberry Pi.
 
-**v0.5.0** | [AGPL-3.0](LICENSE) | [Discord](https://discord.gg/VvxgUpF3uQ) | [Live Instance](https://amityvox.chat/invite/b38a4701f16f)
+**v0.5.0** | [AGPL-3.0](LICENSE) | [Discord](https://discord.gg/VvxgUpF3uQ) | [Live Instance](https://amityvox.chat/)
 
-## Features
+First, a bit about myself. I am a 27 year veteran in IT, with the bulk of that in senior and management roles in what is now known as DevOps and Network Ops/Engineering. This software was written with Codex and Claude Code. This software was architected and specced out across a 31 page document by myself and my friends, with no AI involvement other than taking the spec we wrote and making it more presentable. If AI written code offends you, please move along. If a project that is not yet in a completed and ready-for-public state offends you, move along, come check back later. This is being worked on daily by myself and a small team of friends who all share the same vision: Take all the things we love about Discord, Matrix, and other platforms we have used/tried... and create one cohesive self-hostable open source, AGPL3 licensed project that we can use for ourselves and our communities. We have decided to make this project available to everyone as a means to provide people, when we are done, a powerful turn key solution that can act as a viable alternative to Discord that will NEVER be monetized. It will be maintained as long as we ourselves are using it. Should that ever change, our intention with the code being produced is to make sure it is well documented, and full code spec documents will be made available once we are done with our current development phase. 
+
+Right now, the code is a mess. It's getting better through a lot of manual review and changes as it evolves. It is presently in a functional state(any code you see here, is what is running on the version hosted at amityvox.chat, sometimes off by a few hours if we're working on specific new features).
+
+AmityVox, at it's core, is not a Matrix replacement. I've been asked several times about how certain features work or are going to work. We are going to be building in some messaging encryption, but the core of this is not architected for privacy-first like Matrix. What is LOGGED is ultimately not under our control outside of the instance we host. Even if we disable logging, it would be trivial for someone to re-enable it or add their own in, being open source. Instead, we have focused on features being OPTIONAL. Such as requiring e-mail validation to register. Federation will be OPTIONAL and disabled by default.
+
+Federation, and how it will work:
+We intend to host a 'Master/Public' federation server, and joining that is optional. Beyond that, you have three other federation modes: Open(Private, but anyone who knows your server exists can add your server to their federation list and interact with your instance.), Closed(Requires exchanging of keys and whitelisting on both sides), Disabled(No federation at all, completely standalone). When you are federated with another server, you may:
+Join guilds on other instances you are federated with.
+DM both 1:1 and 1:Many between people on your instance and instances you are federated with.
+Voice chat, video chat and screenshare between instances that are federated together. This includes guild voice/video chat. It will require all involved parties to have LiveKit setup correctly in their stack.
+
+Within a week or so of writing this(2/18/26), the front end will be locked in and set as stable. At that time, one of my friends will be getting Tauri going and handling getting Windows, MacOS, Linux, Android, and iPad/iPhone apps going and start figuring out the app registration stuff for Google and Apple. The apps will be instance agnostic, when you launch, you'll be asked what instance you want to connect to. You can choose one of our instances, or you can specify another.
+
+Everything below this is mostly written by AI. I'm keeping it in because it has good information. Not all of it is 100% accurate as of the update to this file, I will endeavor to update it before we 'launch'.
+
+
+## Features(not all implemented yet. Will all be finished by end of 02/2026)
 
 - Guilds with channels, categories, roles, and granular permissions
 - Real-time messaging with replies, reactions, threads, pins, and markdown
+- Message expiration options at DM level, Guild level, and Instance level(Configurable by the instance host)
 - DMs and group DMs with typing indicators and read receipts
 - Voice and video channels powered by LiveKit (WebRTC)
 - File uploads with image thumbnails, blurhash previews, and EXIF stripping
@@ -22,8 +40,7 @@ A self-hosted, federated, optionally-encrypted communication platform. Think Dis
 - Admin dashboard with user management and instance settings
 - Emoji picker, Giphy integration, and keyboard shortcuts
 - Self-hosted translation via LibreTranslate
-- Prometheus metrics endpoint
-- ~16 MB Docker image, runs on 2 GB RAM
+
 
 ## Quick Start
 
@@ -188,7 +205,7 @@ Migrations run automatically on startup.
 ## Community
 
 - [Discord](https://discord.gg/VvxgUpF3uQ) — Support, feedback, and announcements
-- [Live Instance](https://amityvox.chat/invite/b38a4701f16f) — Try AmityVox without installing
+- [Live Instance](https://amityvox.chat/) — Try AmityVox without installing
 - [GitHub Issues](https://github.com/WAN-Ninjas/AmityVox/issues) — Bug reports and feature requests
 
 ## License
