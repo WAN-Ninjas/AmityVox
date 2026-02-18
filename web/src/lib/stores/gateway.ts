@@ -4,7 +4,7 @@ import { writable, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
-import { loadGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
+import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
 import { updateChannel, removeChannel, channels as channelsStore, currentChannelId } from './channels';
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
@@ -41,6 +41,9 @@ export function connectGateway(token: string) {
 				currentUser.set(ready.user);
 				gatewayConnected.set(true);
 				loadGuilds();
+				if (ready.federated_guilds) {
+					loadFederatedGuilds(ready.federated_guilds);
+				}
 				loadDMs();
 				loadReadState();
 				loadRelationships();
