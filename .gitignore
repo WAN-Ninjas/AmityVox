@@ -12,6 +12,9 @@
 coverage.html
 coverage.txt
 
+# Audit reports (local only)
+_audit/
+
 # Claude Code / AI prompts
 CLAUDE.md
 CURRENT_SPRINT.md
