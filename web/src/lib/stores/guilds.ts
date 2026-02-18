@@ -1,7 +1,7 @@
 // Guild store — manages guild list and current guild selection.
 // Supports both local guilds and federated (remote) guilds.
 
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type { Guild, FederatedGuild } from '$lib/types';
 import { api } from '$lib/api/client';
 
@@ -21,9 +21,7 @@ export const federatedGuildIds = derived(federatedGuilds, ($fg) => new Set($fg.k
 
 /** Returns true if the given guild ID is a federated (remote) guild. */
 export function isFederatedGuild(guildId: string): boolean {
-	let result = false;
-	federatedGuilds.subscribe(($fg) => { result = $fg.has(guildId); })();
-	return result;
+	return get(federatedGuilds).has(guildId);
 }
 
 export async function loadGuilds() {

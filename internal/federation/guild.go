@@ -168,15 +168,10 @@ func (ss *SyncService) HandleFederatedGuildJoin(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Resolve the instance for this user's domain.
-	instanceID := senderID
-	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT id FROM instances WHERE domain = $1`, req.InstanceDomain,
-	).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
-		ss.logger.Warn("failed to resolve instance for guild join",
-			slog.String("domain", req.InstanceDomain),
-			slog.String("error", err.Error()),
-		)
+	// Validate that the claimed domain matches the signed sender.
+	instanceID, ok := ss.validateSenderDomain(ctx, w, senderID, req.InstanceDomain)
+	if !ok {
+		return
 	}
 
 	// Create remote user stub.
@@ -356,13 +351,10 @@ func (ss *SyncService) HandleFederatedGuildInviteAccept(w http.ResponseWriter, r
 		return
 	}
 
-	// Resolve instance.
-	instanceID := senderID
-	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT id FROM instances WHERE domain = $1`, req.InstanceDomain,
-	).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
-		ss.logger.Warn("failed to resolve instance for invite accept",
-			slog.String("domain", req.InstanceDomain), slog.String("error", err.Error()))
+	// Validate that the claimed domain matches the signed sender.
+	instanceID, ok := ss.validateSenderDomain(ctx, w, senderID, req.InstanceDomain)
+	if !ok {
+		return
 	}
 
 	// Create user stub.
@@ -491,12 +483,14 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 
 	messages := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var id, chID, authorID, content string
+		var id, chID, authorID string
+		var content *string
 		var createdAt time.Time
 		var username string
 		var displayName, avatarID *string
 		if err := rows.Scan(&id, &chID, &authorID, &content, &createdAt,
 			&username, &displayName, &avatarID); err != nil {
+			ss.logger.Warn("failed to scan federated message row", slog.String("error", err.Error()))
 			continue
 		}
 		messages = append(messages, map[string]interface{}{
@@ -540,12 +534,17 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 
 	ctx := r.Context()
 
-	// Verify channel belongs to guild.
+	// Verify channel belongs to guild and is not locked.
 	var channelGuildID *string
+	var locked bool
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT guild_id FROM channels WHERE id = $1`, channelID,
-	).Scan(&channelGuildID); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		`SELECT guild_id, locked FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &locked); err != nil || channelGuildID == nil || *channelGuildID != guildID {
 		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if locked {
+		http.Error(w, "Channel is locked", http.StatusForbidden)
 		return
 	}
 
@@ -593,9 +592,30 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 // Helper methods
 // ============================================================
 
+// validateSenderDomain verifies that the claimed instance_domain in a federation
+// payload matches the signed sender's actual domain. Returns the instance ID and
+// true on success, or writes an HTTP error and returns false.
+func (ss *SyncService) validateSenderDomain(ctx context.Context, w http.ResponseWriter, senderID, claimedDomain string) (string, bool) {
+	var senderDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT domain FROM instances WHERE id = $1`, senderID,
+	).Scan(&senderDomain); err != nil {
+		http.Error(w, "Unknown sender instance", http.StatusForbidden)
+		return "", false
+	}
+	if senderDomain != claimedDomain {
+		http.Error(w, "instance_domain does not match signed sender", http.StatusForbidden)
+		return "", false
+	}
+	return senderID, true
+}
+
+// addInstanceToGuildChannelPeers registers a remote instance as a federation
+// peer for non-private channels in a guild.
 func (ss *SyncService) addInstanceToGuildChannelPeers(ctx context.Context, guildID, instanceID string) {
+	// Only register peers for non-private channels to prevent private data leaks.
 	rows, err := ss.fed.pool.Query(ctx,
-		`SELECT id FROM channels WHERE guild_id = $1`, guildID)
+		`SELECT id FROM channels WHERE guild_id = $1 AND (channel_type <> 'private' OR channel_type IS NULL)`, guildID)
 	if err != nil {
 		ss.logger.Warn("failed to query guild channels for peer addition", slog.String("error", err.Error()))
 		return
@@ -624,9 +644,11 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 		return nil, fmt.Errorf("looking up guild: %w", err)
 	}
 
-	// Load channels.
+	// Load non-private channels only (private channels require explicit access).
 	channelRows, err := ss.fed.pool.Query(ctx,
-		`SELECT id, channel_type, name, topic, position FROM channels WHERE guild_id = $1 ORDER BY position`, guildID)
+		`SELECT id, channel_type, name, topic, position FROM channels
+		 WHERE guild_id = $1 AND (channel_type <> 'private' OR channel_type IS NULL)
+		 ORDER BY position`, guildID)
 	if err == nil {
 		defer channelRows.Close()
 		channels := make([]map[string]interface{}, 0)
@@ -825,9 +847,10 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 		}
 	}
 
+	// Wrap in API response envelope for frontend compatibility.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	w.Write(respBody)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": joinResp})
 }
 
 // HandleProxyLeaveFederatedGuild proxies a leave request to a remote guild's instance.
