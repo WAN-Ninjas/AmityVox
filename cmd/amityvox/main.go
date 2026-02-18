@@ -312,6 +312,11 @@ func runServe() error {
 
 	// Create and start federation sync service (message routing between instances).
 	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
+
+	// Wire voice service into federation sync for federated voice token generation.
+	if voiceSvc != nil {
+		syncSvc.SetVoiceService(voiceSvc, srv.Config.LiveKit.PublicURL)
+	}
 	srv.Router.With(fedRL).Post("/federation/v1/inbox", syncSvc.HandleInbox)
 	srv.Router.With(fedRL).Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
 
@@ -342,6 +347,17 @@ func runServe() error {
 		r.Post("/{guildID}/leave", syncSvc.HandleProxyLeaveFederatedGuild)
 		r.Get("/{guildID}/channels/{channelID}/messages", syncSvc.HandleProxyGetFederatedGuildMessages)
 		r.Post("/{guildID}/channels/{channelID}/messages", syncSvc.HandleProxyPostFederatedGuildMessage)
+	})
+
+	// Federation voice endpoint (remote-facing, for generating voice tokens for federated users).
+	srv.Router.With(fedRL).Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
+
+	// Federation voice proxy endpoints (authenticated, for local users joining remote voice channels).
+	srv.Router.Route("/api/v1/federation/voice", func(r chi.Router) {
+		r.Use(auth.RequireAuth(authSvc))
+		r.Use(srv.RateLimitGlobal())
+		r.Post("/join", syncSvc.HandleProxyFederatedVoiceJoin)
+		r.Post("/guild-join", syncSvc.HandleProxyFederatedVoiceJoinByGuild)
 	})
 
 	if cfg.Instance.FederationMode != "closed" {
