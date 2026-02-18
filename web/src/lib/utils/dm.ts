@@ -3,6 +3,42 @@
 import type { Channel, User } from '$lib/types';
 
 /**
+ * Returns whether a user is from a remote (federated) instance.
+ * A user is remote if their instance_id differs from the local instance ID.
+ */
+export function isRemoteUser(user: User, localInstanceId: string | undefined): boolean {
+	if (!localInstanceId || !user.instance_id) return false;
+	return user.instance_id !== localInstanceId;
+}
+
+/**
+ * Returns a user's handle string.
+ * Local users: @username
+ * Remote users: @username@domain (requires domain lookup from instance)
+ * If no domain is available, falls back to showing instance_id.
+ */
+export function getUserHandle(user: User, localInstanceId: string | undefined, remoteDomain?: string): string {
+	if (!localInstanceId || !user.instance_id || user.instance_id === localInstanceId) {
+		return `@${user.username}`;
+	}
+	if (remoteDomain) {
+		return `@${user.username}@${remoteDomain}`;
+	}
+	return `@${user.username}`;
+}
+
+/**
+ * Returns the display name for a user, with domain suffix for remote users.
+ */
+export function getDisplayNameWithDomain(user: User, localInstanceId: string | undefined, remoteDomain?: string): string {
+	const name = user.display_name ?? user.username;
+	if (localInstanceId && user.instance_id && user.instance_id !== localInstanceId && remoteDomain) {
+		return `${name} (${remoteDomain})`;
+	}
+	return name;
+}
+
+/**
  * Returns the display name for a DM channel based on its recipients.
  * For 1-on-1 DMs, returns the other user's display_name or username.
  * For group DMs with a name, returns the name.

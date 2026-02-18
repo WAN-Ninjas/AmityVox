@@ -69,6 +69,7 @@ type Server struct {
 	InstanceID string
 	Version     string
 	Logger      *slog.Logger
+	UserHandler *users.Handler // exposed for federation wiring
 	server      *http.Server
 }
 
@@ -143,6 +144,7 @@ func (s *Server) registerRoutes() {
 		InstanceDomain: s.Config.Instance.Domain,
 		Logger:         s.Logger,
 	}
+	s.UserHandler = userH
 	guildH := &guilds.Handler{
 		Pool:       s.DB.Pool,
 		EventBus:   s.EventBus,
