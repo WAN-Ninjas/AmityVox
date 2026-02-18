@@ -4,59 +4,77 @@ A self-hosted, federated, optionally-encrypted communication platform. Think Dis
 
 **v0.5.0** | [AGPL-3.0](LICENSE) | [Discord](https://discord.gg/VvxgUpF3uQ) | [Live Instance](https://amityvox.chat/)
 
-First, a bit about myself. I am a 27 year veteran in IT, with the bulk of that in senior and management roles in what is now known as DevOps and Network Ops/Engineering. This software was written with Codex and Claude Code. This software was architected and specced out across a 31 page document by myself and my friends, with no AI involvement other than taking the spec we wrote and making it more presentable. If AI written code offends you, please move along. If a project that is not yet in a completed and ready-for-public state offends you, move along, come check back later. This is being worked on daily by myself and a small team of friends who all share the same vision: Take all the things we love about Discord, Matrix, and other platforms we have used/tried... and create one cohesive self-hostable open source, AGPL3 licensed project that we can use for ourselves and our communities. We have decided to make this project available to everyone as a means to provide people, when we are done, a powerful turn key solution that can act as a viable alternative to Discord that will NEVER be monetized. It will be maintained as long as we ourselves are using it. Should that ever change, our intention with the code being produced is to make sure it is well documented, and full code spec documents will be made available once we are done with our current development phase. 
+I'm a 27 year IT veteran, most of that in senior/management DevOps and Network Ops/Engineering roles. This software was written with Codex and Claude Code. The architecture and spec behind it is a 31 page document written by myself and my friends — no AI involvement beyond making our spec more presentable. If AI written code offends you, move along. If a project that isn't finished yet offends you, come back later.
 
-Right now, the code is a mess. It's getting better through a lot of manual review and changes as it evolves. It is presently in a functional state(any code you see here, is what is running on the version hosted at amityvox.chat, sometimes off by a few hours if we're working on specific new features).
+This is being worked on daily by myself and a small team of friends who share the same vision: take all the things we love about Discord, Matrix, and other platforms we've used or tried, and build one cohesive self-hostable, AGPL-3.0 licensed project for ourselves and our communities. We've decided to make it available to everyone so that when we're done, people have a powerful turnkey alternative to Discord that will NEVER be monetized. We'll maintain it as long as we're using it. If that ever changes, we intend the code to be well documented — full spec documents will be published once we finish the current dev phase.
 
-AmityVox, at it's core, is not a Matrix replacement. I've been asked several times about how certain features work or are going to work. We are going to be building in some messaging encryption, but the core of this is not architected for privacy-first like Matrix. Federation is intended to give people the ability to be in charge of their own instances, while still maintaining the ability to have global communication with other instances. What is logged is ultimately not under our control outside of the instance we host. Even if we disable logging, it would be trivial for someone to re-enable it or add their own in, being open source. Instead, we have focused on features being OPTIONAL. Such as choosing if instance hosts require e-mail validation to register. Federation will be OPTIONAL and disabled by default. Encryption will be added in with the basis of, the initiating party for encryption(be it in a DM, group DM, or a guild channel) will generate a key client side in the front end, that is NOT logged to the server back end. Once encryption is enabled, if the key(or passphrase used to generate the key) is lost, there will be no recovery. Without that key, instance owners(if they have not modified the code) will be unable to decrypt messages and media stored on the server. Users who join the server will need to somehow be provided that encryption key. We have discussed options for fleshing this feature out further and making it more user-friendly, but at this time, it is not a primary focus/priority. Anyone with a background in this specific feature set is welcome to come give us pointers, none of us have much experience in the realm of encrypted chat communications.
+Right now, the code is a mess. It's getting better through a lot of manual review and changes as it evolves. It is functional — the code here is what's running at amityvox.chat, sometimes off by a few hours if we're working on new features.
 
-Federation, and how it will work:
-We intend to host a 'Master/Public' federation server, and joining that is optional. Beyond that, you have three other federation modes: Open(Private, but anyone who knows your server exists can add your server to their federation list and interact with your instance.), Closed(Requires exchanging of keys and whitelisting on both sides), Disabled(No federation at all, completely standalone). When you are federated with another server, you may:
-Join guilds on other instances you are federated with.
-DM both 1:1 and 1:Many between people on your instance and instances you are federated with.
-Voice chat, video chat and screenshare between instances that are federated together. This includes guild voice/video chat. It will require all involved parties to have LiveKit setup correctly in their stack.
+### What AmityVox Is (and Isn't)
 
-Within a week or so of writing this(2/18/26), the front end will be locked in and set as stable. At that time, one of my friends will be getting Tauri going and handling getting Windows, MacOS, Linux, Android, and iPad/iPhone apps going and start figuring out the app registration stuff for Google and Apple. The apps will be instance agnostic: when you launch, you'll be asked what instance you want to connect to. You can choose one of our instances, or you can specify another.
+AmityVox is not a Matrix replacement. I've been asked several times how certain features work or will work, so let me clarify:
 
-One feature we have been on the fence on but are strongly considering, is hosting a dynamic DNS service for instance hosts to use. Ultimately, it's not needed, there are several free ones out there. But we've had a few requests as we flesh this project out to provide that, so it is under consideration.
+We'll have some messaging encryption, but this is not privacy-first like Matrix. Federation gives people control over their own instances while keeping global communication between instances possible. What gets logged is ultimately not under our control outside our own instance — even if we disable logging, anyone running the code could trivially re-enable it. Instead, we've focused on making features **optional**: email validation for registration, federation (disabled by default), encryption, etc.
 
-We welcome any and all feedback, our preferred method is under issues here in GitHub, or using the Report Issue button on our instance hosted at amityvox.chat. Or, you are welcome to come chat with us on amityvox.chat, my handle there is @Horatio.
+**Encryption model:** The party initiating encryption (DM, group DM, or guild channel) generates a key client-side that is NOT sent to the server backend. If the key or passphrase is lost, there's no recovery. Without it, instance owners (assuming unmodified code) can't decrypt stored messages or media. Users joining an encrypted channel will need to receive the key out-of-band. We have ideas for making this more user-friendly, but it's not a priority right now. Anyone with experience in encrypted chat is welcome to give us pointers.
 
-Everything below this is mostly written by AI. I'm keeping it in because it has good information. Not all of it is 100% accurate as of the update to this file, I will endeavor to update it before we 'launch'.
+### Federation Modes
 
+We plan to host a **Master/Public** federation server (joining is optional). Beyond that, three modes:
 
-## Features(not all implemented yet. Will all be finished by end of 02/2026)
+- **Open** — Private, but anyone who knows your server can add it to their federation list and interact with your instance.
+- **Closed** — Requires exchanging keys and whitelisting on both sides.
+- **Disabled** — Completely standalone, no federation.
+
+When federated with another server, you can: join guilds on other instances, DM (1:1 and group) across instances, and voice/video/screenshare across instances (requires LiveKit on all sides).
+
+### Roadmap & Apps
+
+Within a week or so of writing this (2/18/26), the front end will be locked in as stable. At that point, one of my friends will be getting Tauri going for Windows, macOS, Linux, Android, and iOS apps, plus handling app store registration for Google and Apple. The apps will be instance-agnostic — on launch you pick which instance to connect to.
+
+We're also considering hosting a dynamic DNS service for instance hosts. It's not strictly needed (plenty of free options exist), but we've had requests for it.
+
+### Feedback
+
+We welcome any and all feedback — preferably via [GitHub Issues](https://github.com/WAN-Ninjas/AmityVox/issues) or the Report Issue button on [amityvox.chat](https://amityvox.chat/). Or just come chat with us there — I'm @Horatio.
+
+---
+
+*Everything below is mostly AI-written. It has good info but may not be 100% accurate as of this update — I'll clean it up before launch.*
+
+---
+
+## Features
+
+*Not all implemented yet. All planned for completion by end of 02/2026.*
 
 - Guilds with channels, categories, roles, and granular permissions
 - Real-time messaging with replies, reactions, threads, pins, and markdown
-- Message expiration options at DM level, Guild level, and Instance level(Configurable by the instance host)
+- Message expiration (configurable per DM, guild, or instance)
 - DMs and group DMs with typing indicators and read receipts
-- Voice and video channels powered by LiveKit (WebRTC)
+- Voice and video channels via LiveKit (WebRTC)
 - File uploads with image thumbnails, blurhash previews, and EXIF stripping
 - Full-text search via Meilisearch
-- MLS end-to-end encryption (RFC 9420) for channels
-- Federation between instances with Ed25519-signed messages
-- TOTP and WebAuthn/FIDO2 two-factor authentication
+- MLS end-to-end encryption (RFC 9420)
+- Federation with Ed25519-signed messages
+- TOTP and WebAuthn/FIDO2 two-factor auth
 - WebPush notifications with per-guild preferences
 - Bridges to Matrix, Discord, Telegram, Slack, and IRC
-- Bot SDK for building custom integrations
-- Webhooks, audit logs, and AutoMod (word/regex/spam/link filters)
+- Bot SDK and webhooks
+- Audit logs and AutoMod (word/regex/spam/link filters)
 - Admin dashboard with user management and instance settings
-- Emoji picker, Giphy integration, and keyboard shortcuts
+- Emoji picker, Giphy integration, keyboard shortcuts
 - Self-hosted translation via LibreTranslate
-
 
 ## Quick Start
 
 ### Prerequisites
 
-- [Docker Engine](https://docs.docker.com/engine/install/) and Docker Compose v2+
+- [Docker Engine](https://docs.docker.com/engine/install/) + Docker Compose v2+
 - A domain name (for TLS) or `localhost` for local testing
 - 2 GB+ RAM (runs comfortably on Raspberry Pi 5)
 
 ### Option A: Deploy without cloning
-
-Download the compose file and environment template, then start:
 
 ```bash
 mkdir amityvox && cd amityvox
@@ -81,13 +99,7 @@ docker compose up -d
 
 ### 1. Setup Wizard
 
-On first launch, open your domain (or `http://localhost`) in a browser. The setup wizard runs automatically and lets you configure:
-
-- Instance name and description
-- Domain and registration mode
-- Federation mode (open, allowlist, or closed)
-
-The wizard locks after completion. Further changes require admin authentication.
+On first launch, open your domain (or `http://localhost`). The wizard runs automatically and lets you configure instance name, domain, registration mode, and federation mode. It locks after completion — further changes require admin auth.
 
 ### 2. Create an Admin User
 
@@ -98,28 +110,28 @@ docker exec amityvox amityvox admin set-admin admin
 
 ### 3. Log In
 
-Open your domain in the browser, register or log in with the admin account, and start using AmityVox.
+Open your domain, log in with the admin account, and start using AmityVox.
 
 ## Configuration
 
-All settings are controlled via environment variables in `.env`. Key variables:
+All settings live in `.env`. Key variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AMITYVOX_INSTANCE_DOMAIN` | `localhost` | Public domain (used for TLS, WebAuthn, federation) |
-| `AMITYVOX_INSTANCE_NAME` | `AmityVox` | Display name shown in the UI |
+| `AMITYVOX_INSTANCE_DOMAIN` | `localhost` | Public domain (TLS, WebAuthn, federation) |
+| `AMITYVOX_INSTANCE_NAME` | `AmityVox` | Display name in the UI |
 | `POSTGRES_PASSWORD` | `amityvox` | Database password (**change for production**) |
 | `LIVEKIT_API_KEY` | `devkey` | LiveKit auth key (**change for production**) |
 | `LIVEKIT_API_SECRET` | `secret` | LiveKit auth secret (**change for production**) |
 | `MEILI_MASTER_KEY` | *(empty)* | Meilisearch API key (set for production) |
-| `AMITYVOX_STORAGE_ACCESS_KEY` | *(empty)* | S3 access key (see Garage setup below) |
-| `AMITYVOX_STORAGE_SECRET_KEY` | *(empty)* | S3 secret key (see Garage setup below) |
+| `AMITYVOX_STORAGE_ACCESS_KEY` | *(empty)* | S3 access key (see Garage setup) |
+| `AMITYVOX_STORAGE_SECRET_KEY` | *(empty)* | S3 secret key (see Garage setup) |
 
-See [`docker_deploy/.env.example`](docker_deploy/.env.example) for all available options including push notifications, Giphy, translation languages, and media settings.
+See [`docker_deploy/.env.example`](docker_deploy/.env.example) for all options including push notifications, Giphy, translation, and media settings.
 
 ### TLS / Custom Domain
 
-Set `AMITYVOX_INSTANCE_DOMAIN` to your domain in `.env`. Caddy automatically provisions Let's Encrypt certificates — no manual TLS configuration needed. Ensure ports 80 and 443 are open.
+Set `AMITYVOX_INSTANCE_DOMAIN` in `.env`. Caddy auto-provisions Let's Encrypt certs — just ensure ports 80 and 443 are open.
 
 ### Garage S3 Setup
 
@@ -144,7 +156,7 @@ docker exec amityvox-garage /garage bucket allow amityvox --read --write --key a
 docker exec amityvox-garage /garage key info amityvox-key
 ```
 
-Copy the key ID and secret into `AMITYVOX_STORAGE_ACCESS_KEY` and `AMITYVOX_STORAGE_SECRET_KEY` in `.env`, then restart:
+Copy the key ID and secret into `.env` as `AMITYVOX_STORAGE_ACCESS_KEY` and `AMITYVOX_STORAGE_SECRET_KEY`, then restart:
 
 ```bash
 docker compose restart amityvox
@@ -152,7 +164,7 @@ docker compose restart amityvox
 
 ## Services
 
-The full stack runs 9 containers:
+The full stack runs 9 containers (~700 MB–1.2 GB total):
 
 | Service | Image | Purpose |
 |---|---|---|
@@ -165,8 +177,6 @@ The full stack runs 9 containers:
 | `meilisearch` | `getmeili/meilisearch:v1.35` | Full-text search |
 | `libretranslate` | `libretranslate/libretranslate` | Message translation |
 | `caddy` | `caddy:2-alpine` | Reverse proxy + auto-TLS |
-
-Total memory: ~700 MB - 1.2 GB.
 
 ## CLI Reference
 
@@ -182,7 +192,7 @@ docker exec amityvox amityvox <command>
 | `admin suspend <user>` | Suspend a user |
 | `admin unsuspend <user>` | Unsuspend a user |
 | `admin list-users` | List all users |
-| `migrate up` | Run pending database migrations |
+| `migrate up` | Run pending migrations |
 | `migrate down` | Rollback last migration |
 | `migrate status` | Show migration status |
 | `version` | Print version info |
@@ -190,7 +200,7 @@ docker exec amityvox amityvox <command>
 ## Backup & Restore
 
 ```bash
-# Backup all data (database + volumes)
+# Backup
 docker exec amityvox-postgresql pg_dumpall -U amityvox > backup.sql
 
 # Restore
