@@ -1,7 +1,6 @@
 package channels
 
 import (
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -527,7 +526,10 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		}
 
 		// 3. Set message thread_id to the new thread.
-		tx.Exec(r.Context(), `UPDATE messages SET thread_id = $1 WHERE id = $2`, threadID, msgID)
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE messages SET thread_id = $1 WHERE id = $2`, threadID, msgID); err != nil {
+			return err
+		}
 
 		// 4. Insert gallery_post_tags.
 		post.Tags = []models.GalleryTag{}
@@ -535,17 +537,22 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 			if _, err := tx.Exec(r.Context(),
 				`INSERT INTO gallery_post_tags (post_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 				threadID, tagID); err != nil {
-				h.Logger.Warn("failed to insert gallery post tag", slog.String("error", err.Error()))
+				return err
 			}
 		}
 
 		// 5. Link attachments.
-		tx.Exec(r.Context(),
+		if _, err := tx.Exec(r.Context(),
 			`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
-			msgID, req.AttachmentIDs, userID)
+			msgID, req.AttachmentIDs, userID); err != nil {
+			return err
+		}
 
 		// 6. Update gallery channel's last_activity_at.
-		tx.Exec(r.Context(), `UPDATE channels SET last_activity_at = now() WHERE id = $1`, channelID)
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE channels SET last_activity_at = now() WHERE id = $1`, channelID); err != nil {
+			return err
+		}
 
 		return nil
 	})

@@ -564,8 +564,12 @@ func (h *Handler) HandleReleaseVanityURL(w http.ResponseWriter, r *http.Request)
 	}
 
 	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
-		tx.Exec(r.Context(), `DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID)
-		tx.Exec(r.Context(), `UPDATE guilds SET vanity_url = NULL WHERE id = $1`, guildID)
+		if _, err := tx.Exec(r.Context(), `DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE guilds SET vanity_url = NULL WHERE id = $1`, guildID); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {

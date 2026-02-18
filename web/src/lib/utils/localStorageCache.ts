@@ -16,8 +16,11 @@ export function createLocalStorageCache<V>(key: string) {
 	}
 
 	function save() {
-		if (cached !== null) {
+		if (cached === null) return;
+		try {
 			localStorage.setItem(key, JSON.stringify(cached));
+		} catch {
+			// Ignore storage quota/availability errors.
 		}
 	}
 

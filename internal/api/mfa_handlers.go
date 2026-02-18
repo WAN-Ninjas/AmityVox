@@ -278,15 +278,19 @@ func (s *Server) handleGenerateBackupCodes(w http.ResponseWriter, r *http.Reques
 
 	// Delete old codes and insert new ones.
 	err = apiutil.WithTx(r.Context(), s.DB.Pool, func(tx pgx.Tx) error {
-		tx.Exec(r.Context(), `DELETE FROM backup_codes WHERE user_id = $1`, userID)
+		if _, err := tx.Exec(r.Context(), `DELETE FROM backup_codes WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
 		for _, code := range codes {
 			hash, err := argon2id.CreateHash(code, argon2id.DefaultParams)
 			if err != nil {
 				return err
 			}
-			tx.Exec(r.Context(),
+			if _, err := tx.Exec(r.Context(),
 				`INSERT INTO backup_codes (user_id, code_hash, used) VALUES ($1, $2, false)`,
-				userID, hash)
+				userID, hash); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

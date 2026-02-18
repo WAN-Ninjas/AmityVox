@@ -1377,16 +1377,20 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Link the parent message to the thread.
-		tx.Exec(r.Context(),
+		if _, err := tx.Exec(r.Context(),
 			`UPDATE messages SET thread_id = $1 WHERE id = $2 AND channel_id = $3`,
-			threadID, messageID, channelID)
+			threadID, messageID, channelID); err != nil {
+			return err
+		}
 
 		// Create a system message about thread creation.
 		sysMsgID := models.NewULID().String()
-		tx.Exec(r.Context(),
+		if _, err := tx.Exec(r.Context(),
 			`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
 			 VALUES ($1, $2, $3, $4, $5, now())`,
-			sysMsgID, channelID, userID, req.Name, models.MessageTypeThreadCreated)
+			sysMsgID, channelID, userID, req.Name, models.MessageTypeThreadCreated); err != nil {
+			return err
+		}
 
 		return nil
 	})
@@ -2555,14 +2559,16 @@ func (h *Handler) HandleApplyChannelTemplate(w http.ResponseWriter, r *http.Requ
 			}
 			if jsonErr := json.Unmarshal(tmpl.PermissionOverwrites, &overwrites); jsonErr == nil {
 				for _, ow := range overwrites {
-					tx.Exec(r.Context(),
+					if _, err := tx.Exec(r.Context(),
 						`INSERT INTO channel_permission_overrides (channel_id, target_type, target_id, permissions_allow, permissions_deny)
 						 VALUES ($1, $2, $3, $4, $5)
 						 ON CONFLICT (channel_id, target_id) DO UPDATE SET
 						     permissions_allow = EXCLUDED.permissions_allow,
 						     permissions_deny = EXCLUDED.permissions_deny`,
 						channelID, ow.TargetType, ow.TargetID, ow.PermissionsAllow, ow.PermissionsDeny,
-					)
+					); err != nil {
+						return err
+					}
 				}
 			}
 		}
