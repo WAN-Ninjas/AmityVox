@@ -134,6 +134,8 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 	// Ensure the LiveKit room exists.
 	if err := ss.voiceSvc.EnsureRoom(ctx, req.ChannelID); err != nil {
 		ss.logger.Error("failed to ensure voice room for federation", slog.String("error", err.Error()))
+		http.Error(w, "Failed to ensure voice room", http.StatusServiceUnavailable)
+		return
 	}
 
 	// Build participant metadata.
@@ -367,17 +369,21 @@ func checkFederatedGuildPerm(ctx context.Context, pool *pgxpool.Pool, guildID, u
 
 	// Admin flag.
 	var userFlags int
-	pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
+	if err := pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags); err != nil {
+		return false
+	}
 	if userFlags&models.UserFlagAdmin != 0 {
 		return true
 	}
 
 	// Compute from default + role permissions.
 	var defaultPerms int64
-	pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms)
+	if err := pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms); err != nil {
+		return false
+	}
 	computed := uint64(defaultPerms)
 
-	rows, _ := pool.Query(ctx,
+	rows, err := pool.Query(ctx,
 		`SELECT r.permissions_allow, r.permissions_deny
 		 FROM roles r
 		 JOIN member_roles mr ON r.id = mr.role_id
@@ -385,14 +391,20 @@ func checkFederatedGuildPerm(ctx context.Context, pool *pgxpool.Pool, guildID, u
 		 ORDER BY r.position DESC`,
 		guildID, userID,
 	)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var allow, deny int64
-			rows.Scan(&allow, &deny)
-			computed |= uint64(allow)
-			computed &^= uint64(deny)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var allow, deny int64
+		if err := rows.Scan(&allow, &deny); err != nil {
+			return false
 		}
+		computed |= uint64(allow)
+		computed &^= uint64(deny)
+	}
+	if err := rows.Err(); err != nil {
+		return false
 	}
 
 	if computed&permissions.Administrator != 0 {
