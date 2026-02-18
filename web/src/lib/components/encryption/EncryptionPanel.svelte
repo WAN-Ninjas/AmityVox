@@ -3,6 +3,7 @@
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { addToast } from '$lib/stores/toast';
 	import { updateChannel as updateChannelStore } from '$lib/stores/channels';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		channelId: string;
@@ -18,14 +19,14 @@
 	let unlockPassphrase = $state('');
 	let hasKey = $state(false);
 	let checkingKey = $state(true);
-	let enabling = $state(false);
-	let unlocking = $state(false);
-	let disabling = $state(false);
+	let enableOp = $state(createAsyncOp());
+	let unlockOp = $state(createAsyncOp());
+	let disableOp = $state(createAsyncOp());
 	let showPassphraseResult = $state('');
 	let showChangePassphrase = $state(false);
 	let newPassphrase = $state('');
 	let newPassphraseConfirm = $state('');
-	let changingPassphrase = $state(false);
+	let changePassphraseOp = $state(createAsyncOp());
 	let showDisableOptions = $state(false);
 	let decryptProgress = $state<{ current: number; total: number } | null>(null);
 
@@ -55,24 +56,20 @@
 			return;
 		}
 
-		enabling = true;
-		try {
+		const pp = passphrase;
+		await enableOp.run(async () => {
 			// Derive and store the key
-			await e2ee.setPassphrase(channelId, passphrase);
-
+			await e2ee.setPassphrase(channelId, pp);
 			// Enable encryption on the server
 			await api.updateChannel(channelId, { encrypted: true } as any);
-
+		}, msg => addToast(msg, 'error'));
+		if (!enableOp.error) {
 			// Show the passphrase one time
-			showPassphraseResult = passphrase;
+			showPassphraseResult = pp;
 			hasKey = true;
 			passphrase = '';
 			passphraseConfirm = '';
 			onchange?.();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to enable encryption', 'error');
-		} finally {
-			enabling = false;
 		}
 	}
 
@@ -82,16 +79,14 @@
 			return;
 		}
 
-		unlocking = true;
-		try {
-			await e2ee.setPassphrase(channelId, unlockPassphrase);
+		await unlockOp.run(
+			() => e2ee.setPassphrase(channelId, unlockPassphrase),
+			msg => addToast(msg, 'error')
+		);
+		if (!unlockOp.error) {
 			hasKey = true;
 			unlockPassphrase = '';
 			addToast('Channel unlocked', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to set passphrase', 'error');
-		} finally {
-			unlocking = false;
 		}
 	}
 
@@ -105,40 +100,35 @@
 			return;
 		}
 
-		changingPassphrase = true;
-		try {
-			await e2ee.setPassphrase(channelId, newPassphrase);
+		await changePassphraseOp.run(
+			() => e2ee.setPassphrase(channelId, newPassphrase),
+			msg => addToast(msg, 'error')
+		);
+		if (!changePassphraseOp.error) {
 			showChangePassphrase = false;
 			newPassphrase = '';
 			newPassphraseConfirm = '';
 			addToast('Passphrase changed. Only future messages will use the new key.', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to change passphrase', 'error');
-		} finally {
-			changingPassphrase = false;
 		}
 	}
 
 	async function handleDisableKeepEncrypted() {
-		disabling = true;
-		try {
+		await disableOp.run(async () => {
 			await api.updateChannel(channelId, { encrypted: false } as any);
 			await e2ee.clearChannelKey(channelId);
+		}, msg => addToast(msg, 'error'));
+		if (!disableOp.error) {
 			hasKey = false;
 			showDisableOptions = false;
 			addToast('Encryption disabled. Old messages remain encrypted.', 'success');
 			onchange?.();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to disable encryption', 'error');
-		} finally {
-			disabling = false;
 		}
 	}
 
 	async function handleDisableDecryptAll() {
-		disabling = true;
 		decryptProgress = { current: 0, total: 0 };
-		try {
+		const chId = channelId;
+		await disableOp.run(async () => {
 			// Fetch all encrypted messages and decrypt them in batches.
 			// NOTE: Messages created during this loop may be missed since encryption
 			// remains enabled until the sweep completes. This is an accepted limitation.
@@ -148,7 +138,7 @@
 			while (true) {
 				const params: Record<string, string> = { limit: '100' };
 				if (before) params.before = before;
-				const messages = await api.getMessages(channelId, params);
+				const messages = await api.getMessages(chId, params);
 
 				const encrypted = messages.filter((m: any) => m.encrypted && m.content);
 				if (encrypted.length === 0 && messages.length === 0) break;
@@ -157,7 +147,7 @@
 					const decrypted: { id: string; content: string }[] = [];
 					for (const msg of encrypted) {
 						try {
-							const plaintext = await e2ee.decryptMessage(channelId, msg.content);
+							const plaintext = await e2ee.decryptMessage(chId, msg.content);
 							decrypted.push({ id: msg.id, content: plaintext });
 						} catch {
 							// Skip messages we can't decrypt (wrong key)
@@ -165,7 +155,7 @@
 					}
 
 					if (decrypted.length > 0) {
-						await api.batchDecryptMessages(channelId, decrypted);
+						await api.batchDecryptMessages(chId, decrypted);
 						totalDecrypted += decrypted.length;
 						decryptProgress = { current: totalDecrypted, total: totalDecrypted };
 					}
@@ -176,19 +166,18 @@
 			}
 
 			// Disable encryption on the channel
-			await api.updateChannel(channelId, { encrypted: false } as any);
-			await e2ee.clearChannelKey(channelId);
+			await api.updateChannel(chId, { encrypted: false } as any);
+			await e2ee.clearChannelKey(chId);
+
 			hasKey = false;
 			showDisableOptions = false;
 			decryptProgress = null;
 			addToast(`Encryption disabled. ${totalDecrypted} message(s) decrypted.`, 'success');
 			onchange?.();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to decrypt messages', 'error');
+		}, msg => {
+			addToast(msg, 'error');
 			decryptProgress = null;
-		} finally {
-			disabling = false;
-		}
+		});
 	}
 
 	function copyPassphrase() {
@@ -283,9 +272,9 @@
 					<button
 						class="shrink-0 rounded-md bg-brand-500 px-4 py-2 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
 						onclick={handleUnlock}
-						disabled={unlocking || !unlockPassphrase.trim()}
+						disabled={unlockOp.loading || !unlockPassphrase.trim()}
 					>
-						{unlocking ? 'Unlocking...' : 'Unlock'}
+						{unlockOp.loading ? 'Unlocking...' : 'Unlock'}
 					</button>
 				</div>
 			</div>
@@ -329,9 +318,9 @@
 						<button
 							class="rounded-md bg-brand-500 px-4 py-2 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
 							onclick={handleChangePassphrase}
-							disabled={changingPassphrase || !newPassphrase.trim()}
+							disabled={changePassphraseOp.loading || !newPassphrase.trim()}
 						>
-							{changingPassphrase ? 'Changing...' : 'Change'}
+							{changePassphraseOp.loading ? 'Changing...' : 'Change'}
 						</button>
 						<button
 							class="rounded-md px-4 py-2 text-xs text-text-muted hover:text-text-primary"
@@ -371,21 +360,21 @@
 							<button
 								class="rounded-md bg-red-500 px-4 py-2 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
 								onclick={handleDisableDecryptAll}
-								disabled={disabling}
+								disabled={disableOp.loading}
 							>
 								Decrypt all messages & turn off
 							</button>
 							<button
 								class="rounded-md border border-red-500/30 px-4 py-2 text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-50"
 								onclick={handleDisableKeepEncrypted}
-								disabled={disabling}
+								disabled={disableOp.loading}
 							>
 								Turn off (keep old messages encrypted)
 							</button>
 							<button
 								class="text-xs text-text-muted hover:text-text-primary"
 								onclick={() => (showDisableOptions = false)}
-								disabled={disabling}
+								disabled={disableOp.loading}
 							>
 								Cancel
 							</button>
@@ -418,9 +407,9 @@
 			<button
 				class="flex items-center gap-2 rounded-md bg-status-online px-4 py-2 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
 				onclick={handleEnable}
-				disabled={enabling || !passphrase.trim() || !passphraseConfirm.trim()}
+				disabled={enableOp.loading || !passphrase.trim() || !passphraseConfirm.trim()}
 			>
-				{#if enabling}
+				{#if enableOp.loading}
 					<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
 					Enabling...
 				{:else}

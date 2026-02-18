@@ -5,6 +5,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { setManualStatus } from '$lib/utils/idle';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		open: boolean;
@@ -31,7 +32,8 @@
 	let showCustomStatus = $state(false);
 	let customText = $state('');
 	let expiryMs = $state<number | null>(null);
-	let saving = $state(false);
+	let saveOp = $state(createAsyncOp());
+	let clearOp = $state(createAsyncOp());
 
 	const currentStatus = $derived(
 		$currentUser?.status_presence ?? 'online'
@@ -65,49 +67,42 @@
 
 	async function saveCustomStatus() {
 		if (!$currentUser) return;
-		saving = true;
 
-		try {
-			const update: Record<string, unknown> = {
-				status_text: customText.trim() || null
-			};
+		const update: Record<string, unknown> = {
+			status_text: customText.trim() || null
+		};
 
-			if (expiryMs === null) {
-				update.status_expires_at = null;
-			} else if (expiryMs === -1) {
-				// "Today" — end of day
-				const endOfDay = new Date();
-				endOfDay.setHours(23, 59, 59, 999);
-				update.status_expires_at = endOfDay.toISOString();
-			} else {
-				update.status_expires_at = new Date(Date.now() + expiryMs).toISOString();
-			}
+		if (expiryMs === null) {
+			update.status_expires_at = null;
+		} else if (expiryMs === -1) {
+			// "Today" — end of day
+			const endOfDay = new Date();
+			endOfDay.setHours(23, 59, 59, 999);
+			update.status_expires_at = endOfDay.toISOString();
+		} else {
+			update.status_expires_at = new Date(Date.now() + expiryMs).toISOString();
+		}
 
-			const user = await api.updateMe(update as any);
-			currentUser.set(user);
+		const user = await saveOp.run(() => api.updateMe(update as any), msg => addToast(msg, 'error'));
+		if (!saveOp.error) {
+			currentUser.set(user!);
 			showCustomStatus = false;
 			addToast('Custom status updated', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to set custom status', 'error');
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function clearCustomStatus() {
 		if (!$currentUser) return;
-		saving = true;
 
-		try {
-			const user = await api.updateMe({ status_text: null, status_expires_at: null } as any);
-			currentUser.set(user);
+		const user = await clearOp.run(
+			() => api.updateMe({ status_text: null, status_expires_at: null } as any),
+			msg => addToast(msg, 'error')
+		);
+		if (!clearOp.error) {
+			currentUser.set(user!);
 			customText = '';
 			expiryMs = null;
 			showCustomStatus = false;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to clear custom status', 'error');
-		} finally {
-			saving = false;
 		}
 	}
 
@@ -125,6 +120,9 @@
 		class="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg bg-bg-floating shadow-lg"
 		onclick={(e) => e.stopPropagation()}
 		onkeydown={(e) => e.key === 'Escape' && onclose()}
+		role="listbox"
+		aria-label="Set status"
+		aria-expanded="true"
 	>
 		<!-- Status options -->
 		<div class="p-1.5">
@@ -192,17 +190,17 @@
 							<button
 								class="btn-secondary flex-1 text-xs"
 								onclick={clearCustomStatus}
-								disabled={saving}
+								disabled={clearOp.loading || saveOp.loading}
 							>
-								Clear
+								{clearOp.loading ? 'Clearing...' : 'Clear'}
 							</button>
 						{/if}
 						<button
 							class="btn-primary flex-1 text-xs"
 							onclick={saveCustomStatus}
-							disabled={saving || !customText.trim()}
+							disabled={saveOp.loading || clearOp.loading || !customText.trim()}
 						>
-							{saving ? 'Saving...' : 'Save'}
+							{saveOp.loading ? 'Saving...' : 'Save'}
 						</button>
 					</div>
 				</div>

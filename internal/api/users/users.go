@@ -5,6 +5,8 @@ package users
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -16,10 +18,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
 )
+
+// sessionDisplayID returns a non-reversible display identifier for a session
+// token. It uses the first 16 hex characters of the SHA-256 hash so the raw
+// token is never exposed via the API.
+func sessionDisplayID(rawToken string) string {
+	h := sha256.Sum256([]byte(rawToken))
+	return hex.EncodeToString(h[:8]) // 8 bytes = 16 hex chars
+}
 
 // FederationDMNotifier is called when a DM is created with a remote user.
 // The users handler calls this to notify the remote instance of the new DM.
@@ -58,15 +69,14 @@ func (h *Handler) HandleGetSelf(w http.ResponseWriter, r *http.Request) {
 	user, err := h.getUser(r.Context(), userID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "user_not_found", "User not found")
+			apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "User not found")
 			return
 		}
-		h.Logger.Error("failed to get user", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user")
+		apiutil.InternalError(w, h.Logger, "Failed to get user", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user.ToSelf())
+	apiutil.WriteJSON(w, http.StatusOK, user.ToSelf())
 }
 
 // HandleUpdateSelf updates the authenticated user's profile fields.
@@ -75,37 +85,36 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req updateSelfRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	// Validate field lengths.
 	if req.DisplayName != nil && len(*req.DisplayName) > 32 {
-		writeError(w, http.StatusBadRequest, "invalid_display_name", "Display name must be at most 32 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_display_name", "Display name must be at most 32 characters")
 		return
 	}
 	if req.StatusText != nil && len(*req.StatusText) > 128 {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Status text must be at most 128 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status text must be at most 128 characters")
 		return
 	}
 	if req.Bio != nil && len(*req.Bio) > 2000 {
-		writeError(w, http.StatusBadRequest, "invalid_bio", "Bio must be at most 2000 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_bio", "Bio must be at most 2000 characters")
 		return
 	}
 	if req.StatusPresence != nil {
 		valid := map[string]bool{"online": true, "idle": true, "focus": true, "busy": true, "dnd": true, "invisible": true, "offline": true}
 		if !valid[*req.StatusPresence] {
-			writeError(w, http.StatusBadRequest, "invalid_presence", "Invalid status presence value")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_presence", "Invalid status presence value")
 			return
 		}
 	}
 	if req.Pronouns != nil && len(*req.Pronouns) > 40 {
-		writeError(w, http.StatusBadRequest, "invalid_pronouns", "Pronouns must be at most 40 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_pronouns", "Pronouns must be at most 40 characters")
 		return
 	}
 	if req.AccentColor != nil && len(*req.AccentColor) > 7 {
-		writeError(w, http.StatusBadRequest, "invalid_accent_color", "Accent color must be a hex color (e.g. #FF5500)")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_accent_color", "Accent color must be a hex color (e.g. #FF5500)")
 		return
 	}
 
@@ -118,7 +127,7 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		} else {
 			t, err := time.Parse(time.RFC3339, *req.StatusExpiresAt)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid_status_expires", "status_expires_at must be RFC3339 format")
+				apiutil.WriteError(w, http.StatusBadRequest, "invalid_status_expires", "status_expires_at must be RFC3339 format")
 				return
 			}
 			statusExpiresAt = &t
@@ -127,8 +136,7 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.updateUser(r.Context(), userID, req, statusExpiresAt)
 	if err != nil {
-		h.Logger.Error("failed to update user", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update user")
+		apiutil.InternalError(w, h.Logger, "Failed to update user", err)
 		return
 	}
 
@@ -140,26 +148,24 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		Data:   userData,
 	})
 
-	writeJSON(w, http.StatusOK, user.ToSelf())
+	apiutil.WriteJSON(w, http.StatusOK, user.ToSelf())
 }
 
 // HandleGetUser returns a user's public profile by ID.
 // GET /api/v1/users/{userID}
 func (h *Handler) HandleGetUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
-	if targetID == "" {
-		writeError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
+	if !apiutil.RequireNonEmpty(w, "User ID", targetID) {
 		return
 	}
 
 	user, err := h.getUser(r.Context(), targetID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "user_not_found", "User not found")
+			apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "User not found")
 			return
 		}
-		h.Logger.Error("failed to get user", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user")
+		apiutil.InternalError(w, h.Logger, "Failed to get user", err)
 		return
 	}
 
@@ -167,7 +173,7 @@ func (h *Handler) HandleGetUser(w http.ResponseWriter, r *http.Request) {
 	user.Email = nil
 	h.computeHandle(r.Context(), user)
 
-	writeJSON(w, http.StatusOK, user)
+	apiutil.WriteJSON(w, http.StatusOK, user)
 }
 
 // HandleGetSelfGuilds returns the guilds the authenticated user is a member of.
@@ -188,8 +194,7 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 		userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get guilds", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guilds")
+		apiutil.InternalError(w, h.Logger, "Failed to get guilds", err)
 		return
 	}
 	defer rows.Close()
@@ -204,14 +209,13 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 			&g.VerificationLevel, &g.AFKChannelID, &g.AFKTimeout,
 			&g.Tags, &g.MemberCount, &g.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan guild", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")
+			apiutil.InternalError(w, h.Logger, "Failed to read guilds", err)
 			return
 		}
 		guilds = append(guilds, g)
 	}
 
-	writeJSON(w, http.StatusOK, guilds)
+	apiutil.WriteJSON(w, http.StatusOK, guilds)
 }
 
 // HandleGetSelfDMs returns the DM and group channels the authenticated user
@@ -233,8 +237,7 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 		userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get DMs", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get DMs")
+		apiutil.InternalError(w, h.Logger, "Failed to get DMs", err)
 		return
 	}
 	defer rows.Close()
@@ -249,8 +252,7 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 			&c.Locked, &c.LockedBy, &c.LockedAt, &c.Archived,
 			&c.ParentChannelID, &c.LastActivityAt, &c.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan channel", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read DMs")
+			apiutil.InternalError(w, h.Logger, "Failed to read DMs", err)
 			return
 		}
 		channels = append(channels, c)
@@ -272,7 +274,7 @@ func (h *Handler) HandleGetSelfDMs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, channels)
+	apiutil.WriteJSON(w, http.StatusOK, channels)
 }
 
 // HandleCreateDM creates a DM channel with another user or returns an existing one.
@@ -281,12 +283,11 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	targetID := chi.URLParam(r, "userID")
 
-	if targetID == "" {
-		writeError(w, http.StatusBadRequest, "missing_user_id", "Target user ID is required")
+	if !apiutil.RequireNonEmpty(w, "Target user ID", targetID) {
 		return
 	}
 	if targetID == userID {
-		writeError(w, http.StatusBadRequest, "self_dm", "Cannot create a DM with yourself")
+		apiutil.WriteError(w, http.StatusBadRequest, "self_dm", "Cannot create a DM with yourself")
 		return
 	}
 
@@ -294,7 +295,7 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 	var exists bool
 	err := h.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, targetID).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusNotFound, "user_not_found", "Target user not found")
+		apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "Target user not found")
 		return
 	}
 
@@ -313,11 +314,10 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 		// Existing DM found — return it.
 		channel, err := h.getChannel(r.Context(), channelID)
 		if err != nil {
-			h.Logger.Error("failed to get existing DM", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get DM")
+			apiutil.InternalError(w, h.Logger, "Failed to get DM", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, channel)
+		apiutil.WriteJSON(w, http.StatusOK, channel)
 		return
 	}
 
@@ -325,50 +325,34 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 	newID := models.NewULID().String()
 	now := time.Now()
 
-	tx, err := h.Pool.Begin(r.Context())
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO channels (id, channel_type, created_at) VALUES ($1, 'dm', $2)`,
+			newID, now,
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3), ($1, $4, $3)`,
+			newID, userID, now, targetID,
+		)
+		return err
+	})
 	if err != nil {
-		h.Logger.Error("failed to begin tx", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create DM")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO channels (id, channel_type, created_at) VALUES ($1, 'dm', $2)`,
-		newID, now,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create DM channel", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create DM")
-		return
-	}
-
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3), ($1, $4, $3)`,
-		newID, userID, now, targetID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to add DM recipients", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create DM")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit DM", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create DM")
+		apiutil.InternalError(w, h.Logger, "Failed to create DM", err)
 		return
 	}
 
 	channel, _ := h.getChannel(r.Context(), newID)
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+	h.EventBus.PublishUserEvent(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", targetID, channel)
 
 	// If the target user is from a remote instance, notify their instance.
 	if h.NotifyFederatedDM != nil {
 		h.notifyRemoteInstancesAsync(r.Context(), newID, "dm", userID, []string{targetID}, nil)
 	}
 
-	writeJSON(w, http.StatusCreated, channel)
+	apiutil.WriteJSON(w, http.StatusCreated, channel)
 }
 
 // HandleAddFriend sends or accepts a friend request.
@@ -378,7 +362,7 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
 
 	if targetID == "" || targetID == userID {
-		writeError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
 		return
 	}
 
@@ -389,7 +373,7 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 		targetID, userID,
 	).Scan(&blocked)
 	if blocked {
-		writeError(w, http.StatusForbidden, "blocked", "Cannot send friend request to this user")
+		apiutil.WriteError(w, http.StatusForbidden, "blocked", "Cannot send friend request to this user")
 		return
 	}
 
@@ -403,30 +387,30 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		switch existingStatus {
 		case models.RelationshipFriend:
-			writeError(w, http.StatusConflict, "already_friends", "Already friends")
+			apiutil.WriteError(w, http.StatusConflict, "already_friends", "Already friends")
 			return
 		case models.RelationshipBlocked:
-			writeError(w, http.StatusConflict, "blocked_user", "You have blocked this user")
+			apiutil.WriteError(w, http.StatusConflict, "blocked_user", "You have blocked this user")
 			return
 		case models.RelationshipPendingOutgoing:
-			writeError(w, http.StatusConflict, "already_pending", "Friend request already sent")
+			apiutil.WriteError(w, http.StatusConflict, "already_pending", "Friend request already sent")
 			return
 		case models.RelationshipPendingIncoming:
 			// Accept the friend request — update both sides.
-			tx, err := h.Pool.Begin(r.Context())
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "internal_error", "Failed to accept request")
+			if err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+				if _, err := tx.Exec(r.Context(),
+					`UPDATE user_relationships SET status = 'friend' WHERE user_id = $1 AND target_id = $2`,
+					userID, targetID); err != nil {
+					return err
+				}
+				_, err := tx.Exec(r.Context(),
+					`UPDATE user_relationships SET status = 'friend' WHERE user_id = $1 AND target_id = $2`,
+					targetID, userID)
+				return err
+			}); err != nil {
+				apiutil.InternalError(w, h.Logger, "Failed to accept friend request", err)
 				return
 			}
-			defer tx.Rollback(r.Context())
-
-			tx.Exec(r.Context(),
-				`UPDATE user_relationships SET status = 'friend' WHERE user_id = $1 AND target_id = $2`,
-				userID, targetID)
-			tx.Exec(r.Context(),
-				`UPDATE user_relationships SET status = 'friend' WHERE user_id = $1 AND target_id = $2`,
-				targetID, userID)
-			tx.Commit(r.Context())
 
 			// Emit RELATIONSHIP_UPDATE to both users.
 			selfUser, _ := h.getUser(r.Context(), userID)
@@ -444,7 +428,7 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 				Type: "RELATIONSHIP_UPDATE", UserID: targetID, Data: targetRel,
 			})
 
-			writeJSON(w, http.StatusOK, map[string]string{
+			apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 				"user_id":   userID,
 				"target_id": targetID,
 				"status":    models.RelationshipFriend,
@@ -454,26 +438,23 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create new friend request.
-	tx, err := h.Pool.Begin(r.Context())
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO user_relationships (user_id, target_id, status, created_at)
+			 VALUES ($1, $2, 'pending_outgoing', now())
+			 ON CONFLICT (user_id, target_id) DO UPDATE SET status = 'pending_outgoing'`,
+			userID, targetID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO user_relationships (user_id, target_id, status, created_at)
+			 VALUES ($1, $2, 'pending_incoming', now())
+			 ON CONFLICT (user_id, target_id) DO UPDATE SET status = 'pending_incoming'`,
+			targetID, userID)
+		return err
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to send friend request")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	tx.Exec(r.Context(),
-		`INSERT INTO user_relationships (user_id, target_id, status, created_at)
-		 VALUES ($1, $2, 'pending_outgoing', now())
-		 ON CONFLICT (user_id, target_id) DO UPDATE SET status = 'pending_outgoing'`,
-		userID, targetID)
-	tx.Exec(r.Context(),
-		`INSERT INTO user_relationships (user_id, target_id, status, created_at)
-		 VALUES ($1, $2, 'pending_incoming', now())
-		 ON CONFLICT (user_id, target_id) DO UPDATE SET status = 'pending_incoming'`,
-		targetID, userID)
-
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to send friend request")
+		apiutil.InternalError(w, h.Logger, "Failed to send friend request", err)
 		return
 	}
 
@@ -493,7 +474,7 @@ func (h *Handler) HandleAddFriend(w http.ResponseWriter, r *http.Request) {
 		Type: "RELATIONSHIP_ADD", UserID: targetID, Data: targetRel,
 	})
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"user_id":   userID,
 		"target_id": targetID,
 		"status":    models.RelationshipPendingOutgoing,
@@ -507,25 +488,25 @@ func (h *Handler) HandleRemoveFriend(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
 
 	if targetID == "" || targetID == userID {
-		writeError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status IN ('friend', 'pending_outgoing', 'pending_incoming')`,
+			userID, targetID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(r.Context(),
+			`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status IN ('friend', 'pending_incoming', 'pending_outgoing')`,
+			targetID, userID)
+		return err
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove friend")
+		apiutil.InternalError(w, h.Logger, "Failed to remove friend", err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-
-	tx.Exec(r.Context(),
-		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status IN ('friend', 'pending_outgoing', 'pending_incoming')`,
-		userID, targetID)
-	tx.Exec(r.Context(),
-		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status IN ('friend', 'pending_incoming', 'pending_outgoing')`,
-		targetID, userID)
-
-	tx.Commit(r.Context())
 
 	// Emit RELATIONSHIP_REMOVE to both users.
 	selfRel, _ := json.Marshal(map[string]string{"user_id": userID, "target_id": targetID, "type": "none"})
@@ -561,7 +542,7 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
 
 	if targetID == "" || targetID == userID {
-		writeError(w, http.StatusBadRequest, "invalid_target", "Cannot block yourself")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Cannot block yourself")
 		return
 	}
 
@@ -570,7 +551,7 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, targetID,
 	).Scan(&exists); err != nil || !exists {
-		writeError(w, http.StatusNotFound, "user_not_found", "Target user not found")
+		apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "Target user not found")
 		return
 	}
 
@@ -581,23 +562,22 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 		userID, targetID,
 	).Scan(&alreadyBlocked)
 	if alreadyBlocked {
-		writeError(w, http.StatusConflict, "already_blocked", "User is already blocked")
+		apiutil.WriteError(w, http.StatusConflict, "already_blocked", "User is already blocked")
 		return
 	}
 
 	// Parse optional reason and level from request body.
 	var req blockUserRequest
 	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		if !apiutil.DecodeJSON(w, r, &req) {
 			return
 		}
 		if req.Reason != nil && len(*req.Reason) > 256 {
-			writeError(w, http.StatusBadRequest, "reason_too_long", "Block reason must be at most 256 characters")
+			apiutil.WriteError(w, http.StatusBadRequest, "reason_too_long", "Block reason must be at most 256 characters")
 			return
 		}
 		if req.Level != nil && *req.Level != "ignore" && *req.Level != "block" {
-			writeError(w, http.StatusBadRequest, "invalid_level", "Block level must be 'ignore' or 'block'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_level", "Block level must be 'ignore' or 'block'")
 			return
 		}
 	}
@@ -610,57 +590,34 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 	blockID := models.NewULID().String()
 	now := time.Now()
 
-	tx, err := h.Pool.Begin(r.Context())
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Remove any existing relationships from both sides (friend requests, friendships).
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`,
+			userID, targetID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`,
+			targetID, userID); err != nil {
+			return err
+		}
+		// Insert blocked status into user_relationships for fast relationship checks.
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO user_relationships (user_id, target_id, status, created_at)
+			 VALUES ($1, $2, 'blocked', $3)`,
+			userID, targetID, now); err != nil {
+			return err
+		}
+		// Insert into user_blocks for richer metadata.
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO user_blocks (id, user_id, target_id, reason, level, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			blockID, userID, targetID, req.Reason, blockLevel, now)
+		return err
+	})
 	if err != nil {
-		h.Logger.Error("failed to begin tx for block", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Remove any existing relationships from both sides (friend requests, friendships).
-	_, err = tx.Exec(r.Context(),
-		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`,
-		userID, targetID)
-	if err != nil {
-		h.Logger.Error("failed to clear relationship (self)", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
-		return
-	}
-	_, err = tx.Exec(r.Context(),
-		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2`,
-		targetID, userID)
-	if err != nil {
-		h.Logger.Error("failed to clear relationship (target)", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
-		return
-	}
-
-	// Insert blocked status into user_relationships for fast relationship checks.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO user_relationships (user_id, target_id, status, created_at)
-		 VALUES ($1, $2, 'blocked', $3)`,
-		userID, targetID, now)
-	if err != nil {
-		h.Logger.Error("failed to insert relationship block", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
-		return
-	}
-
-	// Insert into user_blocks for richer metadata.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO user_blocks (id, user_id, target_id, reason, level, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		blockID, userID, targetID, req.Reason, blockLevel, now)
-	if err != nil {
-		h.Logger.Error("failed to insert user_block", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit block tx", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to block user")
+		apiutil.InternalError(w, h.Logger, "Failed to block user", err)
 		return
 	}
 
@@ -675,14 +632,14 @@ func (h *Handler) HandleBlockUser(w http.ResponseWriter, r *http.Request) {
 		result["reason"] = *req.Reason
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectRelationshipUpdate, "RELATIONSHIP_UPDATE", map[string]string{
+	h.EventBus.PublishUserEvent(r.Context(), events.SubjectRelationshipUpdate, "RELATIONSHIP_UPDATE", targetID, map[string]string{
 		"user_id":   userID,
 		"target_id": targetID,
 		"status":    models.RelationshipBlocked,
 		"level":     blockLevel,
 	})
 
-	writeJSON(w, http.StatusOK, result)
+	apiutil.WriteJSON(w, http.StatusOK, result)
 }
 
 // HandleUnblockUser removes a block on another user. Cleans up both
@@ -693,49 +650,39 @@ func (h *Handler) HandleUnblockUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
 
 	if targetID == "" || targetID == userID {
-		writeError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
+	var notBlocked bool
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Remove from user_relationships.
+		result, err := tx.Exec(r.Context(),
+			`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status = 'blocked'`,
+			userID, targetID)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() == 0 {
+			notBlocked = true
+			return nil
+		}
+		// Remove from user_blocks.
+		_, err = tx.Exec(r.Context(),
+			`DELETE FROM user_blocks WHERE user_id = $1 AND target_id = $2`,
+			userID, targetID)
+		return err
+	})
 	if err != nil {
-		h.Logger.Error("failed to begin tx for unblock", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
+		apiutil.InternalError(w, h.Logger, "Failed to unblock user", err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-
-	// Remove from user_relationships.
-	result, err := tx.Exec(r.Context(),
-		`DELETE FROM user_relationships WHERE user_id = $1 AND target_id = $2 AND status = 'blocked'`,
-		userID, targetID)
-	if err != nil {
-		h.Logger.Error("failed to delete relationship block", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
-		return
-	}
-	if result.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_blocked", "User is not blocked")
+	if notBlocked {
+		apiutil.WriteError(w, http.StatusNotFound, "not_blocked", "User is not blocked")
 		return
 	}
 
-	// Remove from user_blocks.
-	_, err = tx.Exec(r.Context(),
-		`DELETE FROM user_blocks WHERE user_id = $1 AND target_id = $2`,
-		userID, targetID)
-	if err != nil {
-		h.Logger.Error("failed to delete user_block", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit unblock tx", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unblock user")
-		return
-	}
-
-	h.EventBus.PublishJSON(r.Context(), events.SubjectRelationshipUpdate, "RELATIONSHIP_UPDATE", map[string]string{
+	h.EventBus.PublishUserEvent(r.Context(), events.SubjectRelationshipUpdate, "RELATIONSHIP_UPDATE", targetID, map[string]string{
 		"user_id":   userID,
 		"target_id": targetID,
 		"status":    "none",
@@ -751,17 +698,16 @@ func (h *Handler) HandleUpdateBlockLevel(w http.ResponseWriter, r *http.Request)
 	targetID := chi.URLParam(r, "userID")
 
 	if targetID == "" || targetID == userID {
-		writeError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Invalid target user")
 		return
 	}
 
 	var req updateBlockRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Level != "ignore" && req.Level != "block" {
-		writeError(w, http.StatusBadRequest, "invalid_level", "Block level must be 'ignore' or 'block'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_level", "Block level must be 'ignore' or 'block'")
 		return
 	}
 
@@ -769,16 +715,15 @@ func (h *Handler) HandleUpdateBlockLevel(w http.ResponseWriter, r *http.Request)
 		`UPDATE user_blocks SET level = $1 WHERE user_id = $2 AND target_id = $3`,
 		req.Level, userID, targetID)
 	if err != nil {
-		h.Logger.Error("failed to update block level", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update block level")
+		apiutil.InternalError(w, h.Logger, "Failed to update block level", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Block not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"level": req.Level})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"level": req.Level})
 }
 
 // HandleGetBlockedUsers returns the list of users blocked by the authenticated
@@ -800,8 +745,7 @@ func (h *Handler) HandleGetBlockedUsers(w http.ResponseWriter, r *http.Request) 
 		userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get blocked users", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get blocked users")
+		apiutil.InternalError(w, h.Logger, "Failed to get blocked users", err)
 		return
 	}
 	defer rows.Close()
@@ -817,15 +761,14 @@ func (h *Handler) HandleGetBlockedUsers(w http.ResponseWriter, r *http.Request) 
 			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
 			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan blocked user", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read blocked users")
+			apiutil.InternalError(w, h.Logger, "Failed to read blocked users", err)
 			return
 		}
 		b.User = &u
 		blocks = append(blocks, b)
 	}
 
-	writeJSON(w, http.StatusOK, blocks)
+	apiutil.WriteJSON(w, http.StatusOK, blocks)
 }
 
 // HandleGetSelfSessions lists all active sessions for the authenticated user.
@@ -833,7 +776,7 @@ func (h *Handler) HandleGetBlockedUsers(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) HandleGetSelfSessions(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		apiutil.WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
@@ -844,7 +787,7 @@ func (h *Handler) HandleGetSelfSessions(w http.ResponseWriter, r *http.Request) 
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get sessions")
+		apiutil.InternalError(w, h.Logger, "Failed to get sessions", err)
 		return
 	}
 	defer rows.Close()
@@ -857,11 +800,11 @@ func (h *Handler) HandleGetSelfSessions(w http.ResponseWriter, r *http.Request) 
 			&s.ID, &s.UserID, &s.DeviceName,
 			&s.UserAgent, &s.CreatedAt, &s.LastActiveAt, &s.ExpiresAt,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read sessions")
+			apiutil.InternalError(w, h.Logger, "Failed to read sessions", err)
 			return
 		}
 		session := map[string]interface{}{
-			"id":             s.ID,
+			"id":             sessionDisplayID(s.ID),
 			"device_name":    s.DeviceName,
 			"user_agent":     s.UserAgent,
 			"created_at":     s.CreatedAt,
@@ -872,29 +815,53 @@ func (h *Handler) HandleGetSelfSessions(w http.ResponseWriter, r *http.Request) 
 		sessions = append(sessions, session)
 	}
 
-	writeJSON(w, http.StatusOK, sessions)
+	apiutil.WriteJSON(w, http.StatusOK, sessions)
 }
 
 // HandleDeleteSelfSession revokes a specific session for the authenticated user.
+// The sessionID URL parameter is the display ID (SHA-256 hash prefix), not the
+// raw token. We iterate the user's sessions and match by computing the same hash.
 // DELETE /api/v1/users/@me/sessions/{sessionID}
 func (h *Handler) HandleDeleteSelfSession(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		apiutil.WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
-	sessionID := chi.URLParam(r, "sessionID")
+	displayID := chi.URLParam(r, "sessionID")
 
-	result, err := h.Pool.Exec(r.Context(),
-		`DELETE FROM user_sessions WHERE id = $1 AND user_id = $2`, sessionID, userID)
+	// Fetch all session IDs for this user and find the one whose hash prefix matches.
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id FROM user_sessions WHERE user_id = $1`, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete session")
+		apiutil.InternalError(w, h.Logger, "Failed to delete session", err)
+		return
+	}
+	defer rows.Close()
+
+	var realSessionID string
+	for rows.Next() {
+		var rawID string
+		if err := rows.Scan(&rawID); err != nil {
+			continue
+		}
+		if sessionDisplayID(rawID) == displayID {
+			realSessionID = rawID
+			break
+		}
+	}
+	rows.Close()
+
+	if realSessionID == "" {
+		apiutil.WriteError(w, http.StatusNotFound, "session_not_found", "Session not found")
 		return
 	}
 
-	if result.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "session_not_found", "Session not found")
+	_, err = h.Pool.Exec(r.Context(),
+		`DELETE FROM user_sessions WHERE id = $1 AND user_id = $2`, realSessionID, userID)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to delete session", err)
 		return
 	}
 
@@ -913,7 +880,7 @@ func (h *Handler) HandleGetSelfReadState(w http.ResponseWriter, r *http.Request)
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get read state")
+		apiutil.InternalError(w, h.Logger, "Failed to get read state", err)
 		return
 	}
 	defer rows.Close()
@@ -928,13 +895,13 @@ func (h *Handler) HandleGetSelfReadState(w http.ResponseWriter, r *http.Request)
 	for rows.Next() {
 		var rs readState
 		if err := rows.Scan(&rs.ChannelID, &rs.LastReadID, &rs.MentionCount); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read state")
+			apiutil.InternalError(w, h.Logger, "Failed to read state", err)
 			return
 		}
 		states = append(states, rs)
 	}
 
-	writeJSON(w, http.StatusOK, states)
+	apiutil.WriteJSON(w, http.StatusOK, states)
 }
 
 // HandleDeleteSelf soft-deletes the authenticated user's account.
@@ -948,57 +915,58 @@ func (h *Handler) HandleDeleteSelf(w http.ResponseWriter, r *http.Request) {
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM guilds WHERE owner_id = $1`, userID,
 	).Scan(&ownedCount); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check guild ownership")
+		apiutil.InternalError(w, h.Logger, "Failed to check guild ownership", err)
 		return
 	}
 	if ownedCount > 0 {
-		writeError(w, http.StatusBadRequest, "owns_guilds",
+		apiutil.WriteError(w, http.StatusBadRequest, "owns_guilds",
 			"Transfer or delete all guilds you own before deleting your account")
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Soft-delete: set deleted flag, clear personal data.
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE users SET
+				flags = flags | $2,
+				display_name = NULL,
+				avatar_id = NULL,
+				status_text = NULL,
+				bio = NULL,
+				email = NULL,
+				password_hash = NULL
+			 WHERE id = $1`,
+			userID, models.UserFlagDeleted,
+		); err != nil {
+			return err
+		}
+
+		// Remove from all guilds.
+		if _, err := tx.Exec(r.Context(), `DELETE FROM guild_members WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(r.Context(), `DELETE FROM member_roles WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
+
+		// Remove all relationships and blocks.
+		if _, err := tx.Exec(r.Context(), `DELETE FROM user_relationships WHERE user_id = $1 OR target_id = $1`, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(r.Context(), `DELETE FROM user_blocks WHERE user_id = $1 OR target_id = $1`, userID); err != nil {
+			return err
+		}
+
+		// Invalidate all sessions.
+		_, err := tx.Exec(r.Context(), `DELETE FROM user_sessions WHERE user_id = $1`, userID)
+		return err
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete account")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Soft-delete: set deleted flag, clear personal data.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE users SET
-			flags = flags | $2,
-			display_name = NULL,
-			avatar_id = NULL,
-			status_text = NULL,
-			bio = NULL,
-			email = NULL,
-			password_hash = NULL
-		 WHERE id = $1`,
-		userID, models.UserFlagDeleted,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete account")
+		apiutil.InternalError(w, h.Logger, "Failed to delete account", err)
 		return
 	}
 
-	// Remove from all guilds.
-	tx.Exec(r.Context(), `DELETE FROM guild_members WHERE user_id = $1`, userID)
-	tx.Exec(r.Context(), `DELETE FROM member_roles WHERE user_id = $1`, userID)
-
-	// Remove all relationships and blocks.
-	tx.Exec(r.Context(), `DELETE FROM user_relationships WHERE user_id = $1 OR target_id = $1`, userID)
-	tx.Exec(r.Context(), `DELETE FROM user_blocks WHERE user_id = $1 OR target_id = $1`, userID)
-
-	// Invalidate all sessions.
-	tx.Exec(r.Context(), `DELETE FROM user_sessions WHERE user_id = $1`, userID)
-
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete account")
-		return
-	}
-
-	h.EventBus.PublishJSON(r.Context(), events.SubjectUserUpdate, "USER_UPDATE", map[string]interface{}{
+	h.EventBus.PublishUserEvent(r.Context(), events.SubjectUserUpdate, "USER_UPDATE", userID, map[string]interface{}{
 		"id":      userID,
 		"deleted": true,
 	})
@@ -1018,18 +986,18 @@ func (h *Handler) HandleGetUserNote(w http.ResponseWriter, r *http.Request) {
 		userID, targetID,
 	).Scan(&note)
 	if err == pgx.ErrNoRows {
-		writeJSON(w, http.StatusOK, map[string]string{
+		apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 			"target_id": targetID,
 			"note":      "",
 		})
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get note")
+		apiutil.InternalError(w, h.Logger, "Failed to get note", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"target_id": targetID,
 		"note":      note,
 	})
@@ -1044,13 +1012,12 @@ func (h *Handler) HandleSetUserNote(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Note string `json:"note"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if len(req.Note) > 256 {
-		writeError(w, http.StatusBadRequest, "note_too_long", "Note must be at most 256 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "note_too_long", "Note must be at most 256 characters")
 		return
 	}
 
@@ -1065,12 +1032,12 @@ func (h *Handler) HandleSetUserNote(w http.ResponseWriter, r *http.Request) {
 			 ON CONFLICT (user_id, target_id) DO UPDATE SET note = $3, updated_at = now()`,
 			userID, targetID, req.Note)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to save note")
+			apiutil.InternalError(w, h.Logger, "Failed to save note", err)
 			return
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"target_id": targetID,
 		"note":      req.Note,
 	})
@@ -1086,11 +1053,11 @@ func (h *Handler) HandleGetUserSettings(w http.ResponseWriter, r *http.Request) 
 		`SELECT settings FROM user_settings WHERE user_id = $1`, userID,
 	).Scan(&settings)
 	if err == pgx.ErrNoRows {
-		writeJSON(w, http.StatusOK, map[string]interface{}{})
+		apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{})
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get settings")
+		apiutil.InternalError(w, h.Logger, "Failed to get settings", err)
 		return
 	}
 
@@ -1105,8 +1072,7 @@ func (h *Handler) HandleUpdateUserSettings(w http.ResponseWriter, r *http.Reques
 	userID := auth.UserIDFromContext(r.Context())
 
 	var settings json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid JSON body")
+	if !apiutil.DecodeJSON(w, r, &settings) {
 		return
 	}
 
@@ -1116,8 +1082,7 @@ func (h *Handler) HandleUpdateUserSettings(w http.ResponseWriter, r *http.Reques
 		 ON CONFLICT (user_id) DO UPDATE SET settings = $2, updated_at = now()`,
 		userID, settings)
 	if err != nil {
-		h.Logger.Error("failed to update settings", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update settings")
+		apiutil.InternalError(w, h.Logger, "Failed to update settings", err)
 		return
 	}
 
@@ -1148,7 +1113,7 @@ func (h *Handler) HandleGetMutualFriends(w http.ResponseWriter, r *http.Request)
 		userID, targetID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get mutual friends")
+		apiutil.InternalError(w, h.Logger, "Failed to get mutual friends", err)
 		return
 	}
 	defer rows.Close()
@@ -1162,13 +1127,13 @@ func (h *Handler) HandleGetMutualFriends(w http.ResponseWriter, r *http.Request)
 			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
 			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read mutual friends")
+			apiutil.InternalError(w, h.Logger, "Failed to read mutual friends", err)
 			return
 		}
 		friends = append(friends, u)
 	}
 
-	writeJSON(w, http.StatusOK, friends)
+	apiutil.WriteJSON(w, http.StatusOK, friends)
 }
 
 // HandleGetMutualGuilds returns guilds that both the current user and a target share.
@@ -1191,7 +1156,7 @@ func (h *Handler) HandleGetMutualGuilds(w http.ResponseWriter, r *http.Request) 
 		userID, targetID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get mutual guilds")
+		apiutil.InternalError(w, h.Logger, "Failed to get mutual guilds", err)
 		return
 	}
 	defer rows.Close()
@@ -1206,13 +1171,13 @@ func (h *Handler) HandleGetMutualGuilds(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var g mutualGuild
 		if err := rows.Scan(&g.ID, &g.Name, &g.IconID); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read mutual guilds")
+			apiutil.InternalError(w, h.Logger, "Failed to read mutual guilds", err)
 			return
 		}
 		guilds = append(guilds, g)
 	}
 
-	writeJSON(w, http.StatusOK, guilds)
+	apiutil.WriteJSON(w, http.StatusOK, guilds)
 }
 
 // HandleGetRelationships returns all relationships (friends, pending, blocked)
@@ -1236,8 +1201,7 @@ func (h *Handler) HandleGetRelationships(w http.ResponseWriter, r *http.Request)
 		userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get relationships", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get relationships")
+		apiutil.InternalError(w, h.Logger, "Failed to get relationships", err)
 		return
 	}
 	defer rows.Close()
@@ -1264,8 +1228,7 @@ func (h *Handler) HandleGetRelationships(w http.ResponseWriter, r *http.Request)
 			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
 			&instanceDomain,
 		); err != nil {
-			h.Logger.Error("failed to scan relationship", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read relationships")
+			apiutil.InternalError(w, h.Logger, "Failed to read relationships", err)
 			return
 		}
 		// Compute handle inline to avoid N+1 queries.
@@ -1278,12 +1241,11 @@ func (h *Handler) HandleGetRelationships(w http.ResponseWriter, r *http.Request)
 		relationships = append(relationships, rel)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating relationships", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read relationships")
+		apiutil.InternalError(w, h.Logger, "Failed to read relationships", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, relationships)
+	apiutil.WriteJSON(w, http.StatusOK, relationships)
 }
 
 // --- Internal helpers ---
@@ -1436,10 +1398,10 @@ func (h *Handler) HandleGetUserLinks(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
 	links, err := h.getUserLinks(r.Context(), targetID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user links")
+		apiutil.InternalError(w, h.Logger, "Failed to get user links", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, links)
+	apiutil.WriteJSON(w, http.StatusOK, links)
 }
 
 // HandleGetMyLinks returns the authenticated user's own links.
@@ -1448,10 +1410,10 @@ func (h *Handler) HandleGetMyLinks(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	links, err := h.getUserLinks(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get links")
+		apiutil.InternalError(w, h.Logger, "Failed to get links", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, links)
+	apiutil.WriteJSON(w, http.StatusOK, links)
 }
 
 // HandleCreateLink adds a profile link for the authenticated user.
@@ -1464,16 +1426,15 @@ func (h *Handler) HandleCreateLink(w http.ResponseWriter, r *http.Request) {
 		Label    string `json:"label"`
 		URL      string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Platform == "" || req.Label == "" || req.URL == "" {
-		writeError(w, http.StatusBadRequest, "missing_fields", "platform, label, and url are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_fields", "platform, label, and url are required")
 		return
 	}
 	if !isValidLinkURL(req.URL) {
-		writeError(w, http.StatusBadRequest, "invalid_url", "URL must use http or https scheme")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_url", "URL must use http or https scheme")
 		return
 	}
 
@@ -1486,12 +1447,11 @@ func (h *Handler) HandleCreateLink(w http.ResponseWriter, r *http.Request) {
 		id, userID, req.Platform, req.Label, req.URL,
 	).Scan(&link.ID, &link.UserID, &link.Platform, &link.Label, &link.URL, &link.Position, &link.Verified, &link.CreatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create link", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create link")
+		apiutil.InternalError(w, h.Logger, "Failed to create link", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, link)
+	apiutil.WriteJSON(w, http.StatusCreated, link)
 }
 
 // HandleUpdateLink updates a profile link.
@@ -1506,13 +1466,12 @@ func (h *Handler) HandleUpdateLink(w http.ResponseWriter, r *http.Request) {
 		URL      *string `json:"url"`
 		Position *int    `json:"position"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.URL != nil && !isValidLinkURL(*req.URL) {
-		writeError(w, http.StatusBadRequest, "invalid_url", "URL must use http or https scheme")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_url", "URL must use http or https scheme")
 		return
 	}
 
@@ -1529,14 +1488,14 @@ func (h *Handler) HandleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	).Scan(&link.ID, &link.UserID, &link.Platform, &link.Label, &link.URL, &link.Position, &link.Verified, &link.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "link_not_found", "Link not found")
+			apiutil.WriteError(w, http.StatusNotFound, "link_not_found", "Link not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update link")
+		apiutil.InternalError(w, h.Logger, "Failed to update link", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, link)
+	apiutil.WriteJSON(w, http.StatusOK, link)
 }
 
 // HandleDeleteLink removes a profile link.
@@ -1548,11 +1507,11 @@ func (h *Handler) HandleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM user_links WHERE id = $1 AND user_id = $2`, linkID, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete link")
+		apiutil.InternalError(w, h.Logger, "Failed to delete link", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "link_not_found", "Link not found")
+		apiutil.WriteError(w, http.StatusNotFound, "link_not_found", "Link not found")
 		return
 	}
 
@@ -1604,27 +1563,26 @@ func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req createGroupDMRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	// Validate recipient count: 2-9 other users (plus self makes 3-10 total).
 	if len(req.UserIDs) < 2 || len(req.UserIDs) > 9 {
-		writeError(w, http.StatusBadRequest, "invalid_user_count", "Group DMs require between 2 and 9 other users")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_user_count", "Group DMs require between 2 and 9 other users")
 		return
 	}
 
 	// Validate name length if provided.
 	if req.Name != nil && len(*req.Name) > 100 {
-		writeError(w, http.StatusBadRequest, "invalid_name", "Group DM name must be at most 100 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Group DM name must be at most 100 characters")
 		return
 	}
 
 	// Ensure self is not included in user_ids.
 	for _, uid := range req.UserIDs {
 		if uid == userID {
-			writeError(w, http.StatusBadRequest, "self_included", "Do not include yourself in user_ids; you are added automatically")
+			apiutil.WriteError(w, http.StatusBadRequest, "self_included", "Do not include yourself in user_ids; you are added automatically")
 			return
 		}
 	}
@@ -1642,7 +1600,7 @@ func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
 
 	// Re-validate after dedup: still need 2-9 unique recipients.
 	if len(req.UserIDs) < 2 || len(req.UserIDs) > 9 {
-		writeError(w, http.StatusBadRequest, "invalid_recipients", "Group DMs require 2-9 other users (after deduplication)")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_recipients", "Group DMs require 2-9 other users (after deduplication)")
 		return
 	}
 
@@ -1652,12 +1610,11 @@ func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
 		`SELECT COUNT(*) FROM users WHERE id = ANY($1)`, req.UserIDs,
 	).Scan(&existCount)
 	if err != nil {
-		h.Logger.Error("failed to verify group DM users", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		apiutil.InternalError(w, h.Logger, "Failed to create group DM", err)
 		return
 	}
 	if existCount != len(req.UserIDs) {
-		writeError(w, http.StatusBadRequest, "user_not_found", "One or more users not found")
+		apiutil.WriteError(w, http.StatusBadRequest, "user_not_found", "One or more users not found")
 		return
 	}
 
@@ -1665,65 +1622,48 @@ func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
 	newID := models.NewULID().String()
 	now := time.Now()
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin tx for group DM", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO channels (id, channel_type, name, owner_id, created_at) VALUES ($1, 'group', $2, $3, $4)`,
-		newID, req.Name, userID, now,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create group DM channel", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
-		return
-	}
-
-	// Insert self as the first recipient.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3)`,
-		newID, userID, now,
-	)
-	if err != nil {
-		h.Logger.Error("failed to add self to group DM", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
-		return
-	}
-
-	// Insert all other recipients.
-	for _, uid := range req.UserIDs {
-		_, err = tx.Exec(r.Context(),
-			`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3)`,
-			newID, uid, now,
-		)
-		if err != nil {
-			h.Logger.Error("failed to add recipient to group DM",
-				slog.String("user_id", uid), slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
-			return
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO channels (id, channel_type, name, owner_id, created_at) VALUES ($1, 'group', $2, $3, $4)`,
+			newID, req.Name, userID, now,
+		); err != nil {
+			return err
 		}
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit group DM", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create group DM")
+		// Insert self as the first recipient.
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3)`,
+			newID, userID, now,
+		); err != nil {
+			return err
+		}
+		// Insert all other recipients.
+		for _, uid := range req.UserIDs {
+			if _, err := tx.Exec(r.Context(),
+				`INSERT INTO channel_recipients (channel_id, user_id, joined_at) VALUES ($1, $2, $3)`,
+				newID, uid, now,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to create group DM", err)
 		return
 	}
 
 	channel, _ := h.getChannel(r.Context(), newID)
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+	for _, uid := range req.UserIDs {
+		h.EventBus.PublishUserEvent(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", uid, channel)
+	}
 
 	// Notify remote instances of any remote recipients.
 	if h.NotifyFederatedDM != nil {
 		h.notifyRemoteInstancesAsync(r.Context(), newID, "group", userID, req.UserIDs, req.Name)
 	}
 
-	writeJSON(w, http.StatusCreated, channel)
+	apiutil.WriteJSON(w, http.StatusCreated, channel)
 }
 
 // notifyRemoteInstancesAsync queries for remote instances among the given userIDs
@@ -1774,16 +1714,4 @@ func (h *Handler) notifyRemoteInstancesAsync(ctx context.Context, channelID, cha
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
-}

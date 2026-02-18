@@ -1,13 +1,13 @@
 package moderation
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -32,7 +32,7 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 	reportedUserID := chi.URLParam(r, "userID")
 
 	if reporterID == reportedUserID {
-		writeError(w, http.StatusBadRequest, "invalid_report", "You cannot report yourself")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_report", "You cannot report yourself")
 		return
 	}
 
@@ -41,16 +41,14 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 		ContextGuildID   *string `json:"context_guild_id"`
 		ContextChannelID *string `json:"context_channel_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 	if len(req.Reason) > 2000 {
-		writeError(w, http.StatusBadRequest, "reason_too_long", "Reason must be 2000 characters or less")
+		apiutil.WriteError(w, http.StatusBadRequest, "reason_too_long", "Reason must be 2000 characters or less")
 		return
 	}
 	if req.ContextGuildID != nil && *req.ContextGuildID == "" {
@@ -63,12 +61,11 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 	// Verify reported user exists.
 	var exists bool
 	if err := h.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, reportedUserID).Scan(&exists); err != nil {
-		h.Logger.Error("failed to check user existence", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify user")
+		apiutil.InternalError(w, h.Logger, "Failed to verify user", err)
 		return
 	}
 	if !exists {
-		writeError(w, http.StatusNotFound, "user_not_found", "User not found")
+		apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "User not found")
 		return
 	}
 
@@ -78,12 +75,11 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		id, reporterID, reportedUserID, req.Reason, req.ContextGuildID, req.ContextChannelID)
 	if err != nil {
-		h.Logger.Error("failed to create user report", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create report")
+		apiutil.InternalError(w, h.Logger, "Failed to create report", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "open"})
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "open"})
 }
 
 // HandleGetUserReports handles GET /api/v1/moderation/user-reports?status=
@@ -91,12 +87,11 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -121,7 +116,7 @@ func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 		rows, qerr = h.Pool.Query(r.Context(), query)
 	}
 	if qerr != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch reports")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch reports")
 		return
 	}
 	defer rows.Close()
@@ -131,32 +126,31 @@ func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 			&rpt.ContextGuildID, &rpt.ContextChannelID, &rpt.Status,
 			&rpt.ResolvedBy, &rpt.ResolvedAt, &rpt.Notes, &rpt.CreatedAt,
 			&rpt.ReporterName, &rpt.ReportedUserName); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read reports")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read reports")
 			return
 		}
 		reports = append(reports, rpt)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read reports")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read reports")
 		return
 	}
 
 	if reports == nil {
 		reports = []models.UserReport{}
 	}
-	writeJSON(w, http.StatusOK, reports)
+	apiutil.WriteJSON(w, http.StatusOK, reports)
 }
 
 // HandleResolveUserReport handles PATCH /api/v1/moderation/user-reports/{reportID}.
 func (h *Handler) HandleResolveUserReport(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -167,13 +161,12 @@ func (h *Handler) HandleResolveUserReport(w http.ResponseWriter, r *http.Request
 		Status string  `json:"status"`
 		Notes  *string `json:"notes"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Status != "resolved" && req.Status != "dismissed" {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
 		return
 	}
 
@@ -182,15 +175,15 @@ func (h *Handler) HandleResolveUserReport(w http.ResponseWriter, r *http.Request
 		`UPDATE user_reports SET status = $1, resolved_by = $2, resolved_at = $3, notes = $4 WHERE id = $5`,
 		req.Status, modID, now, req.Notes, reportID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve report")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve report")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Report not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Report not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
 }
 
 // HandleCreateIssue handles POST /api/v1/issues.
@@ -203,20 +196,19 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 		Category    string `json:"category"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Title == "" || req.Description == "" {
-		writeError(w, http.StatusBadRequest, "missing_fields", "Title and description are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_fields", "Title and description are required")
 		return
 	}
 	if len(req.Title) > 200 {
-		writeError(w, http.StatusBadRequest, "title_too_long", "Title must be 200 characters or less")
+		apiutil.WriteError(w, http.StatusBadRequest, "title_too_long", "Title must be 200 characters or less")
 		return
 	}
 	if len(req.Description) > 4000 {
-		writeError(w, http.StatusBadRequest, "description_too_long", "Description must be 4000 characters or less")
+		apiutil.WriteError(w, http.StatusBadRequest, "description_too_long", "Description must be 4000 characters or less")
 		return
 	}
 	if req.Category == "" {
@@ -224,7 +216,7 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	validCategories := map[string]bool{"general": true, "bug": true, "abuse": true, "suggestion": true}
 	if !validCategories[req.Category] {
-		writeError(w, http.StatusBadRequest, "invalid_category", "Category must be one of: general, bug, abuse, suggestion")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_category", "Category must be one of: general, bug, abuse, suggestion")
 		return
 	}
 
@@ -233,24 +225,22 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO reported_issues (id, reporter_id, title, description, category) VALUES ($1, $2, $3, $4, $5)`,
 		id, reporterID, req.Title, req.Description, req.Category)
 	if err != nil {
-		h.Logger.Error("failed to create issue", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create issue")
+		apiutil.InternalError(w, h.Logger, "Failed to create issue", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "open"})
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "open"})
 }
 
 // HandleGetIssues handles GET /api/v1/moderation/issues?status=
 func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -278,7 +268,7 @@ func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 		irows, ierr = h.Pool.Query(r.Context(), query, status)
 	}
 	if ierr != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
 		return
 	}
 	defer irows.Close()
@@ -287,32 +277,31 @@ func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 		if err := irows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
 			&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
 			&issue.Notes, &issue.CreatedAt, &issue.ReporterName); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
 			return
 		}
 		issues = append(issues, issue)
 	}
 	if err := irows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
 		return
 	}
 
 	if issues == nil {
 		issues = []models.ReportedIssue{}
 	}
-	writeJSON(w, http.StatusOK, issues)
+	apiutil.WriteJSON(w, http.StatusOK, issues)
 }
 
 // HandleResolveIssue handles PATCH /api/v1/moderation/issues/{issueID}.
 func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -323,14 +312,13 @@ func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 		Status string  `json:"status"`
 		Notes  *string `json:"notes"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	validStatuses := map[string]bool{"in_progress": true, "resolved": true, "dismissed": true}
 	if !validStatuses[req.Status] {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Status must be 'in_progress', 'resolved', or 'dismissed'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status must be 'in_progress', 'resolved', or 'dismissed'")
 		return
 	}
 
@@ -346,27 +334,26 @@ func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 		`UPDATE reported_issues SET status = $1, resolved_by = $2, resolved_at = $3, notes = $4 WHERE id = $5`,
 		req.Status, resolvedBy, resolvedAt, req.Notes, issueID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update issue")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update issue")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Issue not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Issue not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
 }
 
 // HandleGetModerationStats handles GET /api/v1/moderation/stats.
 func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -374,21 +361,21 @@ func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Reques
 
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM message_reports WHERE status = 'admin_pending'`).Scan(&stats.OpenMessageReports); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
 		return
 	}
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM user_reports WHERE status = 'open'`).Scan(&stats.OpenUserReports); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
 		return
 	}
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM reported_issues WHERE status IN ('open', 'in_progress')`).Scan(&stats.OpenIssues); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load moderation stats")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, stats)
+	apiutil.WriteJSON(w, http.StatusOK, stats)
 }
 
 // HandleGetAllMessageReports handles GET /api/v1/moderation/message-reports?status=
@@ -396,12 +383,11 @@ func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Reques
 func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -419,7 +405,7 @@ func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Requ
 		WHERE mr.status = $1
 		ORDER BY mr.created_at DESC LIMIT 100`, status)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch message reports")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch message reports")
 		return
 	}
 	defer rows.Close()
@@ -435,20 +421,20 @@ func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Requ
 		if err := rows.Scan(&rpt.ID, &rpt.GuildID, &rpt.ChannelID, &rpt.MessageID,
 			&rpt.ReporterID, &rpt.Reason, &rpt.Status, &rpt.ResolvedBy,
 			&rpt.ResolvedAt, &rpt.CreatedAt, &rpt.ReporterName); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read message reports")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read message reports")
 			return
 		}
 		reports = append(reports, rpt)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read message reports")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read message reports")
 		return
 	}
 
 	if reports == nil {
 		reports = []messageReportRow{}
 	}
-	writeJSON(w, http.StatusOK, reports)
+	apiutil.WriteJSON(w, http.StatusOK, reports)
 }
 
 // HandleGetMyIssues handles GET /api/v1/users/@me/issues.
@@ -463,7 +449,7 @@ func (h *Handler) HandleGetMyIssues(w http.ResponseWriter, r *http.Request) {
 		WHERE reporter_id = $1
 		ORDER BY created_at DESC LIMIT 50`, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch issues")
 		return
 	}
 	defer rows.Close()
@@ -474,32 +460,31 @@ func (h *Handler) HandleGetMyIssues(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
 			&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
 			&issue.Notes, &issue.CreatedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
 			return
 		}
 		issues = append(issues, issue)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
 		return
 	}
 
 	if issues == nil {
 		issues = []models.ReportedIssue{}
 	}
-	writeJSON(w, http.StatusOK, issues)
+	apiutil.WriteJSON(w, http.StatusOK, issues)
 }
 
 // HandleResolveMessageReport handles PATCH /api/v1/moderation/message-reports/{reportID}.
 func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
 		return
 	}
 
@@ -509,13 +494,12 @@ func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Status string `json:"status"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Status != "resolved" && req.Status != "dismissed" {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
 		return
 	}
 
@@ -524,13 +508,13 @@ func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Requ
 		`UPDATE message_reports SET status = $1, resolved_by = $2, resolved_at = $3 WHERE id = $4`,
 		req.Status, modID, now, reportID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve message report")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve message report")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Report not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Report not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
 }

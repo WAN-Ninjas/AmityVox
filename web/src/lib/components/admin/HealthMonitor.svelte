@@ -44,14 +44,8 @@
 
 	async function loadHealth() {
 		try {
-			const res = await fetch('/api/v1/admin/health/dashboard', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				health = json.data;
-			}
-		} catch (e) {
+			health = await api.getHealthDashboard();
+		} catch {
 			addToast('Failed to load health data', 'error');
 		}
 		loading = false;

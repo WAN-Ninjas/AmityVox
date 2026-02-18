@@ -3,6 +3,7 @@
 	import Modal from '$components/common/Modal.svelte';
 	import { api } from '$lib/api/client';
 	import { updateGuild } from '$lib/stores/guilds';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		open?: boolean;
@@ -20,41 +21,36 @@
 	let guildName = $state('');
 	let inviteCode = $state('');
 	let error = $state('');
-	let loading = $state(false);
+	let createOp = $state(createAsyncOp());
+	let joinOp = $state(createAsyncOp());
 
 	async function handleCreate() {
 		if (!guildName.trim()) return;
-		loading = true;
 		error = '';
-
-		try {
-			const guild = await api.createGuild(guildName.trim());
-			updateGuild(guild);
-			goto(`/app/guilds/${guild.id}`);
+		const guild = await createOp.run(
+			() => api.createGuild(guildName.trim()),
+			msg => (error = msg)
+		);
+		if (!createOp.error) {
+			updateGuild(guild!);
+			goto(`/app/guilds/${guild!.id}`);
 			onclose?.();
-		} catch (err: any) {
-			error = err.message || 'Failed to create guild';
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function handleJoin() {
 		if (!inviteCode.trim()) return;
-		loading = true;
 		error = '';
-
-		try {
-			// Extract code from full URL if pasted.
-			const code = inviteCode.trim().split('/').pop() ?? inviteCode.trim();
-			const guild = await api.acceptInvite(code);
-			updateGuild(guild);
-			goto(`/app/guilds/${guild.id}`);
+		// Extract code from full URL if pasted.
+		const code = inviteCode.trim().split('/').pop() ?? inviteCode.trim();
+		const guild = await joinOp.run(
+			() => api.acceptInvite(code),
+			msg => (error = msg)
+		);
+		if (!joinOp.error) {
+			updateGuild(guild!);
+			goto(`/app/guilds/${guild!.id}`);
 			onclose?.();
-		} catch (err: any) {
-			error = err.message || 'Invalid invite';
-		} finally {
-			loading = false;
 		}
 	}
 </script>
@@ -94,8 +90,8 @@
 			</label>
 			<input id="guildNameInput" type="text" bind:value={guildName} class="input w-full" placeholder="My Guild" maxlength="100" />
 		</div>
-		<button class="btn-primary w-full" onclick={handleCreate} disabled={loading || !guildName.trim()}>
-			{loading ? 'Creating...' : 'Create Guild'}
+		<button class="btn-primary w-full" onclick={handleCreate} disabled={createOp.loading || !guildName.trim()}>
+			{createOp.loading ? 'Creating...' : 'Create Guild'}
 		</button>
 	{:else}
 		<div class="mb-4">
@@ -104,8 +100,8 @@
 			</label>
 			<input id="inviteInput" type="text" bind:value={inviteCode} class="input w-full" placeholder="abc123 or https://..." />
 		</div>
-		<button class="btn-primary w-full" onclick={handleJoin} disabled={loading || !inviteCode.trim()}>
-			{loading ? 'Joining...' : 'Join Guild'}
+		<button class="btn-primary w-full" onclick={handleJoin} disabled={joinOp.loading || !inviteCode.trim()}>
+			{joinOp.loading ? 'Joining...' : 'Join Guild'}
 		</button>
 	{/if}
 </Modal>

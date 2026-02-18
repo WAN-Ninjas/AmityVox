@@ -649,6 +649,7 @@
 					placeholder={isEditing ? 'Edit your message...' : isReplying ? 'Reply...' : silentMode ? `Message ${isDM ? '@' : '#'}${channelName} (silent)` : `Message ${isDM ? '@' : '#'}${channelName}`}
 					class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted placeholder:font-mono"
 					rows="1"
+					aria-label="Message input"
 				></textarea>
 
 				<!-- Right-side icon toolbar -->

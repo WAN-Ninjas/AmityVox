@@ -74,7 +74,7 @@
 
 {#if $activeIncomingCall}
 	{@const call = $activeIncomingCall}
-	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" role="alertdialog" aria-modal="true" aria-labelledby="incoming-call-title">
 		<div class="animate-slide-up flex w-80 flex-col items-center gap-4 rounded-2xl bg-bg-secondary p-6 shadow-2xl ring-1 ring-white/10">
 			<!-- Caller avatar with pulsing ring -->
 			<div class="relative">
@@ -88,7 +88,7 @@
 
 			<!-- Caller info -->
 			<div class="text-center">
-				<h2 class="text-lg font-semibold text-text-primary">
+				<h2 id="incoming-call-title" class="text-lg font-semibold text-text-primary">
 					{call.callerDisplayName ?? call.callerName}
 				</h2>
 				<p class="text-sm text-text-muted">

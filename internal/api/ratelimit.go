@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/amityvox/amityvox/internal/auth"
@@ -230,18 +229,11 @@ func isAuthEndpoint(r *http.Request) bool {
 		path == "/api/v1/auth/register"
 }
 
-// clientIP extracts the client IP from the request, preferring X-Forwarded-For.
-// It normalizes the result to a bare IP (no port, no extra entries).
+// clientIP extracts the client IP from the request. Chi's RealIP middleware
+// already sets r.RemoteAddr from trusted proxy headers, so we just strip the
+// port from RemoteAddr. We do NOT re-parse X-Forwarded-For here to avoid
+// trusting arbitrary client-supplied headers.
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if i := strings.IndexByte(fwd, ','); i >= 0 {
-			fwd = fwd[:i]
-		}
-		fwd = strings.TrimSpace(fwd)
-		if fwd != "" {
-			return fwd
-		}
-	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
 		return host
 	}

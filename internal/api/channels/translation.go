@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/permissions"
@@ -74,21 +75,20 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 
 	// Check that the user can view this channel.
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
 		return
 	}
 
 	// Check translation config.
 	enabled, apiURL, defaultLang := getTranslationConfig()
 	if !enabled {
-		writeError(w, http.StatusBadRequest, "translation_disabled", "Translation is not enabled on this instance")
+		apiutil.WriteError(w, http.StatusBadRequest, "translation_disabled", "Translation is not enabled on this instance")
 		return
 	}
 
 	// Parse request body.
 	var req translateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.TargetLang == "" {
@@ -97,7 +97,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 
 	// Validate target language (basic check: 2-5 chars, lowercase).
 	if len(req.TargetLang) < 2 || len(req.TargetLang) > 5 {
-		writeError(w, http.StatusBadRequest, "invalid_lang", "Target language must be a 2-5 character language code")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_lang", "Target language must be a 2-5 character language code")
 		return
 	}
 
@@ -109,15 +109,14 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 	).Scan(&content)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+			apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found")
 			return
 		}
-		h.Logger.Error("failed to fetch message for translation", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch message")
+		apiutil.InternalError(w, h.Logger, "Failed to fetch message", err)
 		return
 	}
 	if content == nil || *content == "" {
-		writeError(w, http.StatusBadRequest, "no_content", "Message has no text content to translate")
+		apiutil.WriteError(w, http.StatusBadRequest, "no_content", "Message has no text content to translate")
 		return
 	}
 
@@ -132,7 +131,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 		).Scan(&cachedText, &cachedSourceLang)
 		if err == nil {
 			// Cache hit — return cached translation.
-			writeJSON(w, http.StatusOK, map[string]interface{}{
+			apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 				"message_id":      messageID,
 				"source_lang":     cachedSourceLang,
 				"target_lang":     req.TargetLang,
@@ -152,7 +151,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 	}
 	body, err := json.Marshal(ltReq)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to prepare translation request")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to prepare translation request")
 		return
 	}
 
@@ -160,7 +159,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 	resp, err := httpClient.Post(apiURL+"/translate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		h.Logger.Error("failed to call LibreTranslate", slog.String("error", err.Error()))
-		writeError(w, http.StatusBadGateway, "translation_error", "Translation service is unavailable")
+		apiutil.WriteError(w, http.StatusBadGateway, "translation_error", "Translation service is unavailable")
 		return
 	}
 	defer resp.Body.Close()
@@ -171,7 +170,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 			slog.Int("status", resp.StatusCode),
 			slog.String("body", string(respBody)),
 		)
-		writeError(w, http.StatusBadGateway, "translation_error",
+		apiutil.WriteError(w, http.StatusBadGateway, "translation_error",
 			fmt.Sprintf("Translation service returned status %d", resp.StatusCode))
 		return
 	}
@@ -179,7 +178,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 	var ltResp libreTranslateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ltResp); err != nil {
 		h.Logger.Error("failed to decode LibreTranslate response", slog.String("error", err.Error()))
-		writeError(w, http.StatusBadGateway, "translation_error", "Failed to parse translation response")
+		apiutil.WriteError(w, http.StatusBadGateway, "translation_error", "Failed to parse translation response")
 		return
 	}
 
@@ -190,7 +189,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 		h.Logger.Warn("LibreTranslate returned repeated-word garbage output",
 			slog.String("output", ltResp.TranslatedText[:min(len(ltResp.TranslatedText), 100)]),
 		)
-		writeError(w, http.StatusBadGateway, "translation_error",
+		apiutil.WriteError(w, http.StatusBadGateway, "translation_error",
 			"Translation service returned invalid output — check LibreTranslate configuration")
 		return
 	}
@@ -215,7 +214,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 		h.Logger.Warn("failed to cache translation", slog.String("error", err.Error()))
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"message_id":      messageID,
 		"source_lang":     sourceLang,
 		"target_lang":     req.TargetLang,

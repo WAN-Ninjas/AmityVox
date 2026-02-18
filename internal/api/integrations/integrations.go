@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -131,8 +132,7 @@ func (h *Handler) HandleListIntegrations(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list integrations", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list integrations")
+		apiutil.InternalError(w, h.Logger, "Failed to list integrations", err)
 		return
 	}
 	defer rows.Close()
@@ -150,7 +150,7 @@ func (h *Handler) HandleListIntegrations(w http.ResponseWriter, r *http.Request)
 		integrations = append(integrations, i)
 	}
 
-	writeJSON(w, http.StatusOK, integrations)
+	apiutil.WriteJSON(w, http.StatusOK, integrations)
 }
 
 // HandleCreateIntegration creates a new integration for a guild.
@@ -160,8 +160,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 	guildID := chi.URLParam(r, "guildID")
 
 	var req createIntegrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -170,22 +169,21 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 		"activitypub": true,
 	}
 	if !validTypes[req.IntegrationType] {
-		writeError(w, http.StatusBadRequest, "invalid_type", "Integration type must be: activitypub")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_type", "Integration type must be: activitypub")
 		return
 	}
 
-	if req.ChannelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_channel", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "channel_id", req.ChannelID) {
 		return
 	}
 	if req.Name == "" || utf8.RuneCountInString(req.Name) > 100 {
-		writeError(w, http.StatusBadRequest, "invalid_name", "Name is required and must be at most 100 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Name is required and must be at most 100 characters")
 		return
 	}
 
 	// Verify user is a guild member.
 	if err := h.requireGuildMember(r, guildID, userID); err != nil {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -194,7 +192,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id FROM channels WHERE id = $1`, req.ChannelID).Scan(&channelGuildID)
 	if err != nil || channelGuildID == nil || *channelGuildID != guildID {
-		writeError(w, http.StatusBadRequest, "invalid_channel", "Channel does not belong to this guild")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Channel does not belong to this guild")
 		return
 	}
 
@@ -211,8 +209,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 		&integration.ChannelID, &integration.Name, &integration.Enabled,
 		&configJSON, &integration.CreatedBy, &integration.CreatedAt, &integration.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create integration", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create integration")
+		apiutil.InternalError(w, h.Logger, "Failed to create integration", err)
 		return
 	}
 	json.Unmarshal(configJSON, &integration.Config)
@@ -223,7 +220,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 		slog.String("type", req.IntegrationType),
 	)
 
-	writeJSON(w, http.StatusCreated, integration)
+	apiutil.WriteJSON(w, http.StatusCreated, integration)
 }
 
 // HandleGetIntegration retrieves a single integration.
@@ -242,17 +239,16 @@ func (h *Handler) HandleGetIntegration(w http.ResponseWriter, r *http.Request) {
 	).Scan(&i.ID, &i.GuildID, &i.IntegrationType, &i.ChannelID,
 		&i.Name, &i.Enabled, &configJSON, &i.CreatedBy, &i.CreatedAt, &i.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Integration not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Integration not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get integration", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get integration")
+		apiutil.InternalError(w, h.Logger, "Failed to get integration", err)
 		return
 	}
 	json.Unmarshal(configJSON, &i.Config)
 
-	writeJSON(w, http.StatusOK, i)
+	apiutil.WriteJSON(w, http.StatusOK, i)
 }
 
 // HandleUpdateIntegration updates an integration's name, enabled status, or config.
@@ -262,8 +258,7 @@ func (h *Handler) HandleUpdateIntegration(w http.ResponseWriter, r *http.Request
 	integrationID := chi.URLParam(r, "integrationID")
 
 	var req updateIntegrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -273,8 +268,7 @@ func (h *Handler) HandleUpdateIntegration(w http.ResponseWriter, r *http.Request
 	argIdx := 3
 
 	if req.Name != nil {
-		if utf8.RuneCountInString(*req.Name) > 100 {
-			writeError(w, http.StatusBadRequest, "invalid_name", "Name must be at most 100 characters")
+		if !apiutil.ValidateStringLength(w, "name", *req.Name, 0, 100) {
 			return
 		}
 		setClauses = append(setClauses, "name = $"+itoa(argIdx))
@@ -303,17 +297,16 @@ func (h *Handler) HandleUpdateIntegration(w http.ResponseWriter, r *http.Request
 		&i.ID, &i.GuildID, &i.IntegrationType, &i.ChannelID,
 		&i.Name, &i.Enabled, &configJSON, &i.CreatedBy, &i.CreatedAt, &i.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Integration not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Integration not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to update integration", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update integration")
+		apiutil.InternalError(w, h.Logger, "Failed to update integration", err)
 		return
 	}
 	json.Unmarshal(configJSON, &i.Config)
 
-	writeJSON(w, http.StatusOK, i)
+	apiutil.WriteJSON(w, http.StatusOK, i)
 }
 
 // HandleDeleteIntegration deletes an integration and all associated resources.
@@ -326,12 +319,11 @@ func (h *Handler) HandleDeleteIntegration(w http.ResponseWriter, r *http.Request
 		`DELETE FROM guild_integrations WHERE id = $1 AND guild_id = $2`,
 		integrationID, guildID)
 	if err != nil {
-		h.Logger.Error("failed to delete integration", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete integration")
+		apiutil.InternalError(w, h.Logger, "Failed to delete integration", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Integration not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Integration not found")
 		return
 	}
 
@@ -358,8 +350,7 @@ func (h *Handler) HandleListActivityPubFollows(w http.ResponseWriter, r *http.Re
 		 FROM activitypub_follows WHERE integration_id = $1 ORDER BY created_at DESC`,
 		integrationID)
 	if err != nil {
-		h.Logger.Error("failed to list follows", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list follows")
+		apiutil.InternalError(w, h.Logger, "Failed to list follows", err)
 		return
 	}
 	defer rows.Close()
@@ -374,7 +365,7 @@ func (h *Handler) HandleListActivityPubFollows(w http.ResponseWriter, r *http.Re
 		follows = append(follows, f)
 	}
 
-	writeJSON(w, http.StatusOK, follows)
+	apiutil.WriteJSON(w, http.StatusOK, follows)
 }
 
 // HandleAddActivityPubFollow adds a new ActivityPub actor to follow.
@@ -383,17 +374,15 @@ func (h *Handler) HandleAddActivityPubFollow(w http.ResponseWriter, r *http.Requ
 	integrationID := chi.URLParam(r, "integrationID")
 
 	var req addActivityPubFollowRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.ActorURI == "" {
-		writeError(w, http.StatusBadRequest, "missing_uri", "Actor URI is required")
+	if !apiutil.RequireNonEmpty(w, "actor_uri", req.ActorURI) {
 		return
 	}
 	if _, err := url.ParseRequestURI(req.ActorURI); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_uri", "Actor URI must be a valid URL")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_uri", "Actor URI must be a valid URL")
 		return
 	}
 
@@ -402,11 +391,11 @@ func (h *Handler) HandleAddActivityPubFollow(w http.ResponseWriter, r *http.Requ
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT integration_type FROM guild_integrations WHERE id = $1`, integrationID).Scan(&intType)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Integration not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Integration not found")
 		return
 	}
 	if intType != "activitypub" {
-		writeError(w, http.StatusBadRequest, "wrong_type", "Integration is not an ActivityPub integration")
+		apiutil.WriteError(w, http.StatusBadRequest, "wrong_type", "Integration is not an ActivityPub integration")
 		return
 	}
 
@@ -422,15 +411,14 @@ func (h *Handler) HandleAddActivityPubFollow(w http.ResponseWriter, r *http.Requ
 		&f.ActorHandle, &f.ActorAvatarURL, &f.LastFetchedAt, &f.CreatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			writeError(w, http.StatusConflict, "already_following", "Already following this actor")
+			apiutil.WriteError(w, http.StatusConflict, "already_following", "Already following this actor")
 			return
 		}
-		h.Logger.Error("failed to add follow", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add follow")
+		apiutil.InternalError(w, h.Logger, "Failed to add follow", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, f)
+	apiutil.WriteJSON(w, http.StatusCreated, f)
 }
 
 // HandleRemoveActivityPubFollow removes an ActivityPub follow.
@@ -443,12 +431,11 @@ func (h *Handler) HandleRemoveActivityPubFollow(w http.ResponseWriter, r *http.R
 		`DELETE FROM activitypub_follows WHERE id = $1 AND integration_id = $2`,
 		followID, integrationID)
 	if err != nil {
-		h.Logger.Error("failed to remove follow", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove follow")
+		apiutil.InternalError(w, h.Logger, "Failed to remove follow", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Follow not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Follow not found")
 		return
 	}
 
@@ -478,8 +465,7 @@ func (h *Handler) HandleListBridgeConnections(w http.ResponseWriter, r *http.Req
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list bridge connections", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list bridge connections")
+		apiutil.InternalError(w, h.Logger, "Failed to list bridge connections", err)
 		return
 	}
 	defer rows.Close()
@@ -497,7 +483,7 @@ func (h *Handler) HandleListBridgeConnections(w http.ResponseWriter, r *http.Req
 		connections = append(connections, bc)
 	}
 
-	writeJSON(w, http.StatusOK, connections)
+	apiutil.WriteJSON(w, http.StatusOK, connections)
 }
 
 // HandleCreateBridgeConnection creates a new bridge connection (Telegram, Slack, or IRC).
@@ -507,23 +493,20 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 	guildID := chi.URLParam(r, "guildID")
 
 	var req createBridgeConnectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	validTypes := map[string]bool{"telegram": true, "slack": true, "irc": true}
 	if !validTypes[req.BridgeType] {
-		writeError(w, http.StatusBadRequest, "invalid_type", "Bridge type must be one of: telegram, slack, irc")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_type", "Bridge type must be one of: telegram, slack, irc")
 		return
 	}
 
-	if req.ChannelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_channel", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "channel_id", req.ChannelID) {
 		return
 	}
-	if req.RemoteID == "" {
-		writeError(w, http.StatusBadRequest, "missing_remote_id", "Remote ID is required (Telegram chat ID, Slack channel, or IRC channel)")
+	if !apiutil.RequireNonEmpty(w, "remote_id", req.RemoteID) {
 		return
 	}
 
@@ -532,7 +515,7 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id FROM channels WHERE id = $1`, req.ChannelID).Scan(&channelGuildID)
 	if err != nil || channelGuildID == nil || *channelGuildID != guildID {
-		writeError(w, http.StatusBadRequest, "invalid_channel", "Channel does not belong to this guild")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Channel does not belong to this guild")
 		return
 	}
 
@@ -552,11 +535,10 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 		&bc.CreatedAt, &bc.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			writeError(w, http.StatusConflict, "already_exists", "A bridge connection for this remote channel already exists")
+			apiutil.WriteError(w, http.StatusConflict, "already_exists", "A bridge connection for this remote channel already exists")
 			return
 		}
-		h.Logger.Error("failed to create bridge connection", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create bridge connection")
+		apiutil.InternalError(w, h.Logger, "Failed to create bridge connection", err)
 		return
 	}
 	json.Unmarshal(configJSON, &bc.Config)
@@ -567,7 +549,7 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 		slog.String("remote_id", req.RemoteID),
 	)
 
-	writeJSON(w, http.StatusCreated, bc)
+	apiutil.WriteJSON(w, http.StatusCreated, bc)
 }
 
 // HandleUpdateBridgeConnection updates a bridge connection.
@@ -577,8 +559,7 @@ func (h *Handler) HandleUpdateBridgeConnection(w http.ResponseWriter, r *http.Re
 	connectionID := chi.URLParam(r, "connectionID")
 
 	var req updateBridgeConnectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -614,17 +595,16 @@ func (h *Handler) HandleUpdateBridgeConnection(w http.ResponseWriter, r *http.Re
 		&bc.Enabled, &configJSON, &bc.Status, &bc.LastError, &bc.CreatedBy,
 		&bc.CreatedAt, &bc.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Bridge connection not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Bridge connection not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to update bridge connection", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update bridge connection")
+		apiutil.InternalError(w, h.Logger, "Failed to update bridge connection", err)
 		return
 	}
 	json.Unmarshal(configJSON, &bc.Config)
 
-	writeJSON(w, http.StatusOK, bc)
+	apiutil.WriteJSON(w, http.StatusOK, bc)
 }
 
 // HandleDeleteBridgeConnection deletes a bridge connection.
@@ -637,12 +617,11 @@ func (h *Handler) HandleDeleteBridgeConnection(w http.ResponseWriter, r *http.Re
 		`DELETE FROM bridge_connections WHERE id = $1 AND guild_id = $2`,
 		connectionID, guildID)
 	if err != nil {
-		h.Logger.Error("failed to delete bridge connection", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bridge connection")
+		apiutil.InternalError(w, h.Logger, "Failed to delete bridge connection", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Bridge connection not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Bridge connection not found")
 		return
 	}
 
@@ -670,8 +649,7 @@ func (h *Handler) HandleGetIntegrationLog(w http.ResponseWriter, r *http.Request
 		 LIMIT $2`,
 		guildID, limit)
 	if err != nil {
-		h.Logger.Error("failed to get integration log", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get integration log")
+		apiutil.InternalError(w, h.Logger, "Failed to get integration log", err)
 		return
 	}
 	defer rows.Close()
@@ -700,7 +678,7 @@ func (h *Handler) HandleGetIntegrationLog(w http.ResponseWriter, r *http.Request
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // ============================================================
@@ -716,20 +694,6 @@ func (h *Handler) requireGuildMember(r *http.Request, guildID, userID string) er
 		return pgx.ErrNoRows
 	}
 	return nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
 }
 
 // itoa converts an integer to its string representation for building

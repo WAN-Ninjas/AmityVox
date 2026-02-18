@@ -4,7 +4,6 @@
 package channels
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -52,19 +52,18 @@ func (h *EmojiHandler) HandleGetChannelEmoji(w http.ResponseWriter, r *http.Requ
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
-	if channelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "Channel ID", channelID) {
 		return
 	}
 
 	// Verify the user has access to this channel (is a member of the guild).
 	guildID, err := h.getChannelGuild(r, channelID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if !h.isMember(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -76,8 +75,7 @@ func (h *EmojiHandler) HandleGetChannelEmoji(w http.ResponseWriter, r *http.Requ
 		channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to list channel emoji", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to list emoji", err)
 		return
 	}
 	defer rows.Close()
@@ -89,14 +87,13 @@ func (h *EmojiHandler) HandleGetChannelEmoji(w http.ResponseWriter, r *http.Requ
 			&e.ID, &e.ChannelID, &e.GuildID, &e.Name,
 			&e.CreatorID, &e.Animated, &e.S3Key, &e.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan channel emoji", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list emoji")
+			apiutil.InternalError(w, h.Logger, "Failed to list emoji", err)
 			return
 		}
 		emoji = append(emoji, e)
 	}
 
-	writeJSON(w, http.StatusOK, emoji)
+	apiutil.WriteJSON(w, http.StatusOK, emoji)
 }
 
 // HandleCreateChannelEmoji adds a new emoji to a channel.
@@ -105,38 +102,34 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
-	if channelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "Channel ID", channelID) {
 		return
 	}
 
 	var req createChannelEmojiRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Emoji name is required")
+	if !apiutil.RequireNonEmpty(w, "Emoji name", req.Name) {
 		return
 	}
 	if len(req.Name) > 32 {
-		writeError(w, http.StatusBadRequest, "name_too_long", "Emoji name must be at most 32 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "name_too_long", "Emoji name must be at most 32 characters")
 		return
 	}
-	if req.FileID == "" {
-		writeError(w, http.StatusBadRequest, "missing_file_id", "File ID (S3 key) is required")
+	if !apiutil.RequireNonEmpty(w, "File ID (S3 key)", req.FileID) {
 		return
 	}
 
 	// Verify channel access and get guild ID.
 	guildID, err := h.getChannelGuild(r, channelID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if !h.isMember(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -147,7 +140,7 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 		channelID, req.Name,
 	).Scan(&duplicate)
 	if duplicate {
-		writeError(w, http.StatusConflict, "emoji_exists", "An emoji with this name already exists in the channel")
+		apiutil.WriteError(w, http.StatusConflict, "emoji_exists", "An emoji with this name already exists in the channel")
 		return
 	}
 
@@ -157,7 +150,7 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 		`SELECT COUNT(*) FROM channel_emoji WHERE channel_id = $1`, channelID,
 	).Scan(&count)
 	if count >= 50 {
-		writeError(w, http.StatusBadRequest, "emoji_limit", "This channel has reached the maximum of 50 emoji")
+		apiutil.WriteError(w, http.StatusBadRequest, "emoji_limit", "This channel has reached the maximum of 50 emoji")
 		return
 	}
 
@@ -173,8 +166,7 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 		&e.CreatorID, &e.Animated, &e.S3Key, &e.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create channel emoji", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to create emoji", err)
 		return
 	}
 
@@ -184,7 +176,7 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 		slog.String("name", e.Name),
 	)
 
-	writeJSON(w, http.StatusCreated, e)
+	apiutil.WriteJSON(w, http.StatusCreated, e)
 }
 
 // HandleDeleteChannelEmoji removes an emoji from a channel.
@@ -195,18 +187,18 @@ func (h *EmojiHandler) HandleDeleteChannelEmoji(w http.ResponseWriter, r *http.R
 	emojiID := chi.URLParam(r, "emojiID")
 
 	if channelID == "" || emojiID == "" {
-		writeError(w, http.StatusBadRequest, "missing_params", "Channel ID and Emoji ID are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_params", "Channel ID and Emoji ID are required")
 		return
 	}
 
 	// Verify channel access.
 	guildID, err := h.getChannelGuild(r, channelID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if !h.isMember(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -217,12 +209,11 @@ func (h *EmojiHandler) HandleDeleteChannelEmoji(w http.ResponseWriter, r *http.R
 		emojiID, channelID,
 	).Scan(&creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "emoji_not_found", "Emoji not found")
+		apiutil.WriteError(w, http.StatusNotFound, "emoji_not_found", "Emoji not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to check emoji ownership", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to delete emoji", err)
 		return
 	}
 
@@ -233,7 +224,7 @@ func (h *EmojiHandler) HandleDeleteChannelEmoji(w http.ResponseWriter, r *http.R
 			`SELECT owner_id FROM guilds WHERE id = $1`, guildID,
 		).Scan(&ownerID)
 		if ownerID != userID {
-			writeError(w, http.StatusForbidden, "forbidden", "You can only delete emoji you created")
+			apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You can only delete emoji you created")
 			return
 		}
 	}
@@ -243,8 +234,7 @@ func (h *EmojiHandler) HandleDeleteChannelEmoji(w http.ResponseWriter, r *http.R
 		emojiID, channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete channel emoji", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to delete emoji", err)
 		return
 	}
 

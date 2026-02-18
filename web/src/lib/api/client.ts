@@ -1009,7 +1009,7 @@ class ApiClient {
 	}
 
 	ackWelcome(welcomeId: string): Promise<void> {
-		return this.post(`/encryption/welcome/${welcomeId}/ack`);
+		return this.del(`/encryption/welcome/${welcomeId}`);
 	}
 
 	deleteKeyPackage(keyPackageId: string): Promise<void> {
@@ -1414,8 +1414,8 @@ class ApiClient {
 
 	// --- Activities ---
 
-	getActiveSession<T>(channelId: string): Promise<T> {
-		return this.get(`/channels/${channelId}/activities/sessions/active`);
+	getActiveSession<T>(activityId: string): Promise<T> {
+		return this.get(`/activities/${activityId}/sessions/active`);
 	}
 
 	listActivities<T>(category?: string): Promise<T> {
@@ -1423,20 +1423,20 @@ class ApiClient {
 		return this.get(url);
 	}
 
-	createActivitySession<T>(channelId: string, body: unknown): Promise<T> {
-		return this.post(`/channels/${channelId}/activities/sessions`, body);
+	createActivitySession<T>(activityId: string, body: unknown): Promise<T> {
+		return this.post(`/activities/${activityId}/sessions`, body);
 	}
 
-	joinActivitySession(channelId: string, sessionId: string): Promise<void> {
-		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/join`);
+	joinActivitySession(sessionId: string): Promise<void> {
+		return this.post(`/activities/sessions/${sessionId}/join`);
 	}
 
-	leaveActivitySession(channelId: string, sessionId: string): Promise<void> {
-		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/leave`);
+	leaveActivitySession(sessionId: string): Promise<void> {
+		return this.post(`/activities/sessions/${sessionId}/leave`);
 	}
 
-	endActivitySession(channelId: string, sessionId: string): Promise<void> {
-		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/end`);
+	endActivitySession(sessionId: string): Promise<void> {
+		return this.post(`/activities/sessions/${sessionId}/end`);
 	}
 
 	// --- Kanban ---
@@ -1648,6 +1648,276 @@ class ApiClient {
 
 	closeGalleryPost(channelId: string, postId: string): Promise<void> {
 		return this.post(`/channels/${channelId}/gallery-posts/${postId}/close`);
+	}
+
+	// --- Channel Groups ---
+
+	getChannelGroups(): Promise<any[]> {
+		return this.get('/users/@me/channel-groups');
+	}
+
+	createChannelGroup(data: { name: string }): Promise<any> {
+		return this.post('/users/@me/channel-groups', data);
+	}
+
+	updateChannelGroup(groupId: string, data: { name?: string }): Promise<any> {
+		return this.patch(`/users/@me/channel-groups/${groupId}`, data);
+	}
+
+	deleteChannelGroup(groupId: string): Promise<void> {
+		return this.del(`/users/@me/channel-groups/${groupId}`);
+	}
+
+	removeChannelFromGroup(groupId: string, channelId: string): Promise<void> {
+		return this.del(`/users/@me/channel-groups/${groupId}/channels/${channelId}`);
+	}
+
+	setChannelGroupChannels(groupId: string, channelIds: string[]): Promise<void> {
+		return this.put(`/users/@me/channel-groups/${groupId}/channels`, { channel_ids: channelIds });
+	}
+
+	// --- Voice Extensions ---
+
+	setVoiceInputMode(channelId: string, mode: string): Promise<void> {
+		return this.post(`/voice/${channelId}/input-mode`, { mode });
+	}
+
+	setVoicePrioritySpeaker(channelId: string, userId: string, enabled: boolean): Promise<void> {
+		return this.post(`/voice/${channelId}/members/${userId}/priority`, { enabled });
+	}
+
+	// --- Voice Broadcast ---
+
+	getVoiceBroadcast(channelId: string): Promise<any> {
+		return this.get(`/voice/${channelId}/broadcast`);
+	}
+
+	startVoiceBroadcast(channelId: string, data?: { title?: string }): Promise<any> {
+		return this.post(`/voice/${channelId}/broadcast/start`, data);
+	}
+
+	stopVoiceBroadcast(channelId: string): Promise<void> {
+		return this.post(`/voice/${channelId}/broadcast/stop`);
+	}
+
+	// --- Soundboard ---
+
+	getSoundboardConfig(guildId: string): Promise<any> {
+		return this.get(`/guilds/${guildId}/soundboard/config`);
+	}
+
+	updateSoundboardConfig(guildId: string, config: any): Promise<any> {
+		return this.patch(`/guilds/${guildId}/soundboard/config`, config);
+	}
+
+	getSoundboardSounds(guildId: string): Promise<any[]> {
+		return this.get(`/guilds/${guildId}/soundboard/sounds`);
+	}
+
+	createSoundboardSound(guildId: string, sound: any): Promise<any> {
+		return this.post(`/guilds/${guildId}/soundboard/sounds`, sound);
+	}
+
+	deleteSoundboardSound(guildId: string, soundId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/soundboard/sounds/${soundId}`);
+	}
+
+	playSoundboardSound(guildId: string, soundId: string): Promise<void> {
+		return this.post(`/guilds/${guildId}/soundboard/sounds/${soundId}/play`);
+	}
+
+	// --- Guild Widget ---
+
+	getGuildWidget(guildId: string): Promise<any> {
+		return this.get(`/guilds/${guildId}/widget`);
+	}
+
+	updateGuildWidget(guildId: string, data: any): Promise<any> {
+		return this.patch(`/guilds/${guildId}/widget`, data);
+	}
+
+	// --- Guild Plugins ---
+
+	getGuildPlugins(guildId: string): Promise<any[]> {
+		return this.get(`/guilds/${guildId}/plugins`);
+	}
+
+	updateGuildPlugin(guildId: string, pluginId: string, data: any): Promise<any> {
+		return this.patch(`/guilds/${guildId}/plugins/${pluginId}`, data);
+	}
+
+	deleteGuildPlugin(guildId: string, pluginId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/plugins/${pluginId}`);
+	}
+
+	// --- Guild Templates ---
+
+	getGuildTemplates(guildId: string): Promise<any[]> {
+		return this.get(`/guilds/${guildId}/templates`);
+	}
+
+	createGuildTemplate(guildId: string, data: { name: string; description?: string }): Promise<any> {
+		return this.post(`/guilds/${guildId}/templates`, data);
+	}
+
+	deleteGuildTemplate(guildId: string, templateId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/templates/${templateId}`);
+	}
+
+	applyGuildTemplate(guildId: string, templateId: string, data?: Record<string, unknown>): Promise<void> {
+		return this.post(`/guilds/${guildId}/templates/${templateId}/apply`, data);
+	}
+
+	// --- Channel Widgets ---
+
+	getChannelWidgets(channelId: string): Promise<any[]> {
+		return this.get(`/channels/${channelId}/widgets`);
+	}
+
+	createChannelWidget(channelId: string, widget: any): Promise<any> {
+		return this.post(`/channels/${channelId}/widgets`, widget);
+	}
+
+	updateChannelWidget(channelId: string, widgetId: string, data: any): Promise<any> {
+		return this.patch(`/channels/${channelId}/widgets/${widgetId}`, data);
+	}
+
+	deleteChannelWidget(channelId: string, widgetId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/widgets/${widgetId}`);
+	}
+
+	// --- Instance Profiles ---
+
+	getInstanceProfiles(): Promise<any[]> {
+		return this.get('/users/@me/instance-profiles');
+	}
+
+	createInstanceProfile(data: { instance_url: string; token: string; display_name?: string }): Promise<any> {
+		return this.post('/users/@me/instance-profiles', data);
+	}
+
+	deleteInstanceProfile(profileId: string): Promise<void> {
+		return this.del(`/users/@me/instance-profiles/${profileId}`);
+	}
+
+	// --- Webhook Extras ---
+
+	getWebhookTemplates(): Promise<any[]> {
+		return this.get('/webhooks/templates');
+	}
+
+	getOutgoingWebhookEvents(): Promise<any[]> {
+		return this.get('/webhooks/outgoing-events');
+	}
+
+	getWebhookLogs(guildId: string, webhookId: string): Promise<any[]> {
+		return this.get(`/guilds/${guildId}/webhooks/${webhookId}/logs`);
+	}
+
+	previewWebhook(data: any): Promise<any> {
+		return this.post('/webhooks/preview', data);
+	}
+
+	// --- Channel Export ---
+
+	exportChannelMessages(channelId: string, format: string = 'json'): Promise<any> {
+		return this.get(`/channels/${channelId}/export?format=${format}`);
+	}
+
+	// --- Admin Health ---
+
+	getHealthDashboard(): Promise<any> {
+		return this.get('/admin/health/dashboard');
+	}
+
+	// --- Admin Updates ---
+
+	getAdminUpdates(): Promise<any> {
+		return this.get('/admin/updates');
+	}
+
+	getAdminUpdatesConfig(): Promise<any> {
+		return this.get('/admin/updates/config');
+	}
+
+	updateAdminUpdatesConfig(config: any): Promise<void> {
+		return this.patch('/admin/updates/config', config);
+	}
+
+	dismissAdminUpdate(): Promise<void> {
+		return this.post('/admin/updates/dismiss');
+	}
+
+	// --- Admin Backups ---
+
+	getBackupSchedules(): Promise<any[]> {
+		return this.get('/admin/backups');
+	}
+
+	createBackupSchedule(schedule: any): Promise<any> {
+		return this.post('/admin/backups', schedule);
+	}
+
+	updateBackupSchedule(scheduleId: string, update: any): Promise<void> {
+		return this.patch(`/admin/backups/${scheduleId}`, update);
+	}
+
+	deleteBackupSchedule(scheduleId: string): Promise<void> {
+		return this.del(`/admin/backups/${scheduleId}`);
+	}
+
+	runBackup(scheduleId: string): Promise<void> {
+		return this.post(`/admin/backups/${scheduleId}/run`);
+	}
+
+	getBackupHistory(scheduleId: string): Promise<any[]> {
+		return this.get(`/admin/backups/${scheduleId}/history`);
+	}
+
+	// --- Admin Retention ---
+
+	getAdminRetentionPolicies(): Promise<any[]> {
+		return this.get('/admin/retention');
+	}
+
+	createAdminRetentionPolicy(policy: any): Promise<any> {
+		return this.post('/admin/retention', policy);
+	}
+
+	updateAdminRetentionPolicy(policyId: string, update: any): Promise<void> {
+		return this.patch(`/admin/retention/${policyId}`, update);
+	}
+
+	deleteAdminRetentionPolicy(policyId: string): Promise<void> {
+		return this.del(`/admin/retention/${policyId}`);
+	}
+
+	runAdminRetentionPolicy(policyId: string): Promise<any> {
+		return this.post(`/admin/retention/${policyId}/run`);
+	}
+
+	// --- Admin Domains ---
+
+	getAdminDomains(): Promise<any[]> {
+		return this.get('/admin/domains');
+	}
+
+	addAdminDomain(data: { domain: string; guild_id?: string; type?: string }): Promise<any> {
+		return this.post('/admin/domains', data);
+	}
+
+	verifyAdminDomain(domainId: string): Promise<void> {
+		return this.post(`/admin/domains/${domainId}/verify`);
+	}
+
+	deleteAdminDomain(domainId: string): Promise<void> {
+		return this.del(`/admin/domains/${domainId}`);
+	}
+
+	// --- Admin Storage ---
+
+	getAdminStorage(): Promise<any> {
+		return this.get('/admin/storage');
 	}
 }
 

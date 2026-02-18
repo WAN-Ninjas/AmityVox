@@ -1,6 +1,7 @@
 <!-- CodeSnippet.svelte — Code sharing with syntax highlighting and a Run button. -->
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface CodeSnippetData {
 		id: string;
@@ -31,13 +32,12 @@
 	let code = $state('');
 	let stdin = $state('');
 	let runnable = $state(false);
-	let creating = $state(false);
-	let running = $state(false);
+	let createOp = $state(createAsyncOp());
+	let runOp = $state(createAsyncOp());
 	let output = $state<string | null>(snippet?.output ?? null);
 	let outputError = $state<string | null>(snippet?.output_error ?? null);
 	let exitCode = $state<number | null>(snippet?.exit_code ?? null);
 	let runtimeMs = $state<number | null>(snippet?.runtime_ms ?? null);
-	let error = $state('');
 	let copied = $state(false);
 	let showCreateForm = $state(!snippet);
 	let lineNumbers = $derived(
@@ -114,48 +114,34 @@
 
 	async function createSnippet() {
 		if (!code.trim()) {
-			error = 'Code content is required';
+			createOp.error = 'Code content is required';
 			return;
 		}
-		creating = true;
-		error = '';
-		try {
-			await api.request('POST', `/channels/${channelId}/experimental/code-snippets`, {
-				title: title || undefined,
-				language,
-				code,
-				stdin: stdin || undefined,
-				runnable
-			});
+		await createOp.run(() => api.request('POST', `/channels/${channelId}/experimental/code-snippets`, {
+			title: title || undefined,
+			language,
+			code,
+			stdin: stdin || undefined,
+			runnable
+		}));
+		if (!createOp.error) {
 			if (onclose) onclose();
-		} catch (err: any) {
-			error = err.message || 'Failed to create snippet';
-		} finally {
-			creating = false;
 		}
 	}
 
 	async function runSnippet() {
 		if (!snippet) return;
-		running = true;
-		error = '';
-		try {
-			const result = await api.request<{
-				output: string;
-				output_error?: string;
-				exit_code: number;
-				runtime_ms: number;
-			}>('POST', `/channels/${channelId}/experimental/code-snippets/${snippet.id}/run`);
-			if (result) {
-				output = result.output;
-				outputError = result.output_error ?? null;
-				exitCode = result.exit_code;
-				runtimeMs = result.runtime_ms;
-			}
-		} catch (err: any) {
-			error = err.message || 'Failed to run snippet';
-		} finally {
-			running = false;
+		const result = await runOp.run(() => api.request<{
+			output: string;
+			output_error?: string;
+			exit_code: number;
+			runtime_ms: number;
+		}>('POST', `/channels/${channelId}/experimental/code-snippets/${snippet.id}/run`));
+		if (!runOp.error && result) {
+			output = result.output;
+			outputError = result.output_error ?? null;
+			exitCode = result.exit_code;
+			runtimeMs = result.runtime_ms;
 		}
 	}
 
@@ -185,8 +171,8 @@
 		</div>
 
 		<div class="p-3 space-y-3">
-			{#if error}
-				<div class="p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{error}</div>
+			{#if createOp.error}
+				<div class="p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{createOp.error}</div>
 			{/if}
 
 			<div class="flex gap-2">
@@ -237,10 +223,10 @@
 				<button
 					type="button"
 					class="btn-primary text-sm px-3 py-1.5 rounded"
-					disabled={creating || !code.trim()}
+					disabled={createOp.loading || !code.trim()}
 					onclick={createSnippet}
 				>
-					{creating ? 'Sharing...' : 'Share Code'}
+					{createOp.loading ? 'Sharing...' : 'Share Code'}
 				</button>
 			</div>
 		</div>
@@ -279,10 +265,10 @@
 					<button
 						type="button"
 						class="flex items-center gap-1 text-sm px-2 py-0.5 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors"
-						disabled={running}
+						disabled={runOp.loading}
 						onclick={runSnippet}
 					>
-						{#if running}
+						{#if runOp.loading}
 							<svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
 								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
 								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -331,8 +317,8 @@
 			</div>
 		{/if}
 
-		{#if error}
-			<div class="p-2 m-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{error}</div>
+		{#if runOp.error}
+			<div class="p-2 m-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{runOp.error}</div>
 		{/if}
 	</div>
 {/if}

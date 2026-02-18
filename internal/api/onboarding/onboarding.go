@@ -15,10 +15,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
 )
+
 
 // Handler implements guild onboarding REST API endpoints.
 type Handler struct {
@@ -136,7 +138,7 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
 		return
 	}
 
@@ -161,11 +163,10 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 				UpdatedAt:         time.Now(),
 				Prompts:           []promptResponse{},
 			}
-			writeJSON(w, http.StatusOK, resp)
+			apiutil.WriteJSON(w, http.StatusOK, resp)
 			return
 		}
-		h.Logger.Error("failed to query onboarding config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding config")
+		apiutil.InternalError(w, h.Logger, "Failed to get onboarding config", err)
 		return
 	}
 
@@ -187,8 +188,7 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query onboarding prompts", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding prompts")
+		apiutil.InternalError(w, h.Logger, "Failed to get onboarding prompts", err)
 		return
 	}
 	defer promptRows.Close()
@@ -200,8 +200,7 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 	for promptRows.Next() {
 		var p promptResponse
 		if err := promptRows.Scan(&p.ID, &p.GuildID, &p.Title, &p.Required, &p.SingleSelect, &p.Position, &p.CreatedAt); err != nil {
-			h.Logger.Error("failed to scan prompt row", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding prompts")
+			apiutil.InternalError(w, h.Logger, "Failed to get onboarding prompts", err)
 			return
 		}
 		p.Options = []optionResponse{}
@@ -210,8 +209,7 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 		prompts = append(prompts, p)
 	}
 	if err := promptRows.Err(); err != nil {
-		h.Logger.Error("prompt rows iteration error", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding prompts")
+		apiutil.InternalError(w, h.Logger, "Failed to get onboarding prompts", err)
 		return
 	}
 
@@ -225,8 +223,7 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 			promptIDs,
 		)
 		if err != nil {
-			h.Logger.Error("failed to query onboarding options", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding options")
+			apiutil.InternalError(w, h.Logger, "Failed to get onboarding options", err)
 			return
 		}
 		defer optionRows.Close()
@@ -234,8 +231,7 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 		for optionRows.Next() {
 			var o optionResponse
 			if err := optionRows.Scan(&o.ID, &o.PromptID, &o.GuildID, &o.Label, &o.Description, &o.Emoji, &o.RoleIDs, &o.ChannelIDs, &o.CreatedAt); err != nil {
-				h.Logger.Error("failed to scan option row", slog.String("error", err.Error()))
-				writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding options")
+				apiutil.InternalError(w, h.Logger, "Failed to get onboarding options", err)
 				return
 			}
 			if o.RoleIDs == nil {
@@ -249,14 +245,13 @@ func (h *Handler) HandleGetOnboarding(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := optionRows.Err(); err != nil {
-			h.Logger.Error("option rows iteration error", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding options")
+			apiutil.InternalError(w, h.Logger, "Failed to get onboarding options", err)
 			return
 		}
 	}
 
 	resp.Prompts = prompts
-	writeJSON(w, http.StatusOK, resp)
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // HandleUpdateOnboarding updates the onboarding settings for a guild.
@@ -267,13 +262,12 @@ func (h *Handler) HandleUpdateOnboarding(w http.ResponseWriter, r *http.Request)
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
 	var req updateOnboardingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -283,7 +277,7 @@ func (h *Handler) HandleUpdateOnboarding(w http.ResponseWriter, r *http.Request)
 		var err error
 		rulesJSON, err = json.Marshal(req.Rules)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_rules", "Rules must be valid JSON")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_rules", "Rules must be valid JSON")
 			return
 		}
 	}
@@ -308,8 +302,7 @@ func (h *Handler) HandleUpdateOnboarding(w http.ResponseWriter, r *http.Request)
 		guildID, req.Enabled, req.WelcomeMessage, rulesJSON, req.DefaultChannelIDs,
 	).Scan(&resp.GuildID, &resp.Enabled, &resp.WelcomeMessage, &rulesRaw, &resp.DefaultChannelIDs, &resp.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to upsert onboarding config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update onboarding config")
+		apiutil.InternalError(w, h.Logger, "Failed to update onboarding config", err)
 		return
 	}
 
@@ -323,7 +316,7 @@ func (h *Handler) HandleUpdateOnboarding(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Publish event so connected clients see the change.
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildUpdate, "GUILD_ONBOARDING_UPDATE", map[string]interface{}{
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildUpdate, "GUILD_ONBOARDING_UPDATE", guildID, map[string]interface{}{
 		"guild_id":            guildID,
 		"enabled":             resp.Enabled,
 		"welcome_message":     resp.WelcomeMessage,
@@ -332,7 +325,7 @@ func (h *Handler) HandleUpdateOnboarding(w http.ResponseWriter, r *http.Request)
 		"updated_at":          resp.UpdatedAt,
 	})
 
-	writeJSON(w, http.StatusOK, resp)
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // HandleCreatePrompt creates a new onboarding prompt with its options in a single request.
@@ -342,18 +335,16 @@ func (h *Handler) HandleCreatePrompt(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
 	var req createPromptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Title == "" {
-		writeError(w, http.StatusBadRequest, "title_required", "Prompt title is required")
+	if !apiutil.RequireNonEmpty(w, "Prompt title", req.Title) {
 		return
 	}
 
@@ -375,72 +366,62 @@ func (h *Handler) HandleCreatePrompt(w http.ResponseWriter, r *http.Request) {
 	position := maxPos + 1
 
 	// Use a transaction to create the prompt and its options atomically.
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create prompt")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
 	promptID := models.NewULID().String()
 	now := time.Now()
-
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO onboarding_prompts (id, guild_id, title, required, single_select, position, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		promptID, guildID, req.Title, required, singleSelect, position, now,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create prompt", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create prompt")
-		return
-	}
-
 	options := make([]optionResponse, 0, len(req.Options))
-	for _, opt := range req.Options {
-		if opt.Label == "" {
-			continue
-		}
-		optionID := models.NewULID().String()
-		optNow := time.Now()
 
-		roleIDs := opt.RoleIDs
-		if roleIDs == nil {
-			roleIDs = []string{}
-		}
-		channelIDs := opt.ChannelIDs
-		if channelIDs == nil {
-			channelIDs = []string{}
-		}
-
-		_, err = tx.Exec(r.Context(),
-			`INSERT INTO onboarding_options (id, prompt_id, guild_id, label, description, emoji, role_ids, channel_ids, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			optionID, promptID, guildID, opt.Label, opt.Description, opt.Emoji, roleIDs, channelIDs, optNow,
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO onboarding_prompts (id, guild_id, title, required, single_select, position, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			promptID, guildID, req.Title, required, singleSelect, position, now,
 		)
 		if err != nil {
-			h.Logger.Error("failed to create option", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create prompt option")
-			return
+			return err
 		}
 
-		options = append(options, optionResponse{
-			ID:          optionID,
-			PromptID:    promptID,
-			GuildID:     guildID,
-			Label:       opt.Label,
-			Description: opt.Description,
-			Emoji:       opt.Emoji,
-			RoleIDs:     roleIDs,
-			ChannelIDs:  channelIDs,
-			CreatedAt:   optNow,
-		})
-	}
+		for _, opt := range req.Options {
+			if opt.Label == "" {
+				continue
+			}
+			optionID := models.NewULID().String()
+			optNow := time.Now()
 
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit prompt transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create prompt")
+			roleIDs := opt.RoleIDs
+			if roleIDs == nil {
+				roleIDs = []string{}
+			}
+			channelIDs := opt.ChannelIDs
+			if channelIDs == nil {
+				channelIDs = []string{}
+			}
+
+			_, err = tx.Exec(r.Context(),
+				`INSERT INTO onboarding_options (id, prompt_id, guild_id, label, description, emoji, role_ids, channel_ids, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				optionID, promptID, guildID, opt.Label, opt.Description, opt.Emoji, roleIDs, channelIDs, optNow,
+			)
+			if err != nil {
+				return err
+			}
+
+			options = append(options, optionResponse{
+				ID:          optionID,
+				PromptID:    promptID,
+				GuildID:     guildID,
+				Label:       opt.Label,
+				Description: opt.Description,
+				Emoji:       opt.Emoji,
+				RoleIDs:     roleIDs,
+				ChannelIDs:  channelIDs,
+				CreatedAt:   optNow,
+			})
+		}
+
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to create prompt", err)
 		return
 	}
 
@@ -455,7 +436,7 @@ func (h *Handler) HandleCreatePrompt(w http.ResponseWriter, r *http.Request) {
 		Options:      options,
 	}
 
-	writeJSON(w, http.StatusCreated, resp)
+	apiutil.WriteJSON(w, http.StatusCreated, resp)
 }
 
 // HandleUpdatePrompt updates an existing onboarding prompt's settings.
@@ -466,13 +447,12 @@ func (h *Handler) HandleUpdatePrompt(w http.ResponseWriter, r *http.Request) {
 	promptID := chi.URLParam(r, "promptID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
 	var req updatePromptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -488,11 +468,10 @@ func (h *Handler) HandleUpdatePrompt(w http.ResponseWriter, r *http.Request) {
 	).Scan(&prompt.ID, &prompt.GuildID, &prompt.Title, &prompt.Required, &prompt.SingleSelect, &prompt.Position, &prompt.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "prompt_not_found", "Prompt not found")
+			apiutil.WriteError(w, http.StatusNotFound, "prompt_not_found", "Prompt not found")
 			return
 		}
-		h.Logger.Error("failed to update prompt", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update prompt")
+		apiutil.InternalError(w, h.Logger, "Failed to update prompt", err)
 		return
 	}
 
@@ -505,8 +484,7 @@ func (h *Handler) HandleUpdatePrompt(w http.ResponseWriter, r *http.Request) {
 		promptID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query options for prompt", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load prompt options")
+		apiutil.InternalError(w, h.Logger, "Failed to load prompt options", err)
 		return
 	}
 	defer optionRows.Close()
@@ -527,7 +505,7 @@ func (h *Handler) HandleUpdatePrompt(w http.ResponseWriter, r *http.Request) {
 		prompt.Options = append(prompt.Options, o)
 	}
 
-	writeJSON(w, http.StatusOK, prompt)
+	apiutil.WriteJSON(w, http.StatusOK, prompt)
 }
 
 // HandleDeletePrompt deletes an onboarding prompt and its options (cascading via FK).
@@ -538,7 +516,7 @@ func (h *Handler) HandleDeletePrompt(w http.ResponseWriter, r *http.Request) {
 	promptID := chi.URLParam(r, "promptID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -547,12 +525,11 @@ func (h *Handler) HandleDeletePrompt(w http.ResponseWriter, r *http.Request) {
 		promptID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete prompt", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete prompt")
+		apiutil.InternalError(w, h.Logger, "Failed to delete prompt", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "prompt_not_found", "Prompt not found")
+		apiutil.WriteError(w, http.StatusNotFound, "prompt_not_found", "Prompt not found")
 		return
 	}
 
@@ -568,7 +545,7 @@ func (h *Handler) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
 		return
 	}
 
@@ -579,13 +556,12 @@ func (h *Handler) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		guildID, userID,
 	).Scan(&alreadyCompleted)
 	if alreadyCompleted {
-		writeError(w, http.StatusConflict, "already_completed", "You have already completed onboarding for this guild")
+		apiutil.WriteError(w, http.StatusConflict, "already_completed", "You have already completed onboarding for this guild")
 		return
 	}
 
 	var req completeOnboardingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -595,86 +571,74 @@ func (h *Handler) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		allOptionIDs = append(allOptionIDs, optionIDs...)
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to complete onboarding")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Batch-load role_ids for all selected options.
-	if len(allOptionIDs) > 0 {
-		optRows, err := tx.Query(r.Context(),
-			`SELECT id, role_ids FROM onboarding_options
-			 WHERE id = ANY($1) AND guild_id = $2`,
-			allOptionIDs, guildID,
-		)
-		if err != nil {
-			h.Logger.Error("failed to query selected options", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to complete onboarding")
-			return
-		}
-		defer optRows.Close()
-
-		// Collect all role IDs to assign (deduplicated).
-		roleSet := make(map[string]struct{})
-		for optRows.Next() {
-			var optionID string
-			var roleIDs []string
-			if err := optRows.Scan(&optionID, &roleIDs); err != nil {
-				h.Logger.Error("failed to scan option role_ids", slog.String("error", err.Error()))
-				continue
-			}
-			for _, roleID := range roleIDs {
-				roleSet[roleID] = struct{}{}
-			}
-		}
-		if err := optRows.Err(); err != nil {
-			h.Logger.Error("option rows iteration error", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to complete onboarding")
-			return
-		}
-
-		// Assign roles to the member.
-		for roleID := range roleSet {
-			_, err := tx.Exec(r.Context(),
-				`INSERT INTO member_roles (guild_id, user_id, role_id)
-				 VALUES ($1, $2, $3)
-				 ON CONFLICT DO NOTHING`,
-				guildID, userID, roleID,
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Batch-load role_ids for all selected options.
+		if len(allOptionIDs) > 0 {
+			optRows, err := tx.Query(r.Context(),
+				`SELECT id, role_ids FROM onboarding_options
+				 WHERE id = ANY($1) AND guild_id = $2`,
+				allOptionIDs, guildID,
 			)
 			if err != nil {
-				h.Logger.Error("failed to assign role from onboarding",
-					slog.String("role_id", roleID),
-					slog.String("error", err.Error()),
+				return err
+			}
+			defer optRows.Close()
+
+			// Collect all role IDs to assign (deduplicated).
+			roleSet := make(map[string]struct{})
+			for optRows.Next() {
+				var optionID string
+				var roleIDs []string
+				if err := optRows.Scan(&optionID, &roleIDs); err != nil {
+					h.Logger.Error("failed to scan option role_ids", slog.String("error", err.Error()))
+					continue
+				}
+				for _, roleID := range roleIDs {
+					roleSet[roleID] = struct{}{}
+				}
+			}
+			if err := optRows.Err(); err != nil {
+				return err
+			}
+
+			// Assign roles to the member.
+			for roleID := range roleSet {
+				_, err := tx.Exec(r.Context(),
+					`INSERT INTO member_roles (guild_id, user_id, role_id)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT DO NOTHING`,
+					guildID, userID, roleID,
 				)
-				// Continue assigning other roles; do not fail the whole operation.
+				if err != nil {
+					h.Logger.Error("failed to assign role from onboarding",
+						slog.String("role_id", roleID),
+						slog.String("error", err.Error()),
+					)
+					// Continue assigning other roles; do not fail the whole operation.
+				}
 			}
 		}
-	}
 
-	// Record completion.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO onboarding_completions (guild_id, user_id, completed_at)
-		 VALUES ($1, $2, now())
-		 ON CONFLICT DO NOTHING`,
-		guildID, userID,
-	)
+		// Record completion.
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO onboarding_completions (guild_id, user_id, completed_at)
+			 VALUES ($1, $2, now())
+			 ON CONFLICT DO NOTHING`,
+			guildID, userID,
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to record onboarding completion", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to record onboarding completion")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit onboarding completion", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to complete onboarding")
+		apiutil.InternalError(w, h.Logger, "Failed to complete onboarding", err)
 		return
 	}
 
 	// Publish event for real-time update.
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", map[string]interface{}{
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildMemberUpdate, "GUILD_MEMBER_UPDATE", guildID, map[string]interface{}{
 		"guild_id":             guildID,
 		"user_id":              userID,
 		"onboarding_completed": true,
@@ -691,7 +655,7 @@ func (h *Handler) HandleGetOnboardingStatus(w http.ResponseWriter, r *http.Reque
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
 		return
 	}
 
@@ -703,8 +667,7 @@ func (h *Handler) HandleGetOnboardingStatus(w http.ResponseWriter, r *http.Reque
 	).Scan(&completedAt)
 
 	if err != nil && err != pgx.ErrNoRows {
-		h.Logger.Error("failed to query onboarding status", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get onboarding status")
+		apiutil.InternalError(w, h.Logger, "Failed to get onboarding status", err)
 		return
 	}
 
@@ -713,21 +676,5 @@ func (h *Handler) HandleGetOnboardingStatus(w http.ResponseWriter, r *http.Reque
 		CompletedAt: completedAt,
 	}
 
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// --- JSON helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }

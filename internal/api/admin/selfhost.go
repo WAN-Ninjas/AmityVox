@@ -6,7 +6,6 @@ package admin
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -41,7 +41,7 @@ func (h *Handler) HandleGetSetupStatus(w http.ResponseWriter, r *http.Request) {
 	h.Pool.QueryRow(r.Context(),
 		`SELECT COALESCE(name, '') FROM instances WHERE id = $1`, h.InstanceID).Scan(&instanceName)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"completed":     completed == "true",
 		"instance_name": instanceName,
 		"instance_id":   h.InstanceID,
@@ -61,7 +61,7 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 	if completed == "true" {
 		// Already completed — require admin.
 		if !h.isAdmin(r) {
-			writeError(w, http.StatusForbidden, "forbidden", "Setup already completed. Admin access required to reconfigure.")
+			apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Setup already completed. Admin access required to reconfigure.")
 			return
 		}
 	}
@@ -76,13 +76,11 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 		RegistrationMode string `json:"registration_mode"`
 		Domain          string `json:"domain"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.InstanceName == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Instance name is required")
+	if !apiutil.RequireNonEmpty(w, "Instance name", req.InstanceName) {
 		return
 	}
 
@@ -92,8 +90,7 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $4`,
 		req.InstanceName, req.Description, req.FederationMode, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("setup: failed to update instance", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update instance settings")
+		apiutil.InternalError(w, h.Logger, "Failed to update instance settings", err)
 		return
 	}
 
@@ -124,7 +121,7 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 		 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
 		time.Now().UTC().Format(time.RFC3339))
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "completed",
 		"message": "Instance setup completed successfully",
 	})
@@ -138,7 +135,7 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/admin/updates/check
 func (h *Handler) HandleCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -169,7 +166,7 @@ func (h *Handler) HandleCheckUpdates(w http.ResponseWriter, r *http.Request) {
 
 	updateAvailable := latestVersion != "" && latestVersion != currentVersion && latestVersion != dismissed
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"current_version":  currentVersion,
 		"latest_version":   latestVersion,
 		"update_available": updateAvailable,
@@ -185,7 +182,7 @@ func (h *Handler) HandleCheckUpdates(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/admin/updates/set-latest
 func (h *Handler) HandleSetLatestVersion(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -194,13 +191,11 @@ func (h *Handler) HandleSetLatestVersion(w http.ResponseWriter, r *http.Request)
 		ReleaseNotes string `json:"release_notes"`
 		ReleaseURL   string `json:"release_url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Version == "" {
-		writeError(w, http.StatusBadRequest, "missing_version", "Version is required")
+	if !apiutil.RequireNonEmpty(w, "Version", req.Version) {
 		return
 	}
 
@@ -217,14 +212,14 @@ func (h *Handler) HandleSetLatestVersion(w http.ResponseWriter, r *http.Request)
 			 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()`, k, v)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleDismissUpdate dismisses the current update notification.
 // POST /api/v1/admin/updates/dismiss
 func (h *Handler) HandleDismissUpdate(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -238,14 +233,14 @@ func (h *Handler) HandleDismissUpdate(w http.ResponseWriter, r *http.Request) {
 			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, latestVersion)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }
 
 // HandleGetUpdateConfig returns the auto-update configuration.
 // GET /api/v1/admin/updates/config
 func (h *Handler) HandleGetUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -257,7 +252,7 @@ func (h *Handler) HandleGetUpdateConfig(w http.ResponseWriter, r *http.Request) 
 	h.Pool.QueryRow(r.Context(),
 		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'update_notify_admins'), 'true')`).Scan(&notifyAdmins)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"auto_check":    autoCheck == "true",
 		"channel":       channel,
 		"notify_admins": notifyAdmins == "true",
@@ -268,7 +263,7 @@ func (h *Handler) HandleGetUpdateConfig(w http.ResponseWriter, r *http.Request) 
 // PATCH /api/v1/admin/updates/config
 func (h *Handler) HandleUpdateUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -277,8 +272,7 @@ func (h *Handler) HandleUpdateUpdateConfig(w http.ResponseWriter, r *http.Reques
 		Channel      *string `json:"channel"`
 		NotifyAdmins *bool   `json:"notify_admins"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -299,7 +293,7 @@ func (h *Handler) HandleUpdateUpdateConfig(w http.ResponseWriter, r *http.Reques
 				`INSERT INTO instance_settings (key, value, updated_at) VALUES ('update_channel', $1, now())
 				 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.Channel)
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_channel", "Channel must be 'stable', 'beta', or 'nightly'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Channel must be 'stable', 'beta', or 'nightly'")
 			return
 		}
 	}
@@ -314,7 +308,7 @@ func (h *Handler) HandleUpdateUpdateConfig(w http.ResponseWriter, r *http.Reques
 			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, v)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // =============================================================================
@@ -325,7 +319,7 @@ func (h *Handler) HandleUpdateUpdateConfig(w http.ResponseWriter, r *http.Reques
 // GET /api/v1/admin/health
 func (h *Handler) HandleGetHealthDashboard(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -433,7 +427,7 @@ func (h *Handler) HandleGetHealthDashboard(w http.ResponseWriter, r *http.Reques
 	h.Pool.Exec(r.Context(),
 		`DELETE FROM health_snapshots WHERE created_at < now() - INTERVAL '7 days'`)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"services": services,
 		"database": map[string]interface{}{
 			"size":            dbSize,
@@ -464,7 +458,7 @@ func (h *Handler) HandleGetHealthDashboard(w http.ResponseWriter, r *http.Reques
 // GET /api/v1/admin/health/history
 func (h *Handler) HandleGetHealthHistory(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -489,8 +483,7 @@ func (h *Handler) HandleGetHealthHistory(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to query health history", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get health history")
+		apiutil.InternalError(w, h.Logger, "Failed to get health history", err)
 		return
 	}
 	defer rows.Close()
@@ -512,7 +505,7 @@ func (h *Handler) HandleGetHealthHistory(w http.ResponseWriter, r *http.Request)
 		snapshots = append(snapshots, s)
 	}
 
-	writeJSON(w, http.StatusOK, snapshots)
+	apiutil.WriteJSON(w, http.StatusOK, snapshots)
 }
 
 // =============================================================================
@@ -523,7 +516,7 @@ func (h *Handler) HandleGetHealthHistory(w http.ResponseWriter, r *http.Request)
 // GET /api/v1/admin/storage
 func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -557,8 +550,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 		 GROUP BY category
 		 ORDER BY total_bytes DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query storage breakdown", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get storage breakdown")
+		apiutil.InternalError(w, h.Logger, "Failed to get storage breakdown", err)
 		return
 	}
 	defer rows.Close()
@@ -668,7 +660,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"total_files":       totalFiles,
 		"total_bytes":       totalBytes,
 		"total_readable":    formatBytes(totalBytes),
@@ -688,7 +680,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 // GET /api/v1/admin/retention
 func (h *Handler) HandleGetRetentionPolicies(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -704,8 +696,7 @@ func (h *Handler) HandleGetRetentionPolicies(w http.ResponseWriter, r *http.Requ
 		 LEFT JOIN users u ON u.id = drp.created_by
 		 ORDER BY drp.created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query retention policies", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get retention policies")
+		apiutil.InternalError(w, h.Logger, "Failed to get retention policies", err)
 		return
 	}
 	defer rows.Close()
@@ -744,14 +735,14 @@ func (h *Handler) HandleGetRetentionPolicies(w http.ResponseWriter, r *http.Requ
 		policies = append(policies, p)
 	}
 
-	writeJSON(w, http.StatusOK, policies)
+	apiutil.WriteJSON(w, http.StatusOK, policies)
 }
 
 // HandleCreateRetentionPolicy creates a new data retention policy.
 // POST /api/v1/admin/retention
 func (h *Handler) HandleCreateRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -763,17 +754,16 @@ func (h *Handler) HandleCreateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		DeletePins        *bool   `json:"delete_pins"`
 		Enabled           *bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.MaxAgeDays < 1 {
-		writeError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be at least 1")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be at least 1")
 		return
 	}
 	if req.MaxAgeDays > 36500 {
-		writeError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days cannot exceed 36500 (100 years)")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days cannot exceed 36500 (100 years)")
 		return
 	}
 
@@ -803,15 +793,14 @@ func (h *Handler) HandleCreateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		deleteAttachments, deletePins, enabled, nextRun, adminID)
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
-			writeError(w, http.StatusConflict, "duplicate_policy", "A retention policy already exists for this scope")
+			apiutil.WriteError(w, http.StatusConflict, "duplicate_policy", "A retention policy already exists for this scope")
 			return
 		}
-		h.Logger.Error("failed to create retention policy", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to create retention policy", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":                 policyID,
 		"channel_id":         req.ChannelID,
 		"guild_id":           req.GuildID,
@@ -827,7 +816,7 @@ func (h *Handler) HandleCreateRetentionPolicy(w http.ResponseWriter, r *http.Req
 // PATCH /api/v1/admin/retention/{policyID}
 func (h *Handler) HandleUpdateRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -839,13 +828,12 @@ func (h *Handler) HandleUpdateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		DeletePins        *bool `json:"delete_pins"`
 		Enabled           *bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.MaxAgeDays != nil && (*req.MaxAgeDays < 1 || *req.MaxAgeDays > 36500) {
-		writeError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be between 1 and 36500")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be between 1 and 36500")
 		return
 	}
 
@@ -859,23 +847,22 @@ func (h *Handler) HandleUpdateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		 WHERE id = $5`,
 		req.MaxAgeDays, req.DeleteAttachments, req.DeletePins, req.Enabled, policyID)
 	if err != nil {
-		h.Logger.Error("failed to update retention policy", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to update retention policy", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Retention policy not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Retention policy not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleDeleteRetentionPolicy deletes a retention policy.
 // DELETE /api/v1/admin/retention/{policyID}
 func (h *Handler) HandleDeleteRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -884,12 +871,11 @@ func (h *Handler) HandleDeleteRetentionPolicy(w http.ResponseWriter, r *http.Req
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM data_retention_policies WHERE id = $1`, policyID)
 	if err != nil {
-		h.Logger.Error("failed to delete retention policy", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to delete retention policy", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Retention policy not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Retention policy not found")
 		return
 	}
 
@@ -900,7 +886,7 @@ func (h *Handler) HandleDeleteRetentionPolicy(w http.ResponseWriter, r *http.Req
 // POST /api/v1/admin/retention/{policyID}/run
 func (h *Handler) HandleRunRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -914,11 +900,11 @@ func (h *Handler) HandleRunRetentionPolicy(w http.ResponseWriter, r *http.Reques
 		 FROM data_retention_policies WHERE id = $1 AND enabled = true`, policyID).Scan(
 		&maxAgeDays, &channelID, &guildID, &deleteAttachments, &deletePins)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Retention policy not found or disabled")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Retention policy not found or disabled")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read retention policy")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read retention policy")
 		return
 	}
 
@@ -957,7 +943,7 @@ func (h *Handler) HandleRunRetentionPolicy(w http.ResponseWriter, r *http.Reques
 		     updated_at = now()
 		 WHERE id = $2`, deleted, policyID)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"policy_id":        policyID,
 		"messages_deleted": deleted,
 		"cutoff_date":      cutoff.Format(time.RFC3339),
@@ -972,7 +958,7 @@ func (h *Handler) HandleRunRetentionPolicy(w http.ResponseWriter, r *http.Reques
 // GET /api/v1/admin/domains
 func (h *Handler) HandleGetCustomDomains(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -983,8 +969,7 @@ func (h *Handler) HandleGetCustomDomains(w http.ResponseWriter, r *http.Request)
 		 JOIN guilds g ON g.id = gcd.guild_id
 		 ORDER BY gcd.created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query custom domains", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get custom domains")
+		apiutil.InternalError(w, h.Logger, "Failed to get custom domains", err)
 		return
 	}
 	defer rows.Close()
@@ -1013,14 +998,14 @@ func (h *Handler) HandleGetCustomDomains(w http.ResponseWriter, r *http.Request)
 		domains = append(domains, d)
 	}
 
-	writeJSON(w, http.StatusOK, domains)
+	apiutil.WriteJSON(w, http.StatusOK, domains)
 }
 
 // HandleCreateCustomDomain adds a custom domain for a guild.
 // POST /api/v1/admin/domains
 func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1028,20 +1013,19 @@ func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Reques
 		GuildID string `json:"guild_id"`
 		Domain  string `json:"domain"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.GuildID == "" || req.Domain == "" {
-		writeError(w, http.StatusBadRequest, "missing_fields", "guild_id and domain are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_fields", "guild_id and domain are required")
 		return
 	}
 
 	// Sanitize domain.
 	req.Domain = strings.ToLower(strings.TrimSpace(req.Domain))
 	if strings.HasPrefix(req.Domain, "http") {
-		writeError(w, http.StatusBadRequest, "invalid_domain", "Domain should not include protocol (http/https)")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_domain", "Domain should not include protocol (http/https)")
 		return
 	}
 
@@ -1050,14 +1034,14 @@ func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Reques
 	h.Pool.QueryRow(r.Context(),
 		`SELECT EXISTS(SELECT 1 FROM guilds WHERE id = $1)`, req.GuildID).Scan(&guildExists)
 	if !guildExists {
-		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		apiutil.WriteError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
 		return
 	}
 
 	// Generate verification token.
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to generate verification token")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate verification token")
 		return
 	}
 	verificationToken := fmt.Sprintf("amityvox-verify-%s", hex.EncodeToString(tokenBytes[:16]))
@@ -1070,15 +1054,14 @@ func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Reques
 		domainID, req.GuildID, req.Domain, verificationToken)
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
-			writeError(w, http.StatusConflict, "domain_exists", "This domain is already registered")
+			apiutil.WriteError(w, http.StatusConflict, "domain_exists", "This domain is already registered")
 			return
 		}
-		h.Logger.Error("failed to create custom domain", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create custom domain")
+		apiutil.InternalError(w, h.Logger, "Failed to create custom domain", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":                 domainID,
 		"guild_id":           req.GuildID,
 		"domain":             req.Domain,
@@ -1092,7 +1075,7 @@ func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Reques
 // POST /api/v1/admin/domains/{domainID}/verify
 func (h *Handler) HandleVerifyCustomDomain(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1106,16 +1089,15 @@ func (h *Handler) HandleVerifyCustomDomain(w http.ResponseWriter, r *http.Reques
 		 WHERE id = $1`,
 		domainID)
 	if err != nil {
-		h.Logger.Error("failed to verify domain", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify domain")
+		apiutil.InternalError(w, h.Logger, "Failed to verify domain", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Custom domain not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Custom domain not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"verified": true,
 		"message":  "Domain verified successfully. Configure your DNS CNAME to point to this instance.",
 	})
@@ -1125,7 +1107,7 @@ func (h *Handler) HandleVerifyCustomDomain(w http.ResponseWriter, r *http.Reques
 // DELETE /api/v1/admin/domains/{domainID}
 func (h *Handler) HandleDeleteCustomDomain(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1134,12 +1116,11 @@ func (h *Handler) HandleDeleteCustomDomain(w http.ResponseWriter, r *http.Reques
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM guild_custom_domains WHERE id = $1`, domainID)
 	if err != nil {
-		h.Logger.Error("failed to delete custom domain", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete custom domain")
+		apiutil.InternalError(w, h.Logger, "Failed to delete custom domain", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Custom domain not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Custom domain not found")
 		return
 	}
 
@@ -1154,7 +1135,7 @@ func (h *Handler) HandleDeleteCustomDomain(w http.ResponseWriter, r *http.Reques
 // GET /api/v1/admin/backups
 func (h *Handler) HandleGetBackupSchedules(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1168,8 +1149,7 @@ func (h *Handler) HandleGetBackupSchedules(w http.ResponseWriter, r *http.Reques
 		 JOIN users u ON u.id = bs.created_by
 		 ORDER BY bs.created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query backup schedules", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get backup schedules")
+		apiutil.InternalError(w, h.Logger, "Failed to get backup schedules", err)
 		return
 	}
 	defer rows.Close()
@@ -1208,14 +1188,14 @@ func (h *Handler) HandleGetBackupSchedules(w http.ResponseWriter, r *http.Reques
 		schedules = append(schedules, s)
 	}
 
-	writeJSON(w, http.StatusOK, schedules)
+	apiutil.WriteJSON(w, http.StatusOK, schedules)
 }
 
 // HandleCreateBackupSchedule creates a new backup schedule.
 // POST /api/v1/admin/backups
 func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1228,13 +1208,11 @@ func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		StoragePath     string `json:"storage_path"`
 		Enabled         *bool  `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Schedule name is required")
+	if !apiutil.RequireNonEmpty(w, "Schedule name", req.Name) {
 		return
 	}
 
@@ -1245,7 +1223,7 @@ func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Requ
 	case "":
 		req.Frequency = "daily"
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_frequency", "Frequency must be 'hourly', 'daily', 'weekly', or 'monthly'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_frequency", "Frequency must be 'hourly', 'daily', 'weekly', or 'monthly'")
 		return
 	}
 
@@ -1286,12 +1264,11 @@ func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		scheduleID, req.Name, req.Frequency, req.RetentionCount,
 		includeMedia, includeDB, req.StoragePath, enabled, nextRun, adminID)
 	if err != nil {
-		h.Logger.Error("failed to create backup schedule", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create backup schedule")
+		apiutil.InternalError(w, h.Logger, "Failed to create backup schedule", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":               scheduleID,
 		"name":             req.Name,
 		"frequency":        req.Frequency,
@@ -1308,7 +1285,7 @@ func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Requ
 // PATCH /api/v1/admin/backups/{scheduleID}
 func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1323,8 +1300,7 @@ func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		StoragePath     *string `json:"storage_path"`
 		Enabled         *bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1333,13 +1309,13 @@ func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		case "hourly", "daily", "weekly", "monthly":
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_frequency", "Frequency must be 'hourly', 'daily', 'weekly', or 'monthly'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_frequency", "Frequency must be 'hourly', 'daily', 'weekly', or 'monthly'")
 			return
 		}
 	}
 
 	if req.RetentionCount != nil && (*req.RetentionCount < 1 || *req.RetentionCount > 365) {
-		writeError(w, http.StatusBadRequest, "invalid_retention", "Retention count must be between 1 and 365")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_retention", "Retention count must be between 1 and 365")
 		return
 	}
 
@@ -1357,12 +1333,11 @@ func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		req.Name, req.Frequency, req.RetentionCount, req.IncludeMedia,
 		req.IncludeDatabase, req.StoragePath, req.Enabled, scheduleID)
 	if err != nil {
-		h.Logger.Error("failed to update backup schedule", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update backup schedule")
+		apiutil.InternalError(w, h.Logger, "Failed to update backup schedule", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
 		return
 	}
 
@@ -1373,14 +1348,14 @@ func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Requ
 			`UPDATE backup_schedules SET next_run_at = $1 WHERE id = $2`, nextRun, scheduleID)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleDeleteBackupSchedule deletes a backup schedule.
 // DELETE /api/v1/admin/backups/{scheduleID}
 func (h *Handler) HandleDeleteBackupSchedule(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1389,12 +1364,11 @@ func (h *Handler) HandleDeleteBackupSchedule(w http.ResponseWriter, r *http.Requ
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM backup_schedules WHERE id = $1`, scheduleID)
 	if err != nil {
-		h.Logger.Error("failed to delete backup schedule", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete backup schedule")
+		apiutil.InternalError(w, h.Logger, "Failed to delete backup schedule", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
 		return
 	}
 
@@ -1405,7 +1379,7 @@ func (h *Handler) HandleDeleteBackupSchedule(w http.ResponseWriter, r *http.Requ
 // GET /api/v1/admin/backups/{scheduleID}/history
 func (h *Handler) HandleGetBackupHistory(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1419,8 +1393,7 @@ func (h *Handler) HandleGetBackupHistory(w http.ResponseWriter, r *http.Request)
 		 ORDER BY created_at DESC
 		 LIMIT 50`, scheduleID)
 	if err != nil {
-		h.Logger.Error("failed to query backup history", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get backup history")
+		apiutil.InternalError(w, h.Logger, "Failed to get backup history", err)
 		return
 	}
 	defer rows.Close()
@@ -1449,14 +1422,14 @@ func (h *Handler) HandleGetBackupHistory(w http.ResponseWriter, r *http.Request)
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // HandleTriggerBackup manually triggers a backup for a schedule.
 // POST /api/v1/admin/backups/{scheduleID}/run
 func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1467,11 +1440,11 @@ func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT name, frequency FROM backup_schedules WHERE id = $1`, scheduleID).Scan(&name, &frequency)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read backup schedule")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read backup schedule")
 		return
 	}
 
@@ -1481,7 +1454,7 @@ func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO backup_history (id, schedule_id, status, started_at, created_at)
 		 VALUES ($1, $2, 'running', now(), now())`, historyID, scheduleID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create backup entry")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create backup entry")
 		return
 	}
 
@@ -1498,7 +1471,7 @@ func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 	h.Pool.Exec(r.Context(),
 		`UPDATE backup_schedules SET last_run_status = 'completed' WHERE id = $1`, scheduleID)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"backup_id":   historyID,
 		"schedule_id": scheduleID,
 		"status":      "completed",
@@ -1528,7 +1501,7 @@ func formatBytes(b int64) string {
 // GET /api/v1/admin/media
 func (h *Handler) HandleAdminGetMedia(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1550,7 +1523,7 @@ func (h *Handler) HandleAdminGetMedia(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to query media")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to query media")
 		return
 	}
 	defer rows.Close()
@@ -1563,20 +1536,20 @@ func (h *Handler) HandleAdminGetMedia(w http.ResponseWriter, r *http.Request) {
 			&a.Width, &a.Height, &a.DurationSeconds, &a.S3Bucket, &a.S3Key, &a.Blurhash,
 			&a.AltText, &a.NSFW, &a.Description, &a.CreatedAt,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read media data")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read media data")
 			return
 		}
 		attachments = append(attachments, a)
 	}
 
-	writeJSON(w, http.StatusOK, attachments)
+	apiutil.WriteJSON(w, http.StatusOK, attachments)
 }
 
 // HandleAdminDeleteMedia deletes an attachment from DB and S3 as admin.
 // DELETE /api/v1/admin/media/{fileID}
 func (h *Handler) HandleAdminDeleteMedia(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1589,9 +1562,9 @@ func (h *Handler) HandleAdminDeleteMedia(w http.ResponseWriter, r *http.Request)
 	).Scan(&s3Key, &s3Bucket)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
+			apiutil.WriteError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up attachment")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up attachment")
 		}
 		return
 	}
@@ -1607,7 +1580,7 @@ func (h *Handler) HandleAdminDeleteMedia(w http.ResponseWriter, r *http.Request)
 	// Delete from database.
 	_, err = h.Pool.Exec(r.Context(), `DELETE FROM attachments WHERE id = $1`, fileID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete attachment")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete attachment")
 		return
 	}
 

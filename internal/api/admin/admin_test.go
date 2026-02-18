@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, map[string]string{"key": "value"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"key": "value"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -49,7 +51,7 @@ func TestWriteError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			writeError(w, tt.status, tt.code, tt.message)
+			apiutil.WriteError(w, tt.status, tt.code, tt.message)
 
 			if w.Code != tt.status {
 				t.Errorf("status = %d, want %d", w.Code, tt.status)
@@ -136,7 +138,7 @@ func TestAddPeerRequest_EmptyDomain(t *testing.T) {
 
 func TestWriteJSON_Array(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, []string{"a", "b", "c"})
+	apiutil.WriteJSON(w, http.StatusOK, []string{"a", "b", "c"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -165,7 +167,7 @@ func TestWriteJSON_StatusCodes(t *testing.T) {
 
 	for _, code := range codes {
 		w := httptest.NewRecorder()
-		writeJSON(w, code, "test")
+		apiutil.WriteJSON(w, code, "test")
 		if w.Code != code {
 			t.Errorf("status = %d, want %d", w.Code, code)
 		}

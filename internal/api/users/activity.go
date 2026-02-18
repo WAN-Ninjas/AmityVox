@@ -3,10 +3,9 @@
 package users
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 )
@@ -29,8 +28,7 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req updateActivityRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -43,7 +41,7 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 			"streaming": true,
 		}
 		if *req.ActivityType != "" && !validTypes[*req.ActivityType] {
-			writeError(w, http.StatusBadRequest, "invalid_activity_type",
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_activity_type",
 				"Activity type must be 'playing', 'listening', 'watching', or 'streaming'")
 			return
 		}
@@ -54,7 +52,7 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ActivityName != nil && len(*req.ActivityName) > 128 {
-		writeError(w, http.StatusBadRequest, "invalid_activity_name",
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_activity_name",
 			"Activity name must be at most 128 characters")
 		return
 	}
@@ -75,8 +73,7 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 		userID, req.ActivityType, req.ActivityName,
 	).Scan(&actType, &actName)
 	if err != nil {
-		h.Logger.Error("failed to update activity", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update activity")
+		apiutil.InternalError(w, h.Logger, "Failed to update activity", err)
 		return
 	}
 
@@ -87,9 +84,9 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Publish presence update so connected clients see the change.
-	h.EventBus.PublishJSON(r.Context(), events.SubjectPresenceUpdate, "PRESENCE_UPDATE", resp)
+	h.EventBus.PublishUserEvent(r.Context(), events.SubjectPresenceUpdate, "PRESENCE_UPDATE", userID, resp)
 
-	writeJSON(w, http.StatusOK, resp)
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // HandleGetActivity returns the authenticated user's current activity status.
@@ -103,12 +100,11 @@ func (h *Handler) HandleGetActivity(w http.ResponseWriter, r *http.Request) {
 		userID,
 	).Scan(&actType, &actName)
 	if err != nil {
-		h.Logger.Error("failed to get activity", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get activity")
+		apiutil.InternalError(w, h.Logger, "Failed to get activity", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ActivityResponse{
+	apiutil.WriteJSON(w, http.StatusOK, ActivityResponse{
 		UserID:       userID,
 		ActivityType: actType,
 		ActivityName: actName,

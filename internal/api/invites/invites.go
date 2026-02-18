@@ -4,7 +4,6 @@
 package invites
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -25,22 +25,6 @@ type Handler struct {
 	EventBus   *events.Bus
 	InstanceID string
 	Logger     *slog.Logger
-}
-
-// --- Helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
 }
 
 // HandleGetInvite handles GET /api/v1/invites/{code}.
@@ -58,21 +42,20 @@ func (h *Handler) HandleGetInvite(w http.ResponseWriter, r *http.Request) {
 		&inv.CreatedAt, &inv.ExpiresAt,
 	)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "invite_not_found", "Invite not found or has expired")
+		apiutil.WriteError(w, http.StatusNotFound, "invite_not_found", "Invite not found or has expired")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get invite", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get invite")
+		apiutil.InternalError(w, h.Logger, "Failed to get invite", err)
 		return
 	}
 
 	if inv.IsExpired() {
-		writeError(w, http.StatusNotFound, "invite_expired", "This invite has expired")
+		apiutil.WriteError(w, http.StatusNotFound, "invite_expired", "This invite has expired")
 		return
 	}
 	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
-		writeError(w, http.StatusNotFound, "invite_exhausted", "This invite has reached its maximum uses")
+		apiutil.WriteError(w, http.StatusNotFound, "invite_exhausted", "This invite has reached its maximum uses")
 		return
 	}
 
@@ -86,7 +69,7 @@ func (h *Handler) HandleGetInvite(w http.ResponseWriter, r *http.Request) {
 		guildName = "Unknown"
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"invite":       inv,
 		"guild_name":   guildName,
 		"member_count": memberCount,
@@ -109,21 +92,20 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		&inv.CreatedAt, &inv.ExpiresAt,
 	)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
+		apiutil.WriteError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get invite", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get invite")
+		apiutil.InternalError(w, h.Logger, "Failed to get invite", err)
 		return
 	}
 
 	if inv.IsExpired() {
-		writeError(w, http.StatusGone, "invite_expired", "This invite has expired")
+		apiutil.WriteError(w, http.StatusGone, "invite_expired", "This invite has expired")
 		return
 	}
 	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
-		writeError(w, http.StatusGone, "invite_exhausted", "This invite has reached its maximum uses")
+		apiutil.WriteError(w, http.StatusGone, "invite_exhausted", "This invite has reached its maximum uses")
 		return
 	}
 
@@ -133,7 +115,7 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
 		inv.GuildID, userID).Scan(&banned)
 	if banned {
-		writeError(w, http.StatusForbidden, "banned", "You are banned from this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "banned", "You are banned from this guild")
 		return
 	}
 
@@ -143,12 +125,11 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
 		inv.GuildID, userID).Scan(&exists)
 	if err != nil {
-		h.Logger.Error("failed to check membership", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check membership")
+		apiutil.InternalError(w, h.Logger, "Failed to check membership", err)
 		return
 	}
 	if exists {
-		writeError(w, http.StatusConflict, "already_member", "You are already a member of this guild")
+		apiutil.WriteError(w, http.StatusConflict, "already_member", "You are already a member of this guild")
 		return
 	}
 
@@ -158,54 +139,44 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		`SELECT max_members, member_count
 		 FROM guilds WHERE id = $1`, inv.GuildID).Scan(&maxMembers, &currentMembers)
 	if maxMembers > 0 && currentMembers >= maxMembers {
-		writeError(w, http.StatusForbidden, "guild_full", "This guild has reached its maximum member count")
+		apiutil.WriteError(w, http.StatusForbidden, "guild_full", "This guild has reached its maximum member count")
 		return
 	}
 
 	now := time.Now().UTC()
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
-		return
-	}
-	defer tx.Rollback(r.Context())
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Add guild member.
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO guild_members (guild_id, user_id, nickname, joined_at, deaf, mute)
+			 VALUES ($1, $2, NULL, $3, false, false)`,
+			inv.GuildID, userID, now)
+		if err != nil {
+			return err
+		}
 
-	// Add guild member.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO guild_members (guild_id, user_id, nickname, joined_at, deaf, mute)
-		 VALUES ($1, $2, NULL, $3, false, false)`,
-		inv.GuildID, userID, now)
-	if err != nil {
-		h.Logger.Error("failed to add member", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
-		return
-	}
+		// Increment invite usage.
+		_, err = tx.Exec(r.Context(),
+			`UPDATE invites SET uses = uses + 1 WHERE code = $1`, code)
+		if err != nil {
+			return err
+		}
 
-	// Increment invite usage.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE invites SET uses = uses + 1 WHERE code = $1`, code)
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to increment invite uses", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update invite")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
+		apiutil.InternalError(w, h.Logger, "Failed to join guild", err)
 		return
 	}
 
 	// Publish member add event.
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD",
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD", inv.GuildID,
 		map[string]interface{}{
 			"guild_id":  inv.GuildID,
 			"user_id":   userID,
 			"joined_at": now,
 		})
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"guild_id": inv.GuildID,
 		"joined":   true,
 	})
@@ -223,12 +194,11 @@ func (h *Handler) HandleDeleteInvite(w http.ResponseWriter, r *http.Request) {
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id, creator_id FROM invites WHERE code = $1`, code).Scan(&guildID, &creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
+		apiutil.WriteError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get invite", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get invite")
+		apiutil.InternalError(w, h.Logger, "Failed to get invite", err)
 		return
 	}
 
@@ -250,7 +220,7 @@ func (h *Handler) HandleDeleteInvite(w http.ResponseWriter, r *http.Request) {
 					  AND (r.permissions & $3) = $3
 				)`, guildID, userID, permissions.ManageGuild).Scan(&hasManageGuild)
 			if err != nil || !hasManageGuild {
-				writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to delete this invite")
+				apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to delete this invite")
 				return
 			}
 		}
@@ -259,12 +229,11 @@ func (h *Handler) HandleDeleteInvite(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM invites WHERE code = $1`, code)
 	if err != nil {
-		h.Logger.Error("failed to delete invite", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete invite")
+		apiutil.InternalError(w, h.Logger, "Failed to delete invite", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
+		apiutil.WriteError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
 		return
 	}
 

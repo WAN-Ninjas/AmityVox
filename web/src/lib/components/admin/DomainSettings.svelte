@@ -31,13 +31,7 @@
 	async function loadDomains() {
 		loading = true;
 		try {
-			const res = await fetch('/api/v1/admin/domains', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				domains = json.data || [];
-			}
+			domains = await api.getAdminDomains() || [];
 		} catch {
 			addToast('Failed to load custom domains', 'error');
 		}
@@ -51,26 +45,14 @@
 		}
 		adding = true;
 		try {
-			const res = await fetch('/api/v1/admin/domains', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({ guild_id: newGuildId, domain: newDomain })
-			});
-			const json = await res.json();
-			if (res.ok) {
-				addToast('Domain added. Configure DNS to verify.', 'success');
-				showAddForm = false;
-				newGuildId = '';
-				newDomain = '';
-				await loadDomains();
-			} else {
-				addToast(json.error?.message || 'Failed to add domain', 'error');
-			}
-		} catch {
-			addToast('Failed to add domain', 'error');
+			await api.addAdminDomain({ guild_id: newGuildId, domain: newDomain });
+			addToast('Domain added. Configure DNS to verify.', 'success');
+			showAddForm = false;
+			newGuildId = '';
+			newDomain = '';
+			await loadDomains();
+		} catch (e: any) {
+			addToast(e?.message || 'Failed to add domain', 'error');
 		}
 		adding = false;
 	}
@@ -78,19 +60,11 @@
 	async function verifyDomain(domainId: string) {
 		verifyingId = domainId;
 		try {
-			const res = await fetch(`/api/v1/admin/domains/${domainId}/verify`, {
-				method: 'POST',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				addToast('Domain verified successfully', 'success');
-				await loadDomains();
-			} else {
-				addToast(json.error?.message || 'Failed to verify domain', 'error');
-			}
-		} catch {
-			addToast('Failed to verify domain', 'error');
+			await api.verifyAdminDomain(domainId);
+			addToast('Domain verified successfully', 'success');
+			await loadDomains();
+		} catch (e: any) {
+			addToast(e?.message || 'Failed to verify domain', 'error');
 		}
 		verifyingId = '';
 	}
@@ -98,14 +72,9 @@
 	async function deleteDomain(domainId: string) {
 		if (!confirm('Remove this custom domain?')) return;
 		try {
-			const res = await fetch(`/api/v1/admin/domains/${domainId}`, {
-				method: 'DELETE',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				domains = domains.filter(d => d.id !== domainId);
-				addToast('Domain removed', 'success');
-			}
+			await api.deleteAdminDomain(domainId);
+			domains = domains.filter(d => d.id !== domainId);
+			addToast('Domain removed', 'success');
 		} catch {
 			addToast('Failed to remove domain', 'error');
 		}

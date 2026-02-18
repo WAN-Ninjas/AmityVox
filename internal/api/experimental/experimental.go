@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 )
@@ -40,22 +41,6 @@ type msgEntry struct {
 	ID       string
 	Content  string
 	AuthorID string
-}
-
-// --- JSON helpers (match project-wide pattern) ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
 }
 
 // =============================================================================
@@ -86,17 +71,16 @@ func (h *Handler) HandleShareLocation(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 
 	var req shareLocationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Latitude < -90 || req.Latitude > 90 {
-		writeError(w, http.StatusBadRequest, "invalid_latitude", "Latitude must be between -90 and 90")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_latitude", "Latitude must be between -90 and 90")
 		return
 	}
 	if req.Longitude < -180 || req.Longitude > 180 {
-		writeError(w, http.StatusBadRequest, "invalid_longitude", "Longitude must be between -180 and 180")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_longitude", "Longitude must be between -180 and 180")
 		return
 	}
 
@@ -110,7 +94,7 @@ func (h *Handler) HandleShareLocation(w http.ResponseWriter, r *http.Request) {
 			WHERE c.id = $1 AND (gm.user_id IS NOT NULL OR cr.user_id IS NOT NULL OR c.guild_id IS NULL)
 		)`, channelID, userID).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusForbidden, "no_access", "You do not have access to this channel")
+		apiutil.WriteError(w, http.StatusForbidden, "no_access", "You do not have access to this channel")
 		return
 	}
 
@@ -130,8 +114,7 @@ func (h *Handler) HandleShareLocation(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		id, userID, channelID, req.Latitude, req.Longitude, req.Accuracy, req.Altitude, req.Label, req.Live, expiresAt)
 	if err != nil {
-		h.Logger.Error("failed to create location share", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to share location")
+		apiutil.InternalError(w, h.Logger, "Failed to share location", err)
 		return
 	}
 
@@ -151,10 +134,10 @@ func (h *Handler) HandleShareLocation(w http.ResponseWriter, r *http.Request) {
 
 	// Publish event for real-time updates.
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.location_share", "LOCATION_SHARE_CREATE", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.location_share", "LOCATION_SHARE_CREATE", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleUpdateLiveLocation updates coordinates for an active live location share.
@@ -165,13 +148,12 @@ func (h *Handler) HandleUpdateLiveLocation(w http.ResponseWriter, r *http.Reques
 	locationID := chi.URLParam(r, "locationID")
 
 	var req updateLiveLocationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Latitude < -90 || req.Latitude > 90 || req.Longitude < -180 || req.Longitude > 180 {
-		writeError(w, http.StatusBadRequest, "invalid_coordinates", "Invalid coordinates")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_coordinates", "Invalid coordinates")
 		return
 	}
 
@@ -183,12 +165,11 @@ func (h *Handler) HandleUpdateLiveLocation(w http.ResponseWriter, r *http.Reques
 		   AND (expires_at IS NULL OR expires_at > NOW())`,
 		req.Latitude, req.Longitude, req.Accuracy, req.Altitude, locationID, userID, channelID)
 	if err != nil {
-		h.Logger.Error("failed to update live location", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update location")
+		apiutil.InternalError(w, h.Logger, "Failed to update location", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Active live location share not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Active live location share not found")
 		return
 	}
 
@@ -204,10 +185,10 @@ func (h *Handler) HandleUpdateLiveLocation(w http.ResponseWriter, r *http.Reques
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.location_share", "LOCATION_SHARE_UPDATE", update)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.location_share", "LOCATION_SHARE_UPDATE", channelID, update)
 	}
 
-	writeJSON(w, http.StatusOK, update)
+	apiutil.WriteJSON(w, http.StatusOK, update)
 }
 
 // HandleStopLiveLocation ends an active live location share.
@@ -222,17 +203,16 @@ func (h *Handler) HandleStopLiveLocation(w http.ResponseWriter, r *http.Request)
 		 WHERE id = $1 AND user_id = $2 AND channel_id = $3 AND live = true`,
 		locationID, userID, channelID)
 	if err != nil {
-		h.Logger.Error("failed to stop live location", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to stop live location")
+		apiutil.InternalError(w, h.Logger, "Failed to stop live location", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Active live location share not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Active live location share not found")
 		return
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.location_share", "LOCATION_SHARE_STOP", map[string]string{
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.location_share", "LOCATION_SHARE_STOP", channelID, map[string]string{
 			"id":         locationID,
 			"user_id":    userID,
 			"channel_id": channelID,
@@ -258,8 +238,7 @@ func (h *Handler) HandleGetLocationShares(w http.ResponseWriter, r *http.Request
 		 ORDER BY ls.created_at DESC
 		 LIMIT 50`, channelID)
 	if err != nil {
-		h.Logger.Error("failed to query location shares", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get location shares")
+		apiutil.InternalError(w, h.Logger, "Failed to get location shares", err)
 		return
 	}
 	defer rows.Close()
@@ -293,7 +272,7 @@ func (h *Handler) HandleGetLocationShares(w http.ResponseWriter, r *http.Request
 		locations = append(locations, l)
 	}
 
-	writeJSON(w, http.StatusOK, locations)
+	apiutil.WriteJSON(w, http.StatusOK, locations)
 }
 
 // =============================================================================
@@ -313,8 +292,7 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 	messageID := chi.URLParam(r, "messageID")
 
 	var req createEffectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -324,7 +302,7 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 		"party_popper": true, "sparkles": true,
 	}
 	if !validEffects[req.EffectType] {
-		writeError(w, http.StatusBadRequest, "invalid_effect_type",
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_effect_type",
 			fmt.Sprintf("Effect type must be one of: %s", strings.Join(effectTypeKeys(validEffects), ", ")))
 		return
 	}
@@ -335,7 +313,7 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
 		messageID, channelID).Scan(&msgExists)
 	if err != nil || !msgExists {
-		writeError(w, http.StatusNotFound, "message_not_found", "Message not found in channel")
+		apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found in channel")
 		return
 	}
 
@@ -347,8 +325,7 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		id, messageID, channelID, userID, req.EffectType, configJSON)
 	if err != nil {
-		h.Logger.Error("failed to create message effect", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create effect")
+		apiutil.InternalError(w, h.Logger, "Failed to create effect", err)
 		return
 	}
 
@@ -363,10 +340,10 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.message.effect", "MESSAGE_EFFECT_CREATE", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.message.effect", "MESSAGE_EFFECT_CREATE", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 func effectTypeKeys(m map[string]bool) []string {
@@ -394,13 +371,11 @@ func (h *Handler) HandleAddSuperReaction(w http.ResponseWriter, r *http.Request)
 	messageID := chi.URLParam(r, "messageID")
 
 	var req superReactionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Emoji == "" {
-		writeError(w, http.StatusBadRequest, "missing_emoji", "Emoji is required")
+	if !apiutil.RequireNonEmpty(w, "emoji", req.Emoji) {
 		return
 	}
 	if req.Intensity < 1 || req.Intensity > 5 {
@@ -413,7 +388,7 @@ func (h *Handler) HandleAddSuperReaction(w http.ResponseWriter, r *http.Request)
 		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
 		messageID, channelID).Scan(&msgExists)
 	if err != nil || !msgExists {
-		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found")
 		return
 	}
 
@@ -424,8 +399,7 @@ func (h *Handler) HandleAddSuperReaction(w http.ResponseWriter, r *http.Request)
 		 ON CONFLICT (message_id, user_id, emoji) DO UPDATE SET intensity = $5`,
 		id, messageID, userID, req.Emoji, req.Intensity)
 	if err != nil {
-		h.Logger.Error("failed to add super reaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add super reaction")
+		apiutil.InternalError(w, h.Logger, "Failed to add super reaction", err)
 		return
 	}
 
@@ -438,10 +412,10 @@ func (h *Handler) HandleAddSuperReaction(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.message.reaction_add", "SUPER_REACTION_ADD", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.message.reaction_add", "SUPER_REACTION_ADD", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleGetSuperReactions returns super reactions on a message.
@@ -457,7 +431,7 @@ func (h *Handler) HandleGetSuperReactions(w http.ResponseWriter, r *http.Request
 		 WHERE sr.message_id = $1
 		 ORDER BY sr.created_at ASC`, messageID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get super reactions")
+		apiutil.InternalError(w, h.Logger, "Failed to get super reactions", err)
 		return
 	}
 	defer rows.Close()
@@ -484,7 +458,7 @@ func (h *Handler) HandleGetSuperReactions(w http.ResponseWriter, r *http.Request
 		reactions = append(reactions, sr)
 	}
 
-	writeJSON(w, http.StatusOK, reactions)
+	apiutil.WriteJSON(w, http.StatusOK, reactions)
 }
 
 // =============================================================================
@@ -503,8 +477,7 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	var req summarizeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -529,8 +502,7 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 			channelID, req.MessageCount)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query messages for summarization", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch messages")
+		apiutil.InternalError(w, h.Logger, "Failed to fetch messages", err)
 		return
 	}
 	defer rows.Close()
@@ -545,7 +517,7 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 	}
 
 	if len(messages) == 0 {
-		writeError(w, http.StatusBadRequest, "no_messages", "No messages found to summarize")
+		apiutil.WriteError(w, http.StatusBadRequest, "no_messages", "No messages found to summarize")
 		return
 	}
 
@@ -562,12 +534,11 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'extractive')`,
 		id, channelID, userID, summary, len(messages), fromMsgID, toMsgID)
 	if err != nil {
-		h.Logger.Error("failed to store summary", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to store summary")
+		apiutil.InternalError(w, h.Logger, "Failed to store summary", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"id":               id,
 		"channel_id":       channelID,
 		"summary":          summary,
@@ -652,7 +623,7 @@ func (h *Handler) HandleGetSummaries(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY created_at DESC
 		 LIMIT 20`, channelID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get summaries")
+		apiutil.InternalError(w, h.Logger, "Failed to get summaries", err)
 		return
 	}
 	defer rows.Close()
@@ -679,7 +650,7 @@ func (h *Handler) HandleGetSummaries(w http.ResponseWriter, r *http.Request) {
 		summaries = append(summaries, s)
 	}
 
-	writeJSON(w, http.StatusOK, summaries)
+	apiutil.WriteJSON(w, http.StatusOK, summaries)
 }
 
 // =============================================================================
@@ -698,8 +669,7 @@ func (h *Handler) HandleUpdateTranscriptionSettings(w http.ResponseWriter, r *ht
 	channelID := chi.URLParam(r, "channelID")
 
 	var req transcriptionSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -718,12 +688,11 @@ func (h *Handler) HandleUpdateTranscriptionSettings(w http.ResponseWriter, r *ht
 		 ON CONFLICT (channel_id, user_id) DO UPDATE SET enabled = $3, language = $4, updated_at = NOW()`,
 		channelID, userID, enabled, language)
 	if err != nil {
-		h.Logger.Error("failed to update transcription settings", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update settings")
+		apiutil.InternalError(w, h.Logger, "Failed to update settings", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"channel_id": channelID,
 		"user_id":    userID,
 		"enabled":    enabled,
@@ -744,7 +713,7 @@ func (h *Handler) HandleGetTranscriptionSettings(w http.ResponseWriter, r *http.
 		 WHERE channel_id = $1 AND user_id = $2`,
 		channelID, userID).Scan(&enabled, &language)
 	if err == pgx.ErrNoRows {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"channel_id": channelID,
 			"user_id":    userID,
 			"enabled":    false,
@@ -753,11 +722,11 @@ func (h *Handler) HandleGetTranscriptionSettings(w http.ResponseWriter, r *http.
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get settings")
+		apiutil.InternalError(w, h.Logger, "Failed to get settings", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"channel_id": channelID,
 		"user_id":    userID,
 		"enabled":    enabled,
@@ -780,7 +749,7 @@ func (h *Handler) HandleGetTranscriptions(w http.ResponseWriter, r *http.Request
 		 ORDER BY vt.created_at DESC
 		 LIMIT 100`, channelID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get transcriptions")
+		apiutil.InternalError(w, h.Logger, "Failed to get transcriptions", err)
 		return
 	}
 	defer rows.Close()
@@ -812,7 +781,7 @@ func (h *Handler) HandleGetTranscriptions(w http.ResponseWriter, r *http.Request
 		transcriptions = append(transcriptions, t)
 	}
 
-	writeJSON(w, http.StatusOK, transcriptions)
+	apiutil.WriteJSON(w, http.StatusOK, transcriptions)
 }
 
 // =============================================================================
@@ -840,8 +809,7 @@ func (h *Handler) HandleCreateWhiteboard(w http.ResponseWriter, r *http.Request)
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createWhiteboardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -868,8 +836,7 @@ func (h *Handler) HandleCreateWhiteboard(w http.ResponseWriter, r *http.Request)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, channelID, guildID, req.Name, userID, req.Width, req.Height, req.BackgroundColor)
 	if err != nil {
-		h.Logger.Error("failed to create whiteboard", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create whiteboard")
+		apiutil.InternalError(w, h.Logger, "Failed to create whiteboard", err)
 		return
 	}
 
@@ -878,7 +845,7 @@ func (h *Handler) HandleCreateWhiteboard(w http.ResponseWriter, r *http.Request)
 		`INSERT INTO whiteboard_collaborators (whiteboard_id, user_id, role) VALUES ($1, $2, 'admin')`,
 		id, userID)
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":               id,
 		"channel_id":       channelID,
 		"guild_id":         guildID,
@@ -905,7 +872,7 @@ func (h *Handler) HandleGetWhiteboards(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY created_at DESC
 		 LIMIT 20`, channelID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get whiteboards")
+		apiutil.InternalError(w, h.Logger, "Failed to get whiteboards", err)
 		return
 	}
 	defer rows.Close()
@@ -936,18 +903,18 @@ func (h *Handler) HandleGetWhiteboards(w http.ResponseWriter, r *http.Request) {
 		whiteboards = append(whiteboards, wb)
 	}
 
-	writeJSON(w, http.StatusOK, whiteboards)
+	apiutil.WriteJSON(w, http.StatusOK, whiteboards)
 }
 
 // HandleUpdateWhiteboard updates whiteboard state (for real-time collaboration).
 // PATCH /api/v1/channels/{channelID}/experimental/whiteboards/{whiteboardID}
 func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
 	whiteboardID := chi.URLParam(r, "whiteboardID")
 
 	var req updateWhiteboardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -957,16 +924,16 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT locked, creator_id FROM whiteboards WHERE id = $1`, whiteboardID).Scan(&locked, &creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Whiteboard not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Whiteboard not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get whiteboard")
+		apiutil.InternalError(w, h.Logger, "Failed to get whiteboard", err)
 		return
 	}
 
 	if locked && creatorID != userID {
-		writeError(w, http.StatusForbidden, "whiteboard_locked", "This whiteboard is locked")
+		apiutil.WriteError(w, http.StatusForbidden, "whiteboard_locked", "This whiteboard is locked")
 		return
 	}
 
@@ -1000,14 +967,14 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 		whiteboardID, userID)
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.whiteboard_update", "WHITEBOARD_UPDATE", map[string]interface{}{
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.whiteboard_update", "WHITEBOARD_UPDATE", channelID, map[string]interface{}{
 			"whiteboard_id": whiteboardID,
 			"user_id":       userID,
 			"state":         req.State,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleGetWhiteboardState returns the full state of a whiteboard for initial load.
@@ -1030,11 +997,11 @@ func (h *Handler) HandleGetWhiteboardState(w http.ResponseWriter, r *http.Reques
 		&whiteboardID, &channelID, &guildID, &name, &creatorID, &state,
 		&width, &height, &bgColor, &locked, &maxCollab, &createdAt, &updatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Whiteboard not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Whiteboard not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get whiteboard")
+		apiutil.InternalError(w, h.Logger, "Failed to get whiteboard", err)
 		return
 	}
 
@@ -1071,7 +1038,7 @@ func (h *Handler) HandleGetWhiteboardState(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"id":                whiteboardID,
 		"channel_id":        channelID,
 		"guild_id":          guildID,
@@ -1108,17 +1075,14 @@ func (h *Handler) HandleCreateCodeSnippet(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createCodeSnippetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Code == "" {
-		writeError(w, http.StatusBadRequest, "missing_code", "Code content is required")
+	if !apiutil.RequireNonEmpty(w, "code", req.Code) {
 		return
 	}
-	if utf8.RuneCountInString(req.Code) > 100000 {
-		writeError(w, http.StatusBadRequest, "code_too_long", "Code must be at most 100,000 characters")
+	if !apiutil.ValidateStringLength(w, "code", req.Code, 0, 100000) {
 		return
 	}
 	if req.Language == "" {
@@ -1145,8 +1109,7 @@ func (h *Handler) HandleCreateCodeSnippet(w http.ResponseWriter, r *http.Request
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, channelID, userID, req.Title, req.Language, req.Code, req.Stdin, req.Runnable)
 	if err != nil {
-		h.Logger.Error("failed to create code snippet", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create code snippet")
+		apiutil.InternalError(w, h.Logger, "Failed to create code snippet", err)
 		return
 	}
 
@@ -1163,10 +1126,10 @@ func (h *Handler) HandleCreateCodeSnippet(w http.ResponseWriter, r *http.Request
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.code_snippet", "CODE_SNIPPET_CREATE", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.code_snippet", "CODE_SNIPPET_CREATE", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleGetCodeSnippet returns a single code snippet.
@@ -1202,15 +1165,15 @@ func (h *Handler) HandleGetCodeSnippet(w http.ResponseWriter, r *http.Request) {
 		&s.Code, &s.Stdin, &s.Output, &s.OutputError, &s.ExitCode, &s.RuntimeMs,
 		&s.Runnable, &s.Public, &s.CreatedAt, &s.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Code snippet not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Code snippet not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get code snippet")
+		apiutil.InternalError(w, h.Logger, "Failed to get code snippet", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, s)
+	apiutil.WriteJSON(w, http.StatusOK, s)
 }
 
 // HandleRunCodeSnippet executes a code snippet in a sandboxed environment.
@@ -1224,11 +1187,11 @@ func (h *Handler) HandleRunCodeSnippet(w http.ResponseWriter, r *http.Request) {
 		`SELECT language, code, stdin FROM code_snippets WHERE id = $1 AND runnable = true`,
 		snippetID).Scan(&language, &code, &stdin)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Runnable code snippet not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Runnable code snippet not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get code snippet")
+		apiutil.InternalError(w, h.Logger, "Failed to get code snippet", err)
 		return
 	}
 
@@ -1245,7 +1208,7 @@ func (h *Handler) HandleRunCodeSnippet(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $4`,
 		output, exitCode, runtimeMs, snippetID)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"id":         snippetID,
 		"output":     output,
 		"exit_code":  exitCode,
@@ -1284,13 +1247,12 @@ func (h *Handler) HandleCreateVideoRecording(w http.ResponseWriter, r *http.Requ
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createVideoRecordingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.S3Key == "" || req.S3Bucket == "" {
-		writeError(w, http.StatusBadRequest, "missing_s3", "S3 key and bucket are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_s3", "S3 key and bucket are required")
 		return
 	}
 
@@ -1302,12 +1264,11 @@ func (h *Handler) HandleCreateVideoRecording(w http.ResponseWriter, r *http.Requ
 		id, channelID, userID, req.Title, req.S3Key, req.S3Bucket,
 		req.DurationMs, req.FileSizeBytes, req.Width, req.Height, req.ThumbnailKey)
 	if err != nil {
-		h.Logger.Error("failed to create video recording", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to register recording")
+		apiutil.InternalError(w, h.Logger, "Failed to register recording", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":              id,
 		"channel_id":      channelID,
 		"user_id":         userID,
@@ -1334,7 +1295,7 @@ func (h *Handler) HandleGetRecordings(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY vr.created_at DESC
 		 LIMIT 50`, channelID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get recordings")
+		apiutil.InternalError(w, h.Logger, "Failed to get recordings", err)
 		return
 	}
 	defer rows.Close()
@@ -1366,7 +1327,7 @@ func (h *Handler) HandleGetRecordings(w http.ResponseWriter, r *http.Request) {
 		recordings = append(recordings, rec)
 	}
 
-	writeJSON(w, http.StatusOK, recordings)
+	apiutil.WriteJSON(w, http.StatusOK, recordings)
 }
 
 // =============================================================================
@@ -1405,8 +1366,7 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createKanbanBoardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" {
@@ -1418,7 +1378,7 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id FROM channels WHERE id = $1 AND guild_id IS NOT NULL`, channelID).Scan(&guildID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_channel", "Channel must belong to a guild")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Channel must belong to a guild")
 		return
 	}
 
@@ -1428,8 +1388,7 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		boardID, channelID, guildID, req.Name, req.Description, userID)
 	if err != nil {
-		h.Logger.Error("failed to create kanban board", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create board")
+		apiutil.InternalError(w, h.Logger, "Failed to create board", err)
 		return
 	}
 
@@ -1447,7 +1406,7 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 			colID, boardID, col.Name, col.Color, i)
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":          boardID,
 		"channel_id":  channelID,
 		"guild_id":    guildID,
@@ -1471,11 +1430,11 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 		 FROM kanban_boards WHERE id = $1`, boardID).Scan(
 		&boardID, &channelID, &guildID, &name, &description, &creatorID, &createdAt, &updatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Kanban board not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Kanban board not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get board")
+		apiutil.InternalError(w, h.Logger, "Failed to get board", err)
 		return
 	}
 
@@ -1484,7 +1443,7 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, name, color, position, wip_limit FROM kanban_columns
 		 WHERE board_id = $1 ORDER BY position ASC`, boardID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get columns")
+		apiutil.InternalError(w, h.Logger, "Failed to get columns", err)
 		return
 	}
 	defer colRows.Close()
@@ -1580,7 +1539,7 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"id":          boardID,
 		"channel_id":  channelID,
 		"guild_id":    guildID,
@@ -1600,12 +1559,10 @@ func (h *Handler) HandleCreateKanbanColumn(w http.ResponseWriter, r *http.Reques
 	boardID := chi.URLParam(r, "boardID")
 
 	var req createKanbanColumnRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Column name is required")
+	if !apiutil.RequireNonEmpty(w, "name", req.Name) {
 		return
 	}
 	if req.Color == "" {
@@ -1623,12 +1580,11 @@ func (h *Handler) HandleCreateKanbanColumn(w http.ResponseWriter, r *http.Reques
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		colID, boardID, req.Name, req.Color, maxPos+1, req.WipLimit)
 	if err != nil {
-		h.Logger.Error("failed to create kanban column", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create column")
+		apiutil.InternalError(w, h.Logger, "Failed to create column", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":        colID,
 		"board_id":  boardID,
 		"name":      req.Name,
@@ -1642,16 +1598,15 @@ func (h *Handler) HandleCreateKanbanColumn(w http.ResponseWriter, r *http.Reques
 // POST /api/v1/channels/{channelID}/experimental/kanban/{boardID}/columns/{columnID}/cards
 func (h *Handler) HandleCreateKanbanCard(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
+	channelID := chi.URLParam(r, "channelID")
 	boardID := chi.URLParam(r, "boardID")
 	columnID := chi.URLParam(r, "columnID")
 
 	var req createKanbanCardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Title == "" {
-		writeError(w, http.StatusBadRequest, "missing_title", "Card title is required")
+	if !apiutil.RequireNonEmpty(w, "title", req.Title) {
 		return
 	}
 
@@ -1681,8 +1636,7 @@ func (h *Handler) HandleCreateKanbanCard(w http.ResponseWriter, r *http.Request)
 		cardID, columnID, boardID, req.Title, req.Description, req.Color,
 		maxPos+1, req.AssigneeIDs, req.LabelIDs, dueDate, userID)
 	if err != nil {
-		h.Logger.Error("failed to create kanban card", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create card")
+		apiutil.InternalError(w, h.Logger, "Failed to create card", err)
 		return
 	}
 
@@ -1703,24 +1657,23 @@ func (h *Handler) HandleCreateKanbanCard(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.kanban_update", "KANBAN_CARD_CREATE", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.kanban_update", "KANBAN_CARD_CREATE", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleMoveKanbanCard moves a card to a different column or position.
 // PATCH /api/v1/channels/{channelID}/experimental/kanban/{boardID}/cards/{cardID}/move
 func (h *Handler) HandleMoveKanbanCard(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
 	cardID := chi.URLParam(r, "cardID")
 
 	var req moveKanbanCardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.ColumnID == "" {
-		writeError(w, http.StatusBadRequest, "missing_column_id", "Target column ID is required")
+	if !apiutil.RequireNonEmpty(w, "column_id", req.ColumnID) {
 		return
 	}
 
@@ -1729,24 +1682,23 @@ func (h *Handler) HandleMoveKanbanCard(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $3`,
 		req.ColumnID, req.Position, cardID)
 	if err != nil {
-		h.Logger.Error("failed to move kanban card", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to move card")
+		apiutil.InternalError(w, h.Logger, "Failed to move card", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Card not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Card not found")
 		return
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.kanban_update", "KANBAN_CARD_MOVE", map[string]interface{}{
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.kanban_update", "KANBAN_CARD_MOVE", channelID, map[string]interface{}{
 			"card_id":   cardID,
 			"column_id": req.ColumnID,
 			"position":  req.Position,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "moved"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "moved"})
 }
 
 // HandleDeleteKanbanCard deletes a card from a kanban board.
@@ -1757,11 +1709,11 @@ func (h *Handler) HandleDeleteKanbanCard(w http.ResponseWriter, r *http.Request)
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM kanban_cards WHERE id = $1`, cardID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete card")
+		apiutil.InternalError(w, h.Logger, "Failed to delete card", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Card not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Card not found")
 		return
 	}
 

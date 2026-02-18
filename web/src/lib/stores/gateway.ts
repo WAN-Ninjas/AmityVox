@@ -22,6 +22,7 @@ import { addToast } from './toast';
 import { clearChannelMessages } from './messages';
 import { addAnnouncement, updateAnnouncement, removeAnnouncement } from './announcements';
 import { addIncomingCall, dismissIncomingCall, clearIncomingCalls } from './callRing';
+import { clearChannelUnreads } from './unreads';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
 
 export const gatewayConnected = writable(false);
@@ -340,6 +341,188 @@ export function connectGateway(token: string) {
 				removeRelationship(rel.target_id);
 				break;
 			}
+
+			// --- Guild member add/remove events ---
+			case 'GUILD_MEMBER_ADD': {
+				const member = data as { guild_id: string; user_id: string; username?: string };
+				// Reload permissions when a new member joins (could affect role distribution).
+				let selfId: string | undefined;
+				currentUser.subscribe((u) => (selfId = u?.id))();
+				if (member.user_id === selfId && member.guild_id) {
+					// We joined a new guild — reload guilds and permissions.
+					loadGuilds();
+					loadPermissions(member.guild_id);
+				}
+				break;
+			}
+			case 'GUILD_MEMBER_REMOVE': {
+				const removed = data as { guild_id: string; user_id: string };
+				let selfId: string | undefined;
+				currentUser.subscribe((u) => (selfId = u?.id))();
+				if (removed.user_id === selfId) {
+					// We were removed from the guild.
+					removeGuild(removed.guild_id);
+					invalidatePermissions(removed.guild_id);
+				}
+				break;
+			}
+
+			// --- Guild role create ---
+			case 'GUILD_ROLE_CREATE': {
+				const roleData = data as { guild_id: string };
+				if (roleData.guild_id) {
+					loadPermissions(roleData.guild_id);
+				}
+				break;
+			}
+
+			// --- Guild ban events ---
+			case 'GUILD_BAN_ADD': {
+				const ban = data as { guild_id: string; user_id: string };
+				let selfId: string | undefined;
+				currentUser.subscribe((u) => (selfId = u?.id))();
+				if (ban.user_id === selfId) {
+					removeGuild(ban.guild_id);
+					invalidatePermissions(ban.guild_id);
+					addToast('You have been banned from a server', 'error', 5000);
+				}
+				break;
+			}
+			case 'GUILD_BAN_REMOVE':
+				// No-op for UI; user would need to re-join via invite.
+				break;
+
+			// --- Guild emoji update ---
+			case 'GUILD_EMOJI_UPDATE':
+			case 'GUILD_EMOJI_DELETE':
+				// Emoji changes — the guild store will pick up changes on next load.
+				break;
+
+			// --- Guild scheduled events ---
+			case 'GUILD_EVENT_CREATE':
+			case 'GUILD_EVENT_UPDATE':
+			case 'GUILD_EVENT_DELETE':
+				// Scheduled event changes — currently no dedicated frontend store.
+				break;
+
+			// --- Guild onboarding ---
+			case 'GUILD_ONBOARDING_UPDATE':
+				// Onboarding config changed — no-op for non-admin users.
+				break;
+
+			// --- Channel pins update ---
+			case 'CHANNEL_PINS_UPDATE':
+				// Pin count changed — components that display pins will refetch on focus.
+				break;
+
+			// --- Channel ACK (read state, user-scoped) ---
+			case 'CHANNEL_ACK': {
+				const ack = data as { channel_id: string; message_id?: string };
+				clearChannelUnreads(ack.channel_id);
+				break;
+			}
+
+			// --- Channel widget events ---
+			case 'CHANNEL_WIDGET_CREATE':
+			case 'CHANNEL_WIDGET_UPDATE':
+			case 'CHANNEL_WIDGET_DELETE':
+				// Widget changes — no dedicated frontend store yet.
+				break;
+
+			// --- Message reaction events ---
+			case 'MESSAGE_REACTION_ADD':
+			case 'MESSAGE_REACTION_REMOVE': {
+				// Reaction events include the full updated reactions array from the backend.
+				// Update the message with the new reaction data.
+				const reaction = data as { channel_id: string; message_id: string; reactions?: unknown[] };
+				if (reaction.reactions !== undefined) {
+					updateMessage({ id: reaction.message_id, channel_id: reaction.channel_id, reactions: reaction.reactions } as Message);
+				}
+				break;
+			}
+
+			// --- Message embed update (link unfurl) ---
+			case 'MESSAGE_EMBED_UPDATE': {
+				const embed = data as { channel_id: string; message_id: string; embeds?: unknown[] };
+				if (embed.embeds !== undefined) {
+					updateMessage({ id: embed.message_id, channel_id: embed.channel_id, embeds: embed.embeds } as Message);
+				}
+				break;
+			}
+
+			// --- Poll events ---
+			case 'POLL_CREATE':
+			case 'POLL_VOTE':
+			case 'POLL_CLOSE': {
+				const poll = data as { channel_id: string; poll_id?: string; message_id?: string };
+				// Polls are embedded in messages — re-fetch the channel messages.
+				if (poll.channel_id) {
+					const activeChannelId = get(currentChannelId);
+					if (activeChannelId === poll.channel_id) {
+						// Refresh messages in active channel to get updated poll state.
+						clearChannelMessages(poll.channel_id);
+						loadMessages(poll.channel_id);
+					}
+				}
+				break;
+			}
+
+			// --- Automod action ---
+			case 'AUTOMOD_ACTION':
+				// Automod notification — could show a toast for guild moderators.
+				break;
+
+			// --- Activity/game events ---
+			case 'ACTIVITY_SESSION_START':
+			case 'ACTIVITY_SESSION_END':
+			case 'ACTIVITY_PARTICIPANT_JOIN':
+			case 'ACTIVITY_PARTICIPANT_LEAVE':
+			case 'ACTIVITY_STATE_UPDATE':
+			case 'WATCH_TOGETHER_START':
+			case 'WATCH_TOGETHER_SYNC':
+			case 'MUSIC_PARTY_START':
+			case 'MUSIC_PARTY_QUEUE_ADD':
+			case 'GAME_SESSION_CREATE':
+			case 'GAME_PLAYER_JOIN':
+			case 'GAME_MOVE':
+				// Activity/game events — handled by activity-specific components
+				// via their own event subscriptions when mounted.
+				break;
+
+			// --- Soundboard events ---
+			case 'SOUNDBOARD_PLAY':
+				// Soundboard play — handled by voice panel component.
+				break;
+
+			// --- Voice broadcast events ---
+			case 'VOICE_BROADCAST_START':
+			case 'VOICE_BROADCAST_END':
+				// Voice broadcast lifecycle — handled by voice components.
+				break;
+
+			// --- Screen share events ---
+			case 'SCREEN_SHARE_START':
+			case 'SCREEN_SHARE_END':
+				// Screen share lifecycle — handled by voice components.
+				break;
+
+			// --- Location share events ---
+			case 'LOCATION_SHARE_UPDATE':
+			case 'LOCATION_SHARE_END':
+				// Location share — handled by LocationShare component.
+				break;
+
+			// --- Bot presence ---
+			case 'BOT_PRESENCE_UPDATE': {
+				const bot = data as { bot_id: string; status: string };
+				updatePresence(bot.bot_id, bot.status);
+				break;
+			}
+
+			// --- Component interaction (for bots) ---
+			case 'COMPONENT_INTERACTION':
+				// Bot component interaction — handled by message components.
+				break;
 
 			// --- Announcement events (instance-wide) ---
 			case 'ANNOUNCEMENT_CREATE':

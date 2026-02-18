@@ -1,30 +1,6 @@
 <script lang="ts">
-	import { api, ApiRequestError } from '$lib/api/client';
+	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-
-	const API_BASE = '/api/v1';
-
-	async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		const token = api.getToken();
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-		const res = await fetch(`${API_BASE}${path}`, {
-			method,
-			headers,
-			body: body ? JSON.stringify(body) : undefined
-		});
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		if (!res.ok) {
-			const err = json as { error?: { message?: string; code?: string } };
-			throw new ApiRequestError(
-				err.error?.message || res.statusText,
-				err.error?.code || 'unknown',
-				res.status
-			);
-		}
-		return (json as { data: T }).data;
-	}
 
 	interface GuildPlugin {
 		id: string;
@@ -71,8 +47,7 @@
 		loading = true;
 		error = '';
 		try {
-			const resp = await apiRequest<GuildPlugin[]>('GET', `/guilds/${gId}/plugins`);
-			plugins = resp;
+			plugins = await api.getGuildPlugins(gId) as GuildPlugin[];
 		} catch (err: any) {
 			error = err.message || 'Failed to load plugins';
 		} finally {
@@ -82,7 +57,7 @@
 
 	async function togglePlugin(plugin: GuildPlugin) {
 		try {
-			await apiRequest('PATCH', `/guilds/${guildId}/plugins/${plugin.id}`, {
+			await api.updateGuildPlugin(guildId, plugin.id, {
 				enabled: !plugin.enabled
 			});
 			plugins = plugins.map((p) =>
@@ -97,7 +72,7 @@
 	async function uninstallPlugin(plugin: GuildPlugin) {
 		if (!confirm(`Uninstall "${plugin.name}"? This will remove all plugin configuration.`)) return;
 		try {
-			await apiRequest('DELETE', `/guilds/${guildId}/plugins/${plugin.id}`);
+			await api.deleteGuildPlugin(guildId, plugin.id);
 			plugins = plugins.filter((p) => p.id !== plugin.id);
 			addToast('Plugin uninstalled', 'success');
 		} catch (err: any) {
@@ -113,7 +88,7 @@
 	async function saveConfig(plugin: GuildPlugin) {
 		try {
 			const config = JSON.parse(configJson);
-			await apiRequest('PATCH', `/guilds/${guildId}/plugins/${plugin.id}`, { config });
+			await api.updateGuildPlugin(guildId, plugin.id, { config });
 			plugins = plugins.map((p) =>
 				p.id === plugin.id ? { ...p, config } : p
 			);

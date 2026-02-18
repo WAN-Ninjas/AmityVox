@@ -1,8 +1,6 @@
 package channels
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/oklog/ulid/v2"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -29,7 +28,7 @@ func (h *Handler) HandleGetGalleryTags(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
 		return
 	}
 
@@ -37,7 +36,7 @@ func (h *Handler) HandleGetGalleryTags(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, channel_id, name, emoji, color, position, created_at
 		 FROM gallery_tags WHERE channel_id = $1 ORDER BY position`, channelID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list tags")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list tags")
 		return
 	}
 	defer rows.Close()
@@ -54,7 +53,7 @@ func (h *Handler) HandleGetGalleryTags(w http.ResponseWriter, r *http.Request) {
 		tags = []models.GalleryTag{}
 	}
 
-	writeJSON(w, http.StatusOK, tags)
+	apiutil.WriteJSON(w, http.StatusOK, tags)
 }
 
 // HandleCreateGalleryTag creates a new tag for a gallery channel.
@@ -64,18 +63,18 @@ func (h *Handler) HandleCreateGalleryTag(w http.ResponseWriter, r *http.Request)
 	channelID := chi.URLParam(r, "channelID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
 		return
 	}
 
 	// Verify it's a gallery channel.
 	var channelType string
 	if err := h.Pool.QueryRow(r.Context(), `SELECT channel_type FROM channels WHERE id = $1`, channelID).Scan(&channelType); err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if channelType != models.ChannelTypeGallery {
-		writeError(w, http.StatusBadRequest, "not_gallery", "Tags can only be created on gallery channels")
+		apiutil.WriteError(w, http.StatusBadRequest, "not_gallery", "Tags can only be created on gallery channels")
 		return
 	}
 
@@ -84,12 +83,10 @@ func (h *Handler) HandleCreateGalleryTag(w http.ResponseWriter, r *http.Request)
 		Emoji *string `json:"emoji"`
 		Color *string `json:"color"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Tag name is required")
+	if !apiutil.RequireNonEmpty(w, "Tag name", req.Name) {
 		return
 	}
 
@@ -107,12 +104,11 @@ func (h *Handler) HandleCreateGalleryTag(w http.ResponseWriter, r *http.Request)
 		id, channelID, req.Name, req.Emoji, req.Color, maxPos+1,
 	).Scan(&tag.ID, &tag.ChannelID, &tag.Name, &tag.Emoji, &tag.Color, &tag.Position, &tag.CreatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create gallery tag", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create tag")
+		apiutil.InternalError(w, h.Logger, "Failed to create tag", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, tag)
+	apiutil.WriteJSON(w, http.StatusCreated, tag)
 }
 
 // HandleUpdateGalleryTag updates a gallery tag.
@@ -123,7 +119,7 @@ func (h *Handler) HandleUpdateGalleryTag(w http.ResponseWriter, r *http.Request)
 	tagID := chi.URLParam(r, "tagID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
 		return
 	}
 
@@ -132,8 +128,7 @@ func (h *Handler) HandleUpdateGalleryTag(w http.ResponseWriter, r *http.Request)
 		Emoji *string `json:"emoji"`
 		Color *string `json:"color"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -167,15 +162,15 @@ func (h *Handler) HandleUpdateGalleryTag(w http.ResponseWriter, r *http.Request)
 	err := h.Pool.QueryRow(r.Context(), query, args...).Scan(
 		&tag.ID, &tag.ChannelID, &tag.Name, &tag.Emoji, &tag.Color, &tag.Position, &tag.CreatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Tag not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Tag not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update tag")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update tag")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, tag)
+	apiutil.WriteJSON(w, http.StatusOK, tag)
 }
 
 // HandleDeleteGalleryTag deletes a gallery tag.
@@ -186,18 +181,18 @@ func (h *Handler) HandleDeleteGalleryTag(w http.ResponseWriter, r *http.Request)
 	tagID := chi.URLParam(r, "tagID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
 		return
 	}
 
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM gallery_tags WHERE id = $1 AND channel_id = $2`, tagID, channelID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete tag")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete tag")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Tag not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Tag not found")
 		return
 	}
 
@@ -215,18 +210,18 @@ func (h *Handler) HandleGetGalleryPosts(w http.ResponseWriter, r *http.Request) 
 	channelID := chi.URLParam(r, "channelID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")
 		return
 	}
 
 	// Verify it's a gallery channel.
 	var channelType string
 	if err := h.Pool.QueryRow(r.Context(), `SELECT channel_type FROM channels WHERE id = $1`, channelID).Scan(&channelType); err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if channelType != models.ChannelTypeGallery {
-		writeError(w, http.StatusBadRequest, "not_gallery", "This is not a gallery channel")
+		apiutil.WriteError(w, http.StatusBadRequest, "not_gallery", "This is not a gallery channel")
 		return
 	}
 
@@ -288,8 +283,7 @@ func (h *Handler) HandleGetGalleryPosts(w http.ResponseWriter, r *http.Request) 
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to query gallery posts", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load gallery posts")
+		apiutil.InternalError(w, h.Logger, "Failed to load gallery posts", err)
 		return
 	}
 	defer rows.Close()
@@ -432,7 +426,7 @@ func (h *Handler) HandleGetGalleryPosts(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	writeJSON(w, http.StatusOK, posts)
+	apiutil.WriteJSON(w, http.StatusOK, posts)
 }
 
 // HandleCreateGalleryPost creates a new post in a gallery channel.
@@ -442,7 +436,7 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.CreateThreads) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need CREATE_THREADS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need CREATE_THREADS permission")
 		return
 	}
 
@@ -454,11 +448,11 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		`SELECT channel_type, COALESCE(gallery_require_tags, false), guild_id
 		 FROM channels WHERE id = $1`, channelID).Scan(&channelType, &requireTags, &guildID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if channelType != models.ChannelTypeGallery {
-		writeError(w, http.StatusBadRequest, "not_gallery", "Posts can only be created in gallery channels")
+		apiutil.WriteError(w, http.StatusBadRequest, "not_gallery", "Posts can only be created in gallery channels")
 		return
 	}
 
@@ -468,17 +462,16 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		TagIDs        []string `json:"tag_ids"`
 		AttachmentIDs []string `json:"attachment_ids"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if len(req.AttachmentIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "missing_attachments", "Gallery posts require at least one image or video attachment")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_attachments", "Gallery posts require at least one image or video attachment")
 		return
 	}
 	if requireTags && len(req.TagIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "tags_required", "This gallery requires at least one tag per post")
+		apiutil.WriteError(w, http.StatusBadRequest, "tags_required", "This gallery requires at least one tag per post")
 		return
 	}
 
@@ -490,7 +483,7 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		   AND (content_type LIKE 'image/%' OR content_type LIKE 'video/%')`,
 		req.AttachmentIDs, userID).Scan(&validCount)
 	if validCount != len(req.AttachmentIDs) {
-		writeError(w, http.StatusBadRequest, "invalid_attachments", "All attachments must be images or videos that you uploaded")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_attachments", "All attachments must be images or videos that you uploaded")
 		return
 	}
 
@@ -504,70 +497,67 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 	}
 
 	// Start transaction.
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to start transaction")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// 1. Create the OP message in the gallery channel.
 	msgID := ulid.Make().String()
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
-		 VALUES ($1, $2, $3, $4, 'default', now())`,
-		msgID, channelID, userID, content)
-	if err != nil {
-		h.Logger.Error("failed to create gallery post message", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create post")
-		return
-	}
-
-	// 2. Create thread channel (name=title, parent_channel_id=gallery).
 	threadID := ulid.Make().String()
 	threadName := req.Title
 	if threadName == "" {
 		threadName = "Gallery Post"
 	}
 	var post models.GalleryPost
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO channels (id, guild_id, channel_type, name, parent_channel_id, owner_id,
-		                       pinned, reply_count, last_activity_at, created_at)
-		 VALUES ($1, $2, 'text', $3, $4, $5, false, 0, now(), now())
-		 RETURNING id, name, owner_id, pinned, locked, reply_count, last_activity_at, created_at`,
-		threadID, guildID, threadName, channelID, userID,
-	).Scan(&post.ID, &post.Name, &post.OwnerID, &post.Pinned, &post.Locked,
-		&post.ReplyCount, &post.LastActivityAt, &post.CreatedAt)
-	if err != nil {
-		h.Logger.Error("failed to create gallery thread", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create post")
-		return
-	}
-
-	// 3. Set message thread_id to the new thread.
-	tx.Exec(r.Context(), `UPDATE messages SET thread_id = $1 WHERE id = $2`, threadID, msgID)
-
-	// 4. Insert gallery_post_tags.
-	post.Tags = []models.GalleryTag{}
-	for _, tagID := range req.TagIDs {
-		_, err = tx.Exec(r.Context(),
-			`INSERT INTO gallery_post_tags (post_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-			threadID, tagID)
-		if err != nil {
-			h.Logger.Warn("failed to insert gallery post tag", slog.String("error", err.Error()))
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// 1. Create the OP message in the gallery channel.
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
+			 VALUES ($1, $2, $3, $4, 'default', now())`,
+			msgID, channelID, userID, content); err != nil {
+			return err
 		}
-	}
 
-	// 5. Link attachments.
-	tx.Exec(r.Context(),
-		`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
-		msgID, req.AttachmentIDs, userID)
+		// 2. Create thread channel (name=title, parent_channel_id=gallery).
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO channels (id, guild_id, channel_type, name, parent_channel_id, owner_id,
+			                       pinned, reply_count, last_activity_at, created_at)
+			 VALUES ($1, $2, 'text', $3, $4, $5, false, 0, now(), now())
+			 RETURNING id, name, owner_id, pinned, locked, reply_count, last_activity_at, created_at`,
+			threadID, guildID, threadName, channelID, userID,
+		).Scan(&post.ID, &post.Name, &post.OwnerID, &post.Pinned, &post.Locked,
+			&post.ReplyCount, &post.LastActivityAt, &post.CreatedAt); err != nil {
+			return err
+		}
 
-	// 6. Update gallery channel's last_activity_at.
-	tx.Exec(r.Context(), `UPDATE channels SET last_activity_at = now() WHERE id = $1`, channelID)
+		// 3. Set message thread_id to the new thread.
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE messages SET thread_id = $1 WHERE id = $2`, threadID, msgID); err != nil {
+			return err
+		}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create post")
+		// 4. Insert gallery_post_tags.
+		post.Tags = []models.GalleryTag{}
+		for _, tagID := range req.TagIDs {
+			if _, err := tx.Exec(r.Context(),
+				`INSERT INTO gallery_post_tags (post_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+				threadID, tagID); err != nil {
+				return err
+			}
+		}
+
+		// 5. Link attachments.
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
+			msgID, req.AttachmentIDs, userID); err != nil {
+			return err
+		}
+
+		// 6. Update gallery channel's last_activity_at.
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE channels SET last_activity_at = now() WHERE id = $1`, channelID); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create post")
 		return
 	}
 
@@ -633,7 +623,7 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		}),
 	})
 
-	writeJSON(w, http.StatusCreated, post)
+	apiutil.WriteJSON(w, http.StatusCreated, post)
 }
 
 // HandlePinGalleryPost toggles the pinned status of a gallery post.
@@ -644,7 +634,7 @@ func (h *Handler) HandlePinGalleryPost(w http.ResponseWriter, r *http.Request) {
 	postID := chi.URLParam(r, "postID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageThreads) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_THREADS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_THREADS permission")
 		return
 	}
 
@@ -653,14 +643,14 @@ func (h *Handler) HandlePinGalleryPost(w http.ResponseWriter, r *http.Request) {
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT parent_channel_id FROM channels WHERE id = $1`, postID).Scan(&parentID)
 	if err != nil || parentID == nil || *parentID != channelID {
-		writeError(w, http.StatusNotFound, "not_found", "Post not found in this gallery")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Post not found in this gallery")
 		return
 	}
 
 	_, err = h.Pool.Exec(r.Context(),
 		`UPDATE channels SET pinned = NOT pinned WHERE id = $1`, postID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to toggle pin")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to toggle pin")
 		return
 	}
 
@@ -675,7 +665,7 @@ func (h *Handler) HandleCloseGalleryPost(w http.ResponseWriter, r *http.Request)
 	postID := chi.URLParam(r, "postID")
 
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageThreads) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_THREADS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_THREADS permission")
 		return
 	}
 
@@ -684,14 +674,14 @@ func (h *Handler) HandleCloseGalleryPost(w http.ResponseWriter, r *http.Request)
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT parent_channel_id FROM channels WHERE id = $1`, postID).Scan(&parentID)
 	if err != nil || parentID == nil || *parentID != channelID {
-		writeError(w, http.StatusNotFound, "not_found", "Post not found in this gallery")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Post not found in this gallery")
 		return
 	}
 
 	_, err = h.Pool.Exec(r.Context(),
 		`UPDATE channels SET locked = NOT locked WHERE id = $1`, postID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to toggle post lock")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to toggle post lock")
 		return
 	}
 

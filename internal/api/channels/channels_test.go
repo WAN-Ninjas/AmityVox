@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, map[string]string{"hello": "world"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"hello": "world"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -33,7 +35,7 @@ func TestWriteJSON(t *testing.T) {
 
 func TestWriteError(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeError(w, http.StatusBadRequest, "test_code", "Test message")
+	apiutil.WriteError(w, http.StatusBadRequest, "test_code", "Test message")
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
@@ -57,7 +59,7 @@ func TestWriteError(t *testing.T) {
 
 func TestWriteJSON_StatusCreated(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusCreated, []string{"a", "b"})
+	apiutil.WriteJSON(w, http.StatusCreated, []string{"a", "b"})
 
 	if w.Code != http.StatusCreated {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusCreated)
@@ -78,7 +80,7 @@ func TestWriteJSON_StatusCreated(t *testing.T) {
 
 func TestWriteError_InternalServer(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeError(w, http.StatusInternalServerError, "internal_error", "Something went wrong")
+	apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Something went wrong")
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
@@ -87,7 +89,7 @@ func TestWriteError_InternalServer(t *testing.T) {
 
 func TestWriteJSON_EmptySlice(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, make([]string, 0))
+	apiutil.WriteJSON(w, http.StatusOK, make([]string, 0))
 
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {

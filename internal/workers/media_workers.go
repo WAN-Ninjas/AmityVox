@@ -268,7 +268,7 @@ func (m *Manager) processEmbedJob(ctx context.Context, job EmbedJob) {
 	}
 
 	// Publish embed update event so clients can refresh.
-	m.bus.PublishJSON(ctx, events.SubjectMessageEmbedUpdate, "MESSAGE_EMBED_UPDATE", map[string]interface{}{
+	m.bus.PublishChannelEvent(ctx, events.SubjectMessageEmbedUpdate, "MESSAGE_EMBED_UPDATE", job.ChannelID, map[string]interface{}{
 		"message_id": job.MessageID,
 		"channel_id": job.ChannelID,
 		"embeds":     embeds,
