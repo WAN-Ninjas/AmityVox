@@ -118,9 +118,11 @@
 		text = text.replace(/<@&([0-9A-Z]{26})>/g, (_match, roleId) => {
 			const role = roles?.get(roleId);
 			const name = role?.name ?? 'Unknown Role';
-			const color = role?.color ?? '#99aab5';
+			const rawColor = role?.color ?? '#99aab5';
+			// Validate hex color to prevent style attribute injection
+			const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : '#99aab5';
 			return addPlaceholder(
-				`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${escapeHtml(color)}20; color: ${escapeHtml(color)}">@${escapeHtml(name)}</span>`
+				`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${color}20; color: ${color}">@${escapeHtml(name)}</span>`
 			);
 		});
 
