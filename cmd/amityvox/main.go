@@ -21,6 +21,8 @@ import (
 
 	"github.com/alexedwards/argon2id"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/amityvox/amityvox/internal/api"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/automod"
@@ -323,6 +325,25 @@ func runServe() error {
 	srv.Router.With(fedRL).Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
 	srv.Router.With(fedRL).Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
 	srv.Router.With(fedRL).Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
+
+	// Federation guild endpoints (remote-facing, rate limited by IP).
+	srv.Router.With(fedRL).Get("/federation/v1/guilds/{guildID}/preview", syncSvc.HandleFederatedGuildPreview)
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/join", syncSvc.HandleFederatedGuildJoin)
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/leave", syncSvc.HandleFederatedGuildLeave)
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/invite-accept", syncSvc.HandleFederatedGuildInviteAccept)
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages", syncSvc.HandleFederatedGuildMessages)
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/create", syncSvc.HandleFederatedGuildPostMessage)
+
+	// Federation guild proxy endpoints (authenticated, for local users accessing remote guilds).
+	srv.Router.Route("/api/v1/federation/guilds", func(r chi.Router) {
+		r.Use(auth.RequireAuth(authSvc))
+		r.Use(srv.RateLimitGlobal())
+		r.Post("/join", syncSvc.HandleProxyJoinFederatedGuild)
+		r.Post("/{guildID}/leave", syncSvc.HandleProxyLeaveFederatedGuild)
+		r.Get("/{guildID}/channels/{channelID}/messages", syncSvc.HandleProxyGetFederatedGuildMessages)
+		r.Post("/{guildID}/channels/{channelID}/messages", syncSvc.HandleProxyPostFederatedGuildMessage)
+	})
+
 	if cfg.Instance.FederationMode != "closed" {
 		syncSvc.StartRouter(ctx)
 		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))

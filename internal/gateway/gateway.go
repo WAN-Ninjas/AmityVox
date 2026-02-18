@@ -346,7 +346,8 @@ func (s *Server) heartbeatMonitor(ctx context.Context, client *Client) {
 	}
 }
 
-// loadGuildMemberships queries the database to populate the client's guild list.
+// loadGuildMemberships queries the database to populate the client's guild list,
+// including both local guilds and federated (remote) guilds from the cache.
 func (s *Server) loadGuildMemberships(ctx context.Context, client *Client) {
 	if s.pool == nil {
 		return
@@ -364,6 +365,21 @@ func (s *Server) loadGuildMemberships(ctx context.Context, client *Client) {
 	for rows.Next() {
 		var guildID string
 		if rows.Scan(&guildID) == nil {
+			client.guildIDs[guildID] = true
+		}
+	}
+
+	// Also load federated guild IDs so events for remote guilds are dispatched.
+	fedRows, err := s.pool.Query(ctx,
+		`SELECT guild_id FROM federation_guild_cache WHERE user_id = $1`, client.userID)
+	if err != nil {
+		s.logger.Warn("failed to load federated guild memberships", slog.String("error", err.Error()))
+		return
+	}
+	defer fedRows.Close()
+	for fedRows.Next() {
+		var guildID string
+		if fedRows.Scan(&guildID) == nil {
 			client.guildIDs[guildID] = true
 		}
 	}
@@ -558,12 +574,46 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 		}
 	}
 
+	// Load federated guild metadata for sidebar display.
+	federatedGuilds := make([]map[string]interface{}, 0)
+	if s.pool != nil {
+		fgRows, err := s.pool.Query(ctx,
+			`SELECT fgc.guild_id, fgc.name, fgc.icon_id, fgc.description,
+			        fgc.member_count, fgc.channels_json, fgc.roles_json, i.domain
+			 FROM federation_guild_cache fgc
+			 JOIN instances i ON i.id = fgc.instance_id
+			 WHERE fgc.user_id = $1`, userID)
+		if err == nil {
+			defer fgRows.Close()
+			for fgRows.Next() {
+				var guildID, name, domain string
+				var iconID, description *string
+				var memberCount int
+				var channelsJSON, rolesJSON json.RawMessage
+				if fgRows.Scan(&guildID, &name, &iconID, &description,
+					&memberCount, &channelsJSON, &rolesJSON, &domain) == nil {
+					federatedGuilds = append(federatedGuilds, map[string]interface{}{
+						"guild_id":      guildID,
+						"name":          name,
+						"icon_id":       iconID,
+						"description":   description,
+						"member_count":  memberCount,
+						"channels_json": channelsJSON,
+						"roles_json":    rolesJSON,
+						"instance_domain": domain,
+					})
+				}
+			}
+		}
+	}
+
 	readyData, _ := json.Marshal(map[string]interface{}{
-		"user":         user,
-		"guild_ids":    guildIDList,
-		"session_id":   client.sessionID,
-		"presences":    presences,
-		"voice_states": voiceStates,
+		"user":             user,
+		"guild_ids":        guildIDList,
+		"session_id":       client.sessionID,
+		"presences":        presences,
+		"voice_states":     voiceStates,
+		"federated_guilds": federatedGuilds,
 	})
 
 	s.sendMessage(client, GatewayMessage{
