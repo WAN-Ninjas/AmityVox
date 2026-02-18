@@ -509,9 +509,11 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Release any existing claim by this guild.
-		tx.Exec(r.Context(),
+		if _, err := tx.Exec(r.Context(),
 			`DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID,
-		)
+		); err != nil {
+			return err
+		}
 
 		// Insert new claim.
 		err = tx.QueryRow(r.Context(),
@@ -525,9 +527,11 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Also update guilds.vanity_url.
-		tx.Exec(r.Context(),
+		if _, err := tx.Exec(r.Context(),
 			`UPDATE guilds SET vanity_url = $2 WHERE id = $1`, guildID, code,
-		)
+		); err != nil {
+			return err
+		}
 
 		return nil
 	})

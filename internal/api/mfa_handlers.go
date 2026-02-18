@@ -350,8 +350,11 @@ func (s *Server) handleConsumeBackupCode(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Mark the code as used.
-	s.DB.Pool.Exec(r.Context(),
-		`UPDATE backup_codes SET used = true, used_at = now() WHERE id = $1`, matchedID)
+	if _, err := s.DB.Pool.Exec(r.Context(),
+		`UPDATE backup_codes SET used = true, used_at = now() WHERE id = $1`, matchedID); err != nil {
+		InternalError(w, s.Logger, "Failed to mark backup code as used", err)
+		return
+	}
 
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "verified"})
 }
