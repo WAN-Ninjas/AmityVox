@@ -426,6 +426,11 @@ func (ss *SyncService) verifyFederationRequest(w http.ResponseWriter, r *http.Re
 // NotifyFederatedDM sends a DM creation notification to a remote instance.
 // This is called by the users handler when a local user creates a DM with a remote user.
 func (ss *SyncService) NotifyFederatedDM(ctx context.Context, remoteDomain, localChannelID, channelType, creatorID string, recipientIDs []string, groupName *string) error {
+	// Validate remote domain before constructing URL.
+	if err := ValidateFederationDomain(remoteDomain); err != nil {
+		return fmt.Errorf("invalid remote domain %q: %w", remoteDomain, err)
+	}
+
 	// Look up creator user info.
 	var creator federatedUserInfo
 	err := ss.fed.pool.QueryRow(ctx,
@@ -450,19 +455,23 @@ func (ss *SyncService) NotifyFederatedDM(ctx context.Context, remoteDomain, loca
 	for rows.Next() {
 		var u federatedUserInfo
 		var instanceID string
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.AvatarID, &instanceID); err == nil {
-			if instanceID == ss.fed.instanceID {
-				u.InstanceDomain = ss.fed.domain
-			} else {
-				// Look up the domain for remote users.
-				var domain string
-				_ = ss.fed.pool.QueryRow(ctx,
-					`SELECT domain FROM instances WHERE id = $1`, instanceID,
-				).Scan(&domain)
-				u.InstanceDomain = domain
-			}
-			recipients = append(recipients, u)
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.AvatarID, &instanceID); err != nil {
+			ss.logger.Warn("failed to scan recipient row",
+				slog.String("error", err.Error()),
+			)
+			continue
 		}
+		if instanceID == ss.fed.instanceID {
+			u.InstanceDomain = ss.fed.domain
+		} else {
+			// Look up the domain for remote users.
+			var domain string
+			_ = ss.fed.pool.QueryRow(ctx,
+				`SELECT domain FROM instances WHERE id = $1`, instanceID,
+			).Scan(&domain)
+			u.InstanceDomain = domain
+		}
+		recipients = append(recipients, u)
 	}
 
 	// Build the federation request.
@@ -511,21 +520,36 @@ func (ss *SyncService) NotifyFederatedDM(ctx context.Context, remoteDomain, loca
 	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ChannelID != "" {
 		// Look up the remote instance ID.
 		var remoteInstanceID string
-		_ = ss.fed.pool.QueryRow(ctx,
+		if err := ss.fed.pool.QueryRow(ctx,
 			`SELECT id FROM instances WHERE domain = $1`, remoteDomain,
-		).Scan(&remoteInstanceID)
+		).Scan(&remoteInstanceID); err != nil {
+			ss.logger.Warn("failed to look up remote instance ID for mirror mapping",
+				slog.String("domain", remoteDomain),
+				slog.String("error", err.Error()),
+			)
+		}
 
 		if remoteInstanceID != "" {
-			ss.fed.pool.Exec(ctx,
+			if _, err := ss.fed.pool.Exec(ctx,
 				`INSERT INTO federation_channel_mirrors (local_channel_id, remote_channel_id, remote_instance_id, created_at)
 				 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
 				localChannelID, result.ChannelID, remoteInstanceID,
-			)
-			ss.fed.pool.Exec(ctx,
+			); err != nil {
+				ss.logger.Warn("failed to store channel mirror mapping",
+					slog.String("channel_id", localChannelID),
+					slog.String("error", err.Error()),
+				)
+			}
+			if _, err := ss.fed.pool.Exec(ctx,
 				`INSERT INTO federation_channel_peers (channel_id, instance_id)
 				 VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 				localChannelID, remoteInstanceID,
-			)
+			); err != nil {
+				ss.logger.Warn("failed to store channel peer mapping",
+					slog.String("channel_id", localChannelID),
+					slog.String("error", err.Error()),
+				)
+			}
 		}
 	}
 
