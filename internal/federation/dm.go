@@ -248,7 +248,7 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 		createdAt = time.Now()
 	}
 
-	_, err = ss.fed.pool.Exec(ctx,
+	tag, err := ss.fed.pool.Exec(ctx,
 		`INSERT INTO messages (id, channel_id, author_id, content, created_at)
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -260,6 +260,14 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 			slog.String("error", err.Error()),
 		)
 		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// If the message already existed (retry), skip duplicate broadcast.
+	if tag.RowsAffected() == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 		return
 	}
 
@@ -314,6 +322,10 @@ func (ss *SyncService) HandleFederatedDMRecipientAdd(w http.ResponseWriter, r *h
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
+	if req.RemoteChannelID == "" || req.User.ID == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
 
 	ctx := r.Context()
 
@@ -364,6 +376,10 @@ func (ss *SyncService) HandleFederatedDMRecipientRemove(w http.ResponseWriter, r
 	var req federatedDMRecipientRequest
 	if err := json.Unmarshal(signed.Payload, &req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.RemoteChannelID == "" || req.User.ID == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
 
@@ -597,28 +613,44 @@ func (ss *SyncService) NotifyFederatedDM(ctx context.Context, remoteDomain, loca
 }
 
 // ensureRemoteUserStub creates or updates a user stub for a remote user.
+// Only updates users that belong to the expected instance to prevent cross-instance overwrites.
 func (ss *SyncService) ensureRemoteUserStub(ctx context.Context, instanceID string, u federatedUserInfo) {
-	// First check if user already exists.
-	var exists bool
+	// Check if user already exists and which instance it belongs to.
+	var existingInstanceID string
 	err := ss.fed.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, u.ID,
-	).Scan(&exists)
-	if err == nil && exists {
-		// Update display_name and avatar if changed.
-		ss.fed.pool.Exec(ctx,
-			`UPDATE users SET display_name = $1, avatar_id = $2 WHERE id = $3`,
-			u.DisplayName, u.AvatarID, u.ID,
-		)
+		`SELECT instance_id FROM users WHERE id = $1`, u.ID,
+	).Scan(&existingInstanceID)
+	if err == nil {
+		// User exists — only update if it belongs to the expected instance.
+		if existingInstanceID != instanceID {
+			ss.logger.Warn("refusing to update user stub: instance mismatch",
+				slog.String("user_id", u.ID),
+				slog.String("expected_instance", instanceID),
+				slog.String("actual_instance", existingInstanceID),
+			)
+			return
+		}
+		// Safe to update display_name and avatar.
+		if _, err := ss.fed.pool.Exec(ctx,
+			`UPDATE users SET display_name = $1, avatar_id = $2 WHERE id = $3 AND instance_id = $4`,
+			u.DisplayName, u.AvatarID, u.ID, instanceID,
+		); err != nil {
+			ss.logger.Warn("failed to update remote user stub",
+				slog.String("user_id", u.ID),
+				slog.String("error", err.Error()),
+			)
+		}
 		return
 	}
 
-	// Create stub user.
+	// Create stub user — only if it doesn't already exist (race-safe with ON CONFLICT).
 	_, err = ss.fed.pool.Exec(ctx,
 		`INSERT INTO users (id, instance_id, username, display_name, avatar_id, status_presence, created_at)
 		 VALUES ($1, $2, $3, $4, $5, 'offline', now())
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name = EXCLUDED.display_name,
-		   avatar_id = EXCLUDED.avatar_id`,
+		   avatar_id = EXCLUDED.avatar_id
+		 WHERE users.instance_id = EXCLUDED.instance_id`,
 		u.ID, instanceID, u.Username, u.DisplayName, u.AvatarID,
 	)
 	if err != nil {
