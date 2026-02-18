@@ -56,6 +56,11 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Verify instance_domain matches the authenticated sender.
+	if _, ok := ss.validateSenderDomain(ctx, w, senderID, req.InstanceDomain); !ok {
+		return
+	}
+
 	// Determine channel type and guild.
 	var channelType *string
 	var guildID *string
