@@ -657,7 +657,7 @@
 							</svg>
 						</span>
 					{/if}
-					<MarkdownRenderer content={displayContent} />
+					<MarkdownRenderer content={displayContent} members={$guildMembers} roles={$guildRolesMap} />
 				</div>
 				{#if !message.encrypted && isLastInGroup}
 					<TranslateButton channelId={message.channel_id} messageIds={groupMessageIds ?? [message.id]} />

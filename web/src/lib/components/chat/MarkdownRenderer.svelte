@@ -1,11 +1,14 @@
 <script lang="ts">
 	import katex from 'katex';
+	import type { GuildMember, Role } from '$lib/types';
 
 	interface Props {
 		content: string;
+		members?: Map<string, GuildMember>;
+		roles?: Map<string, Role>;
 	}
 
-	let { content }: Props = $props();
+	let { content, members, roles }: Props = $props();
 
 	/**
 	 * Render a LaTeX formula to HTML using KaTeX.
@@ -99,6 +102,35 @@
 			return addPlaceholder(
 				`<a href="${escapeHtml(href)}" class="inline-flex items-center gap-1 rounded bg-bg-modifier/50 px-1.5 py-0.5 text-xs text-text-link hover:underline hover:bg-bg-modifier">${icon}${escapeHtml(label)}</a>`
 			);
+		});
+
+		// --- Phase 1.6: Extract mention syntax ---
+		// User mentions: <@ULID> → styled pill with display name
+		text = text.replace(/<@([0-9A-Z]{26})>/g, (_match, userId) => {
+			const member = members?.get(userId);
+			const name = member?.nickname ?? member?.user?.display_name ?? member?.user?.username ?? userId.slice(0, 8);
+			return addPlaceholder(
+				`<span class="inline-block rounded bg-brand-500/20 px-1 py-0.5 text-xs font-medium text-brand-300 cursor-pointer hover:bg-brand-500/30">@${escapeHtml(name)}</span>`
+			);
+		});
+
+		// Role mentions: <@&ULID> → styled pill with role name and color
+		text = text.replace(/<@&([0-9A-Z]{26})>/g, (_match, roleId) => {
+			const role = roles?.get(roleId);
+			const name = role?.name ?? 'Unknown Role';
+			const rawColor = role?.color ?? '#99aab5';
+			// Validate 6-digit hex color (required for appending alpha suffix)
+			const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : '#99aab5';
+			return addPlaceholder(
+				`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${color}20; color: ${color}">@${escapeHtml(name)}</span>`
+			);
+		});
+
+		// @here → styled yellow pill (boundary-aware to avoid matching email@here.com)
+		text = text.replace(/(^|[^\w@])@here(?!\w)/g, (_match, prefix) => {
+			return `${prefix}${addPlaceholder(
+				`<span class="inline-block rounded bg-yellow-500/20 px-1 py-0.5 text-xs font-medium text-yellow-300 cursor-pointer hover:bg-yellow-500/30">@here</span>`
+			)}`;
 		});
 
 		// --- Phase 2: Escape HTML in the remaining text ---

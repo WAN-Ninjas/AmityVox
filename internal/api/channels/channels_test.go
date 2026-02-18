@@ -114,8 +114,8 @@ func TestCreateMessageRequest_Defaults(t *testing.T) {
 	if req.Content == nil || *req.Content != "hello" {
 		t.Error("expected content to be 'hello'")
 	}
-	if req.MentionEveryone {
-		t.Error("expected mention_everyone to default to false")
+	if req.MentionHere {
+		t.Error("expected mention_here to default to false")
 	}
 	if len(req.AttachmentIDs) != 0 {
 		t.Error("expected empty attachment_ids")

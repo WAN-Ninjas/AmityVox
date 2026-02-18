@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
+	import { guildMembers, guildRolesMap } from '$lib/stores/members';
 
 	interface Props {
 		quoteMessageId: string;
@@ -87,7 +88,7 @@
 		</div>
 		{#if truncatedContent}
 			<div class="mt-0.5 text-xs text-text-secondary leading-relaxed break-words">
-				<MarkdownRenderer content={truncatedContent} />
+				<MarkdownRenderer content={truncatedContent} members={$guildMembers} roles={$guildRolesMap} />
 			</div>
 		{:else}
 			<p class="mt-0.5 text-xs italic text-text-muted">No text content</p>

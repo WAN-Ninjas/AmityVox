@@ -165,10 +165,10 @@ describe('permissions store', () => {
 
 	describe('hasPermission helper', () => {
 		it('works for low bits (0-16)', () => {
-			const perms = Permission.ManageChannels | Permission.ManageGuild | Permission.MentionEveryone;
+			const perms = Permission.ManageChannels | Permission.ManageGuild | Permission.MentionHere;
 			expect(hasPermission(perms, Permission.ManageChannels)).toBe(true);
 			expect(hasPermission(perms, Permission.ManageGuild)).toBe(true);
-			expect(hasPermission(perms, Permission.MentionEveryone)).toBe(true);
+			expect(hasPermission(perms, Permission.MentionHere)).toBe(true);
 			expect(hasPermission(perms, Permission.KickMembers)).toBe(false);
 		});
 

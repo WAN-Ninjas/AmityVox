@@ -23,7 +23,7 @@ function createMockMessage(overrides?: Partial<Message>): Message {
 		reply_to_ids: [],
 		mention_user_ids: [],
 		mention_role_ids: [],
-		mention_everyone: false,
+		mention_here: false,
 		thread_id: null,
 		masquerade_name: null,
 		masquerade_avatar: null,

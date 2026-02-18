@@ -634,14 +634,14 @@ func (h *Handler) publishLockdownAlert(ctx context.Context, guildID string, conf
 		`INSERT INTO messages (id, channel_id, author_id, content, message_type, flags, created_at)
 		 VALUES ($1, $2, '00000000000000000000000000', $3, $4, 0, now())
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		           reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		           encrypted, encryption_session_id, created_at`,
 		msgID, channelID, alertContent, models.MessageTypeSystemLockdown,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
-		&msg.MentionEveryone, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
 		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
 	)
 	if err != nil {

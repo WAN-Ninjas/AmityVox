@@ -287,7 +287,7 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages${qs ? '?' + qs : ''}`);
 	}
 
-	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[]; encrypted?: boolean; encryption_session_id?: string }): Promise<Message> {
+	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[]; encrypted?: boolean; encryption_session_id?: string; mention_user_ids?: string[]; mention_role_ids?: string[]; mention_here?: boolean }): Promise<Message> {
 		return this.post(`/channels/${channelId}/messages`, { content, ...opts });
 	}
 
