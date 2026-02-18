@@ -96,10 +96,23 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 	allUsers = append(allUsers, req.Recipients...)
 	allUsers = append(allUsers, req.Creator)
 	for _, u := range allUsers {
-		if u.InstanceDomain == "" {
+		if u.InstanceDomain == "" || u.InstanceDomain == ss.fed.domain {
+			// Skip local users — never overwrite local user data from remote claims.
 			continue
 		}
-		ss.ensureRemoteUserStub(ctx, senderID, u)
+		// Resolve the correct instance ID for this user's domain.
+		var instanceID string
+		if err := ss.fed.pool.QueryRow(ctx,
+			`SELECT id FROM instances WHERE domain = $1`, u.InstanceDomain,
+		).Scan(&instanceID); err != nil {
+			ss.logger.Warn("unknown instance for federated user stub",
+				slog.String("domain", u.InstanceDomain),
+				slog.String("user_id", u.ID),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		ss.ensureRemoteUserStub(ctx, instanceID, u)
 	}
 
 	// Create the local mirror channel.
@@ -250,6 +263,12 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Note: Attachments and embeds are stored in separate tables (attachments, embeds)
+	// linked by message_id. For federated messages, the actual files live on the remote
+	// instance's S3. We don't proxy or re-upload them — we just pass the metadata through
+	// to WebSocket clients so they can render the remote URLs. Full attachment proxying
+	// is a future enhancement.
+
 	// Update channel's last_message_id.
 	if _, err := ss.fed.pool.Exec(ctx,
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`,
@@ -261,12 +280,19 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	}
 
 	// Publish MESSAGE_CREATE for local WebSocket clients.
+	// Include attachment/embed metadata so clients can render remote media.
 	msg := map[string]interface{}{
 		"id":         req.Message.ID,
 		"channel_id": localChannelID,
 		"author_id":  req.Message.AuthorID,
 		"content":    req.Message.Content,
 		"created_at": createdAt,
+	}
+	if req.Message.Attachments != nil {
+		msg["attachments"] = req.Message.Attachments
+	}
+	if req.Message.Embeds != nil {
+		msg["embeds"] = req.Message.Embeds
 	}
 	ss.bus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
 
@@ -466,12 +492,21 @@ func (ss *SyncService) NotifyFederatedDM(ctx context.Context, remoteDomain, loca
 		} else {
 			// Look up the domain for remote users.
 			var domain string
-			_ = ss.fed.pool.QueryRow(ctx,
+			if err := ss.fed.pool.QueryRow(ctx,
 				`SELECT domain FROM instances WHERE id = $1`, instanceID,
-			).Scan(&domain)
+			).Scan(&domain); err != nil {
+				ss.logger.Warn("failed to look up recipient instance domain",
+					slog.String("instance_id", instanceID),
+					slog.String("user_id", u.ID),
+					slog.String("error", err.Error()),
+				)
+			}
 			u.InstanceDomain = domain
 		}
 		recipients = append(recipients, u)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating recipients: %w", err)
 	}
 
 	// Build the federation request.
