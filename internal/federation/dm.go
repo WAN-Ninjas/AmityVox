@@ -73,8 +73,12 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if req.ChannelID == "" || req.ChannelType == "" || len(req.RecipientIDs) == 0 {
+	if req.ChannelID == "" || req.ChannelType == "" || len(req.RecipientIDs) == 0 || req.Creator.ID == "" {
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+	if req.ChannelType != "dm" && req.ChannelType != "group" {
+		http.Error(w, "Invalid channel_type", http.StatusBadRequest)
 		return
 	}
 
@@ -218,7 +222,7 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if req.RemoteChannelID == "" || req.Message.ID == "" {
+	if req.RemoteChannelID == "" || req.Message.ID == "" || req.Message.AuthorID == "" {
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
@@ -345,9 +349,20 @@ func (ss *SyncService) HandleFederatedDMRecipientAdd(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Ensure the user stub exists.
-	if req.User.InstanceDomain != "" {
-		ss.ensureRemoteUserStub(ctx, senderID, req.User)
+	// Ensure the user stub exists (only for remote domains).
+	if req.User.InstanceDomain != "" && req.User.InstanceDomain != ss.fed.domain {
+		var instanceID string
+		if err := ss.fed.pool.QueryRow(ctx,
+			`SELECT id FROM instances WHERE domain = $1`, req.User.InstanceDomain,
+		).Scan(&instanceID); err != nil {
+			ss.logger.Warn("unknown instance for recipient stub",
+				slog.String("domain", req.User.InstanceDomain),
+				slog.String("user_id", req.User.ID),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			ss.ensureRemoteUserStub(ctx, instanceID, req.User)
+		}
 	}
 
 	// Add the recipient.
@@ -642,8 +657,16 @@ func (ss *SyncService) ensureRemoteUserStub(ctx context.Context, instanceID stri
 		}
 		return
 	}
+	if err != pgx.ErrNoRows {
+		// Real database error — log and bail out, don't mask with an INSERT.
+		ss.logger.Warn("failed to look up user stub",
+			slog.String("user_id", u.ID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
 
-	// Create stub user — only if it doesn't already exist (race-safe with ON CONFLICT).
+	// User doesn't exist — create stub (race-safe with ON CONFLICT).
 	_, err = ss.fed.pool.Exec(ctx,
 		`INSERT INTO users (id, instance_id, username, display_name, avatar_id, status_presence, created_at)
 		 VALUES ($1, $2, $3, $4, $5, 'offline', now())
