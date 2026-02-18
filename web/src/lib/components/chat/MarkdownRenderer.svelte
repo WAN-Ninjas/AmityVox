@@ -119,18 +119,18 @@
 			const role = roles?.get(roleId);
 			const name = role?.name ?? 'Unknown Role';
 			const rawColor = role?.color ?? '#99aab5';
-			// Validate hex color to prevent style attribute injection
-			const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : '#99aab5';
+			// Validate 6-digit hex color (required for appending alpha suffix)
+			const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : '#99aab5';
 			return addPlaceholder(
 				`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${color}20; color: ${color}">@${escapeHtml(name)}</span>`
 			);
 		});
 
-		// @here → styled yellow pill
-		text = text.replace(/@here/g, () => {
-			return addPlaceholder(
+		// @here → styled yellow pill (boundary-aware to avoid matching email@here.com)
+		text = text.replace(/(^|[^\w@])@here(?!\w)/g, (_match, prefix) => {
+			return `${prefix}${addPlaceholder(
 				`<span class="inline-block rounded bg-yellow-500/20 px-1 py-0.5 text-xs font-medium text-yellow-300 cursor-pointer hover:bg-yellow-500/30">@here</span>`
-			);
+			)}`;
 		});
 
 		// --- Phase 2: Escape HTML in the remaining text ---

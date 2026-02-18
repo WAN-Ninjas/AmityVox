@@ -105,16 +105,16 @@ function renderMarkdown(
 		const role = roles?.get(roleId);
 		const name = role?.name ?? 'Unknown Role';
 		const rawColor = role?.color ?? '#99aab5';
-		const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : '#99aab5';
+		const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : '#99aab5';
 		return addPlaceholder(
 			`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${color}20; color: ${color}">@${escapeHtml(name)}</span>`
 		);
 	});
 
-	text = text.replace(/@here/g, () => {
-		return addPlaceholder(
+	text = text.replace(/(^|[^\w@])@here(?!\w)/g, (_match, prefix) => {
+		return `${prefix}${addPlaceholder(
 			`<span class="inline-block rounded bg-yellow-500/20 px-1 py-0.5 text-xs font-medium text-yellow-300 cursor-pointer hover:bg-yellow-500/30">@here</span>`
-		);
+		)}`;
 	});
 
 	// Escape HTML
@@ -610,6 +610,12 @@ describe('MarkdownRenderer', () => {
 		it('does not render @here inside code block', () => {
 			const html = renderMarkdown('```\n@here\n```');
 			expect(html).not.toContain('bg-yellow-500/20');
+		});
+
+		it('does not render @here inside email address', () => {
+			const html = renderMarkdown('contact user@here.com for help');
+			expect(html).not.toContain('bg-yellow-500/20');
+			expect(html).toContain('user@here.com');
 		});
 
 		it('renders mention alongside other markdown', () => {
