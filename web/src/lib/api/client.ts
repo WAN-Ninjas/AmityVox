@@ -535,6 +535,29 @@ class ApiClient {
 		return this.patch('/voice/preferences', prefs);
 	}
 
+	// --- Federation Guilds ---
+
+	joinFederatedGuild(instanceDomain: string, guildId?: string, inviteCode?: string): Promise<unknown> {
+		return this.post('/federation/guilds/join', { instance_domain: instanceDomain, guild_id: guildId, invite_code: inviteCode });
+	}
+
+	leaveFederatedGuild(guildId: string): Promise<void> {
+		return this.post(`/federation/guilds/${guildId}/leave`);
+	}
+
+	getFederatedGuildMessages(guildId: string, channelId: string, params?: { before?: string; after?: string; limit?: number }): Promise<Message[]> {
+		const query = new URLSearchParams();
+		if (params?.before) query.set('before', params.before);
+		if (params?.after) query.set('after', params.after);
+		if (params?.limit) query.set('limit', String(params.limit));
+		const qs = query.toString();
+		return this.get(`/federation/guilds/${guildId}/channels/${channelId}/messages${qs ? `?${qs}` : ''}`);
+	}
+
+	sendFederatedGuildMessage(guildId: string, channelId: string, content: string, nonce?: string): Promise<Message> {
+		return this.post(`/federation/guilds/${guildId}/channels/${channelId}/messages`, { content, nonce });
+	}
+
 	// --- File Upload ---
 
 	async uploadFile(file: File, altText?: string): Promise<{ id: string; url: string }> {

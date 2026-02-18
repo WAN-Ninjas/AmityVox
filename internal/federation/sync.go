@@ -175,6 +175,11 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Update federation guild cache for guild-level events from remote instances.
+	if msg.GuildID != "" {
+		ss.updateGuildCacheFromEvent(r.Context(), signed.SenderID, msg.Type, msg.GuildID, eventData)
+	}
+
 	// Track inbound event count for the sender peer.
 	ss.fed.IncrementPeerEventCount(r.Context(), signed.SenderID, false)
 

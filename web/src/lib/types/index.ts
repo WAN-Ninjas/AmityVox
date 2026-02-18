@@ -272,6 +272,17 @@ export const GatewayOp = {
 	HeartbeatAck: 11
 } as const;
 
+export interface FederatedGuild {
+	guild_id: string;
+	name: string;
+	icon_id: string | null;
+	description: string | null;
+	member_count: number;
+	channels_json: unknown[];
+	roles_json: unknown[];
+	instance_domain: string;
+}
+
 export interface ReadyEvent {
 	user: User;
 	guild_ids: string[];
@@ -287,6 +298,7 @@ export interface ReadyEvent {
 		display_name?: string | null;
 		avatar_id?: string | null;
 	}>;
+	federated_guilds?: FederatedGuild[];
 }
 
 export interface TypingEvent {
