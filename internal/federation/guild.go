@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"strconv"
 	"time"
 
@@ -991,7 +992,16 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 
 // signAndPost signs a payload with the federation service and POSTs to a URL.
 // Returns the response body, status code, and any error.
-func (ss *SyncService) signAndPost(ctx context.Context, url string, payload interface{}) ([]byte, int, error) {
+// The URL must use HTTPS and the host must pass SSRF validation.
+func (ss *SyncService) signAndPost(ctx context.Context, targetURL string, payload interface{}) ([]byte, int, error) {
+	parsed, err := neturl.Parse(targetURL)
+	if err != nil || parsed.Scheme != "https" {
+		return nil, 0, fmt.Errorf("invalid federation URL: %s", targetURL)
+	}
+	if err := ValidateFederationDomain(parsed.Hostname()); err != nil {
+		return nil, 0, fmt.Errorf("SSRF validation failed for %s: %w", parsed.Hostname(), err)
+	}
+
 	signed, err := ss.fed.Sign(payload)
 	if err != nil {
 		return nil, 0, fmt.Errorf("signing payload: %w", err)
@@ -1001,7 +1011,7 @@ func (ss *SyncService) signAndPost(ctx context.Context, url string, payload inte
 		return nil, 0, fmt.Errorf("marshaling signed payload: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, fmt.Errorf("creating request: %w", err)
 	}
@@ -1010,7 +1020,7 @@ func (ss *SyncService) signAndPost(ctx context.Context, url string, payload inte
 
 	resp, err := ss.client.Do(httpReq)
 	if err != nil {
-		return nil, 0, fmt.Errorf("sending request to %s: %w", url, err)
+		return nil, 0, fmt.Errorf("sending request to %s: %w", targetURL, err)
 	}
 	defer resp.Body.Close()
 
