@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, map[string]string{"name": "test-guild"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"name": "test-guild"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -33,7 +35,7 @@ func TestWriteJSON(t *testing.T) {
 
 func TestWriteError(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeError(w, http.StatusForbidden, "not_owner", "Only the owner can do this")
+	apiutil.WriteError(w, http.StatusForbidden, "not_owner", "Only the owner can do this")
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
@@ -215,7 +217,7 @@ func TestBanRequest(t *testing.T) {
 
 func TestWriteJSON_NilData(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, nil)
+	apiutil.WriteJSON(w, http.StatusOK, nil)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)

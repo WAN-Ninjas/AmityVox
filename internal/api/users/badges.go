@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 // Badge constants derived from the user flags bitfield.
@@ -46,7 +48,7 @@ var badgeDefinitions = []struct {
 func (h *Handler) HandleGetUserBadges(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userID")
 	if targetID == "" {
-		writeError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
 		return
 	}
 
@@ -56,11 +58,11 @@ func (h *Handler) HandleGetUserBadges(w http.ResponseWriter, r *http.Request) {
 	).Scan(&flags)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "user_not_found", "User not found")
+			apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "User not found")
 			return
 		}
 		h.Logger.Error("failed to get user flags", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user badges")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user badges")
 		return
 	}
 
@@ -71,5 +73,5 @@ func (h *Handler) HandleGetUserBadges(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, badges)
+	apiutil.WriteJSON(w, http.StatusOK, badges)
 }

@@ -268,7 +268,7 @@ func (s *Service) deleteMessage(ctx context.Context, msg MessageContext) error {
 		return fmt.Errorf("deleting message %s: %w", msg.MessageID, err)
 	}
 
-	s.bus.PublishJSON(ctx, events.SubjectMessageDelete, "MESSAGE_DELETE", map[string]string{
+	s.bus.PublishChannelEvent(ctx, events.SubjectMessageDelete, "MESSAGE_DELETE", msg.ChannelID, map[string]string{
 		"id":         msg.MessageID,
 		"channel_id": msg.ChannelID,
 		"guild_id":   msg.GuildID,
@@ -305,7 +305,7 @@ func (s *Service) timeoutUser(ctx context.Context, msg MessageContext, duration 
 
 // publishAutomodEvent publishes an automod action event to the event bus.
 func (s *Service) publishAutomodEvent(ctx context.Context, rule *Rule, msg MessageContext, reason string) error {
-	return s.bus.PublishJSON(ctx, events.SubjectAutomodAction, "AUTOMOD_ACTION", map[string]interface{}{
+	return s.bus.PublishGuildEvent(ctx, events.SubjectAutomodAction, "AUTOMOD_ACTION", msg.GuildID, map[string]interface{}{
 		"guild_id":   msg.GuildID,
 		"channel_id": msg.ChannelID,
 		"message_id": msg.MessageID,

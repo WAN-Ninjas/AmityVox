@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -24,7 +25,7 @@ import (
 // GET /api/v1/admin/federation/dashboard
 func (h *Handler) HandleGetFederationDashboard(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -61,7 +62,7 @@ func (h *Handler) HandleGetFederationDashboard(w http.ResponseWriter, r *http.Re
 		 ORDER BY fp.established_at DESC`, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to query federation dashboard", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get federation dashboard")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get federation dashboard")
 		return
 	}
 	defer rows.Close()
@@ -115,7 +116,7 @@ func (h *Handler) HandleGetFederationDashboard(w http.ResponseWriter, r *http.Re
 	h.Pool.QueryRow(r.Context(),
 		`SELECT federation_mode FROM instances WHERE id = $1`, h.InstanceID).Scan(&fedMode)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"peers":              peers,
 		"federation_mode":    fedMode,
 		"total_peers":        totalPeers,
@@ -136,7 +137,7 @@ func (h *Handler) HandleGetFederationDashboard(w http.ResponseWriter, r *http.Re
 // PUT /api/v1/admin/federation/peers/{peerID}/control
 func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -147,7 +148,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 		Reason *string `json:"reason,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -155,7 +156,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 	case "allow", "block", "mute":
 		// valid
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_action", "Action must be 'allow', 'block', or 'mute'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_action", "Action must be 'allow', 'block', or 'mute'")
 		return
 	}
 
@@ -170,7 +171,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 		controlID, h.InstanceID, peerID, req.Action, req.Reason, adminID)
 	if err != nil {
 		h.Logger.Error("failed to update peer control", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update peer control")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update peer control")
 		return
 	}
 
@@ -185,7 +186,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 			h.InstanceID, peerID)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"peer_id": peerID,
 		"action":  req.Action,
 		"reason":  req.Reason,
@@ -197,7 +198,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 // GET /api/v1/admin/federation/peers/controls
 func (h *Handler) HandleGetPeerControls(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -210,7 +211,7 @@ func (h *Handler) HandleGetPeerControls(w http.ResponseWriter, r *http.Request) 
 		 ORDER BY fpc.created_at DESC`, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to query peer controls", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get peer controls")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get peer controls")
 		return
 	}
 	defer rows.Close()
@@ -236,7 +237,7 @@ func (h *Handler) HandleGetPeerControls(w http.ResponseWriter, r *http.Request) 
 		controls = append(controls, c)
 	}
 
-	writeJSON(w, http.StatusOK, controls)
+	apiutil.WriteJSON(w, http.StatusOK, controls)
 }
 
 // =============================================================================
@@ -247,7 +248,7 @@ func (h *Handler) HandleGetPeerControls(w http.ResponseWriter, r *http.Request) 
 // GET /api/v1/admin/federation/delivery-receipts
 func (h *Handler) HandleGetDeliveryReceipts(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -289,7 +290,7 @@ func (h *Handler) HandleGetDeliveryReceipts(w http.ResponseWriter, r *http.Reque
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
 		h.Logger.Error("failed to query delivery receipts", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get delivery receipts")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get delivery receipts")
 		return
 	}
 	defer rows.Close()
@@ -318,14 +319,14 @@ func (h *Handler) HandleGetDeliveryReceipts(w http.ResponseWriter, r *http.Reque
 		receipts = append(receipts, rc)
 	}
 
-	writeJSON(w, http.StatusOK, receipts)
+	apiutil.WriteJSON(w, http.StatusOK, receipts)
 }
 
 // HandleRetryDelivery retries a failed delivery.
 // POST /api/v1/admin/federation/delivery-receipts/{receiptID}/retry
 func (h *Handler) HandleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -338,15 +339,15 @@ func (h *Handler) HandleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 		receiptID, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to retry delivery", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retry delivery")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to retry delivery")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Delivery receipt not found or already delivered")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Delivery receipt not found or already delivered")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "retrying"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "retrying"})
 }
 
 // =============================================================================
@@ -357,7 +358,7 @@ func (h *Handler) HandleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/admin/federation/search-config
 func (h *Handler) HandleGetFederatedSearchConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -383,14 +384,14 @@ func (h *Handler) HandleGetFederatedSearchConfig(w http.ResponseWriter, r *http.
 		}
 	}
 
-	writeJSON(w, http.StatusOK, cfg)
+	apiutil.WriteJSON(w, http.StatusOK, cfg)
 }
 
 // HandleUpdateFederatedSearchConfig updates federated search settings.
 // PATCH /api/v1/admin/federation/search-config
 func (h *Handler) HandleUpdateFederatedSearchConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -401,7 +402,7 @@ func (h *Handler) HandleUpdateFederatedSearchConfig(w http.ResponseWriter, r *ht
 		AllowedPeers  []string `json:"allowed_peers,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -423,11 +424,11 @@ func (h *Handler) HandleUpdateFederatedSearchConfig(w http.ResponseWriter, r *ht
 		h.InstanceID, req.Enabled, req.IndexOutgoing, req.IndexIncoming, peersJSON)
 	if err != nil {
 		h.Logger.Error("failed to update federated search config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update search config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update search config")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // =============================================================================
@@ -438,7 +439,7 @@ func (h *Handler) HandleUpdateFederatedSearchConfig(w http.ResponseWriter, r *ht
 // GET /api/v1/admin/bridges
 func (h *Handler) HandleGetBridges(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -452,7 +453,7 @@ func (h *Handler) HandleGetBridges(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY bc.created_at DESC`, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to query bridges", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get bridges")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bridges")
 		return
 	}
 	defer rows.Close()
@@ -484,14 +485,14 @@ func (h *Handler) HandleGetBridges(w http.ResponseWriter, r *http.Request) {
 		bridges = append(bridges, b)
 	}
 
-	writeJSON(w, http.StatusOK, bridges)
+	apiutil.WriteJSON(w, http.StatusOK, bridges)
 }
 
 // HandleCreateBridge creates a new bridge configuration.
 // POST /api/v1/admin/bridges
 func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -501,7 +502,7 @@ func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		Config      json.RawMessage `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -510,7 +511,7 @@ func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		"slack": true, "irc": true, "xmpp": true,
 	}
 	if !validTypes[req.BridgeType] {
-		writeError(w, http.StatusBadRequest, "invalid_bridge_type",
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_bridge_type",
 			"Bridge type must be one of: matrix, discord, telegram, slack, irc, xmpp")
 		return
 	}
@@ -531,11 +532,11 @@ func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		bridgeID, h.InstanceID, req.BridgeType, req.DisplayName, req.Config, adminID)
 	if err != nil {
 		h.Logger.Error("failed to create bridge", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create bridge")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bridge")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":           bridgeID,
 		"bridge_type":  req.BridgeType,
 		"display_name": req.DisplayName,
@@ -547,7 +548,7 @@ func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 // PATCH /api/v1/admin/bridges/{bridgeID}
 func (h *Handler) HandleUpdateBridge(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -559,7 +560,7 @@ func (h *Handler) HandleUpdateBridge(w http.ResponseWriter, r *http.Request) {
 		Config      json.RawMessage `json:"config,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -573,22 +574,22 @@ func (h *Handler) HandleUpdateBridge(w http.ResponseWriter, r *http.Request) {
 		req.Enabled, req.DisplayName, req.Config, bridgeID, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to update bridge", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update bridge")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update bridge")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Bridge not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Bridge not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleDeleteBridge removes a bridge configuration and all its mappings.
 // DELETE /api/v1/admin/bridges/{bridgeID}
 func (h *Handler) HandleDeleteBridge(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -598,11 +599,11 @@ func (h *Handler) HandleDeleteBridge(w http.ResponseWriter, r *http.Request) {
 		`DELETE FROM bridge_configs WHERE id = $1 AND instance_id = $2`, bridgeID, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to delete bridge", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bridge")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bridge")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Bridge not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Bridge not found")
 		return
 	}
 
@@ -613,7 +614,7 @@ func (h *Handler) HandleDeleteBridge(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/admin/bridges/{bridgeID}/mappings
 func (h *Handler) HandleGetBridgeChannelMappings(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -630,7 +631,7 @@ func (h *Handler) HandleGetBridgeChannelMappings(w http.ResponseWriter, r *http.
 		 ORDER BY bcm.created_at DESC`, bridgeID)
 	if err != nil {
 		h.Logger.Error("failed to query bridge mappings", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get bridge mappings")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bridge mappings")
 		return
 	}
 	defer rows.Close()
@@ -659,14 +660,14 @@ func (h *Handler) HandleGetBridgeChannelMappings(w http.ResponseWriter, r *http.
 		mappings = append(mappings, m)
 	}
 
-	writeJSON(w, http.StatusOK, mappings)
+	apiutil.WriteJSON(w, http.StatusOK, mappings)
 }
 
 // HandleCreateBridgeChannelMapping creates a new channel mapping for a bridge.
 // POST /api/v1/admin/bridges/{bridgeID}/mappings
 func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -679,12 +680,12 @@ func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *htt
 		Direction         string  `json:"direction"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.LocalChannelID == "" || req.RemoteChannelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_fields", "local_channel_id and remote_channel_id are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_fields", "local_channel_id and remote_channel_id are required")
 		return
 	}
 
@@ -694,7 +695,7 @@ func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *htt
 	case "":
 		req.Direction = "bidirectional"
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_direction", "Direction must be 'bidirectional', 'inbound', or 'outbound'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_direction", "Direction must be 'bidirectional', 'inbound', or 'outbound'")
 		return
 	}
 
@@ -706,11 +707,11 @@ func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *htt
 		mappingID, bridgeID, req.LocalChannelID, req.RemoteChannelID, req.RemoteChannelName, req.Direction)
 	if err != nil {
 		h.Logger.Error("failed to create bridge mapping", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel mapping")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel mapping")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":                mappingID,
 		"local_channel_id":  req.LocalChannelID,
 		"remote_channel_id": req.RemoteChannelID,
@@ -722,7 +723,7 @@ func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *htt
 // DELETE /api/v1/admin/bridges/{bridgeID}/mappings/{mappingID}
 func (h *Handler) HandleDeleteBridgeChannelMapping(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -732,11 +733,11 @@ func (h *Handler) HandleDeleteBridgeChannelMapping(w http.ResponseWriter, r *htt
 		`DELETE FROM bridge_channel_mappings WHERE id = $1`, mappingID)
 	if err != nil {
 		h.Logger.Error("failed to delete bridge mapping", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel mapping")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel mapping")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Channel mapping not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Channel mapping not found")
 		return
 	}
 
@@ -747,7 +748,7 @@ func (h *Handler) HandleDeleteBridgeChannelMapping(w http.ResponseWriter, r *htt
 // GET /api/v1/admin/bridges/{bridgeID}/virtual-users
 func (h *Handler) HandleGetBridgeVirtualUsers(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -761,7 +762,7 @@ func (h *Handler) HandleGetBridgeVirtualUsers(w http.ResponseWriter, r *http.Req
 		 LIMIT 100`, bridgeID)
 	if err != nil {
 		h.Logger.Error("failed to query virtual users", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get virtual users")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get virtual users")
 		return
 	}
 	defer rows.Close()
@@ -786,7 +787,7 @@ func (h *Handler) HandleGetBridgeVirtualUsers(w http.ResponseWriter, r *http.Req
 		users = append(users, u)
 	}
 
-	writeJSON(w, http.StatusOK, users)
+	apiutil.WriteJSON(w, http.StatusOK, users)
 }
 
 // =============================================================================
@@ -805,7 +806,7 @@ func (h *Handler) HandleGetInstanceProfiles(w http.ResponseWriter, r *http.Reque
 		 ORDER BY is_primary DESC, last_connected DESC NULLS LAST`, userID)
 	if err != nil {
 		h.Logger.Error("failed to query instance profiles", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get instance profiles")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get instance profiles")
 		return
 	}
 	defer rows.Close()
@@ -830,7 +831,7 @@ func (h *Handler) HandleGetInstanceProfiles(w http.ResponseWriter, r *http.Reque
 		profiles = append(profiles, p)
 	}
 
-	writeJSON(w, http.StatusOK, profiles)
+	apiutil.WriteJSON(w, http.StatusOK, profiles)
 }
 
 // HandleAddInstanceProfile adds a new instance connection profile.
@@ -846,12 +847,12 @@ func (h *Handler) HandleAddInstanceProfile(w http.ResponseWriter, r *http.Reques
 		IsPrimary    bool    `json:"is_primary"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.InstanceURL == "" {
-		writeError(w, http.StatusBadRequest, "missing_url", "Instance URL is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Instance URL is required")
 		return
 	}
 
@@ -875,11 +876,11 @@ func (h *Handler) HandleAddInstanceProfile(w http.ResponseWriter, r *http.Reques
 		req.SessionToken, req.IsPrimary)
 	if err != nil {
 		h.Logger.Error("failed to add instance profile", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add instance profile")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add instance profile")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":            profileID,
 		"instance_url":  req.InstanceURL,
 		"instance_name": req.InstanceName,
@@ -898,11 +899,11 @@ func (h *Handler) HandleRemoveInstanceProfile(w http.ResponseWriter, r *http.Req
 		profileID, userID)
 	if err != nil {
 		h.Logger.Error("failed to remove instance profile", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove instance profile")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove instance profile")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Instance profile not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Instance profile not found")
 		return
 	}
 
@@ -917,7 +918,7 @@ func (h *Handler) HandleRemoveInstanceProfile(w http.ResponseWriter, r *http.Req
 // GET /api/v1/admin/federation/users/{instanceDomain}/{username}
 func (h *Handler) HandleGetFederatedUserProfile(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -947,12 +948,12 @@ func (h *Handler) HandleGetFederatedUserProfile(w http.ResponseWriter, r *http.R
 		&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
 		&u.Bio, &u.StatusPresence, &u.CreatedAt, &u.InstanceDomain)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user_not_found",
+		apiutil.WriteError(w, http.StatusNotFound, "user_not_found",
 			"User not found. The remote instance may need to be discovered first.")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, u)
+	apiutil.WriteJSON(w, http.StatusOK, u)
 }
 
 // =============================================================================
@@ -963,7 +964,7 @@ func (h *Handler) HandleGetFederatedUserProfile(w http.ResponseWriter, r *http.R
 // GET /api/v1/admin/federation/blocklist
 func (h *Handler) HandleGetInstanceBlocklist(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -975,7 +976,7 @@ func (h *Handler) HandleGetInstanceBlocklist(w http.ResponseWriter, r *http.Requ
 		 ORDER BY fpc.created_at DESC`, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to query blocklist", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get blocklist")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get blocklist")
 		return
 	}
 	defer rows.Close()
@@ -998,14 +999,14 @@ func (h *Handler) HandleGetInstanceBlocklist(w http.ResponseWriter, r *http.Requ
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // HandleGetInstanceAllowlist returns the instance allowlist (allowed peers).
 // GET /api/v1/admin/federation/allowlist
 func (h *Handler) HandleGetInstanceAllowlist(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1017,7 +1018,7 @@ func (h *Handler) HandleGetInstanceAllowlist(w http.ResponseWriter, r *http.Requ
 		 ORDER BY fpc.created_at DESC`, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to query allowlist", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get allowlist")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get allowlist")
 		return
 	}
 	defer rows.Close()
@@ -1040,7 +1041,7 @@ func (h *Handler) HandleGetInstanceAllowlist(w http.ResponseWriter, r *http.Requ
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // =============================================================================
@@ -1051,7 +1052,7 @@ func (h *Handler) HandleGetInstanceAllowlist(w http.ResponseWriter, r *http.Requ
 // GET /api/v1/admin/federation/protocol
 func (h *Handler) HandleGetProtocolInfo(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1073,7 +1074,7 @@ func (h *Handler) HandleGetProtocolInfo(w http.ResponseWriter, r *http.Request) 
 		"reactions", "attachments", "embeds", "typing",
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"protocol_version":      protocolVersion,
 		"capabilities":          capabilities,
 		"supported_protocols":   []string{"amityvox-federation/1.0", "amityvox-federation/1.1"},
@@ -1085,7 +1086,7 @@ func (h *Handler) HandleGetProtocolInfo(w http.ResponseWriter, r *http.Request) 
 // PATCH /api/v1/admin/federation/protocol
 func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1094,7 +1095,7 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 		Capabilities    []string `json:"capabilities,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -1104,7 +1105,7 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 			*req.ProtocolVersion, h.InstanceID)
 		if err != nil {
 			h.Logger.Error("failed to update protocol version", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update protocol version")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update protocol version")
 			return
 		}
 	}
@@ -1115,10 +1116,10 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 			`UPDATE instances SET capabilities = $1 WHERE id = $2`, capsJSON, h.InstanceID)
 		if err != nil {
 			h.Logger.Error("failed to update capabilities", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update capabilities")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update capabilities")
 			return
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

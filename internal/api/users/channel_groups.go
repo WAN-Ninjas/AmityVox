@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -72,7 +73,7 @@ func (h *ChannelGroupHandler) HandleGetChannelGroups(w http.ResponseWriter, r *h
 	)
 	if err != nil {
 		h.Logger.Error("failed to list channel groups", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list channel groups")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list channel groups")
 		return
 	}
 	defer rows.Close()
@@ -85,13 +86,13 @@ func (h *ChannelGroupHandler) HandleGetChannelGroups(w http.ResponseWriter, r *h
 			&g.Channels,
 		); err != nil {
 			h.Logger.Error("failed to scan channel group", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list channel groups")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list channel groups")
 			return
 		}
 		groups = append(groups, g)
 	}
 
-	writeJSON(w, http.StatusOK, groups)
+	apiutil.WriteJSON(w, http.StatusOK, groups)
 }
 
 // HandleCreateChannelGroup creates a new channel group.
@@ -101,20 +102,20 @@ func (h *ChannelGroupHandler) HandleCreateChannelGroup(w http.ResponseWriter, r 
 
 	var req createChannelGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Group name is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Group name is required")
 		return
 	}
 	if len(req.Name) > 64 {
-		writeError(w, http.StatusBadRequest, "name_too_long", "Group name must be at most 64 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "name_too_long", "Group name must be at most 64 characters")
 		return
 	}
 	if len(req.Color) > 7 {
-		writeError(w, http.StatusBadRequest, "invalid_color", "Color must be a valid hex color (e.g. #ff0000)")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_color", "Color must be a valid hex color (e.g. #ff0000)")
 		return
 	}
 
@@ -124,7 +125,7 @@ func (h *ChannelGroupHandler) HandleCreateChannelGroup(w http.ResponseWriter, r 
 		`SELECT COUNT(*) FROM user_channel_groups WHERE user_id = $1`, userID,
 	).Scan(&count)
 	if count >= 25 {
-		writeError(w, http.StatusBadRequest, "group_limit", "You can have at most 25 channel groups")
+		apiutil.WriteError(w, http.StatusBadRequest, "group_limit", "You can have at most 25 channel groups")
 		return
 	}
 
@@ -143,7 +144,7 @@ func (h *ChannelGroupHandler) HandleCreateChannelGroup(w http.ResponseWriter, r 
 	).Scan(&g.ID, &g.UserID, &g.Name, &g.Position, &g.Color, &g.CreatedAt)
 	if err != nil {
 		h.Logger.Error("failed to create channel group", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel group")
 		return
 	}
 
@@ -155,7 +156,7 @@ func (h *ChannelGroupHandler) HandleCreateChannelGroup(w http.ResponseWriter, r 
 		slog.String("name", g.Name),
 	)
 
-	writeJSON(w, http.StatusCreated, g)
+	apiutil.WriteJSON(w, http.StatusCreated, g)
 }
 
 // HandleUpdateChannelGroup updates an existing channel group.
@@ -165,13 +166,13 @@ func (h *ChannelGroupHandler) HandleUpdateChannelGroup(w http.ResponseWriter, r 
 	groupID := chi.URLParam(r, "groupID")
 
 	if groupID == "" {
-		writeError(w, http.StatusBadRequest, "missing_group_id", "Group ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_group_id", "Group ID is required")
 		return
 	}
 
 	var req updateChannelGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -181,26 +182,26 @@ func (h *ChannelGroupHandler) HandleUpdateChannelGroup(w http.ResponseWriter, r 
 		`SELECT user_id FROM user_channel_groups WHERE id = $1`, groupID,
 	).Scan(&ownerID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
+		apiutil.WriteError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to check group ownership", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel group")
 		return
 	}
 	if ownerID != userID {
-		writeError(w, http.StatusForbidden, "forbidden", "You can only update your own channel groups")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You can only update your own channel groups")
 		return
 	}
 
 	// Validate fields.
 	if req.Name != nil && len(*req.Name) > 64 {
-		writeError(w, http.StatusBadRequest, "name_too_long", "Group name must be at most 64 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "name_too_long", "Group name must be at most 64 characters")
 		return
 	}
 	if req.Color != nil && len(*req.Color) > 7 {
-		writeError(w, http.StatusBadRequest, "invalid_color", "Color must be a valid hex color")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_color", "Color must be a valid hex color")
 		return
 	}
 
@@ -228,11 +229,11 @@ func (h *ChannelGroupHandler) HandleUpdateChannelGroup(w http.ResponseWriter, r 
 	).Scan(&g.ID, &g.UserID, &g.Name, &g.Position, &g.Color, &g.CreatedAt, &g.Channels)
 	if err != nil {
 		h.Logger.Error("failed to fetch updated group", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update channel group")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, g)
+	apiutil.WriteJSON(w, http.StatusOK, g)
 }
 
 // HandleDeleteChannelGroup removes a channel group and all its items.
@@ -242,7 +243,7 @@ func (h *ChannelGroupHandler) HandleDeleteChannelGroup(w http.ResponseWriter, r 
 	groupID := chi.URLParam(r, "groupID")
 
 	if groupID == "" {
-		writeError(w, http.StatusBadRequest, "missing_group_id", "Group ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_group_id", "Group ID is required")
 		return
 	}
 
@@ -252,16 +253,16 @@ func (h *ChannelGroupHandler) HandleDeleteChannelGroup(w http.ResponseWriter, r 
 		`SELECT user_id FROM user_channel_groups WHERE id = $1`, groupID,
 	).Scan(&ownerID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
+		apiutil.WriteError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to check group ownership", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel group")
 		return
 	}
 	if ownerID != userID {
-		writeError(w, http.StatusForbidden, "forbidden", "You can only delete your own channel groups")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You can only delete your own channel groups")
 		return
 	}
 
@@ -270,7 +271,7 @@ func (h *ChannelGroupHandler) HandleDeleteChannelGroup(w http.ResponseWriter, r 
 		`DELETE FROM user_channel_groups WHERE id = $1`, groupID)
 	if err != nil {
 		h.Logger.Error("failed to delete channel group", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel group")
 		return
 	}
 
@@ -289,17 +290,17 @@ func (h *ChannelGroupHandler) HandleAddChannelToGroup(w http.ResponseWriter, r *
 	groupID := chi.URLParam(r, "groupID")
 
 	if groupID == "" {
-		writeError(w, http.StatusBadRequest, "missing_group_id", "Group ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_group_id", "Group ID is required")
 		return
 	}
 
 	var req addChannelToGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.ChannelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
 		return
 	}
 
@@ -309,16 +310,16 @@ func (h *ChannelGroupHandler) HandleAddChannelToGroup(w http.ResponseWriter, r *
 		`SELECT user_id FROM user_channel_groups WHERE id = $1`, groupID,
 	).Scan(&ownerID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
+		apiutil.WriteError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to check group ownership", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add channel to group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add channel to group")
 		return
 	}
 	if ownerID != userID {
-		writeError(w, http.StatusForbidden, "forbidden", "You can only modify your own channel groups")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You can only modify your own channel groups")
 		return
 	}
 
@@ -328,7 +329,7 @@ func (h *ChannelGroupHandler) HandleAddChannelToGroup(w http.ResponseWriter, r *
 		`SELECT COUNT(*) FROM user_channel_group_items WHERE group_id = $1`, groupID,
 	).Scan(&count)
 	if count >= 100 {
-		writeError(w, http.StatusBadRequest, "channel_limit", "A channel group can have at most 100 channels")
+		apiutil.WriteError(w, http.StatusBadRequest, "channel_limit", "A channel group can have at most 100 channels")
 		return
 	}
 
@@ -340,7 +341,7 @@ func (h *ChannelGroupHandler) HandleAddChannelToGroup(w http.ResponseWriter, r *
 	)
 	if err != nil {
 		h.Logger.Error("failed to add channel to group", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add channel to group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add channel to group")
 		return
 	}
 
@@ -355,7 +356,7 @@ func (h *ChannelGroupHandler) HandleRemoveChannelFromGroup(w http.ResponseWriter
 	channelID := chi.URLParam(r, "channelID")
 
 	if groupID == "" || channelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_params", "Group ID and Channel ID are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_params", "Group ID and Channel ID are required")
 		return
 	}
 
@@ -365,16 +366,16 @@ func (h *ChannelGroupHandler) HandleRemoveChannelFromGroup(w http.ResponseWriter
 		`SELECT user_id FROM user_channel_groups WHERE id = $1`, groupID,
 	).Scan(&ownerID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
+		apiutil.WriteError(w, http.StatusNotFound, "group_not_found", "Channel group not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to check group ownership", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove channel from group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove channel from group")
 		return
 	}
 	if ownerID != userID {
-		writeError(w, http.StatusForbidden, "forbidden", "You can only modify your own channel groups")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You can only modify your own channel groups")
 		return
 	}
 
@@ -384,7 +385,7 @@ func (h *ChannelGroupHandler) HandleRemoveChannelFromGroup(w http.ResponseWriter
 	)
 	if err != nil {
 		h.Logger.Error("failed to remove channel from group", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove channel from group")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove channel from group")
 		return
 	}
 

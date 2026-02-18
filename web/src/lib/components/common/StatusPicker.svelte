@@ -125,6 +125,9 @@
 		class="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg bg-bg-floating shadow-lg"
 		onclick={(e) => e.stopPropagation()}
 		onkeydown={(e) => e.key === 'Escape' && onclose()}
+		role="listbox"
+		aria-label="Set status"
+		aria-expanded="true"
 	>
 		<!-- Status options -->
 		<div class="p-1.5">

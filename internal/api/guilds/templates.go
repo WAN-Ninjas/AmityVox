@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/permissions"
@@ -99,22 +100,22 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
 		return
 	}
 
 	var req createTemplateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Name == "" || len(req.Name) > 100 {
-		writeError(w, http.StatusBadRequest, "invalid_name", "Template name must be 1-100 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Template name must be 1-100 characters")
 		return
 	}
 	if req.Description != nil && len(*req.Description) > 500 {
-		writeError(w, http.StatusBadRequest, "invalid_description", "Description must be at most 500 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_description", "Description must be at most 500 characters")
 		return
 	}
 
@@ -124,7 +125,7 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 		`SELECT COUNT(*) FROM guild_templates WHERE guild_id = $1`, guildID,
 	).Scan(&templateCount)
 	if templateCount >= 10 {
-		writeError(w, http.StatusBadRequest, "template_limit", "A guild can have at most 10 templates")
+		apiutil.WriteError(w, http.StatusBadRequest, "template_limit", "A guild can have at most 10 templates")
 		return
 	}
 
@@ -134,14 +135,14 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 	data, err := h.captureGuildStructure(ctx, guildID)
 	if err != nil {
 		h.Logger.Error("failed to capture guild structure", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
 		return
 	}
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		h.Logger.Error("failed to marshal template data", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
 		return
 	}
 
@@ -155,7 +156,7 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 	)
 	if err != nil {
 		h.Logger.Error("failed to insert template", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
 		return
 	}
 
@@ -171,7 +172,7 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 
 	h.logAudit(ctx, guildID, userID, "template_create", "template", templateID, nil)
 
-	writeJSON(w, http.StatusCreated, tmpl)
+	apiutil.WriteJSON(w, http.StatusCreated, tmpl)
 }
 
 // HandleGetGuildTemplates lists all templates for a guild.
@@ -182,7 +183,7 @@ func (h *Handler) HandleGetGuildTemplates(w http.ResponseWriter, r *http.Request
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -195,7 +196,7 @@ func (h *Handler) HandleGetGuildTemplates(w http.ResponseWriter, r *http.Request
 	)
 	if err != nil {
 		h.Logger.Error("failed to get templates", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get templates")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get templates")
 		return
 	}
 	defer rows.Close()
@@ -206,13 +207,13 @@ func (h *Handler) HandleGetGuildTemplates(w http.ResponseWriter, r *http.Request
 		if err := rows.Scan(&t.ID, &t.GuildID, &t.Name, &t.Description, &t.TemplateData,
 			&t.CreatorID, &t.CreatedAt); err != nil {
 			h.Logger.Error("failed to scan template", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read templates")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read templates")
 			return
 		}
 		templates = append(templates, t)
 	}
 
-	writeJSON(w, http.StatusOK, templates)
+	apiutil.WriteJSON(w, http.StatusOK, templates)
 }
 
 // HandleGetGuildTemplate returns a single template by ID.
@@ -223,7 +224,7 @@ func (h *Handler) HandleGetGuildTemplate(w http.ResponseWriter, r *http.Request)
 	templateID := chi.URLParam(r, "templateID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -235,16 +236,16 @@ func (h *Handler) HandleGetGuildTemplate(w http.ResponseWriter, r *http.Request)
 		templateID, guildID,
 	).Scan(&t.ID, &t.GuildID, &t.Name, &t.Description, &t.TemplateData, &t.CreatorID, &t.CreatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "template_not_found", "Template not found")
+		apiutil.WriteError(w, http.StatusNotFound, "template_not_found", "Template not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get template", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, t)
+	apiutil.WriteJSON(w, http.StatusOK, t)
 }
 
 // HandleDeleteGuildTemplate deletes a guild template.
@@ -256,7 +257,7 @@ func (h *Handler) HandleDeleteGuildTemplate(w http.ResponseWriter, r *http.Reque
 	templateID := chi.URLParam(r, "templateID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
 		return
 	}
 
@@ -266,11 +267,11 @@ func (h *Handler) HandleDeleteGuildTemplate(w http.ResponseWriter, r *http.Reque
 	)
 	if err != nil {
 		h.Logger.Error("failed to delete template", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete template")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete template")
 		return
 	}
 	if result.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "template_not_found", "Template not found")
+		apiutil.WriteError(w, http.StatusNotFound, "template_not_found", "Template not found")
 		return
 	}
 
@@ -295,14 +296,14 @@ func (h *Handler) HandleApplyGuildTemplate(w http.ResponseWriter, r *http.Reques
 
 	// User must be a member of the source guild to access its templates.
 	if !h.isMember(r.Context(), sourceGuildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
 	var req applyTemplateRequest
 	if r.Body != nil && r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 			return
 		}
 	}
@@ -316,19 +317,19 @@ func (h *Handler) HandleApplyGuildTemplate(w http.ResponseWriter, r *http.Reques
 		templateID, sourceGuildID,
 	).Scan(&tmplData)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "template_not_found", "Template not found")
+		apiutil.WriteError(w, http.StatusNotFound, "template_not_found", "Template not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get template for apply", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
 		return
 	}
 
 	var data templateData
 	if err := json.Unmarshal(tmplData, &data); err != nil {
 		h.Logger.Error("failed to unmarshal template data", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Invalid template data")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Invalid template data")
 		return
 	}
 
@@ -337,29 +338,29 @@ func (h *Handler) HandleApplyGuildTemplate(w http.ResponseWriter, r *http.Reques
 		guild, err := h.createGuildFromTemplate(ctx, userID, *req.GuildName, data)
 		if err != nil {
 			h.Logger.Error("failed to create guild from template", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild from template")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild from template")
 			return
 		}
-		writeJSON(w, http.StatusCreated, guild)
+		apiutil.WriteJSON(w, http.StatusCreated, guild)
 	} else {
 		// Apply template to the source guild (additive).
 		if !h.hasGuildPermission(ctx, sourceGuildID, userID, permissions.ManageGuild) {
-			writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission to apply templates")
+			apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission to apply templates")
 			return
 		}
 		if err := h.applyTemplateToGuild(ctx, sourceGuildID, data); err != nil {
 			h.Logger.Error("failed to apply template to guild", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to apply template")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to apply template")
 			return
 		}
 		h.logAudit(ctx, sourceGuildID, userID, "template_apply", "template", templateID, nil)
 
 		guild, err := h.getGuild(ctx, sourceGuildID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild")
 			return
 		}
-		writeJSON(w, http.StatusOK, guild)
+		apiutil.WriteJSON(w, http.StatusOK, guild)
 	}
 }
 

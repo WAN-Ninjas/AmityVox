@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/oklog/ulid/v2"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/permissions"
 )
@@ -39,7 +40,7 @@ func (h *Handler) HandleGetGuildRetentionPolicies(w http.ResponseWriter, r *http
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
 		return
 	}
 
@@ -51,7 +52,7 @@ func (h *Handler) HandleGetGuildRetentionPolicies(w http.ResponseWriter, r *http
 		 ORDER BY created_at DESC`, guildID)
 	if err != nil {
 		h.Logger.Error("failed to list retention policies", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list retention policies")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list retention policies")
 		return
 	}
 	defer rows.Close()
@@ -70,7 +71,7 @@ func (h *Handler) HandleGetGuildRetentionPolicies(w http.ResponseWriter, r *http
 		policies = []RetentionPolicy{}
 	}
 
-	writeJSON(w, http.StatusOK, policies)
+	apiutil.WriteJSON(w, http.StatusOK, policies)
 }
 
 // HandleCreateGuildRetentionPolicy creates a new retention policy for a guild.
@@ -80,7 +81,7 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
 		return
 	}
 
@@ -91,12 +92,12 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		DeletePins        *bool   `json:"delete_pins"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.MaxAgeDays < 1 {
-		writeError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be at least 1")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be at least 1")
 		return
 	}
 
@@ -106,7 +107,7 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'min_retention_days'), '0')`).Scan(&minDaysStr)
 	minDays, _ := strconv.Atoi(minDaysStr)
 	if minDays > 0 && req.MaxAgeDays < minDays {
-		writeError(w, http.StatusBadRequest, "below_minimum", "max_age_days cannot be less than the instance minimum of "+strconv.Itoa(minDays)+" days")
+		apiutil.WriteError(w, http.StatusBadRequest, "below_minimum", "max_age_days cannot be less than the instance minimum of "+strconv.Itoa(minDays)+" days")
 		return
 	}
 
@@ -116,7 +117,7 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		err := h.Pool.QueryRow(r.Context(),
 			`SELECT guild_id FROM channels WHERE id = $1`, *req.ChannelID).Scan(&channelGuildID)
 		if err != nil || channelGuildID == nil || *channelGuildID != guildID {
-			writeError(w, http.StatusBadRequest, "invalid_channel", "Channel does not belong to this guild")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Channel does not belong to this guild")
 			return
 		}
 	}
@@ -142,11 +143,11 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		h.Logger.Error("failed to create retention policy", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create retention policy")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create retention policy")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, p)
+	apiutil.WriteJSON(w, http.StatusCreated, p)
 }
 
 // HandleUpdateGuildRetentionPolicy updates an existing retention policy.
@@ -157,7 +158,7 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 	policyID := chi.URLParam(r, "policyID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
 		return
 	}
 
@@ -166,11 +167,11 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id FROM data_retention_policies WHERE id = $1`, policyID).Scan(&existingGuildID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Retention policy not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Retention policy not found")
 		return
 	}
 	if err != nil || existingGuildID == nil || *existingGuildID != guildID {
-		writeError(w, http.StatusNotFound, "not_found", "Retention policy not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Retention policy not found")
 		return
 	}
 
@@ -181,14 +182,14 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		Enabled           *bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	// Enforce instance minimum retention.
 	if req.MaxAgeDays != nil {
 		if *req.MaxAgeDays < 1 {
-			writeError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be at least 1")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_max_age", "max_age_days must be at least 1")
 			return
 		}
 		var minDaysStr string
@@ -196,7 +197,7 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 			`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'min_retention_days'), '0')`).Scan(&minDaysStr)
 		minDays, _ := strconv.Atoi(minDaysStr)
 		if minDays > 0 && *req.MaxAgeDays < minDays {
-			writeError(w, http.StatusBadRequest, "below_minimum", "max_age_days cannot be less than the instance minimum of "+strconv.Itoa(minDays)+" days")
+			apiutil.WriteError(w, http.StatusBadRequest, "below_minimum", "max_age_days cannot be less than the instance minimum of "+strconv.Itoa(minDays)+" days")
 			return
 		}
 	}
@@ -239,11 +240,11 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		h.Logger.Error("failed to update retention policy", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update retention policy")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update retention policy")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, p)
+	apiutil.WriteJSON(w, http.StatusOK, p)
 }
 
 // HandleDeleteGuildRetentionPolicy deletes a retention policy.
@@ -254,7 +255,7 @@ func (h *Handler) HandleDeleteGuildRetentionPolicy(w http.ResponseWriter, r *htt
 	policyID := chi.URLParam(r, "policyID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageGuild) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_GUILD permission")
 		return
 	}
 
@@ -262,11 +263,11 @@ func (h *Handler) HandleDeleteGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		`DELETE FROM data_retention_policies WHERE id = $1 AND guild_id = $2`, policyID, guildID)
 	if err != nil {
 		h.Logger.Error("failed to delete retention policy", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete retention policy")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete retention policy")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Retention policy not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Retention policy not found")
 		return
 	}
 

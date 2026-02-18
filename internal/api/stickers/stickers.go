@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -91,17 +92,17 @@ func (h *Handler) HandleCreateGuildPack(w http.ResponseWriter, r *http.Request) 
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasManageEmojis(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
 		return
 	}
 
 	var req createPackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name_required", "Pack name is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Pack name is required")
 		return
 	}
 
@@ -113,12 +114,12 @@ func (h *Handler) HandleCreateGuildPack(w http.ResponseWriter, r *http.Request) 
 		id, req.Name, req.Description, guildID, now)
 	if err != nil {
 		h.Logger.Error("failed to create sticker pack", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create sticker pack")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create sticker pack")
 		return
 	}
 
 	_ = userID // logged for audit
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":          id,
 		"name":        req.Name,
 		"description": req.Description,
@@ -135,7 +136,7 @@ func (h *Handler) HandleGetGuildPacks(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You are not a member of this guild")
 		return
 	}
 
@@ -146,7 +147,7 @@ func (h *Handler) HandleGetGuildPacks(w http.ResponseWriter, r *http.Request) {
 		 WHERE sp.owner_type = 'guild' AND sp.owner_id = $1
 		 ORDER BY sp.created_at DESC`, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch sticker packs")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch sticker packs")
 		return
 	}
 	defer rows.Close()
@@ -175,7 +176,7 @@ func (h *Handler) HandleGetGuildPacks(w http.ResponseWriter, r *http.Request) {
 		packs = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, packs)
+	apiutil.WriteJSON(w, http.StatusOK, packs)
 }
 
 // HandleDeletePack deletes a sticker pack and all its stickers.
@@ -186,7 +187,7 @@ func (h *Handler) HandleDeletePack(w http.ResponseWriter, r *http.Request) {
 	packID := chi.URLParam(r, "packID")
 
 	if !h.hasManageEmojis(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
 		return
 	}
 
@@ -194,11 +195,11 @@ func (h *Handler) HandleDeletePack(w http.ResponseWriter, r *http.Request) {
 		`DELETE FROM sticker_packs WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2`,
 		packID, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete sticker pack")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete sticker pack")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
 		return
 	}
 
@@ -213,7 +214,7 @@ func (h *Handler) HandleAddSticker(w http.ResponseWriter, r *http.Request) {
 	packID := chi.URLParam(r, "packID")
 
 	if !h.hasManageEmojis(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
 		return
 	}
 
@@ -223,17 +224,17 @@ func (h *Handler) HandleAddSticker(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM sticker_packs WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2)`,
 		packID, guildID).Scan(&exists)
 	if !exists {
-		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
 		return
 	}
 
 	var req createStickerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.Name == "" || req.FileID == "" {
-		writeError(w, http.StatusBadRequest, "fields_required", "name and file_id are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "fields_required", "name and file_id are required")
 		return
 	}
 	if req.Format == "" {
@@ -247,11 +248,11 @@ func (h *Handler) HandleAddSticker(w http.ResponseWriter, r *http.Request) {
 		id, packID, req.Name, req.Description, req.Tags, req.FileID, req.Format)
 	if err != nil {
 		h.Logger.Error("failed to add sticker", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add sticker")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add sticker")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":          id,
 		"pack_id":     packID,
 		"name":        req.Name,
@@ -271,7 +272,7 @@ func (h *Handler) HandleGetPackStickers(w http.ResponseWriter, r *http.Request) 
 		`SELECT id, pack_id, name, description, tags, file_id, format, created_at
 		 FROM stickers WHERE pack_id = $1 ORDER BY created_at`, packID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch stickers")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch stickers")
 		return
 	}
 	defer rows.Close()
@@ -299,7 +300,7 @@ func (h *Handler) HandleGetPackStickers(w http.ResponseWriter, r *http.Request) 
 		stickers = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, stickers)
+	apiutil.WriteJSON(w, http.StatusOK, stickers)
 }
 
 // HandleDeleteSticker removes a sticker from a pack.
@@ -311,7 +312,7 @@ func (h *Handler) HandleDeleteSticker(w http.ResponseWriter, r *http.Request) {
 	stickerID := chi.URLParam(r, "stickerID")
 
 	if !h.hasManageEmojis(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
 		return
 	}
 
@@ -321,18 +322,18 @@ func (h *Handler) HandleDeleteSticker(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM sticker_packs WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2)`,
 		packID, guildID).Scan(&exists)
 	if !exists {
-		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
 		return
 	}
 
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM stickers WHERE id = $1 AND pack_id = $2`, stickerID, packID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete sticker")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete sticker")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Sticker not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker not found")
 		return
 	}
 
@@ -346,11 +347,11 @@ func (h *Handler) HandleCreateUserPack(w http.ResponseWriter, r *http.Request) {
 
 	var req createPackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name_required", "Pack name is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Pack name is required")
 		return
 	}
 
@@ -359,7 +360,7 @@ func (h *Handler) HandleCreateUserPack(w http.ResponseWriter, r *http.Request) {
 	h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM sticker_packs WHERE owner_type = 'user' AND owner_id = $1`, userID).Scan(&packCount)
 	if packCount >= 5 {
-		writeError(w, http.StatusBadRequest, "limit_reached", "You can have at most 5 personal sticker packs")
+		apiutil.WriteError(w, http.StatusBadRequest, "limit_reached", "You can have at most 5 personal sticker packs")
 		return
 	}
 
@@ -370,11 +371,11 @@ func (h *Handler) HandleCreateUserPack(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, 'user', $4, $5)`,
 		id, req.Name, req.Description, userID, now)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create sticker pack")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create sticker pack")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":          id,
 		"name":        req.Name,
 		"description": req.Description,
@@ -396,7 +397,7 @@ func (h *Handler) HandleGetUserPacks(w http.ResponseWriter, r *http.Request) {
 		 WHERE sp.owner_type = 'user' AND sp.owner_id = $1
 		 ORDER BY sp.created_at`, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch packs")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch packs")
 		return
 	}
 	defer rows.Close()
@@ -422,7 +423,7 @@ func (h *Handler) HandleGetUserPacks(w http.ResponseWriter, r *http.Request) {
 		packs = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, packs)
+	apiutil.WriteJSON(w, http.StatusOK, packs)
 }
 
 // --- Sticker Pack Sharing ---
@@ -435,7 +436,7 @@ func (h *Handler) HandleEnableSharing(w http.ResponseWriter, r *http.Request) {
 	packID := chi.URLParam(r, "packID")
 
 	if !h.hasManageEmojis(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
 		return
 	}
 
@@ -445,7 +446,7 @@ func (h *Handler) HandleEnableSharing(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM sticker_packs WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2)`,
 		packID, guildID).Scan(&exists)
 	if !exists {
-		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
 		return
 	}
 
@@ -455,7 +456,7 @@ func (h *Handler) HandleEnableSharing(w http.ResponseWriter, r *http.Request) {
 		`SELECT share_code FROM sticker_packs WHERE id = $1`, packID).Scan(&existingCode)
 	if existingCode != nil && *existingCode != "" {
 		// Already shared — return existing code.
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"pack_id":    packID,
 			"share_code": *existingCode,
 			"shared":     true,
@@ -470,11 +471,11 @@ func (h *Handler) HandleEnableSharing(w http.ResponseWriter, r *http.Request) {
 		shareCode, packID)
 	if err != nil {
 		h.Logger.Error("failed to enable sticker pack sharing", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to enable sharing")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to enable sharing")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"pack_id":    packID,
 		"share_code": shareCode,
 		"shared":     true,
@@ -489,7 +490,7 @@ func (h *Handler) HandleDisableSharing(w http.ResponseWriter, r *http.Request) {
 	packID := chi.URLParam(r, "packID")
 
 	if !h.hasManageEmojis(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to manage stickers")
 		return
 	}
 
@@ -498,11 +499,11 @@ func (h *Handler) HandleDisableSharing(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $1 AND owner_type = 'guild' AND owner_id = $2`,
 		packID, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to disable sharing")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to disable sharing")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
 		return
 	}
 
@@ -525,7 +526,7 @@ func (h *Handler) HandleGetSharedPack(w http.ResponseWriter, r *http.Request) {
 		shareCode,
 	).Scan(&id, &name, &desc, &ownerType, &ownerID, &createdAt)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Shared sticker pack not found or sharing disabled")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Shared sticker pack not found or sharing disabled")
 		return
 	}
 
@@ -534,7 +535,7 @@ func (h *Handler) HandleGetSharedPack(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, name, description, tags, file_id, format, created_at
 		 FROM stickers WHERE pack_id = $1 ORDER BY created_at`, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch stickers")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch stickers")
 		return
 	}
 	defer rows.Close()
@@ -561,7 +562,7 @@ func (h *Handler) HandleGetSharedPack(w http.ResponseWriter, r *http.Request) {
 		stickers = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"id":          id,
 		"name":        name,
 		"description": desc,
@@ -587,7 +588,7 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 		shareCode,
 	).Scan(&srcPackID, &srcName, &srcDesc)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Shared sticker pack not found or sharing disabled")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Shared sticker pack not found or sharing disabled")
 		return
 	}
 
@@ -596,7 +597,7 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 	h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM sticker_packs WHERE owner_type = 'user' AND owner_id = $1`, userID).Scan(&packCount)
 	if packCount >= 10 {
-		writeError(w, http.StatusBadRequest, "limit_reached", "You can have at most 10 personal sticker packs")
+		apiutil.WriteError(w, http.StatusBadRequest, "limit_reached", "You can have at most 10 personal sticker packs")
 		return
 	}
 
@@ -609,7 +610,7 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 		newPackID, srcName, srcDesc, userID, now)
 	if err != nil {
 		h.Logger.Error("failed to clone sticker pack", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to clone sticker pack")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to clone sticker pack")
 		return
 	}
 
@@ -617,7 +618,7 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT name, description, tags, file_id, format FROM stickers WHERE pack_id = $1`, srcPackID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read source stickers")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read source stickers")
 		return
 	}
 	defer rows.Close()
@@ -641,7 +642,7 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 		clonedCount++
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":             newPackID,
 		"name":           srcName,
 		"description":    srcDesc,
@@ -650,21 +651,5 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 		"cloned_from":    srcPackID,
 		"sticker_count":  clonedCount,
 		"created_at":     now,
-	})
-}
-
-// --- JSON helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
 	})
 }

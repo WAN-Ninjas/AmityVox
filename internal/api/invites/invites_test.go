@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, map[string]string{"code": "abc123"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"code": "abc123"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -33,7 +35,7 @@ func TestWriteJSON(t *testing.T) {
 
 func TestWriteError(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
+	apiutil.WriteError(w, http.StatusNotFound, "invite_not_found", "Invite not found")
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
@@ -70,7 +72,7 @@ func TestWriteError_StatusCodes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			writeError(w, tc.status, tc.code, "test")
+			apiutil.WriteError(w, tc.status, tc.code, "test")
 			if w.Code != tc.status {
 				t.Errorf("status = %d, want %d", w.Code, tc.status)
 			}
@@ -80,7 +82,7 @@ func TestWriteError_StatusCodes(t *testing.T) {
 
 func TestWriteJSON_NestedData(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"invite":       map[string]string{"code": "abc"},
 		"guild_name":   "Test Guild",
 		"member_count": 42,

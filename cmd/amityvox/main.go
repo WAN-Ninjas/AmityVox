@@ -387,6 +387,7 @@ func runServe() error {
 		ListenAddr:        cfg.WebSocket.Listen,
 		BuildVersion:      version + "-" + commit + "-" + buildDate,
 		Logger:            logger,
+		CORSOrigins:       cfg.HTTP.CORSOrigins,
 	})
 
 	// Graceful shutdown handler.

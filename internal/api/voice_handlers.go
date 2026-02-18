@@ -161,7 +161,7 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 	if avatarID != nil {
 		voiceEvent["avatar_id"] = *avatarID
 	}
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", voiceEvent)
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", gID, voiceEvent)
 
 	// For DM/Group channels, ring the other participants so they see an incoming call.
 	// Only ring if this is the first person joining (no ring for joining an active call).
@@ -219,13 +219,15 @@ func (s *Server) handleVoiceLeave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove participant from LiveKit if possible.
-	_ = s.Voice.RemoveParticipant(r.Context(), channelID, userID)
+	if err := s.Voice.RemoveParticipant(r.Context(), channelID, userID); err != nil {
+		s.Logger.Warn("failed to remove participant", "error", err.Error())
+	}
 
 	// Clear voice state.
 	s.Voice.UpdateVoiceState(userID, gID, "", false, false)
 
 	// Publish VOICE_STATE_UPDATE with the channel the user left.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", gID, map[string]interface{}{
 		"user_id":    userID,
 		"guild_id":   gID,
 		"channel_id": channelID,
@@ -291,7 +293,7 @@ func (s *Server) handleVoiceServerMute(w http.ResponseWriter, r *http.Request) {
 	s.Voice.SetServerMute(targetUserID, req.Muted)
 
 	// Publish VOICE_STATE_UPDATE.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", *guildID, map[string]interface{}{
 		"user_id":    targetUserID,
 		"guild_id":   *guildID,
 		"channel_id": channelID,
@@ -361,7 +363,7 @@ func (s *Server) handleVoiceServerDeafen(w http.ResponseWriter, r *http.Request)
 	s.Voice.SetServerDeafen(targetUserID, req.Deafened)
 
 	// Publish VOICE_STATE_UPDATE.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", *guildID, map[string]interface{}{
 		"user_id":    targetUserID,
 		"guild_id":   *guildID,
 		"channel_id": channelID,
@@ -442,16 +444,20 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove from old room.
-	_ = s.Voice.RemoveParticipant(r.Context(), sourceChannelID, targetUserID)
+	if err := s.Voice.RemoveParticipant(r.Context(), sourceChannelID, targetUserID); err != nil {
+		s.Logger.Warn("failed to remove participant from source channel", "error", err.Error())
+	}
 
 	// Ensure target room exists.
-	_ = s.Voice.EnsureRoom(r.Context(), req.TargetChannelID)
+	if err := s.Voice.EnsureRoom(r.Context(), req.TargetChannelID); err != nil {
+		s.Logger.Warn("failed to ensure target voice room", "error", err.Error())
+	}
 
 	// Update voice state.
 	s.Voice.UpdateVoiceState(targetUserID, *guildID, req.TargetChannelID, vs.SelfMute, vs.SelfDeaf)
 
 	// Publish leave for old channel so sidebar removes the user.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", *guildID, map[string]interface{}{
 		"user_id":    targetUserID,
 		"guild_id":   *guildID,
 		"channel_id": sourceChannelID,
@@ -459,7 +465,7 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Publish join for the new channel.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", *guildID, map[string]interface{}{
 		"user_id":    targetUserID,
 		"guild_id":   *guildID,
 		"channel_id": req.TargetChannelID,
@@ -702,7 +708,7 @@ func (s *Server) handleSetInputMode(w http.ResponseWriter, r *http.Request) {
 	gID := vs.GuildID
 
 	// Publish VOICE_STATE_UPDATE with input mode.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", gID, map[string]interface{}{
 		"user_id":    userID,
 		"guild_id":   gID,
 		"channel_id": channelID,
@@ -772,7 +778,7 @@ func (s *Server) handleSetPrioritySpeaker(w http.ResponseWriter, r *http.Request
 	s.Voice.SetPrioritySpeaker(targetUserID, req.Priority)
 
 	// Publish VOICE_STATE_UPDATE with priority speaker flag.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", *guildID, map[string]interface{}{
 		"user_id":          targetUserID,
 		"guild_id":         *guildID,
 		"channel_id":       channelID,
@@ -902,7 +908,7 @@ func (s *Server) handleCreateSoundboardSound(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Publish event for real-time updates.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectGuildUpdate, "SOUNDBOARD_SOUND_CREATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildUpdate, "SOUNDBOARD_SOUND_CREATE", guildID, map[string]interface{}{
 		"guild_id": guildID,
 		"sound":    sound,
 	})
@@ -946,7 +952,7 @@ func (s *Server) handleDeleteSoundboardSound(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Publish event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectGuildUpdate, "SOUNDBOARD_SOUND_DELETE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildUpdate, "SOUNDBOARD_SOUND_DELETE", guildID, map[string]interface{}{
 		"guild_id": guildID,
 		"sound_id": soundID,
 	})
@@ -1006,11 +1012,15 @@ func (s *Server) handlePlaySoundboardSound(w http.ResponseWriter, r *http.Reques
 
 	// Log the play for cooldown tracking and increment play count.
 	logID := newVoiceULID()
-	_ = s.Voice.LogSoundboardPlay(r.Context(), logID, soundID, guildID, vs.ChannelID, userID)
-	_ = s.Voice.IncrementSoundPlayCount(r.Context(), soundID)
+	if err := s.Voice.LogSoundboardPlay(r.Context(), logID, soundID, guildID, vs.ChannelID, userID); err != nil {
+		s.Logger.Warn("failed to log soundboard play", "error", err.Error())
+	}
+	if err := s.Voice.IncrementSoundPlayCount(r.Context(), soundID); err != nil {
+		s.Logger.Warn("failed to increment sound play count", "error", err.Error())
+	}
 
 	// Publish SOUNDBOARD_PLAY event so all clients in the channel can play the audio.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "SOUNDBOARD_PLAY", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "SOUNDBOARD_PLAY", guildID, map[string]interface{}{
 		"guild_id":   guildID,
 		"channel_id": vs.ChannelID,
 		"sound_id":   soundID,
@@ -1205,7 +1215,7 @@ func (s *Server) handleStartBroadcast(w http.ResponseWriter, r *http.Request) {
 	s.Voice.SetBroadcasting(userID, true)
 
 	// Publish broadcast start event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_BROADCAST_START", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_BROADCAST_START", gID, map[string]interface{}{
 		"broadcast_id":   broadcast.ID,
 		"guild_id":       gID,
 		"channel_id":     channelID,
@@ -1254,7 +1264,7 @@ func (s *Server) handleStopBroadcast(w http.ResponseWriter, r *http.Request) {
 	s.Voice.SetBroadcasting(broadcast.BroadcasterID, false)
 
 	// Publish broadcast end event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_BROADCAST_END", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_BROADCAST_END", broadcast.GuildID, map[string]interface{}{
 		"broadcast_id":   broadcast.ID,
 		"guild_id":       broadcast.GuildID,
 		"channel_id":     channelID,
@@ -1390,7 +1400,7 @@ func (s *Server) handleStartScreenShare(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Publish screen share start event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "SCREEN_SHARE_START", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "SCREEN_SHARE_START", gID, map[string]interface{}{
 		"session_id":    session.ID,
 		"guild_id":      gID,
 		"channel_id":    channelID,
@@ -1451,7 +1461,7 @@ func (s *Server) handleStopScreenShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Publish screen share end event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "SCREEN_SHARE_END", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "SCREEN_SHARE_END", gID, map[string]interface{}{
 		"session_id": session.ID,
 		"guild_id":   gID,
 		"channel_id": channelID,
@@ -1531,7 +1541,7 @@ func (s *Server) handleUpdateScreenShare(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Publish update event.
-	s.EventBus.PublishJSON(r.Context(), events.SubjectVoiceStateUpdate, "SCREEN_SHARE_UPDATE", map[string]interface{}{
+	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "SCREEN_SHARE_UPDATE", gID, map[string]interface{}{
 		"session_id":    session.ID,
 		"guild_id":      gID,
 		"channel_id":    channelID,
