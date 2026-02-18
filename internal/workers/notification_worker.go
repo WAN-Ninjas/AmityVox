@@ -114,16 +114,18 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 		}
 	}
 
-	// @here — thread-aware: notify thread participants for threads, all guild members for channels.
+	// @here — thread-aware: notify thread message authors and thread owner for threads, all guild members for channels.
 	if msg.MentionHere && msg.GuildID != "" {
 		var parentChannelID *string
 		var ownerID *string
-		m.pool.QueryRow(ctx,
+		if err := m.pool.QueryRow(ctx,
 			`SELECT parent_channel_id, owner_id FROM channels WHERE id = $1`,
 			msg.ChannelID,
-		).Scan(&parentChannelID, &ownerID)
-
-		if parentChannelID != nil {
+		).Scan(&parentChannelID, &ownerID); err != nil {
+			m.logger.Warn("@here expansion: failed to look up channel, skipping",
+				slog.String("channel_id", msg.ChannelID),
+				slog.String("error", err.Error()))
+		} else if parentChannelID != nil {
 			// Thread/forum post: notify distinct authors + thread owner.
 			rows, err := m.pool.Query(ctx,
 				`SELECT DISTINCT author_id FROM messages WHERE channel_id = $1 AND author_id != $2`,

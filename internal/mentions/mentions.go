@@ -5,7 +5,6 @@ package mentions
 
 import (
 	"regexp"
-	"strings"
 )
 
 // ParseResult holds the extracted mentions from a message.
@@ -20,8 +19,10 @@ var (
 	userMentionRe = regexp.MustCompile(`<@([0-9A-Z]{26})>`)
 	roleMentionRe = regexp.MustCompile(`<@&([0-9A-Z]{26})>`)
 	// Code block and inline code patterns for stripping.
-	codeBlockRe = regexp.MustCompile("(?s)```.*?```")
+	codeBlockRe  = regexp.MustCompile("(?s)```.*?```")
 	inlineCodeRe = regexp.MustCompile("`[^`]+`")
+	// @here with word boundary awareness — prevents matching substrings like "email@here.com".
+	hereRe = regexp.MustCompile(`(?:^|\W)@here(?:\W|$)`)
 )
 
 // Parse extracts mentions from message content, ignoring mentions inside code blocks
@@ -54,7 +55,7 @@ func Parse(content string) ParseResult {
 	}
 
 	// Detect @here (case-sensitive, must be standalone word boundary).
-	if strings.Contains(stripped, "@here") {
+	if hereRe.MatchString(stripped) {
 		result.MentionHere = true
 	}
 

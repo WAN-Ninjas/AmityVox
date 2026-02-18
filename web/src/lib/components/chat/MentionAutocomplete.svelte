@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { guildMembers, guildRolesMap } from '$lib/stores/members';
-	import { canManageRoles } from '$lib/stores/permissions';
+	import { canManageRoles, canMentionHere } from '$lib/stores/permissions';
 	import type { GuildMember, Role } from '$lib/types';
 
 	interface Props {
@@ -44,7 +44,7 @@
 		return results;
 	});
 
-	const showHere = $derived('here'.startsWith(lowerQuery) || lowerQuery === '');
+	const showHere = $derived($canMentionHere && ('here'.startsWith(lowerQuery) || lowerQuery === ''));
 
 	// Build flat list of all items for keyboard navigation.
 	interface AutocompleteItem {

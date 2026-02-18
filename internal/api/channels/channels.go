@@ -621,7 +621,10 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 			rows, qErr := h.Pool.Query(r.Context(),
 				`SELECT user_id FROM guild_members WHERE guild_id = $1 AND user_id = ANY($2)`,
 				*cc.GuildID, mentionUserIDs)
-			if qErr == nil {
+			if qErr != nil {
+				h.Logger.Warn("mention user validation query failed, clearing mentions", slog.String("error", qErr.Error()))
+				mentionUserIDs = nil
+			} else {
 				valid := map[string]bool{}
 				for rows.Next() {
 					var uid string
@@ -643,7 +646,10 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 			rows, qErr := h.Pool.Query(r.Context(),
 				`SELECT user_id FROM channel_recipients WHERE channel_id = $1 AND user_id = ANY($2)`,
 				channelID, mentionUserIDs)
-			if qErr == nil {
+			if qErr != nil {
+				h.Logger.Warn("mention user validation query failed, clearing mentions", slog.String("error", qErr.Error()))
+				mentionUserIDs = nil
+			} else {
 				valid := map[string]bool{}
 				for rows.Next() {
 					var uid string
@@ -669,7 +675,10 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 			rows, qErr := h.Pool.Query(r.Context(),
 				`SELECT id FROM roles WHERE guild_id = $1 AND id = ANY($2) AND mentionable = true`,
 				*cc.GuildID, mentionRoleIDs)
-			if qErr == nil {
+			if qErr != nil {
+				h.Logger.Warn("mention role validation query failed, clearing role mentions", slog.String("error", qErr.Error()))
+				mentionRoleIDs = nil
+			} else {
 				valid := map[string]bool{}
 				for rows.Next() {
 					var rid string
@@ -845,6 +854,107 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 		if guildID == nil {
 			editMentionHere = false
 			editMentionRoleIDs = nil
+		}
+
+		// Validate mentions the same way as the create path.
+		if guildID != nil {
+			// Load channel context for permission checks.
+			cc, ccErr := h.loadChannelCtx(r.Context(), channelID, userID)
+			if ccErr != nil {
+				h.Logger.Warn("failed to load channel context for edit mention validation", slog.String("error", ccErr.Error()))
+				// Fail closed: strip all special mentions.
+				editMentionHere = false
+				editMentionUserIDs = nil
+				editMentionRoleIDs = nil
+			} else {
+				// Validate @here permission.
+				if editMentionHere && !cc.hasPerm(permissions.MentionHere) {
+					editMentionHere = false
+				}
+
+				// Validate user mentions: only actual guild members.
+				if len(editMentionUserIDs) > 0 {
+					rows, qErr := h.Pool.Query(r.Context(),
+						`SELECT user_id FROM guild_members WHERE guild_id = $1 AND user_id = ANY($2)`,
+						*guildID, editMentionUserIDs)
+					if qErr != nil {
+						h.Logger.Warn("edit mention user validation query failed, clearing mentions", slog.String("error", qErr.Error()))
+						editMentionUserIDs = nil
+					} else {
+						valid := map[string]bool{}
+						for rows.Next() {
+							var uid string
+							if rows.Scan(&uid) == nil {
+								valid[uid] = true
+							}
+						}
+						rows.Close()
+						filtered := editMentionUserIDs[:0]
+						for _, id := range editMentionUserIDs {
+							if valid[id] {
+								filtered = append(filtered, id)
+							}
+						}
+						editMentionUserIDs = filtered
+					}
+				}
+
+				// Validate role mentions: must be mentionable (or user has ManageRoles).
+				if len(editMentionRoleIDs) > 0 {
+					if !cc.hasPerm(permissions.ManageRoles) {
+						rows, qErr := h.Pool.Query(r.Context(),
+							`SELECT id FROM roles WHERE guild_id = $1 AND id = ANY($2) AND mentionable = true`,
+							*guildID, editMentionRoleIDs)
+						if qErr != nil {
+							h.Logger.Warn("edit mention role validation query failed, clearing role mentions", slog.String("error", qErr.Error()))
+							editMentionRoleIDs = nil
+						} else {
+							valid := map[string]bool{}
+							for rows.Next() {
+								var rid string
+								if rows.Scan(&rid) == nil {
+									valid[rid] = true
+								}
+							}
+							rows.Close()
+							filtered := editMentionRoleIDs[:0]
+							for _, id := range editMentionRoleIDs {
+								if valid[id] {
+									filtered = append(filtered, id)
+								}
+							}
+							editMentionRoleIDs = filtered
+						}
+					}
+				}
+			}
+		} else {
+			// DMs: validate user mentions against channel recipients.
+			if len(editMentionUserIDs) > 0 {
+				rows, qErr := h.Pool.Query(r.Context(),
+					`SELECT user_id FROM channel_recipients WHERE channel_id = $1 AND user_id = ANY($2)`,
+					channelID, editMentionUserIDs)
+				if qErr != nil {
+					h.Logger.Warn("edit mention user validation query failed, clearing mentions", slog.String("error", qErr.Error()))
+					editMentionUserIDs = nil
+				} else {
+					valid := map[string]bool{}
+					for rows.Next() {
+						var uid string
+						if rows.Scan(&uid) == nil {
+							valid[uid] = true
+						}
+					}
+					rows.Close()
+					filtered := editMentionUserIDs[:0]
+					for _, id := range editMentionUserIDs {
+						if valid[id] {
+							filtered = append(filtered, id)
+						}
+					}
+					editMentionUserIDs = filtered
+				}
+			}
 		}
 	}
 

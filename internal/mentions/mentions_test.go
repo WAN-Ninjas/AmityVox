@@ -123,6 +123,20 @@ func TestParse(t *testing.T) {
 			wantHere:  false,
 		},
 		{
+			name:      "@here inside email not detected",
+			content:   "contact user@here.com for help",
+			wantUsers: nil,
+			wantRoles: nil,
+			wantHere:  false,
+		},
+		{
+			name:      "@here with punctuation detected",
+			content:   "hey @here, read this!",
+			wantUsers: nil,
+			wantRoles: nil,
+			wantHere:  true,
+		},
+		{
 			name:      "empty content",
 			content:   "",
 			wantUsers: nil,
