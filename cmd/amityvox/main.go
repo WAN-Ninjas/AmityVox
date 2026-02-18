@@ -312,6 +312,17 @@ func runServe() error {
 	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
 	srv.Router.With(fedRL).Post("/federation/v1/inbox", syncSvc.HandleInbox)
 	srv.Router.With(fedRL).Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
+
+	// Wire federation DM notifier into the users handler.
+	if cfg.Instance.FederationMode != "closed" && srv.UserHandler != nil {
+		srv.UserHandler.NotifyFederatedDM = syncSvc.NotifyFederatedDM
+	}
+
+	// Federation DM endpoints.
+	srv.Router.With(fedRL).Post("/federation/v1/dm/create", syncSvc.HandleFederatedDMCreate)
+	srv.Router.With(fedRL).Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
+	srv.Router.With(fedRL).Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
+	srv.Router.With(fedRL).Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
 	if cfg.Instance.FederationMode != "closed" {
 		syncSvc.StartRouter(ctx)
 		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))
