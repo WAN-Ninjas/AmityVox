@@ -148,8 +148,7 @@ func (h *Handler) HandleGetGuildWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild widget")
+		apiutil.InternalError(w, h.Logger, "Failed to get guild widget", err)
 		return
 	}
 
@@ -169,8 +168,7 @@ func (h *Handler) HandleUpdateGuildWidget(w http.ResponseWriter, r *http.Request
 	}
 
 	var req updateGuildWidgetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -193,8 +191,7 @@ func (h *Handler) HandleUpdateGuildWidget(w http.ResponseWriter, r *http.Request
 	).Scan(&gw.GuildID, &gw.Enabled, &gw.InviteChannelID, &gw.Style, &gw.UpdatedAt)
 
 	if err != nil {
-		h.Logger.Error("failed to update guild widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update guild widget")
+		apiutil.InternalError(w, h.Logger, "Failed to update guild widget", err)
 		return
 	}
 
@@ -218,8 +215,7 @@ func (h *Handler) HandleGetGuildWidgetEmbed(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to check widget status", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load widget")
+		apiutil.InternalError(w, h.Logger, "Failed to load widget", err)
 		return
 	}
 
@@ -313,8 +309,7 @@ func (h *Handler) HandleGetChannelWidgets(w http.ResponseWriter, r *http.Request
 		 ORDER BY position ASC`, channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get channel widgets", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get widgets")
+		apiutil.InternalError(w, h.Logger, "Failed to get widgets", err)
 		return
 	}
 	defer rows.Close()
@@ -341,13 +336,11 @@ func (h *Handler) HandleCreateChannelWidget(w http.ResponseWriter, r *http.Reque
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createChannelWidgetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Title == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_title", "Title is required")
+	if !apiutil.RequireNonEmpty(w, "title", req.Title) {
 		return
 	}
 	if !validWidgetTypes[req.WidgetType] {
@@ -398,8 +391,7 @@ func (h *Handler) HandleCreateChannelWidget(w http.ResponseWriter, r *http.Reque
 		&cw.CreatorID, &cw.Position, &cw.Active, &cw.CreatedAt, &cw.UpdatedAt)
 
 	if err != nil {
-		h.Logger.Error("failed to create channel widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create widget")
+		apiutil.InternalError(w, h.Logger, "Failed to create widget", err)
 		return
 	}
 
@@ -415,8 +407,7 @@ func (h *Handler) HandleUpdateChannelWidget(w http.ResponseWriter, r *http.Reque
 	widgetID := chi.URLParam(r, "widgetID")
 
 	var req updateChannelWidgetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -430,8 +421,7 @@ func (h *Handler) HandleUpdateChannelWidget(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get widget")
+		apiutil.InternalError(w, h.Logger, "Failed to get widget", err)
 		return
 	}
 
@@ -456,8 +446,7 @@ func (h *Handler) HandleUpdateChannelWidget(w http.ResponseWriter, r *http.Reque
 		&cw.CreatorID, &cw.Position, &cw.Active, &cw.CreatedAt, &cw.UpdatedAt)
 
 	if err != nil {
-		h.Logger.Error("failed to update widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update widget")
+		apiutil.InternalError(w, h.Logger, "Failed to update widget", err)
 		return
 	}
 
@@ -482,8 +471,7 @@ func (h *Handler) HandleDeleteChannelWidget(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get widget")
+		apiutil.InternalError(w, h.Logger, "Failed to get widget", err)
 		return
 	}
 
@@ -495,8 +483,7 @@ func (h *Handler) HandleDeleteChannelWidget(w http.ResponseWriter, r *http.Reque
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channel_widgets WHERE id = $1`, widgetID)
 	if err != nil {
-		h.Logger.Error("failed to delete widget", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete widget")
+		apiutil.InternalError(w, h.Logger, "Failed to delete widget", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -549,8 +536,7 @@ func (h *Handler) HandleListPlugins(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list plugins", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list plugins")
+		apiutil.InternalError(w, h.Logger, "Failed to list plugins", err)
 		return
 	}
 	defer rows.Close()
@@ -622,8 +608,7 @@ func (h *Handler) HandleGetPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get plugin", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get plugin")
+		apiutil.InternalError(w, h.Logger, "Failed to get plugin", err)
 		return
 	}
 
@@ -645,12 +630,10 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 		PluginID string          `json:"plugin_id"`
 		Config   json.RawMessage `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.PluginID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_plugin_id", "plugin_id is required")
+	if !apiutil.RequireNonEmpty(w, "plugin_id", req.PluginID) {
 		return
 	}
 	if req.Config == nil {
@@ -690,8 +673,7 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 	).Scan(&ip.ID, &ip.GuildID, &ip.PluginID, &ip.Enabled, &ip.Config, &ip.InstalledBy, &ip.InstalledAt)
 
 	if err != nil {
-		h.Logger.Error("failed to install plugin", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to install plugin")
+		apiutil.InternalError(w, h.Logger, "Failed to install plugin", err)
 		return
 	}
 
@@ -717,8 +699,7 @@ func (h *Handler) HandleGetGuildPlugins(w http.ResponseWriter, r *http.Request) 
 		 ORDER BY gp.installed_at DESC`, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get guild plugins", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild plugins")
+		apiutil.InternalError(w, h.Logger, "Failed to get guild plugins", err)
 		return
 	}
 	defer rows.Close()
@@ -771,8 +752,7 @@ func (h *Handler) HandleUpdateGuildPlugin(w http.ResponseWriter, r *http.Request
 		Enabled *bool            `json:"enabled"`
 		Config  *json.RawMessage `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -785,8 +765,7 @@ func (h *Handler) HandleUpdateGuildPlugin(w http.ResponseWriter, r *http.Request
 		installID, guildID, req.Enabled, req.Config,
 	)
 	if err != nil {
-		h.Logger.Error("failed to update guild plugin", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update plugin")
+		apiutil.InternalError(w, h.Logger, "Failed to update plugin", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -820,16 +799,14 @@ func (h *Handler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild plugin", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to uninstall plugin")
+		apiutil.InternalError(w, h.Logger, "Failed to uninstall plugin", err)
 		return
 	}
 
 	_, err = h.Pool.Exec(r.Context(),
 		`DELETE FROM guild_plugins WHERE id = $1 AND guild_id = $2`, installID, guildID)
 	if err != nil {
-		h.Logger.Error("failed to uninstall plugin", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to uninstall plugin")
+		apiutil.InternalError(w, h.Logger, "Failed to uninstall plugin", err)
 		return
 	}
 
@@ -855,8 +832,7 @@ func (h *Handler) HandleCreateKeyBackup(w http.ResponseWriter, r *http.Request) 
 		Nonce         []byte `json:"nonce"`
 		KeyCount      int    `json:"key_count"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -889,8 +865,7 @@ func (h *Handler) HandleCreateKeyBackup(w http.ResponseWriter, r *http.Request) 
 		backupID, userID, req.EncryptedData, req.Salt, req.Nonce, req.KeyCount,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create key backup", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create key backup")
+		apiutil.InternalError(w, h.Logger, "Failed to create key backup", err)
 		return
 	}
 
@@ -925,8 +900,7 @@ func (h *Handler) HandleGetKeyBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get key backup", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get key backup")
+		apiutil.InternalError(w, h.Logger, "Failed to get key backup", err)
 		return
 	}
 
@@ -963,8 +937,7 @@ func (h *Handler) HandleDownloadKeyBackup(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to download key backup", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to download key backup")
+		apiutil.InternalError(w, h.Logger, "Failed to download key backup", err)
 		return
 	}
 
@@ -979,8 +952,7 @@ func (h *Handler) HandleDeleteKeyBackup(w http.ResponseWriter, r *http.Request) 
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM key_backups WHERE user_id = $1`, userID)
 	if err != nil {
-		h.Logger.Error("failed to delete key backup", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete key backup")
+		apiutil.InternalError(w, h.Logger, "Failed to delete key backup", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

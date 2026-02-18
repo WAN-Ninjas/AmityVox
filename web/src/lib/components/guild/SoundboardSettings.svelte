@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -33,9 +34,9 @@
 		cooldown_seconds: 5,
 		allow_external: false
 	});
-	let loading = $state(true);
-	let saving = $state(false);
-	let uploading = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
+	let uploadOp = $state(createAsyncOp());
 	let error = $state<string | null>(null);
 	let successMessage = $state<string | null>(null);
 
@@ -58,70 +59,34 @@
 	});
 
 	async function loadData() {
-		try {
-			loading = true;
-			error = null;
-
-			// Load config and sounds in parallel
-			const [configRes, soundsRes] = await Promise.all([
-				fetch(`/api/v1/guilds/${guildId}/soundboard/config`, {
-					headers: { 'Authorization': `Bearer ${api.getToken()}` }
-				}),
-				fetch(`/api/v1/guilds/${guildId}/soundboard/sounds`, {
-					headers: { 'Authorization': `Bearer ${api.getToken()}` }
-				})
-			]);
-
-			if (configRes.ok) {
-				const configJson = await configRes.json();
-				config = configJson.data;
-			}
-			if (soundsRes.ok) {
-				const soundsJson = await soundsRes.json();
-				sounds = soundsJson.data || [];
-			}
-		} catch (err) {
+		error = null;
+		const result = await loadOp.run(() => Promise.all([
+			api.getSoundboardConfig(guildId),
+			api.getSoundboardSounds(guildId)
+		]));
+		if (!loadOp.error && result) {
+			config = result[0];
+			sounds = result[1] || [];
+		} else if (loadOp.error) {
 			error = 'Failed to load soundboard settings';
-			console.error('Soundboard settings load error:', err);
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function saveConfig() {
-		try {
-			saving = true;
-			error = null;
-			successMessage = null;
-
-			const res = await fetch(`/api/v1/guilds/${guildId}/soundboard/config`, {
-				method: 'PATCH',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({
-					enabled: config.enabled,
-					max_sounds: config.max_sounds,
-					cooldown_seconds: config.cooldown_seconds,
-					allow_external: config.allow_external
-				})
-			});
-
-			if (!res.ok) {
-				const errJson = await res.json();
-				error = errJson.error?.message || 'Failed to save config';
-				return;
-			}
-
-			const json = await res.json();
-			config = json.data;
+		error = null;
+		successMessage = null;
+		const result = await saveOp.run(() => api.updateSoundboardConfig(guildId, {
+			enabled: config.enabled,
+			max_sounds: config.max_sounds,
+			cooldown_seconds: config.cooldown_seconds,
+			allow_external: config.allow_external
+		}));
+		if (!saveOp.error) {
+			config = result!;
 			successMessage = 'Settings saved successfully';
 			setTimeout(() => successMessage = null, 3000);
-		} catch (err) {
-			error = 'Failed to save soundboard config';
-		} finally {
-			saving = false;
+		} else {
+			error = saveOp.error;
 		}
 	}
 
@@ -165,85 +130,41 @@
 			return;
 		}
 
-		try {
-			uploading = true;
-			error = null;
-
+		error = null;
+		const file = selectedFile;
+		const newSound = await uploadOp.run(async () => {
 			// Upload file first
-			const formData = new FormData();
-			formData.append('file', selectedFile);
-			const uploadRes = await fetch('/api/v1/files/upload', {
-				method: 'POST',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` },
-				body: formData
-			});
-
-			if (!uploadRes.ok) {
-				const errJson = await uploadRes.json();
-				error = errJson.error?.message || 'Failed to upload audio file';
-				return;
-			}
-
-			const uploadJson = await uploadRes.json();
-			const fileId = uploadJson.data.id;
+			const uploaded = await api.uploadFile(file);
 
 			// Create the sound
-			const createRes = await fetch(`/api/v1/guilds/${guildId}/soundboard/sounds`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({
-					name: newSoundName.trim(),
-					file_url: fileId,
-					volume: newSoundVolume,
-					duration_ms: newSoundDuration,
-					emoji: newSoundEmoji.trim() || null
-				})
+			return await api.createSoundboardSound(guildId, {
+				name: newSoundName.trim(),
+				file_url: uploaded.id,
+				volume: newSoundVolume,
+				duration_ms: newSoundDuration,
+				emoji: newSoundEmoji.trim() || null
 			});
-
-			if (!createRes.ok) {
-				const errJson = await createRes.json();
-				error = errJson.error?.message || 'Failed to create sound';
-				return;
-			}
-
-			const createJson = await createRes.json();
-			sounds = [...sounds, createJson.data];
-
-			// Reset form
+		});
+		if (!uploadOp.error) {
+			sounds = [...sounds, newSound!];
 			resetAddForm();
 			successMessage = 'Sound added successfully';
 			setTimeout(() => successMessage = null, 3000);
-		} catch (err) {
-			error = 'Failed to create sound';
-			console.error('Sound creation error:', err);
-		} finally {
-			uploading = false;
+		} else {
+			error = uploadOp.error;
 		}
 	}
 
 	async function deleteSound(soundId: string) {
 		try {
 			error = null;
-			const res = await fetch(`/api/v1/guilds/${guildId}/soundboard/sounds/${soundId}`, {
-				method: 'DELETE',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-
-			if (!res.ok) {
-				const errJson = await res.json();
-				error = errJson.error?.message || 'Failed to delete sound';
-				return;
-			}
-
+			await api.deleteSoundboardSound(guildId, soundId);
 			sounds = sounds.filter(s => s.id !== soundId);
 			deleteConfirm = null;
 			successMessage = 'Sound deleted';
 			setTimeout(() => successMessage = null, 3000);
-		} catch (err) {
-			error = 'Failed to delete sound';
+		} catch (err: any) {
+			error = err.message || 'Failed to delete sound';
 		}
 	}
 
@@ -275,7 +196,7 @@
 		</p>
 	</div>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="loading-state">Loading soundboard settings...</div>
 	{:else}
 		<!-- Configuration Section -->
@@ -328,9 +249,9 @@
 				<button
 					class="btn-primary"
 					onclick={saveConfig}
-					disabled={saving}
+					disabled={saveOp.loading}
 				>
-					{saving ? 'Saving...' : 'Save Config'}
+					{saveOp.loading ? 'Saving...' : 'Save Config'}
 				</button>
 			</div>
 		</div>
@@ -422,9 +343,9 @@
 						<button
 							class="btn-primary"
 							onclick={uploadAndCreateSound}
-							disabled={uploading || !selectedFile || !newSoundName.trim()}
+							disabled={uploadOp.loading || !selectedFile || !newSoundName.trim()}
 						>
-							{uploading ? 'Uploading...' : 'Add Sound'}
+							{uploadOp.loading ? 'Uploading...' : 'Add Sound'}
 						</button>
 					</div>
 				</div>

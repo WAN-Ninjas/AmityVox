@@ -61,8 +61,7 @@ func (h *Handler) HandleGetUserBadges(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "User not found")
 			return
 		}
-		h.Logger.Error("failed to get user flags", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user badges")
+		apiutil.InternalError(w, h.Logger, "Failed to get user badges", err)
 		return
 	}
 

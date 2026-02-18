@@ -5,7 +5,6 @@ package stickers
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -97,12 +96,10 @@ func (h *Handler) HandleCreateGuildPack(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req createPackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Pack name is required")
+	if !apiutil.RequireNonEmpty(w, "name", req.Name) {
 		return
 	}
 
@@ -113,8 +110,7 @@ func (h *Handler) HandleCreateGuildPack(w http.ResponseWriter, r *http.Request) 
 		 VALUES ($1, $2, $3, 'guild', $4, $5)`,
 		id, req.Name, req.Description, guildID, now)
 	if err != nil {
-		h.Logger.Error("failed to create sticker pack", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create sticker pack")
+		apiutil.InternalError(w, h.Logger, "Failed to create sticker pack", err)
 		return
 	}
 
@@ -229,8 +225,7 @@ func (h *Handler) HandleAddSticker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createStickerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" || req.FileID == "" {
@@ -247,8 +242,7 @@ func (h *Handler) HandleAddSticker(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, packID, req.Name, req.Description, req.Tags, req.FileID, req.Format)
 	if err != nil {
-		h.Logger.Error("failed to add sticker", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add sticker")
+		apiutil.InternalError(w, h.Logger, "Failed to add sticker", err)
 		return
 	}
 
@@ -346,12 +340,10 @@ func (h *Handler) HandleCreateUserPack(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req createPackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Pack name is required")
+	if !apiutil.RequireNonEmpty(w, "name", req.Name) {
 		return
 	}
 
@@ -470,8 +462,7 @@ func (h *Handler) HandleEnableSharing(w http.ResponseWriter, r *http.Request) {
 		`UPDATE sticker_packs SET share_code = $1, shared = true WHERE id = $2`,
 		shareCode, packID)
 	if err != nil {
-		h.Logger.Error("failed to enable sticker pack sharing", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to enable sharing")
+		apiutil.InternalError(w, h.Logger, "Failed to enable sharing", err)
 		return
 	}
 
@@ -609,8 +600,7 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, 'user', $4, $5)`,
 		newPackID, srcName, srcDesc, userID, now)
 	if err != nil {
-		h.Logger.Error("failed to clone sticker pack", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to clone sticker pack")
+		apiutil.InternalError(w, h.Logger, "Failed to clone sticker pack", err)
 		return
 	}
 

@@ -1,34 +1,29 @@
 // Permissions store — caches computed guild-level permissions for the current user.
 
-import { writable, derived } from 'svelte/store';
+import { derived } from 'svelte/store';
 import { api } from '$lib/api/client';
 import { currentGuildId } from './guilds';
 import { Permission, hasPermission } from '$lib/types';
+import { createMapStore } from '$lib/stores/mapHelpers';
 
-export const guildPermissions = writable<Map<string, bigint>>(new Map());
+export const guildPermissions = createMapStore<string, bigint>();
 
 export async function loadPermissions(guildId: string) {
 	try {
 		const result = await api.getMyPermissions(guildId);
 		const perms = BigInt(result.permissions);
-		guildPermissions.update((map) => {
-			map.set(guildId, perms);
-			return new Map(map);
-		});
+		guildPermissions.setEntry(guildId, perms);
 	} catch {
 		// Fail-closed: on error, don't cache anything (defaults to 0n = no permissions).
 	}
 }
 
 export function invalidatePermissions(guildId: string) {
-	guildPermissions.update((map) => {
-		map.delete(guildId);
-		return new Map(map);
-	});
+	guildPermissions.removeEntry(guildId);
 }
 
 export function clearPermissions() {
-	guildPermissions.set(new Map());
+	guildPermissions.clear();
 }
 
 export const currentGuildPermissions = derived(

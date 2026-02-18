@@ -7,7 +7,6 @@ package guilds
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -105,8 +104,7 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req createTemplateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -134,15 +132,13 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 	// Capture the guild's current structure.
 	data, err := h.captureGuildStructure(ctx, guildID)
 	if err != nil {
-		h.Logger.Error("failed to capture guild structure", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.InternalError(w, h.Logger, "Failed to create template", err)
 		return
 	}
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
-		h.Logger.Error("failed to marshal template data", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.InternalError(w, h.Logger, "Failed to create template", err)
 		return
 	}
 
@@ -155,8 +151,7 @@ func (h *Handler) HandleCreateGuildTemplate(w http.ResponseWriter, r *http.Reque
 		templateID, guildID, req.Name, req.Description, dataJSON, userID, now,
 	)
 	if err != nil {
-		h.Logger.Error("failed to insert template", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.InternalError(w, h.Logger, "Failed to create template", err)
 		return
 	}
 
@@ -195,8 +190,7 @@ func (h *Handler) HandleGetGuildTemplates(w http.ResponseWriter, r *http.Request
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get templates", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get templates")
+		apiutil.InternalError(w, h.Logger, "Failed to get templates", err)
 		return
 	}
 	defer rows.Close()
@@ -206,8 +200,7 @@ func (h *Handler) HandleGetGuildTemplates(w http.ResponseWriter, r *http.Request
 		var t guildTemplate
 		if err := rows.Scan(&t.ID, &t.GuildID, &t.Name, &t.Description, &t.TemplateData,
 			&t.CreatorID, &t.CreatedAt); err != nil {
-			h.Logger.Error("failed to scan template", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read templates")
+			apiutil.InternalError(w, h.Logger, "Failed to read templates", err)
 			return
 		}
 		templates = append(templates, t)
@@ -240,8 +233,7 @@ func (h *Handler) HandleGetGuildTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get template", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
+		apiutil.InternalError(w, h.Logger, "Failed to get template", err)
 		return
 	}
 
@@ -266,8 +258,7 @@ func (h *Handler) HandleDeleteGuildTemplate(w http.ResponseWriter, r *http.Reque
 		templateID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete template", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete template")
+		apiutil.InternalError(w, h.Logger, "Failed to delete template", err)
 		return
 	}
 	if result.RowsAffected() == 0 {
@@ -321,15 +312,13 @@ func (h *Handler) HandleApplyGuildTemplate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get template for apply", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get template")
+		apiutil.InternalError(w, h.Logger, "Failed to get template", err)
 		return
 	}
 
 	var data templateData
 	if err := json.Unmarshal(tmplData, &data); err != nil {
-		h.Logger.Error("failed to unmarshal template data", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Invalid template data")
+		apiutil.InternalError(w, h.Logger, "Invalid template data", err)
 		return
 	}
 
@@ -337,8 +326,7 @@ func (h *Handler) HandleApplyGuildTemplate(w http.ResponseWriter, r *http.Reques
 		// Create a new guild from the template.
 		guild, err := h.createGuildFromTemplate(ctx, userID, *req.GuildName, data)
 		if err != nil {
-			h.Logger.Error("failed to create guild from template", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild from template")
+			apiutil.InternalError(w, h.Logger, "Failed to create guild from template", err)
 			return
 		}
 		apiutil.WriteJSON(w, http.StatusCreated, guild)
@@ -349,8 +337,7 @@ func (h *Handler) HandleApplyGuildTemplate(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if err := h.applyTemplateToGuild(ctx, sourceGuildID, data); err != nil {
-			h.Logger.Error("failed to apply template to guild", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to apply template")
+			apiutil.InternalError(w, h.Logger, "Failed to apply template", err)
 			return
 		}
 		h.logAudit(ctx, sourceGuildID, userID, "template_apply", "template", templateID, nil)
@@ -478,120 +465,111 @@ func (h *Handler) createGuildFromTemplate(ctx context.Context, userID, guildName
 			permissions.ChangeNickname | permissions.CreateInvites)
 	}
 
-	tx, err := h.Pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	// Create the guild.
 	var guild models.Guild
-	err = tx.QueryRow(ctx,
-		`INSERT INTO guilds (id, instance_id, owner_id, name, description, default_permissions,
-		                     nsfw, verification_level, afk_timeout, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
-		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
-		           verification_level, afk_channel_id, afk_timeout, created_at`,
-		guildID, h.InstanceID, userID, guildName, data.GuildSettings.Description,
-		defaultPerms, data.GuildSettings.NSFW, data.GuildSettings.VerificationLevel,
-		data.GuildSettings.AFKTimeout, now,
-	).Scan(
-		&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
-		&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
-		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
-		&guild.VerificationLevel, &guild.AFKChannelID, &guild.AFKTimeout, &guild.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add the creating user as the owner member.
-	_, err = tx.Exec(ctx,
-		`INSERT INTO guild_members (guild_id, user_id, joined_at) VALUES ($1, $2, $3)`,
-		guildID, userID, now,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create roles from template.
-	for _, role := range data.Roles {
-		roleID := models.NewULID().String()
-		_, err = tx.Exec(ctx,
-			`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position,
-			                    permissions_allow, permissions_deny, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			roleID, guildID, role.Name, role.Color, role.Hoist, role.Mentionable,
-			role.Position, role.PermissionsAllow, role.PermissionsDeny, now,
-		)
-		if err != nil {
-			return nil, err
+	err := apiutil.WithTx(ctx, h.Pool, func(tx pgx.Tx) error {
+		// Create the guild.
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO guilds (id, instance_id, owner_id, name, description, default_permissions,
+			                     nsfw, verification_level, afk_timeout, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
+			           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
+			           verification_level, afk_channel_id, afk_timeout, created_at`,
+			guildID, h.InstanceID, userID, guildName, data.GuildSettings.Description,
+			defaultPerms, data.GuildSettings.NSFW, data.GuildSettings.VerificationLevel,
+			data.GuildSettings.AFKTimeout, now,
+		).Scan(
+			&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
+			&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
+			&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
+			&guild.VerificationLevel, &guild.AFKChannelID, &guild.AFKTimeout, &guild.CreatedAt,
+		); err != nil {
+			return err
 		}
-	}
 
-	// Create categories from template and build a name-to-ID map.
-	catNameToID := make(map[string]string)
-	for _, cat := range data.Categories {
-		catID := models.NewULID().String()
-		_, err = tx.Exec(ctx,
-			`INSERT INTO guild_categories (id, guild_id, name, position, created_at)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			catID, guildID, cat.Name, cat.Position, now,
-		)
-		if err != nil {
-			return nil, err
+		// Add the creating user as the owner member.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO guild_members (guild_id, user_id, joined_at) VALUES ($1, $2, $3)`,
+			guildID, userID, now,
+		); err != nil {
+			return err
 		}
-		catNameToID[cat.Name] = catID
-	}
 
-	// Create channels from template.
-	hasGeneral := false
-	for _, ch := range data.Channels {
-		channelID := models.NewULID().String()
-		var categoryID *string
-		if ch.CategoryName != "" {
-			if id, ok := catNameToID[ch.CategoryName]; ok {
-				categoryID = &id
+		// Create roles from template.
+		for _, role := range data.Roles {
+			roleID := models.NewULID().String()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position,
+				                    permissions_allow, permissions_deny, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				roleID, guildID, role.Name, role.Color, role.Hoist, role.Mentionable,
+				role.Position, role.PermissionsAllow, role.PermissionsDeny, now,
+			); err != nil {
+				return err
 			}
 		}
-		var topicPtr *string
-		if ch.Topic != "" {
-			topicPtr = &ch.Topic
+
+		// Create categories from template and build a name-to-ID map.
+		catNameToID := make(map[string]string)
+		for _, cat := range data.Categories {
+			catID := models.NewULID().String()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO guild_categories (id, guild_id, name, position, created_at)
+				 VALUES ($1, $2, $3, $4, $5)`,
+				catID, guildID, cat.Name, cat.Position, now,
+			); err != nil {
+				return err
+			}
+			catNameToID[cat.Name] = catID
 		}
-		var namePtr *string
-		if ch.Name != "" {
-			namePtr = &ch.Name
-			if ch.Name == "general" && ch.ChannelType == "text" {
-				hasGeneral = true
+
+		// Create channels from template.
+		hasGeneral := false
+		for _, ch := range data.Channels {
+			channelID := models.NewULID().String()
+			var categoryID *string
+			if ch.CategoryName != "" {
+				if id, ok := catNameToID[ch.CategoryName]; ok {
+					categoryID = &id
+				}
+			}
+			var topicPtr *string
+			if ch.Topic != "" {
+				topicPtr = &ch.Topic
+			}
+			var namePtr *string
+			if ch.Name != "" {
+				namePtr = &ch.Name
+				if ch.Name == "general" && ch.ChannelType == "text" {
+					hasGeneral = true
+				}
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position,
+				                       nsfw, slowmode_seconds, user_limit, bitrate, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+				channelID, guildID, categoryID, ch.ChannelType, namePtr, topicPtr,
+				ch.Position, ch.NSFW, ch.SlowmodeSeconds, ch.UserLimit, ch.Bitrate, now,
+			); err != nil {
+				return err
 			}
 		}
-		_, err = tx.Exec(ctx,
-			`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position,
-			                       nsfw, slowmode_seconds, user_limit, bitrate, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-			channelID, guildID, categoryID, ch.ChannelType, namePtr, topicPtr,
-			ch.Position, ch.NSFW, ch.SlowmodeSeconds, ch.UserLimit, ch.Bitrate, now,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
 
-	// Ensure at least one text channel exists.
-	if !hasGeneral && len(data.Channels) == 0 {
-		channelID := models.NewULID().String()
-		_, err = tx.Exec(ctx,
-			`INSERT INTO channels (id, guild_id, channel_type, name, position, created_at)
-			 VALUES ($1, $2, 'text', 'general', 0, $3)`,
-			channelID, guildID, now,
-		)
-		if err != nil {
-			return nil, err
+		// Ensure at least one text channel exists.
+		if !hasGeneral && len(data.Channels) == 0 {
+			channelID := models.NewULID().String()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO channels (id, guild_id, channel_type, name, position, created_at)
+				 VALUES ($1, $2, 'text', 'general', 0, $3)`,
+				channelID, guildID, now,
+			); err != nil {
+				return err
+			}
 		}
-	}
 
-	if err := tx.Commit(ctx); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -602,121 +580,114 @@ func (h *Handler) createGuildFromTemplate(ctx context.Context, userID, guildName
 // This is additive: it creates roles and channels that don't already exist
 // by name, but does not remove existing ones.
 func (h *Handler) applyTemplateToGuild(ctx context.Context, guildID string, data templateData) error {
-	tx, err := h.Pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+	return apiutil.WithTx(ctx, h.Pool, func(tx pgx.Tx) error {
+		now := time.Now()
 
-	now := time.Now()
-
-	// Get existing role names to avoid duplicates.
-	existingRoles := make(map[string]bool)
-	rRows, err := tx.Query(ctx, `SELECT name FROM roles WHERE guild_id = $1`, guildID)
-	if err != nil {
-		return err
-	}
-	defer rRows.Close()
-	for rRows.Next() {
-		var name string
-		rRows.Scan(&name)
-		existingRoles[name] = true
-	}
-
-	// Create missing roles.
-	for _, role := range data.Roles {
-		if existingRoles[role.Name] {
-			continue
-		}
-		roleID := models.NewULID().String()
-		_, err = tx.Exec(ctx,
-			`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position,
-			                    permissions_allow, permissions_deny, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			roleID, guildID, role.Name, role.Color, role.Hoist, role.Mentionable,
-			role.Position, role.PermissionsAllow, role.PermissionsDeny, now,
-		)
+		// Get existing role names to avoid duplicates.
+		existingRoles := make(map[string]bool)
+		rRows, err := tx.Query(ctx, `SELECT name FROM roles WHERE guild_id = $1`, guildID)
 		if err != nil {
 			return err
 		}
-	}
-
-	// Get existing category names.
-	existingCats := make(map[string]string) // name -> id
-	cRows, err := tx.Query(ctx, `SELECT id, name FROM guild_categories WHERE guild_id = $1`, guildID)
-	if err != nil {
-		return err
-	}
-	defer cRows.Close()
-	for cRows.Next() {
-		var id, name string
-		cRows.Scan(&id, &name)
-		existingCats[name] = id
-	}
-
-	// Create missing categories.
-	for _, cat := range data.Categories {
-		if _, ok := existingCats[cat.Name]; ok {
-			continue
+		defer rRows.Close()
+		for rRows.Next() {
+			var name string
+			rRows.Scan(&name)
+			existingRoles[name] = true
 		}
-		catID := models.NewULID().String()
-		_, err = tx.Exec(ctx,
-			`INSERT INTO guild_categories (id, guild_id, name, position, created_at)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			catID, guildID, cat.Name, cat.Position, now,
-		)
-		if err != nil {
-			return err
-		}
-		existingCats[cat.Name] = catID
-	}
 
-	// Get existing channel names to avoid duplicates.
-	existingChannels := make(map[string]bool)
-	chRows, err := tx.Query(ctx, `SELECT name FROM channels WHERE guild_id = $1`, guildID)
-	if err != nil {
-		return err
-	}
-	defer chRows.Close()
-	for chRows.Next() {
-		var name *string
-		chRows.Scan(&name)
-		if name != nil {
-			existingChannels[*name] = true
-		}
-	}
-
-	// Create missing channels.
-	for _, ch := range data.Channels {
-		if existingChannels[ch.Name] {
-			continue
-		}
-		channelID := models.NewULID().String()
-		var categoryID *string
-		if ch.CategoryName != "" {
-			if id, ok := existingCats[ch.CategoryName]; ok {
-				categoryID = &id
+		// Create missing roles.
+		for _, role := range data.Roles {
+			if existingRoles[role.Name] {
+				continue
+			}
+			roleID := models.NewULID().String()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position,
+				                    permissions_allow, permissions_deny, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				roleID, guildID, role.Name, role.Color, role.Hoist, role.Mentionable,
+				role.Position, role.PermissionsAllow, role.PermissionsDeny, now,
+			); err != nil {
+				return err
 			}
 		}
-		var topicPtr *string
-		if ch.Topic != "" {
-			topicPtr = &ch.Topic
-		}
-		var namePtr *string
-		if ch.Name != "" {
-			namePtr = &ch.Name
-		}
-		_, err = tx.Exec(ctx,
-			`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position,
-			                       nsfw, slowmode_seconds, user_limit, bitrate, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-			channelID, guildID, categoryID, ch.ChannelType, namePtr, topicPtr,
-			ch.Position, ch.NSFW, ch.SlowmodeSeconds, ch.UserLimit, ch.Bitrate, now,
-		)
+
+		// Get existing category names.
+		existingCats := make(map[string]string) // name -> id
+		cRows, err := tx.Query(ctx, `SELECT id, name FROM guild_categories WHERE guild_id = $1`, guildID)
 		if err != nil {
 			return err
 		}
-	}
+		defer cRows.Close()
+		for cRows.Next() {
+			var id, name string
+			cRows.Scan(&id, &name)
+			existingCats[name] = id
+		}
 
-	return tx.Commit(ctx)
+		// Create missing categories.
+		for _, cat := range data.Categories {
+			if _, ok := existingCats[cat.Name]; ok {
+				continue
+			}
+			catID := models.NewULID().String()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO guild_categories (id, guild_id, name, position, created_at)
+				 VALUES ($1, $2, $3, $4, $5)`,
+				catID, guildID, cat.Name, cat.Position, now,
+			); err != nil {
+				return err
+			}
+			existingCats[cat.Name] = catID
+		}
+
+		// Get existing channel names to avoid duplicates.
+		existingChannels := make(map[string]bool)
+		chRows, err := tx.Query(ctx, `SELECT name FROM channels WHERE guild_id = $1`, guildID)
+		if err != nil {
+			return err
+		}
+		defer chRows.Close()
+		for chRows.Next() {
+			var name *string
+			chRows.Scan(&name)
+			if name != nil {
+				existingChannels[*name] = true
+			}
+		}
+
+		// Create missing channels.
+		for _, ch := range data.Channels {
+			if existingChannels[ch.Name] {
+				continue
+			}
+			channelID := models.NewULID().String()
+			var categoryID *string
+			if ch.CategoryName != "" {
+				if id, ok := existingCats[ch.CategoryName]; ok {
+					categoryID = &id
+				}
+			}
+			var topicPtr *string
+			if ch.Topic != "" {
+				topicPtr = &ch.Topic
+			}
+			var namePtr *string
+			if ch.Name != "" {
+				namePtr = &ch.Name
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position,
+				                       nsfw, slowmode_seconds, user_limit, bitrate, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+				channelID, guildID, categoryID, ch.ChannelType, namePtr, topicPtr,
+				ch.Position, ch.NSFW, ch.SlowmodeSeconds, ch.UserLimit, ch.Bitrate, now,
+			); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }

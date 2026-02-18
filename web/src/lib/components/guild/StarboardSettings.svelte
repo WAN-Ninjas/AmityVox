@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -25,8 +26,8 @@
 		created_at: string;
 	}
 
-	let loading = $state(false);
-	let saving = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let error = $state('');
 	let success = $state('');
 
@@ -41,18 +42,18 @@
 	});
 	let entries = $state<StarboardEntry[]>([]);
 	let channels = $state<Channel[]>([]);
-	let loadingEntries = $state(false);
+	let loadEntriesOp = $state(createAsyncOp());
 	let activeTab = $state<'settings' | 'entries'>('settings');
 
 	async function loadConfig() {
-		loading = true;
 		error = '';
-		try {
-			config = await api.request<StarboardConfig>('GET', `/guilds/${guildId}/starboard`);
-		} catch (err: any) {
-			error = err.message || 'Failed to load starboard config';
-		} finally {
-			loading = false;
+		const result = await loadOp.run(
+			() => api.request<StarboardConfig>('GET', `/guilds/${guildId}/starboard`)
+		);
+		if (loadOp.error) {
+			error = loadOp.error;
+		} else if (result) {
+			config = result;
 		}
 	}
 
@@ -64,11 +65,10 @@
 	}
 
 	async function saveConfig() {
-		saving = true;
 		error = '';
 		success = '';
-		try {
-			config = await api.request<StarboardConfig>(
+		const result = await saveOp.run(
+			() => api.request<StarboardConfig>(
 				'PATCH', `/guilds/${guildId}/starboard`, {
 					enabled: config.enabled,
 					channel_id: config.channel_id,
@@ -77,26 +77,27 @@
 					self_star: config.self_star,
 					nsfw_allowed: config.nsfw_allowed
 				}
-			);
+			)
+		);
+		if (saveOp.error) {
+			error = saveOp.error;
+		} else if (result) {
+			config = result;
 			success = 'Settings saved';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to save config';
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function loadEntries() {
-		loadingEntries = true;
-		try {
-			entries = await api.request<StarboardEntry[]>(
+		const result = await loadEntriesOp.run(
+			() => api.request<StarboardEntry[]>(
 				'GET', `/guilds/${guildId}/starboard/entries?limit=50`
-			);
-		} catch (err: any) {
-			error = err.message || 'Failed to load entries';
-		} finally {
-			loadingEntries = false;
+			)
+		);
+		if (loadEntriesOp.error) {
+			error = loadEntriesOp.error;
+		} else if (result) {
+			entries = result;
 		}
 	}
 
@@ -135,7 +136,7 @@
 		<div class="rounded bg-green-500/10 px-4 py-3 text-sm text-green-400">{success}</div>
 	{/if}
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
@@ -214,13 +215,13 @@
 					<span class="text-sm text-text-primary">Allow NSFW channel messages on starboard</span>
 				</label>
 
-				<button class="btn-primary" onclick={saveConfig} disabled={saving}>
-					{saving ? 'Saving...' : 'Save Settings'}
+				<button class="btn-primary" onclick={saveConfig} disabled={saveOp.loading}>
+					{saveOp.loading ? 'Saving...' : 'Save Settings'}
 				</button>
 			</div>
 
 		{:else if activeTab === 'entries'}
-			{#if loadingEntries}
+			{#if loadEntriesOp.loading}
 				<div class="flex items-center justify-center py-8">
 					<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 				</div>

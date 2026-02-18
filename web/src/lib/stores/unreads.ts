@@ -1,22 +1,23 @@
 // Unreads store — tracks unread message counts and mention counts per channel.
 
-import { writable, derived, get } from 'svelte/store';
+import { derived, get } from 'svelte/store';
 import type { ReadState } from '$lib/types';
 import { api } from '$lib/api/client';
 import { currentChannelId } from './channels';
+import { createMapStore } from './mapHelpers';
 
-// Map of channel_id -> { lastReadId, unreadCount, mentionCount }
+// Map of channel_id -> { lastReadId, mentionCount }
 interface UnreadEntry {
 	lastReadId: string | null;
 	mentionCount: number;
 }
 
-const unreadState = writable<Map<string, UnreadEntry>>(new Map());
+const unreadState = createMapStore<string, UnreadEntry>();
 
 // Channels that have any unread messages.
 // We track by comparing last_message_id on the channel with lastReadId.
 // For simplicity, we track an explicit unread count.
-const unreadCounts = writable<Map<string, number>>(new Map());
+const unreadCounts = createMapStore<string, number>();
 
 export { unreadCounts, unreadState };
 
@@ -74,7 +75,7 @@ export async function loadReadState() {
 				mentionCount: rs.mention_count
 			});
 		}
-		unreadState.set(map);
+		unreadState.setAll(map);
 	} catch {
 		// Read state may not be available yet.
 	}
@@ -83,18 +84,8 @@ export async function loadReadState() {
 // Mark a channel as read (acknowledge).
 export async function ackChannel(channelId: string) {
 	// Immediately clear unread count locally.
-	unreadCounts.update((map) => {
-		map.delete(channelId);
-		return new Map(map);
-	});
-	unreadState.update((map) => {
-		const entry = map.get(channelId);
-		if (entry) {
-			map.set(channelId, { ...entry, mentionCount: 0 });
-			return new Map(map);
-		}
-		return map;
-	});
+	unreadCounts.removeEntry(channelId);
+	unreadState.updateEntry(channelId, (entry) => ({ ...entry, mentionCount: 0 }));
 
 	try {
 		await api.ackChannel(channelId);
@@ -108,29 +99,17 @@ export function incrementUnread(channelId: string, isMention: boolean = false) {
 	// Don't increment if we're currently viewing this channel.
 	if (get(currentChannelId) === channelId) return;
 
-	unreadCounts.update((map) => {
-		map.set(channelId, (map.get(channelId) ?? 0) + 1);
-		return new Map(map);
-	});
+	unreadCounts.setEntry(channelId, (get(unreadCounts).get(channelId) ?? 0) + 1);
 
 	if (isMention) {
-		unreadState.update((map) => {
-			const entry = map.get(channelId) ?? { lastReadId: null, mentionCount: 0 };
-			map.set(channelId, { ...entry, mentionCount: entry.mentionCount + 1 });
-			return new Map(map);
-		});
+		const current = get(unreadState).get(channelId) ?? { lastReadId: null, mentionCount: 0 };
+		unreadState.setEntry(channelId, { ...current, mentionCount: current.mentionCount + 1 });
 	}
 }
 
 // Clear unreads when viewing a channel.
 export function clearChannelUnreads(channelId: string) {
-	unreadCounts.update((map) => {
-		if (map.has(channelId)) {
-			map.delete(channelId);
-			return new Map(map);
-		}
-		return map;
-	});
+	unreadCounts.removeEntry(channelId);
 }
 
 // Mark all channels as read.
@@ -139,7 +118,7 @@ export async function markAllRead() {
 	const channelIds = [...counts.keys()].filter((id) => (counts.get(id) ?? 0) > 0);
 
 	// Clear all locally first.
-	unreadCounts.set(new Map());
+	unreadCounts.clear();
 	unreadState.update((map) => {
 		for (const id of channelIds) {
 			const entry = map.get(id);

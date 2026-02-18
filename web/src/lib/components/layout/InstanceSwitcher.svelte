@@ -2,47 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-
-	// Typed fetch helpers using the existing api client's token.
-	async function apiGet<T>(path: string): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function apiDel(path: string): Promise<void> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'DELETE',
-			headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
-		});
-		if (!res.ok && res.status !== 204) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-	}
-
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import {
 		instanceProfiles,
 		instanceConnections,
@@ -64,8 +24,8 @@
 	let showAddForm = $state(false);
 	let newInstanceUrl = $state('');
 	let newInstanceName = $state('');
-	let adding = $state(false);
-	let loading = $state(false);
+	let addOp = $state(createAsyncOp());
+	let loadOp = $state(createAsyncOp());
 
 	// Derived state
 	let profiles = $derived($instanceProfiles);
@@ -75,28 +35,27 @@
 	let mentionBadge = $derived($crossInstanceMentionCount);
 
 	async function loadProfiles() {
-		loading = true;
-		try {
-			const data = await apiGet<InstanceProfile[]>('/users/@me/instance-profiles');
-			setInstanceProfiles(data);
-		} catch {
+		const data = await loadOp.run(() => api.getInstanceProfiles());
+		if (!loadOp.error) {
+			setInstanceProfiles(data!);
+		} else {
 			// Fall back to cache.
 			loadInstanceProfilesFromCache();
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function addInstance() {
 		if (!newInstanceUrl.trim()) return;
-		adding = true;
-		try {
-			const result = await apiPost<{ id: string; instance_url: string }>('/users/@me/instance-profiles', {
+		const result = await addOp.run(
+			() => api.createInstanceProfile({
 				instance_url: newInstanceUrl.trim(),
 				instance_name: newInstanceName.trim() || null,
-			});
+			}),
+			msg => addToast('Failed to add instance: ' + msg, 'error')
+		);
+		if (!addOp.error) {
 			upsertInstanceProfile({
-				id: result.id,
+				id: result!.id,
 				instance_url: newInstanceUrl.trim(),
 				instance_name: newInstanceName.trim() || null,
 				instance_icon: null,
@@ -108,17 +67,13 @@
 			showAddForm = false;
 			newInstanceUrl = '';
 			newInstanceName = '';
-		} catch (e: any) {
-			addToast('Failed to add instance: ' + e.message, 'error');
-		} finally {
-			adding = false;
 		}
 	}
 
 	async function removeInstance(profile: InstanceProfile) {
 		if (!confirm(`Remove ${profile.instance_name || profile.instance_url}?`)) return;
 		try {
-			await apiDel(`/users/@me/instance-profiles/${profile.id}`);
+			await api.deleteInstanceProfile(profile.id);
 			removeInstanceProfile(profile.instance_url);
 			addToast('Instance removed', 'success');
 		} catch (e: any) {
@@ -196,7 +151,7 @@
 			</div>
 
 			<div class="max-h-64 overflow-y-auto p-2 space-y-1">
-				{#if loading}
+				{#if loadOp.loading}
 					<div class="flex items-center justify-center py-4">
 						<div class="animate-spin h-5 w-5 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 					</div>
@@ -274,9 +229,9 @@
 						<button
 							class="btn-primary text-sm flex-1"
 							onclick={addInstance}
-							disabled={adding || !newInstanceUrl.trim()}
+							disabled={addOp.loading || !newInstanceUrl.trim()}
 						>
-							{adding ? 'Adding...' : 'Add'}
+							{addOp.loading ? 'Adding...' : 'Add'}
 						</button>
 						<button
 							class="btn-secondary text-sm"

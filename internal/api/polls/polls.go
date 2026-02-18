@@ -4,11 +4,9 @@
 package polls
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -46,18 +44,15 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createPollRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	// Validate question.
-	if req.Question == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_question", "Question is required")
+	if !apiutil.RequireNonEmpty(w, "question", req.Question) {
 		return
 	}
-	if utf8.RuneCountInString(req.Question) > 300 {
-		apiutil.WriteError(w, http.StatusBadRequest, "question_too_long", "Question must be at most 300 characters")
+	if !apiutil.ValidateStringLength(w, "question", req.Question, 0, 300) {
 		return
 	}
 
@@ -71,12 +66,10 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, opt := range req.Options {
-		if opt == "" {
-			apiutil.WriteError(w, http.StatusBadRequest, "empty_option", "Poll options must not be empty")
+		if !apiutil.RequireNonEmpty(w, "option", opt) {
 			return
 		}
-		if utf8.RuneCountInString(opt) > 100 {
-			apiutil.WriteError(w, http.StatusBadRequest, "option_too_long", "Each poll option must be at most 100 characters")
+		if !apiutil.ValidateStringLength(w, "option", opt, 0, 100) {
 			return
 		}
 	}
@@ -89,54 +82,42 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &t
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create poll")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Insert the poll.
 	var poll models.Poll
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO polls (id, channel_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, false, now())
-		 RETURNING id, channel_id, message_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at`,
-		pollID, channelID, userID, req.Question, req.MultiVote, req.Anonymous, expiresAt,
-	).Scan(
-		&poll.ID, &poll.ChannelID, &poll.MessageID, &poll.AuthorID,
-		&poll.Question, &poll.MultiVote, &poll.Anonymous, &poll.ExpiresAt,
-		&poll.Closed, &poll.CreatedAt,
-	)
-	if err != nil {
-		h.Logger.Error("failed to insert poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create poll")
-		return
-	}
-
-	// Insert poll options.
 	options := make([]models.PollOption, 0, len(req.Options))
-	for i, text := range req.Options {
-		optionID := models.NewULID().String()
-		var opt models.PollOption
-		err = tx.QueryRow(r.Context(),
-			`INSERT INTO poll_options (id, poll_id, text, position, vote_count)
-			 VALUES ($1, $2, $3, $4, 0)
-			 RETURNING id, poll_id, text, position, vote_count`,
-			optionID, pollID, text, i,
-		).Scan(&opt.ID, &opt.PollID, &opt.Text, &opt.Position, &opt.VoteCount)
-		if err != nil {
-			h.Logger.Error("failed to insert poll option", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create poll")
-			return
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Insert the poll.
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO polls (id, channel_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, false, now())
+			 RETURNING id, channel_id, message_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at`,
+			pollID, channelID, userID, req.Question, req.MultiVote, req.Anonymous, expiresAt,
+		).Scan(
+			&poll.ID, &poll.ChannelID, &poll.MessageID, &poll.AuthorID,
+			&poll.Question, &poll.MultiVote, &poll.Anonymous, &poll.ExpiresAt,
+			&poll.Closed, &poll.CreatedAt,
+		); err != nil {
+			return err
 		}
-		options = append(options, opt)
-	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create poll")
+		// Insert poll options.
+		for i, text := range req.Options {
+			optionID := models.NewULID().String()
+			var opt models.PollOption
+			if err := tx.QueryRow(r.Context(),
+				`INSERT INTO poll_options (id, poll_id, text, position, vote_count)
+				 VALUES ($1, $2, $3, $4, 0)
+				 RETURNING id, poll_id, text, position, vote_count`,
+				optionID, pollID, text, i,
+			).Scan(&opt.ID, &opt.PollID, &opt.Text, &opt.Position, &opt.VoteCount); err != nil {
+				return err
+			}
+			options = append(options, opt)
+		}
+
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to create poll", err)
 		return
 	}
 
@@ -170,8 +151,7 @@ func (h *Handler) HandleGetPoll(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "poll_not_found", "Poll not found")
 			return
 		}
-		h.Logger.Error("failed to get poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get poll")
+		apiutil.InternalError(w, h.Logger, "Failed to get poll", err)
 		return
 	}
 
@@ -183,8 +163,7 @@ func (h *Handler) HandleGetPoll(w http.ResponseWriter, r *http.Request) {
 		pollID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get poll options", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get poll options")
+		apiutil.InternalError(w, h.Logger, "Failed to get poll options", err)
 		return
 	}
 	defer rows.Close()
@@ -194,8 +173,7 @@ func (h *Handler) HandleGetPoll(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var opt models.PollOption
 		if err := rows.Scan(&opt.ID, &opt.PollID, &opt.Text, &opt.Position, &opt.VoteCount); err != nil {
-			h.Logger.Error("failed to scan poll option", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read poll options")
+			apiutil.InternalError(w, h.Logger, "Failed to read poll options", err)
 			return
 		}
 		totalVotes += opt.VoteCount
@@ -211,8 +189,7 @@ func (h *Handler) HandleGetPoll(w http.ResponseWriter, r *http.Request) {
 		pollID, userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get user votes", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user votes")
+		apiutil.InternalError(w, h.Logger, "Failed to get user votes", err)
 		return
 	}
 	defer voteRows.Close()
@@ -221,8 +198,7 @@ func (h *Handler) HandleGetPoll(w http.ResponseWriter, r *http.Request) {
 	for voteRows.Next() {
 		var optionID string
 		if err := voteRows.Scan(&optionID); err != nil {
-			h.Logger.Error("failed to scan user vote", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read user votes")
+			apiutil.InternalError(w, h.Logger, "Failed to read user votes", err)
 			return
 		}
 		userVotes = append(userVotes, optionID)
@@ -239,8 +215,7 @@ func (h *Handler) HandleVotePoll(w http.ResponseWriter, r *http.Request) {
 	pollID := chi.URLParam(r, "pollID")
 
 	var req votePollRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -262,8 +237,7 @@ func (h *Handler) HandleVotePoll(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "poll_not_found", "Poll not found")
 			return
 		}
-		h.Logger.Error("failed to get poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get poll")
+		apiutil.InternalError(w, h.Logger, "Failed to get poll", err)
 		return
 	}
 
@@ -292,8 +266,7 @@ func (h *Handler) HandleVotePoll(w http.ResponseWriter, r *http.Request) {
 		pollID, req.OptionIDs,
 	).Scan(&validCount)
 	if err != nil {
-		h.Logger.Error("failed to validate option IDs", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to validate options")
+		apiutil.InternalError(w, h.Logger, "Failed to validate options", err)
 		return
 	}
 	if validCount != len(req.OptionIDs) {
@@ -301,91 +274,69 @@ func (h *Handler) HandleVotePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Remove any existing votes by this user on this poll and decrement counts.
-	existingRows, err := tx.Query(r.Context(),
-		`SELECT option_id FROM poll_votes WHERE poll_id = $1 AND user_id = $2`,
-		pollID, userID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to get existing votes", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-		return
-	}
-
-	var existingOptionIDs []string
-	for existingRows.Next() {
-		var optID string
-		if err := existingRows.Scan(&optID); err != nil {
-			existingRows.Close()
-			h.Logger.Error("failed to scan existing vote", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-			return
-		}
-		existingOptionIDs = append(existingOptionIDs, optID)
-	}
-	existingRows.Close()
-
-	// Decrement vote counts for previously voted options.
-	if len(existingOptionIDs) > 0 {
-		_, err = tx.Exec(r.Context(),
-			`UPDATE poll_options SET vote_count = vote_count - 1
-			 WHERE poll_id = $1 AND id = ANY($2)`,
-			pollID, existingOptionIDs,
-		)
-		if err != nil {
-			h.Logger.Error("failed to decrement vote counts", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-			return
-		}
-
-		// Remove existing votes.
-		_, err = tx.Exec(r.Context(),
-			`DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2`,
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Remove any existing votes by this user on this poll and decrement counts.
+		existingRows, err := tx.Query(r.Context(),
+			`SELECT option_id FROM poll_votes WHERE poll_id = $1 AND user_id = $2`,
 			pollID, userID,
 		)
 		if err != nil {
-			h.Logger.Error("failed to remove existing votes", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-			return
-		}
-	}
-
-	// Insert new votes and increment counts.
-	for _, optionID := range req.OptionIDs {
-		_, err = tx.Exec(r.Context(),
-			`INSERT INTO poll_votes (poll_id, option_id, user_id, created_at)
-			 VALUES ($1, $2, $3, now())`,
-			pollID, optionID, userID,
-		)
-		if err != nil {
-			h.Logger.Error("failed to insert vote", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-			return
+			return err
 		}
 
-		_, err = tx.Exec(r.Context(),
-			`UPDATE poll_options SET vote_count = vote_count + 1
-			 WHERE poll_id = $1 AND id = $2`,
-			pollID, optionID,
-		)
-		if err != nil {
-			h.Logger.Error("failed to increment vote count", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
-			return
+		var existingOptionIDs []string
+		for existingRows.Next() {
+			var optID string
+			if err := existingRows.Scan(&optID); err != nil {
+				existingRows.Close()
+				return err
+			}
+			existingOptionIDs = append(existingOptionIDs, optID)
 		}
-	}
+		existingRows.Close()
 
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cast vote")
+		// Decrement vote counts for previously voted options.
+		if len(existingOptionIDs) > 0 {
+			if _, err := tx.Exec(r.Context(),
+				`UPDATE poll_options SET vote_count = vote_count - 1
+				 WHERE poll_id = $1 AND id = ANY($2)`,
+				pollID, existingOptionIDs,
+			); err != nil {
+				return err
+			}
+
+			// Remove existing votes.
+			if _, err := tx.Exec(r.Context(),
+				`DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2`,
+				pollID, userID,
+			); err != nil {
+				return err
+			}
+		}
+
+		// Insert new votes and increment counts.
+		for _, optionID := range req.OptionIDs {
+			if _, err := tx.Exec(r.Context(),
+				`INSERT INTO poll_votes (poll_id, option_id, user_id, created_at)
+				 VALUES ($1, $2, $3, now())`,
+				pollID, optionID, userID,
+			); err != nil {
+				return err
+			}
+
+			if _, err := tx.Exec(r.Context(),
+				`UPDATE poll_options SET vote_count = vote_count + 1
+				 WHERE poll_id = $1 AND id = $2`,
+				pollID, optionID,
+			); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to cast vote", err)
 		return
 	}
 
@@ -420,8 +371,7 @@ func (h *Handler) HandleClosePoll(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "poll_not_found", "Poll not found")
 			return
 		}
-		h.Logger.Error("failed to get poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get poll")
+		apiutil.InternalError(w, h.Logger, "Failed to get poll", err)
 		return
 	}
 
@@ -443,8 +393,7 @@ func (h *Handler) HandleClosePoll(w http.ResponseWriter, r *http.Request) {
 	_, err = h.Pool.Exec(r.Context(),
 		`UPDATE polls SET closed = true WHERE id = $1`, pollID)
 	if err != nil {
-		h.Logger.Error("failed to close poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to close poll")
+		apiutil.InternalError(w, h.Logger, "Failed to close poll", err)
 		return
 	}
 
@@ -477,8 +426,7 @@ func (h *Handler) HandleDeletePoll(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "poll_not_found", "Poll not found")
 			return
 		}
-		h.Logger.Error("failed to get poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get poll")
+		apiutil.InternalError(w, h.Logger, "Failed to get poll", err)
 		return
 	}
 
@@ -494,8 +442,7 @@ func (h *Handler) HandleDeletePoll(w http.ResponseWriter, r *http.Request) {
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM polls WHERE id = $1`, pollID)
 	if err != nil {
-		h.Logger.Error("failed to delete poll", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete poll")
+		apiutil.InternalError(w, h.Logger, "Failed to delete poll", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

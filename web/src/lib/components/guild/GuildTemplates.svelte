@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -14,20 +15,21 @@
 	}
 
 	let templates = $state<GuildTemplate[]>([]);
-	let loading = $state(false);
 	let error = $state('');
 	let success = $state('');
+
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
+	let applyOp = $state(createAsyncOp());
 
 	// Create template form.
 	let showCreateForm = $state(false);
 	let newTemplateName = $state('');
 	let newTemplateDescription = $state('');
-	let creating = $state(false);
 
 	// Apply template form.
 	let applyingTemplateId = $state<string | null>(null);
 	let applyNewGuildName = $state('');
-	let applying = $state(false);
 	let showApplyDialog = $state(false);
 	let applyMode = $state<'new' | 'existing'>('new');
 
@@ -38,24 +40,12 @@
 	});
 
 	async function loadTemplates() {
-		loading = true;
 		error = '';
-		try {
-			const token = api.getToken();
-			const res = await fetch(`/api/v1/guilds/${guildId}/templates`, {
-				headers: { Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to load templates');
-			}
-			const data = await res.json();
-			templates = data.data ?? [];
-		} catch (err: any) {
-			error = err.message || 'Failed to load templates';
-		} finally {
-			loading = false;
-		}
+		const result = await loadOp.run(
+			() => api.getGuildTemplates(guildId) as Promise<GuildTemplate[]>,
+			msg => (error = msg)
+		);
+		if (result) templates = result;
 	}
 
 	async function handleCreateTemplate() {
@@ -63,38 +53,22 @@
 			error = 'Please enter a template name.';
 			return;
 		}
-		creating = true;
 		error = '';
 		success = '';
-		try {
-			const token = api.getToken();
-			const res = await fetch(`/api/v1/guilds/${guildId}/templates`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${token}`
-				},
-				body: JSON.stringify({
-					name: newTemplateName.trim(),
-					description: newTemplateDescription.trim() || undefined
-				})
-			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to create template');
-			}
-			const data = await res.json();
-			const newTemplate = data.data ?? data;
-			templates = [newTemplate, ...templates];
+		const newTemplate = await createOp.run(
+			() => api.createGuildTemplate(guildId, {
+				name: newTemplateName.trim(),
+				description: newTemplateDescription.trim() || undefined
+			}) as Promise<GuildTemplate>,
+			msg => (error = msg)
+		);
+		if (!createOp.error) {
+			templates = [newTemplate!, ...templates];
 			newTemplateName = '';
 			newTemplateDescription = '';
 			showCreateForm = false;
 			success = 'Template created successfully!';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to create template';
-		} finally {
-			creating = false;
 		}
 	}
 
@@ -102,15 +76,7 @@
 		if (!confirm('Are you sure you want to delete this template?')) return;
 		error = '';
 		try {
-			const token = api.getToken();
-			const res = await fetch(`/api/v1/guilds/${guildId}/templates/${templateId}`, {
-				method: 'DELETE',
-				headers: { Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to delete template');
-			}
+			await api.deleteGuildTemplate(guildId, templateId);
 			templates = templates.filter((t) => t.id !== templateId);
 			success = 'Template deleted.';
 			setTimeout(() => (success = ''), 3000);
@@ -129,34 +95,23 @@
 
 	async function handleApplyTemplate() {
 		if (!applyingTemplateId) return;
-		applying = true;
+		if (applyMode === 'new' && !applyNewGuildName.trim()) {
+			error = 'Please enter a guild name.';
+			return;
+		}
 		error = '';
 		success = '';
-		try {
-			const payload: Record<string, string> = {
-				template_id: applyingTemplateId
-			};
-			if (applyMode === 'new') {
-				if (!applyNewGuildName.trim()) {
-					error = 'Please enter a guild name.';
-					applying = false;
-					return;
-				}
-				payload.guild_name = applyNewGuildName.trim();
-			}
-			const token = api.getToken();
-			const res = await fetch(`/api/v1/guilds/${guildId}/templates/${applyingTemplateId}/apply`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${token}`
-				},
-				body: JSON.stringify(payload)
-			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to apply template');
-			}
+		const payload: Record<string, string> = {
+			template_id: applyingTemplateId
+		};
+		if (applyMode === 'new') {
+			payload.guild_name = applyNewGuildName.trim();
+		}
+		await applyOp.run(
+			() => api.applyGuildTemplate(guildId, applyingTemplateId!, payload),
+			msg => (error = msg)
+		);
+		if (!applyOp.error) {
 			showApplyDialog = false;
 			applyingTemplateId = null;
 			if (applyMode === 'new') {
@@ -165,10 +120,6 @@
 				success = 'Template applied to this guild!';
 			}
 			setTimeout(() => (success = ''), 5000);
-		} catch (err: any) {
-			error = err.message || 'Failed to apply template';
-		} finally {
-			applying = false;
 		}
 	}
 
@@ -233,8 +184,8 @@
 				/>
 			</div>
 			<div class="flex items-center gap-2">
-				<button class="btn-primary" onclick={handleCreateTemplate} disabled={creating || !newTemplateName.trim()}>
-					{creating ? 'Creating...' : 'Create Template'}
+				<button class="btn-primary" onclick={handleCreateTemplate} disabled={createOp.loading || !newTemplateName.trim()}>
+					{createOp.loading ? 'Creating...' : 'Create Template'}
 				</button>
 				<button class="btn-secondary" onclick={() => (showCreateForm = false)}>Cancel</button>
 			</div>
@@ -246,7 +197,7 @@
 	{/if}
 
 	<!-- Template List -->
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center gap-2 py-4">
 			<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			<span class="text-sm text-text-muted">Loading templates...</span>
@@ -347,9 +298,9 @@
 					<button
 						class="btn-primary"
 						onclick={handleApplyTemplate}
-						disabled={applying || (applyMode === 'new' && !applyNewGuildName.trim())}
+						disabled={applyOp.loading || (applyMode === 'new' && !applyNewGuildName.trim())}
 					>
-						{applying ? 'Applying...' : applyMode === 'new' ? 'Create Guild' : 'Apply Template'}
+						{applyOp.loading ? 'Applying...' : applyMode === 'new' ? 'Create Guild' : 'Apply Template'}
 					</button>
 				</div>
 			</div>

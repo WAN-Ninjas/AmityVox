@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { Role, Channel } from '$lib/types';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -32,8 +33,8 @@
 		avatar_id: string | null;
 	}
 
-	let loading = $state(false);
-	let saving = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let error = $state('');
 	let success = $state('');
 
@@ -53,23 +54,22 @@
 
 	let newLevel = $state(5);
 	let newRoleId = $state('');
-	let addingRole = $state(false);
-	let loadingLeaderboard = $state(false);
+	let addRoleOp = $state(createAsyncOp());
+	let loadLeaderboardOp = $state(createAsyncOp());
 	let activeTab = $state<'settings' | 'roles' | 'leaderboard'>('settings');
 
 	async function loadConfig() {
-		loading = true;
 		error = '';
-		try {
-			const data = await api.request<{ config: LevelingConfig; level_roles: LevelRole[] }>(
+		const data = await loadOp.run(
+			() => api.request<{ config: LevelingConfig; level_roles: LevelRole[] }>(
 				'GET', `/guilds/${guildId}/leveling`
-			);
+			)
+		);
+		if (loadOp.error) {
+			error = loadOp.error;
+		} else if (data) {
 			config = data.config;
 			levelRoles = data.level_roles;
-		} catch (err: any) {
-			error = err.message || 'Failed to load leveling config';
-		} finally {
-			loading = false;
 		}
 	}
 
@@ -85,11 +85,10 @@
 	}
 
 	async function saveConfig() {
-		saving = true;
 		error = '';
 		success = '';
-		try {
-			const updated = await api.request<LevelingConfig>(
+		const updated = await saveOp.run(
+			() => api.request<LevelingConfig>(
 				'PATCH', `/guilds/${guildId}/leveling`, {
 					enabled: config.enabled,
 					xp_per_message: config.xp_per_message,
@@ -98,35 +97,34 @@
 					level_up_message: config.level_up_message,
 					stack_roles: config.stack_roles
 				}
-			);
+			)
+		);
+		if (saveOp.error) {
+			error = saveOp.error;
+		} else if (updated) {
 			config = updated;
 			success = 'Settings saved';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to save config';
-		} finally {
-			saving = false;
 		}
 	}
 
 	async function addLevelRole() {
 		if (!newRoleId) return;
-		addingRole = true;
 		error = '';
-		try {
-			const lr = await api.request<LevelRole>(
+		const lr = await addRoleOp.run(
+			() => api.request<LevelRole>(
 				'POST', `/guilds/${guildId}/leveling/roles`, {
 					level: newLevel,
 					role_id: newRoleId
 				}
-			);
+			)
+		);
+		if (addRoleOp.error) {
+			error = addRoleOp.error;
+		} else if (lr) {
 			levelRoles = [...levelRoles, lr].sort((a, b) => a.level - b.level);
 			newLevel = 5;
 			newRoleId = '';
-		} catch (err: any) {
-			error = err.message || 'Failed to add level role';
-		} finally {
-			addingRole = false;
 		}
 	}
 
@@ -140,15 +138,15 @@
 	}
 
 	async function loadLeaderboard() {
-		loadingLeaderboard = true;
-		try {
-			leaderboard = await api.request<MemberXP[]>(
+		const result = await loadLeaderboardOp.run(
+			() => api.request<MemberXP[]>(
 				'GET', `/guilds/${guildId}/leveling/leaderboard?limit=50`
-			);
-		} catch (err: any) {
-			error = err.message || 'Failed to load leaderboard';
-		} finally {
-			loadingLeaderboard = false;
+			)
+		);
+		if (loadLeaderboardOp.error) {
+			error = loadLeaderboardOp.error;
+		} else if (result) {
+			leaderboard = result;
 		}
 	}
 
@@ -180,7 +178,7 @@
 		<div class="rounded bg-green-500/10 px-4 py-3 text-sm text-green-400">{success}</div>
 	{/if}
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
@@ -261,8 +259,8 @@
 					<span class="text-sm text-text-primary">Stack role rewards (keep lower level roles)</span>
 				</label>
 
-				<button class="btn-primary" onclick={saveConfig} disabled={saving}>
-					{saving ? 'Saving...' : 'Save Settings'}
+				<button class="btn-primary" onclick={saveConfig} disabled={saveOp.loading}>
+					{saveOp.loading ? 'Saving...' : 'Save Settings'}
 				</button>
 			</div>
 
@@ -307,15 +305,15 @@
 						</select>
 					</div>
 					<div class="flex items-end">
-						<button class="btn-primary" onclick={addLevelRole} disabled={addingRole || !newRoleId}>
-							{addingRole ? 'Adding...' : 'Add'}
+						<button class="btn-primary" onclick={addLevelRole} disabled={addRoleOp.loading || !newRoleId}>
+							{addRoleOp.loading ? 'Adding...' : 'Add'}
 						</button>
 					</div>
 				</div>
 			</div>
 
 		{:else if activeTab === 'leaderboard'}
-			{#if loadingLeaderboard}
+			{#if loadLeaderboardOp.loading}
 				<div class="flex items-center justify-center py-8">
 					<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 				</div>

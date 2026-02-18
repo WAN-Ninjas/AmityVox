@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Channel, Role, ForumTag, GalleryTag } from '$lib/types';
 
 	let {
@@ -28,7 +29,6 @@
 	let newTagName = $state('');
 	let newTagEmoji = $state('');
 	let newTagColor = $state('#6366f1');
-	let creatingTag = $state(false);
 
 	// Gallery-specific settings
 	let galleryDefaultSort = $state<string>('newest');
@@ -38,9 +38,10 @@
 	let newGalleryTagName = $state('');
 	let newGalleryTagEmoji = $state('');
 	let newGalleryTagColor = $state('#6366f1');
-	let creatingGalleryTag = $state(false);
 
-	let saving = $state(false);
+	let saveOp = $state(createAsyncOp());
+	let createTagOp = $state(createAsyncOp());
+	let createGalleryTagOp = $state(createAsyncOp());
 
 	const isForum = $derived(channel.channel_type === 'forum');
 	const isGallery = $derived(channel.channel_type === 'gallery');
@@ -77,21 +78,19 @@
 	async function createTag() {
 		const name = newTagName.trim();
 		if (!name) return;
-		creatingTag = true;
-		try {
-			const tag = await api.createForumTag(channel.id, {
+		const tag = await createTagOp.run(
+			() => api.createForumTag(channel.id, {
 				name,
 				emoji: newTagEmoji.trim() || undefined,
 				color: newTagColor || undefined
-			});
-			forumTags = [...forumTags, tag];
+			}),
+			msg => addToast(msg, 'error')
+		);
+		if (!createTagOp.error) {
+			forumTags = [...forumTags, tag!];
 			newTagName = '';
 			newTagEmoji = '';
 			addToast('Tag created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create tag', 'error');
-		} finally {
-			creatingTag = false;
 		}
 	}
 
@@ -108,21 +107,19 @@
 	async function createGalleryTag() {
 		const name = newGalleryTagName.trim();
 		if (!name) return;
-		creatingGalleryTag = true;
-		try {
-			const tag = await api.createGalleryTag(channel.id, {
+		const tag = await createGalleryTagOp.run(
+			() => api.createGalleryTag(channel.id, {
 				name,
 				emoji: newGalleryTagEmoji.trim() || undefined,
 				color: newGalleryTagColor || undefined
-			});
-			galleryTags = [...galleryTags, tag];
+			}),
+			msg => addToast(msg, 'error')
+		);
+		if (!createGalleryTagOp.error) {
+			galleryTags = [...galleryTags, tag!];
 			newGalleryTagName = '';
 			newGalleryTagEmoji = '';
 			addToast('Tag created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create tag', 'error');
-		} finally {
-			creatingGalleryTag = false;
 		}
 	}
 
@@ -153,30 +150,28 @@
 	}
 
 	async function handleSave() {
-		saving = true;
-		try {
-			const payload: any = {
-				read_only: readOnly,
-				read_only_role_ids: readOnlyRoleIds,
-				default_auto_archive_duration: autoArchiveDuration
-			};
-			if (isForum) {
-				payload.forum_default_sort = forumDefaultSort;
-				payload.forum_post_guidelines = forumPostGuidelines || null;
-				payload.forum_require_tags = forumRequireTags;
-			}
-			if (isGallery) {
-				payload.gallery_default_sort = galleryDefaultSort;
-				payload.gallery_post_guidelines = galleryPostGuidelines || null;
-				payload.gallery_require_tags = galleryRequireTags;
-			}
-			const updated = await api.updateChannel(channel.id, payload);
-			onUpdate(updated);
+		const payload: any = {
+			read_only: readOnly,
+			read_only_role_ids: readOnlyRoleIds,
+			default_auto_archive_duration: autoArchiveDuration
+		};
+		if (isForum) {
+			payload.forum_default_sort = forumDefaultSort;
+			payload.forum_post_guidelines = forumPostGuidelines || null;
+			payload.forum_require_tags = forumRequireTags;
+		}
+		if (isGallery) {
+			payload.gallery_default_sort = galleryDefaultSort;
+			payload.gallery_post_guidelines = galleryPostGuidelines || null;
+			payload.gallery_require_tags = galleryRequireTags;
+		}
+		const updated = await saveOp.run(
+			() => api.updateChannel(channel.id, payload),
+			msg => addToast(msg, 'error')
+		);
+		if (!saveOp.error) {
+			onUpdate(updated!);
 			addToast('Channel settings updated', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update channel settings', 'error');
-		} finally {
-			saving = false;
 		}
 	}
 </script>
@@ -332,9 +327,9 @@
 				<button
 					class="btn-primary shrink-0 text-xs"
 					onclick={createTag}
-					disabled={creatingTag || !newTagName.trim()}
+					disabled={createTagOp.loading || !newTagName.trim()}
 				>
-					{creatingTag ? '...' : 'Add'}
+					{createTagOp.loading ? '...' : 'Add'}
 				</button>
 			</div>
 		</div>
@@ -439,9 +434,9 @@
 				<button
 					class="btn-primary shrink-0 text-xs"
 					onclick={createGalleryTag}
-					disabled={creatingGalleryTag || !newGalleryTagName.trim()}
+					disabled={createGalleryTagOp.loading || !newGalleryTagName.trim()}
 				>
-					{creatingGalleryTag ? '...' : 'Add'}
+					{createGalleryTagOp.loading ? '...' : 'Add'}
 				</button>
 			</div>
 		</div>
@@ -461,8 +456,8 @@
 	<button
 		class="btn-primary text-sm"
 		onclick={handleSave}
-		disabled={saving}
+		disabled={saveOp.loading}
 	>
-		{saving ? 'Saving...' : 'Save Channel Settings'}
+		{saveOp.loading ? 'Saving...' : 'Save Channel Settings'}
 	</button>
 </div>

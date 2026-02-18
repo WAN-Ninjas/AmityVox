@@ -4,7 +4,6 @@
 package bookmarks
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -41,8 +40,7 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 	// Parse optional request body.
 	var req createBookmarkRequest
 	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		if !apiutil.DecodeJSON(w, r, &req) {
 			return
 		}
 	}
@@ -75,8 +73,7 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 		messageID,
 	).Scan(&exists)
 	if err != nil {
-		h.Logger.Error("failed to check message existence", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to check message")
+		apiutil.InternalError(w, h.Logger, "Failed to check message", err)
 		return
 	}
 	if !exists {
@@ -97,12 +94,7 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 		&bookmark.ReminderAt, &bookmark.Reminded, &bookmark.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create bookmark",
-			slog.String("user_id", userID),
-			slog.String("message_id", messageID),
-			slog.String("error", err.Error()),
-		)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bookmark")
+		apiutil.InternalError(w, h.Logger, "Failed to create bookmark", err)
 		return
 	}
 
@@ -120,12 +112,7 @@ func (h *Handler) HandleDeleteBookmark(w http.ResponseWriter, r *http.Request) {
 		userID, messageID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete bookmark",
-			slog.String("user_id", userID),
-			slog.String("message_id", messageID),
-			slog.String("error", err.Error()),
-		)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bookmark")
+		apiutil.InternalError(w, h.Logger, "Failed to delete bookmark", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -187,11 +174,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if err != nil {
-		h.Logger.Error("failed to list bookmarks",
-			slog.String("user_id", userID),
-			slog.String("error", err.Error()),
-		)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list bookmarks")
+		apiutil.InternalError(w, h.Logger, "Failed to list bookmarks", err)
 		return
 	}
 	defer rows.Close()
@@ -208,8 +191,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 			&author.ID, &author.InstanceID, &author.Username, &author.DisplayName, &author.AvatarID,
 			&author.StatusText, &author.StatusEmoji, &author.StatusPresence, &author.Bio, &author.Flags, &author.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan bookmark row", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read bookmarks")
+			apiutil.InternalError(w, h.Logger, "Failed to read bookmarks", err)
 			return
 		}
 

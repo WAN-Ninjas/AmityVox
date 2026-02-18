@@ -168,25 +168,10 @@
 
 		try {
 			const blob = new Blob(chunks, { type: getSupportedMimeType() });
+			const file = new File([blob], `recording_${Date.now()}.webm`, { type: blob.type });
 
-			// Upload via the file upload endpoint.
-			const formData = new FormData();
-			formData.append('file', blob, `recording_${Date.now()}.webm`);
-
-			const uploadResponse = await fetch('/api/v1/files/upload', {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${api.getToken()}`
-				},
-				body: formData
-			});
-
-			if (!uploadResponse.ok) {
-				throw new Error('Upload failed');
-			}
-
-			const uploadResult = await uploadResponse.json();
-			const fileData = uploadResult.data;
+			// Upload via the api client.
+			const fileData = await api.uploadFile(file) as any;
 
 			// Register the recording.
 			await api.request('POST', `/channels/${channelId}/experimental/recordings`, {
