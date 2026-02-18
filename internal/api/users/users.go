@@ -23,7 +23,7 @@ import (
 
 // FederationDMNotifier is called when a DM is created with a remote user.
 // The users handler calls this to notify the remote instance of the new DM.
-// Parameters: ctx, remoteDomain, localChannelID, creatorUserID, recipientIDs.
+// Parameters: ctx, remoteDomain, localChannelID, channelType, creatorID, recipientIDs, groupName.
 type FederationDMNotifier func(ctx context.Context, remoteDomain, localChannelID, channelType, creatorID string, recipientIDs []string, groupName *string) error
 
 // Handler implements user-related REST API endpoints.
@@ -365,28 +365,7 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 
 	// If the target user is from a remote instance, notify their instance.
 	if h.NotifyFederatedDM != nil {
-		var targetInstanceID string
-		_ = h.Pool.QueryRow(r.Context(),
-			`SELECT instance_id FROM users WHERE id = $1`, targetID,
-		).Scan(&targetInstanceID)
-
-		if targetInstanceID != "" && targetInstanceID != h.InstanceID {
-			var remoteDomain string
-			_ = h.Pool.QueryRow(r.Context(),
-				`SELECT domain FROM instances WHERE id = $1`, targetInstanceID,
-			).Scan(&remoteDomain)
-
-			if remoteDomain != "" {
-				go func() {
-					if err := h.NotifyFederatedDM(context.Background(), remoteDomain, newID, "dm", userID, []string{targetID}, nil); err != nil {
-						h.Logger.Warn("failed to notify remote instance of DM",
-							slog.String("domain", remoteDomain),
-							slog.String("error", err.Error()),
-						)
-					}
-				}()
-			}
-		}
+		h.notifyRemoteInstancesAsync(r.Context(), newID, "dm", userID, []string{targetID}, nil)
 	}
 
 	writeJSON(w, http.StatusCreated, channel)
@@ -1741,41 +1720,58 @@ func (h *Handler) HandleCreateGroupDM(w http.ResponseWriter, r *http.Request) {
 
 	// Notify remote instances of any remote recipients.
 	if h.NotifyFederatedDM != nil {
-		// Collect distinct remote instances.
-		rows, err := h.Pool.Query(r.Context(),
-			`SELECT DISTINCT i.domain, u.instance_id FROM users u
-			 JOIN instances i ON i.id = u.instance_id
-			 WHERE u.id = ANY($1) AND u.instance_id <> $2`,
-			req.UserIDs, h.InstanceID,
-		)
-		if err == nil {
-			defer rows.Close()
-			type remoteInstance struct {
-				domain     string
-				instanceID string
-			}
-			var remotes []remoteInstance
-			for rows.Next() {
-				var ri remoteInstance
-				if err := rows.Scan(&ri.domain, &ri.instanceID); err == nil {
-					remotes = append(remotes, ri)
-				}
-			}
-			for _, ri := range remotes {
-				domain := ri.domain
-				go func() {
-					if err := h.NotifyFederatedDM(context.Background(), domain, newID, "group", userID, req.UserIDs, req.Name); err != nil {
-						h.Logger.Warn("failed to notify remote instance of group DM",
-							slog.String("domain", domain),
-							slog.String("error", err.Error()),
-						)
-					}
-				}()
-			}
-		}
+		h.notifyRemoteInstancesAsync(r.Context(), newID, "group", userID, req.UserIDs, req.Name)
 	}
 
 	writeJSON(w, http.StatusCreated, channel)
+}
+
+// notifyRemoteInstancesAsync queries for remote instances among the given userIDs
+// and asynchronously notifies each one about a new DM/group-DM channel.
+func (h *Handler) notifyRemoteInstancesAsync(ctx context.Context, channelID, channelType, creatorID string, userIDs []string, groupName *string) {
+	rows, err := h.Pool.Query(ctx,
+		`SELECT DISTINCT i.domain FROM users u
+		 JOIN instances i ON i.id = u.instance_id
+		 WHERE u.id = ANY($1) AND u.instance_id <> $2`,
+		userIDs, h.InstanceID,
+	)
+	if err != nil {
+		h.Logger.Warn("failed to query remote instances for federation DM",
+			slog.String("channel_id", channelID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	defer rows.Close()
+
+	var domains []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			h.Logger.Warn("failed to scan remote instance domain",
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		domains = append(domains, domain)
+	}
+	if err := rows.Err(); err != nil {
+		h.Logger.Warn("error iterating remote instances",
+			slog.String("error", err.Error()),
+		)
+	}
+
+	for _, domain := range domains {
+		domain := domain
+		go func() {
+			if err := h.NotifyFederatedDM(context.Background(), domain, channelID, channelType, creatorID, userIDs, groupName); err != nil {
+				h.Logger.Warn("failed to notify remote instance of DM",
+					slog.String("domain", domain),
+					slog.String("error", err.Error()),
+				)
+			}
+		}()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

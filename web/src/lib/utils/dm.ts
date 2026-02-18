@@ -15,7 +15,7 @@ export function isRemoteUser(user: User, localInstanceId: string | undefined): b
  * Returns a user's handle string.
  * Local users: @username
  * Remote users: @username@domain (requires domain lookup from instance)
- * If no domain is available, falls back to showing instance_id.
+ * If no domain is available, falls back to @username only.
  */
 export function getUserHandle(user: User, localInstanceId: string | undefined, remoteDomain?: string): string {
 	if (!localInstanceId || !user.instance_id || user.instance_id === localInstanceId) {

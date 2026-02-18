@@ -45,9 +45,13 @@ func TestFederatedDMCreateRequest_JSON(t *testing.T) {
 	}
 	if len(decoded.RecipientIDs) != 2 {
 		t.Errorf("RecipientIDs length = %d, want 2", len(decoded.RecipientIDs))
+	} else if decoded.RecipientIDs[0] != "user-2" || decoded.RecipientIDs[1] != "user-3" {
+		t.Errorf("RecipientIDs = %v, want %v", decoded.RecipientIDs, []string{"user-2", "user-3"})
 	}
 	if len(decoded.Recipients) != 2 {
 		t.Errorf("Recipients length = %d, want 2", len(decoded.Recipients))
+	} else if decoded.Recipients[0].ID != "user-2" || decoded.Recipients[1].ID != "user-3" {
+		t.Errorf("Recipients IDs = [%s, %s], want [user-2, user-3]", decoded.Recipients[0].ID, decoded.Recipients[1].ID)
 	}
 	if decoded.GroupName == nil || *decoded.GroupName != "Test Group" {
 		t.Errorf("GroupName = %v, want %q", decoded.GroupName, "Test Group")
@@ -147,6 +151,10 @@ func TestFederatedDMMessageRequest_WithAttachments(t *testing.T) {
 
 	if decoded.Message.Attachments == nil {
 		t.Error("Message.Attachments should not be nil")
+	}
+	expected := json.RawMessage(`[{"id":"att-1","filename":"test.png"}]`)
+	if string(decoded.Message.Attachments) != string(expected) {
+		t.Errorf("Message.Attachments = %s, want %s", decoded.Message.Attachments, expected)
 	}
 }
 

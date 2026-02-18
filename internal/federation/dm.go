@@ -92,7 +92,9 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 	}
 
 	// Ensure remote user stubs exist for all non-local participants.
-	allUsers := append(req.Recipients, req.Creator)
+	allUsers := make([]federatedUserInfo, 0, len(req.Recipients)+1)
+	allUsers = append(allUsers, req.Recipients...)
+	allUsers = append(allUsers, req.Creator)
 	for _, u := range allUsers {
 		if u.InstanceDomain == "" {
 			continue
@@ -249,9 +251,14 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	}
 
 	// Update channel's last_message_id.
-	ss.fed.pool.Exec(ctx,
+	if _, err := ss.fed.pool.Exec(ctx,
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`,
-		req.Message.ID, localChannelID)
+		req.Message.ID, localChannelID); err != nil {
+		ss.logger.Warn("failed to update last_message_id",
+			slog.String("channel_id", localChannelID),
+			slog.String("error", err.Error()),
+		)
+	}
 
 	// Publish MESSAGE_CREATE for local WebSocket clients.
 	msg := map[string]interface{}{
