@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let {
 		channelId,
@@ -25,12 +26,11 @@
 	}
 
 	let activeBroadcast = $state<Broadcast | null>(null);
-	let loading = $state(false);
-	let starting = $state(false);
-	let stopping = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let startOp = $state(createAsyncOp());
+	let stopOp = $state(createAsyncOp());
 	let title = $state('');
 	let showStartForm = $state(false);
-	let error = $state<string | null>(null);
 	let elapsed = $state('00:00');
 	let elapsedInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -69,84 +69,29 @@
 	});
 
 	async function loadBroadcast() {
-		try {
-			loading = true;
-			const res = await fetch(`/api/v1/voice/${channelId}/broadcast`, {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				const json = await res.json();
-				activeBroadcast = json.data;
-			}
-		} catch (err) {
-			console.error('Failed to load broadcast:', err);
-		} finally {
-			loading = false;
-		}
+		activeBroadcast = await loadOp.run(() => api.getVoiceBroadcast(channelId)) ?? null;
 	}
 
 	async function startBroadcast() {
-		try {
-			starting = true;
-			error = null;
-			const res = await fetch(`/api/v1/voice/${channelId}/broadcast/start`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({ title: title || 'Live Broadcast' })
-			});
-
-			if (!res.ok) {
-				const errJson = await res.json();
-				error = errJson.error?.message || 'Failed to start broadcast';
-				return;
-			}
-
-			const json = await res.json();
-			activeBroadcast = json.data;
+		const result = await startOp.run(() => api.startVoiceBroadcast(channelId, { title: title || 'Live Broadcast' }));
+		if (!startOp.error) {
+			activeBroadcast = result!;
 			showStartForm = false;
 			title = '';
-		} catch (err) {
-			error = 'Failed to start broadcast';
-			console.error('Broadcast start error:', err);
-		} finally {
-			starting = false;
 		}
 	}
 
 	async function stopBroadcast() {
-		try {
-			stopping = true;
-			error = null;
-			const res = await fetch(`/api/v1/voice/${channelId}/broadcast/stop`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				}
-			});
-
-			if (!res.ok) {
-				const errJson = await res.json();
-				error = errJson.error?.message || 'Failed to stop broadcast';
-				return;
-			}
-
+		await stopOp.run(() => api.stopVoiceBroadcast(channelId));
+		if (!stopOp.error) {
 			activeBroadcast = null;
-		} catch (err) {
-			error = 'Failed to stop broadcast';
-			console.error('Broadcast stop error:', err);
-		} finally {
-			stopping = false;
 		}
 	}
 </script>
 
 {#if connected}
 	<div class="broadcast-section">
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="loading">Checking broadcast...</div>
 		{:else if activeBroadcast}
 			<!-- Active broadcast banner -->
@@ -168,9 +113,9 @@
 					<button
 						class="btn-stop"
 						onclick={stopBroadcast}
-						disabled={stopping}
+						disabled={stopOp.loading}
 					>
-						{stopping ? 'Stopping...' : 'End'}
+						{stopOp.loading ? 'Stopping...' : 'End'}
 					</button>
 				{/if}
 			</div>
@@ -188,16 +133,16 @@
 				<div class="form-actions">
 					<button
 						class="btn-secondary"
-						onclick={() => { showStartForm = false; error = null; }}
+						onclick={() => { showStartForm = false; startOp.error = null; }}
 					>
 						Cancel
 					</button>
 					<button
 						class="btn-primary"
 						onclick={startBroadcast}
-						disabled={starting}
+						disabled={startOp.loading}
 					>
-						{starting ? 'Starting...' : 'Go Live'}
+						{startOp.loading ? 'Starting...' : 'Go Live'}
 					</button>
 				</div>
 			</div>
@@ -215,8 +160,8 @@
 			</button>
 		{/if}
 
-		{#if error}
-			<div class="error-msg">{error}</div>
+		{#if startOp.error || stopOp.error}
+			<div class="error-msg">{startOp.error || stopOp.error}</div>
 		{/if}
 	</div>
 {/if}

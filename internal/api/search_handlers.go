@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/search"
@@ -24,8 +25,7 @@ func (s *Server) handleSearchMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query().Get("q")
-	if query == "" {
-		WriteError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+	if !apiutil.RequireNonEmpty(w, "q", query) {
 		return
 	}
 
@@ -144,8 +144,7 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query().Get("q")
-	if query == "" {
-		WriteError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+	if !apiutil.RequireNonEmpty(w, "q", query) {
 		return
 	}
 
@@ -213,8 +212,7 @@ func (s *Server) handleSearchGuilds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query().Get("q")
-	if query == "" {
-		WriteError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+	if !apiutil.RequireNonEmpty(w, "q", query) {
 		return
 	}
 

@@ -151,8 +151,7 @@ func (h *Handler) HandleCreateGuild(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req createGuildRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -167,73 +166,57 @@ func (h *Handler) HandleCreateGuild(w http.ResponseWriter, r *http.Request) {
 		permissions.Connect | permissions.Speak |
 		permissions.ChangeNickname | permissions.CreateInvites)
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Create the guild.
 	var guild models.Guild
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO guilds (id, instance_id, owner_id, name, description, default_permissions, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, now())
-		 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
-		           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
-		           verification_level, afk_channel_id, afk_timeout, created_at`,
-		guildID, h.InstanceID, userID, req.Name, req.Description, defaultPerms,
-	).Scan(
-		&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
-		&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
-		&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
-		&guild.VerificationLevel, &guild.AFKChannelID, &guild.AFKTimeout, &guild.CreatedAt,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create guild", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
-		return
-	}
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Create the guild.
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO guilds (id, instance_id, owner_id, name, description, default_permissions, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, now())
+			 RETURNING id, instance_id, owner_id, name, description, icon_id, banner_id,
+			           default_permissions, flags, nsfw, discoverable, preferred_locale, max_members,
+			           verification_level, afk_channel_id, afk_timeout, created_at`,
+			guildID, h.InstanceID, userID, req.Name, req.Description, defaultPerms,
+		).Scan(
+			&guild.ID, &guild.InstanceID, &guild.OwnerID, &guild.Name, &guild.Description,
+			&guild.IconID, &guild.BannerID, &guild.DefaultPermissions, &guild.Flags,
+			&guild.NSFW, &guild.Discoverable, &guild.PreferredLocale, &guild.MaxMembers,
+			&guild.VerificationLevel, &guild.AFKChannelID, &guild.AFKTimeout, &guild.CreatedAt,
+		); err != nil {
+			return err
+		}
 
-	// Add owner as member.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO guild_members (guild_id, user_id, joined_at) VALUES ($1, $2, now())`,
-		guildID, userID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to add owner as member", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
-		return
-	}
+		// Add owner as member.
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO guild_members (guild_id, user_id, joined_at) VALUES ($1, $2, now())`,
+			guildID, userID,
+		); err != nil {
+			return err
+		}
 
-	// Create default "general" text channel.
-	channelID := models.NewULID().String()
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO channels (id, guild_id, channel_type, name, position, created_at)
-		 VALUES ($1, $2, 'text', 'general', 0, now())`,
-		channelID, guildID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create default channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
-		return
-	}
+		// Create default "general" text channel.
+		channelID := models.NewULID().String()
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO channels (id, guild_id, channel_type, name, position, created_at)
+			 VALUES ($1, $2, 'text', 'general', 0, now())`,
+			channelID, guildID,
+		); err != nil {
+			return err
+		}
 
-	// Create @everyone role at position 0 with default permissions.
-	everyoneRoleID := models.NewULID().String()
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at)
-		 VALUES ($1, $2, '@everyone', NULL, false, false, 0, $3, 0, now())`,
-		everyoneRoleID, guildID, defaultPerms,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create @everyone role", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
-		return
-	}
+		// Create @everyone role at position 0 with default permissions.
+		everyoneRoleID := models.NewULID().String()
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at)
+			 VALUES ($1, $2, '@everyone', NULL, false, false, 0, $3, 0, now())`,
+			everyoneRoleID, guildID, defaultPerms,
+		); err != nil {
+			return err
+		}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create guild")
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to create guild", err)
 		return
 	}
 
@@ -278,8 +261,7 @@ func (h *Handler) HandleUpdateGuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateGuildRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -412,12 +394,10 @@ func (h *Handler) HandleTransferGuildOwnership(w http.ResponseWriter, r *http.Re
 	var req struct {
 		NewOwnerID string `json:"new_owner_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.NewOwnerID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_new_owner", "new_owner_id is required")
+	if !apiutil.RequireNonEmpty(w, "new_owner_id", req.NewOwnerID) {
 		return
 	}
 	if req.NewOwnerID == userID {
@@ -513,8 +493,7 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req createChannelRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -559,8 +538,7 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 		&channel.ParentChannelID, &channel.LastActivityAt, &channel.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
+		apiutil.InternalError(w, h.Logger, "Failed to create channel", err)
 		return
 	}
 
@@ -692,8 +670,7 @@ func (h *Handler) HandleSearchGuildMembers(w http.ResponseWriter, r *http.Reques
 	}
 
 	query := r.URL.Query().Get("q")
-	if query == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+	if !apiutil.RequireNonEmpty(w, "Query parameter 'q'", query) {
 		return
 	}
 	if len(query) > 100 {
@@ -737,8 +714,7 @@ func (h *Handler) HandleUpdateGuildMember(w http.ResponseWriter, r *http.Request
 	memberID := chi.URLParam(r, "memberID")
 
 	var req updateMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -921,35 +897,31 @@ func (h *Handler) HandleCreateGuildBan(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &t
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to ban user")
-		return
-	}
-	defer tx.Rollback(r.Context())
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Remove from members.
+		tx.Exec(r.Context(), `DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, targetID)
 
-	// Remove from members.
-	tx.Exec(r.Context(), `DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, targetID)
-
-	// Insert ban with optional expiry.
-	tx.Exec(r.Context(),
-		`INSERT INTO guild_bans (guild_id, user_id, reason, banned_by, expires_at, created_at)
-		 VALUES ($1, $2, $3, $4, $5, now())
-		 ON CONFLICT (guild_id, user_id) DO UPDATE SET reason = $3, banned_by = $4, expires_at = $5`,
-		guildID, targetID, req.Reason, actorID, expiresAt)
-
-	// Delete recent messages if requested.
-	if req.DeleteMessageSeconds != nil && *req.DeleteMessageSeconds > 0 {
-		cutoff := time.Now().Add(-time.Duration(*req.DeleteMessageSeconds) * time.Second)
+		// Insert ban with optional expiry.
 		tx.Exec(r.Context(),
-			`DELETE FROM messages
-			 WHERE author_id = $1
-			   AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)
-			   AND created_at > $3`,
-			targetID, guildID, cutoff)
-	}
+			`INSERT INTO guild_bans (guild_id, user_id, reason, banned_by, expires_at, created_at)
+			 VALUES ($1, $2, $3, $4, $5, now())
+			 ON CONFLICT (guild_id, user_id) DO UPDATE SET reason = $3, banned_by = $4, expires_at = $5`,
+			guildID, targetID, req.Reason, actorID, expiresAt)
 
-	if err := tx.Commit(r.Context()); err != nil {
+		// Delete recent messages if requested.
+		if req.DeleteMessageSeconds != nil && *req.DeleteMessageSeconds > 0 {
+			cutoff := time.Now().Add(-time.Duration(*req.DeleteMessageSeconds) * time.Second)
+			tx.Exec(r.Context(),
+				`DELETE FROM messages
+				 WHERE author_id = $1
+				   AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)
+				   AND created_at > $3`,
+				targetID, guildID, cutoff)
+		}
+
+		return nil
+	})
+	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to ban user")
 		return
 	}
@@ -1045,8 +1017,7 @@ func (h *Handler) HandleCreateGuildRole(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req createRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1118,8 +1089,7 @@ func (h *Handler) HandleUpdateGuildRole(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req updateRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1249,24 +1219,17 @@ func (h *Handler) HandleReorderGuildRoles(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder roles")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	for _, item := range req {
-		_, err := tx.Exec(r.Context(),
-			`UPDATE roles SET position = $3 WHERE id = $1 AND guild_id = $2`,
-			item.ID, guildID, item.Position)
-		if err != nil {
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder roles")
-			return
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		for _, item := range req {
+			if _, err := tx.Exec(r.Context(),
+				`UPDATE roles SET position = $3 WHERE id = $1 AND guild_id = $2`,
+				item.ID, guildID, item.Position); err != nil {
+				return err
+			}
 		}
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
+		return nil
+	})
+	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder roles")
 		return
 	}
@@ -1300,24 +1263,17 @@ func (h *Handler) HandleReorderGuildChannels(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder channels")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	for _, item := range req {
-		_, err := tx.Exec(r.Context(),
-			`UPDATE channels SET position = $3 WHERE id = $1 AND guild_id = $2`,
-			item.ID, guildID, item.Position)
-		if err != nil {
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder channels")
-			return
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		for _, item := range req {
+			if _, err := tx.Exec(r.Context(),
+				`UPDATE channels SET position = $3 WHERE id = $1 AND guild_id = $2`,
+				item.ID, guildID, item.Position); err != nil {
+				return err
+			}
 		}
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
+		return nil
+	})
+	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to reorder channels")
 		return
 	}
@@ -1418,8 +1374,7 @@ func (h *Handler) HandleCreateGuildInvite(w http.ResponseWriter, r *http.Request
 		&inv.Uses, &inv.MaxAgeSeconds, &inv.Temporary, &inv.CreatedAt, &inv.ExpiresAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create invite", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create invite")
+		apiutil.InternalError(w, h.Logger, "Failed to create invite", err)
 		return
 	}
 
@@ -1536,8 +1491,7 @@ func (h *Handler) HandleCreateGuildEmoji(w http.ResponseWriter, r *http.Request)
 		S3Key    string `json:"s3_key"`
 		Animated bool   `json:"animated"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1579,8 +1533,7 @@ func (h *Handler) HandleUpdateGuildEmoji(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" || len(req.Name) > 32 {
@@ -1689,8 +1642,7 @@ func (h *Handler) HandleCreateGuildCategory(w http.ResponseWriter, r *http.Reque
 		Name     string `json:"name"`
 		Position *int   `json:"position"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" || len(req.Name) > 100 {
@@ -1712,8 +1664,7 @@ func (h *Handler) HandleCreateGuildCategory(w http.ResponseWriter, r *http.Reque
 		catID, guildID, req.Name, position,
 	).Scan(&cat.ID, &cat.GuildID, &cat.Name, &cat.Position, &cat.CreatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create category", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create category")
+		apiutil.InternalError(w, h.Logger, "Failed to create category", err)
 		return
 	}
 
@@ -1736,8 +1687,7 @@ func (h *Handler) HandleUpdateGuildCategory(w http.ResponseWriter, r *http.Reque
 		Name     *string `json:"name"`
 		Position *int    `json:"position"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1847,8 +1797,7 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 		ChannelID string  `json:"channel_id"`
 		AvatarID  *string `json:"avatar_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1880,8 +1829,7 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create webhook", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create webhook")
+		apiutil.InternalError(w, h.Logger, "Failed to create webhook", err)
 		return
 	}
 
@@ -1906,8 +1854,7 @@ func (h *Handler) HandleUpdateGuildWebhook(w http.ResponseWriter, r *http.Reques
 		ChannelID *string `json:"channel_id"`
 		AvatarID  *string `json:"avatar_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -2108,8 +2055,7 @@ func (h *Handler) HandleSetGuildVanityURL(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Code string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -2205,8 +2151,7 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Pool.Query(r.Context(), baseSQL, args...)
 	if err != nil {
-		h.Logger.Error("discover guilds query failed", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to discover guilds")
+		apiutil.InternalError(w, h.Logger, "Failed to discover guilds", err)
 		return
 	}
 	defer rows.Close()
@@ -2221,8 +2166,7 @@ func (h *Handler) HandleDiscoverGuilds(w http.ResponseWriter, r *http.Request) {
 			&g.AFKChannelID, &g.AFKTimeout, &g.Tags,
 			&g.MemberCount, &g.CreatedAt,
 		); err != nil {
-			h.Logger.Error("discover guilds scan failed", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read guilds")
+			apiutil.InternalError(w, h.Logger, "Failed to read guilds", err)
 			return
 		}
 		guilds = append(guilds, g)
@@ -2623,8 +2567,7 @@ func (h *Handler) HandleGuildPrune(w http.ResponseWriter, r *http.Request) {
 		guildID, cutoff,
 	)
 	if err != nil {
-		h.Logger.Error("guild prune failed", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to prune members")
+		apiutil.InternalError(w, h.Logger, "Failed to prune members", err)
 		return
 	}
 
@@ -2673,8 +2616,7 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found in this guild")
 			return
 		}
-		h.Logger.Error("failed to fetch channel for clone", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch channel")
+		apiutil.InternalError(w, h.Logger, "Failed to fetch channel", err)
 		return
 	}
 	if orig.ParentChannelID != nil {
@@ -2748,8 +2690,7 @@ func (h *Handler) HandleCloneChannel(w http.ResponseWriter, r *http.Request) {
 		&cloned.ParentChannelID, &cloned.LastActivityAt, &cloned.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to clone channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to clone channel")
+		apiutil.InternalError(w, h.Logger, "Failed to clone channel", err)
 		return
 	}
 
@@ -2809,8 +2750,7 @@ func (h *Handler) HandleGetServerGuide(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get server guide", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get server guide")
+		apiutil.InternalError(w, h.Logger, "Failed to get server guide", err)
 		return
 	}
 	defer rows.Close()
@@ -2819,15 +2759,13 @@ func (h *Handler) HandleGetServerGuide(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var s GuideStep
 		if err := rows.Scan(&s.ID, &s.GuildID, &s.Title, &s.Content, &s.Position, &s.ChannelID, &s.CreatedAt); err != nil {
-			h.Logger.Error("failed to scan guide step", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read server guide")
+			apiutil.InternalError(w, h.Logger, "Failed to read server guide", err)
 			return
 		}
 		steps = append(steps, s)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating guide steps", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read server guide")
+		apiutil.InternalError(w, h.Logger, "Failed to read server guide", err)
 		return
 	}
 
@@ -2847,8 +2785,7 @@ func (h *Handler) HandleUpdateServerGuide(w http.ResponseWriter, r *http.Request
 	}
 
 	var req updateServerGuideRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -2868,42 +2805,32 @@ func (h *Handler) HandleUpdateServerGuide(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Delete all existing guide steps for this guild.
-	_, err = tx.Exec(r.Context(), `DELETE FROM guild_guides WHERE guild_id = $1`, guildID)
-	if err != nil {
-		h.Logger.Error("failed to clear server guide", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
-		return
-	}
-
-	// Insert new guide steps.
 	steps := make([]GuideStep, 0, len(req.Steps))
-	for i, step := range req.Steps {
-		stepID := models.NewULID().String()
-		var s GuideStep
-		err := tx.QueryRow(r.Context(),
-			`INSERT INTO guild_guides (id, guild_id, title, content, position, channel_id, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, now())
-			 RETURNING id, guild_id, title, content, position, channel_id, created_at`,
-			stepID, guildID, step.Title, step.Content, i, step.ChannelID,
-		).Scan(&s.ID, &s.GuildID, &s.Title, &s.Content, &s.Position, &s.ChannelID, &s.CreatedAt)
-		if err != nil {
-			h.Logger.Error("failed to insert guide step", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
-			return
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Delete all existing guide steps for this guild.
+		if _, err := tx.Exec(r.Context(), `DELETE FROM guild_guides WHERE guild_id = $1`, guildID); err != nil {
+			return err
 		}
-		steps = append(steps, s)
-	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update server guide")
+		// Insert new guide steps.
+		for i, step := range req.Steps {
+			stepID := models.NewULID().String()
+			var s GuideStep
+			if err := tx.QueryRow(r.Context(),
+				`INSERT INTO guild_guides (id, guild_id, title, content, position, channel_id, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, now())
+				 RETURNING id, guild_id, title, content, position, channel_id, created_at`,
+				stepID, guildID, step.Title, step.Content, i, step.ChannelID,
+			).Scan(&s.ID, &s.GuildID, &s.Title, &s.Content, &s.Position, &s.ChannelID, &s.CreatedAt); err != nil {
+				return err
+			}
+			steps = append(steps, s)
+		}
+
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to update server guide", err)
 		return
 	}
 
@@ -2962,8 +2889,7 @@ func (h *Handler) HandleBumpGuild(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	).Scan(&lastBump)
 	if err != nil && err != pgx.ErrNoRows {
-		h.Logger.Error("failed to check bump cooldown", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to bump guild")
+		apiutil.InternalError(w, h.Logger, "Failed to bump guild", err)
 		return
 	}
 
@@ -2985,8 +2911,7 @@ func (h *Handler) HandleBumpGuild(w http.ResponseWriter, r *http.Request) {
 		bumpID, guildID, userID, now,
 	)
 	if err != nil {
-		h.Logger.Error("failed to record guild bump", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to bump guild")
+		apiutil.InternalError(w, h.Logger, "Failed to bump guild", err)
 		return
 	}
 
@@ -3016,8 +2941,7 @@ func (h *Handler) HandleGetBumpStatus(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	).Scan(&lastBump)
 	if err != nil && err != pgx.ErrNoRows {
-		h.Logger.Error("failed to get bump status", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bump status")
+		apiutil.InternalError(w, h.Logger, "Failed to get bump status", err)
 		return
 	}
 
@@ -3248,8 +3172,7 @@ func (h *Handler) HandleCreateMediaTag(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 

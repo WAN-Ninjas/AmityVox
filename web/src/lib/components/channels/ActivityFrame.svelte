@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface ActivitySession {
 		id: string;
@@ -52,11 +53,12 @@
 	let session = $state<ActivitySession | null>(null);
 	let participants = $state<Participant[]>([]);
 	let activities = $state<Activity[]>([]);
-	let loading = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let browseOp = $state(createAsyncOp());
 	let error = $state('');
 	let showBrowser = $state(false);
 	let selectedCategory = $state('all');
-	let joining = $state(false);
+	let joinOp = $state(createAsyncOp());
 	let iframeEl = $state<HTMLIFrameElement | null>(null);
 
 	const categories = [
@@ -71,65 +73,55 @@
 	const isParticipant = $derived(participants.some((p) => p.user_id === $currentUser?.id));
 
 	async function loadActiveSession() {
-		loading = true;
 		error = '';
-		try {
-			const data = await api.getActiveSession<{ session: ActivitySession; participants: Participant[] }>(channelId);
-			if (data && data.session) {
-				session = data.session;
-				participants = data.participants ?? [];
-			} else {
-				session = null;
-				participants = [];
-				showBrowser = true;
-			}
-		} catch {
+		const data = await loadOp.run(
+			() => api.getActiveSession<{ session: ActivitySession; participants: Participant[] }>(channelId)
+		);
+		if (data && data.session) {
+			session = data.session;
+			participants = data.participants ?? [];
+		} else {
+			session = null;
+			participants = [];
 			showBrowser = true;
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function browseActivities() {
-		loading = true;
-		try {
-			const category = selectedCategory === 'all' ? undefined : selectedCategory;
-			const data = await api.listActivities<Activity[]>(category);
+		const category = selectedCategory === 'all' ? undefined : selectedCategory;
+		const data = await browseOp.run(() => api.listActivities<Activity[]>(category));
+		if (browseOp.error) {
+			error = browseOp.error;
+		} else {
 			activities = data ?? [];
-		} catch (err: any) {
-			error = err.message || 'Failed to load activities';
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function startActivity(activityId: string) {
-		joining = true;
 		error = '';
-		try {
-			const result = await api.createActivitySession<ActivitySession>(channelId, { activity_id: activityId, config: {} });
-			if (result) {
-				session = result;
+		const result = await joinOp.run(async () => {
+			const sess = await api.createActivitySession<ActivitySession>(channelId, { activity_id: activityId, config: {} });
+			if (sess) {
+				session = sess;
 				showBrowser = false;
 				await loadActiveSession();
 			}
-		} catch (err: any) {
-			error = err.message || 'Failed to start activity';
-		} finally {
-			joining = false;
+			return sess;
+		});
+		if (joinOp.error) {
+			error = joinOp.error;
 		}
 	}
 
 	async function joinSession() {
 		if (!session) return;
-		joining = true;
-		try {
-			await api.joinActivitySession(channelId, session.id);
+		const sessionId = session.id;
+		await joinOp.run(async () => {
+			await api.joinActivitySession(channelId, sessionId);
 			await loadActiveSession();
-		} catch (err: any) {
-			error = err.message || 'Failed to join';
-		} finally {
-			joining = false;
+		});
+		if (joinOp.error) {
+			error = joinOp.error;
 		}
 	}
 
@@ -189,7 +181,7 @@
 </script>
 
 <div class="flex flex-col h-full bg-bg-primary">
-	{#if loading && !session && !showBrowser}
+	{#if loadOp.loading && !session && !showBrowser}
 		<div class="flex items-center justify-center h-64 text-text-muted">Loading activity...</div>
 	{:else if session && !showBrowser}
 		<!-- Active session -->
@@ -230,8 +222,8 @@
 				</div>
 
 				{#if !isParticipant}
-					<button type="button" class="btn-primary text-xs px-3 py-1 rounded" disabled={joining} onclick={joinSession}>
-						{joining ? 'Joining...' : 'Join'}
+					<button type="button" class="btn-primary text-xs px-3 py-1 rounded" disabled={joinOp.loading} onclick={joinSession}>
+						{joinOp.loading ? 'Joining...' : 'Join'}
 					</button>
 				{:else}
 					<button type="button" class="btn-secondary text-xs px-3 py-1 rounded" onclick={leaveSession}>Leave</button>
@@ -312,7 +304,7 @@
 
 		<!-- Activity list -->
 		<div class="flex-1 overflow-y-auto p-4">
-			{#if loading}
+			{#if browseOp.loading}
 				<div class="text-text-muted text-sm">Loading activities...</div>
 			{:else if activities.length === 0}
 				<div class="text-center text-text-muted py-8">
@@ -357,10 +349,10 @@
 							<button
 								type="button"
 								class="btn-primary w-full text-sm py-1.5 rounded mt-3"
-								disabled={joining}
+								disabled={joinOp.loading}
 								onclick={() => startActivity(activity.id)}
 							>
-								{joining ? 'Starting...' : 'Start Activity'}
+								{joinOp.loading ? 'Starting...' : 'Start Activity'}
 							</button>
 						</div>
 					{/each}

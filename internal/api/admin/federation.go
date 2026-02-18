@@ -61,8 +61,7 @@ func (h *Handler) HandleGetFederationDashboard(w http.ResponseWriter, r *http.Re
 		 WHERE fp.instance_id = $1
 		 ORDER BY fp.established_at DESC`, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to query federation dashboard", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get federation dashboard")
+		apiutil.InternalError(w, h.Logger, "Failed to get federation dashboard", err)
 		return
 	}
 	defer rows.Close()
@@ -147,8 +146,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 		Action string  `json:"action"` // allow, block, mute
 		Reason *string `json:"reason,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -170,8 +168,7 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 			action = $4, reason = $5, created_by = $6, updated_at = now()`,
 		controlID, h.InstanceID, peerID, req.Action, req.Reason, adminID)
 	if err != nil {
-		h.Logger.Error("failed to update peer control", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update peer control")
+		apiutil.InternalError(w, h.Logger, "Failed to update peer control", err)
 		return
 	}
 
@@ -210,8 +207,7 @@ func (h *Handler) HandleGetPeerControls(w http.ResponseWriter, r *http.Request) 
 		 WHERE fpc.instance_id = $1
 		 ORDER BY fpc.created_at DESC`, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to query peer controls", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get peer controls")
+		apiutil.InternalError(w, h.Logger, "Failed to get peer controls", err)
 		return
 	}
 	defer rows.Close()
@@ -289,8 +285,7 @@ func (h *Handler) HandleGetDeliveryReceipts(w http.ResponseWriter, r *http.Reque
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to query delivery receipts", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get delivery receipts")
+		apiutil.InternalError(w, h.Logger, "Failed to get delivery receipts", err)
 		return
 	}
 	defer rows.Close()
@@ -338,8 +333,7 @@ func (h *Handler) HandleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $1 AND source_instance = $2 AND status IN ('failed', 'pending')`,
 		receiptID, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to retry delivery", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to retry delivery")
+		apiutil.InternalError(w, h.Logger, "Failed to retry delivery", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -401,8 +395,7 @@ func (h *Handler) HandleUpdateFederatedSearchConfig(w http.ResponseWriter, r *ht
 		IndexIncoming *bool    `json:"index_incoming"`
 		AllowedPeers  []string `json:"allowed_peers,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -423,8 +416,7 @@ func (h *Handler) HandleUpdateFederatedSearchConfig(w http.ResponseWriter, r *ht
 			updated_at = now()`,
 		h.InstanceID, req.Enabled, req.IndexOutgoing, req.IndexIncoming, peersJSON)
 	if err != nil {
-		h.Logger.Error("failed to update federated search config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update search config")
+		apiutil.InternalError(w, h.Logger, "Failed to update search config", err)
 		return
 	}
 
@@ -452,8 +444,7 @@ func (h *Handler) HandleGetBridges(w http.ResponseWriter, r *http.Request) {
 		 WHERE bc.instance_id = $1
 		 ORDER BY bc.created_at DESC`, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to query bridges", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bridges")
+		apiutil.InternalError(w, h.Logger, "Failed to get bridges", err)
 		return
 	}
 	defer rows.Close()
@@ -501,8 +492,7 @@ func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		DisplayName string          `json:"display_name"`
 		Config      json.RawMessage `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -531,8 +521,7 @@ func (h *Handler) HandleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		bridgeID, h.InstanceID, req.BridgeType, req.DisplayName, req.Config, adminID)
 	if err != nil {
-		h.Logger.Error("failed to create bridge", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bridge")
+		apiutil.InternalError(w, h.Logger, "Failed to create bridge", err)
 		return
 	}
 
@@ -559,8 +548,7 @@ func (h *Handler) HandleUpdateBridge(w http.ResponseWriter, r *http.Request) {
 		DisplayName *string         `json:"display_name"`
 		Config      json.RawMessage `json:"config,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -573,8 +561,7 @@ func (h *Handler) HandleUpdateBridge(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $4 AND instance_id = $5`,
 		req.Enabled, req.DisplayName, req.Config, bridgeID, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to update bridge", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update bridge")
+		apiutil.InternalError(w, h.Logger, "Failed to update bridge", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -598,8 +585,7 @@ func (h *Handler) HandleDeleteBridge(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM bridge_configs WHERE id = $1 AND instance_id = $2`, bridgeID, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to delete bridge", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bridge")
+		apiutil.InternalError(w, h.Logger, "Failed to delete bridge", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -630,8 +616,7 @@ func (h *Handler) HandleGetBridgeChannelMappings(w http.ResponseWriter, r *http.
 		 WHERE bcm.bridge_id = $1
 		 ORDER BY bcm.created_at DESC`, bridgeID)
 	if err != nil {
-		h.Logger.Error("failed to query bridge mappings", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bridge mappings")
+		apiutil.InternalError(w, h.Logger, "Failed to get bridge mappings", err)
 		return
 	}
 	defer rows.Close()
@@ -679,8 +664,7 @@ func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *htt
 		RemoteChannelName *string `json:"remote_channel_name,omitempty"`
 		Direction         string  `json:"direction"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -706,8 +690,7 @@ func (h *Handler) HandleCreateBridgeChannelMapping(w http.ResponseWriter, r *htt
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		mappingID, bridgeID, req.LocalChannelID, req.RemoteChannelID, req.RemoteChannelName, req.Direction)
 	if err != nil {
-		h.Logger.Error("failed to create bridge mapping", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel mapping")
+		apiutil.InternalError(w, h.Logger, "Failed to create channel mapping", err)
 		return
 	}
 
@@ -732,8 +715,7 @@ func (h *Handler) HandleDeleteBridgeChannelMapping(w http.ResponseWriter, r *htt
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM bridge_channel_mappings WHERE id = $1`, mappingID)
 	if err != nil {
-		h.Logger.Error("failed to delete bridge mapping", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel mapping")
+		apiutil.InternalError(w, h.Logger, "Failed to delete channel mapping", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -761,8 +743,7 @@ func (h *Handler) HandleGetBridgeVirtualUsers(w http.ResponseWriter, r *http.Req
 		 ORDER BY last_active_at DESC NULLS LAST
 		 LIMIT 100`, bridgeID)
 	if err != nil {
-		h.Logger.Error("failed to query virtual users", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get virtual users")
+		apiutil.InternalError(w, h.Logger, "Failed to get virtual users", err)
 		return
 	}
 	defer rows.Close()
@@ -805,8 +786,7 @@ func (h *Handler) HandleGetInstanceProfiles(w http.ResponseWriter, r *http.Reque
 		 WHERE user_id = $1
 		 ORDER BY is_primary DESC, last_connected DESC NULLS LAST`, userID)
 	if err != nil {
-		h.Logger.Error("failed to query instance profiles", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get instance profiles")
+		apiutil.InternalError(w, h.Logger, "Failed to get instance profiles", err)
 		return
 	}
 	defer rows.Close()
@@ -846,13 +826,11 @@ func (h *Handler) HandleAddInstanceProfile(w http.ResponseWriter, r *http.Reques
 		SessionToken *string `json:"session_token,omitempty"`
 		IsPrimary    bool    `json:"is_primary"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.InstanceURL == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Instance URL is required")
+	if !apiutil.RequireNonEmpty(w, "Instance URL", req.InstanceURL) {
 		return
 	}
 
@@ -875,8 +853,7 @@ func (h *Handler) HandleAddInstanceProfile(w http.ResponseWriter, r *http.Reques
 		profileID, userID, req.InstanceURL, req.InstanceName, req.InstanceIcon,
 		req.SessionToken, req.IsPrimary)
 	if err != nil {
-		h.Logger.Error("failed to add instance profile", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add instance profile")
+		apiutil.InternalError(w, h.Logger, "Failed to add instance profile", err)
 		return
 	}
 
@@ -898,8 +875,7 @@ func (h *Handler) HandleRemoveInstanceProfile(w http.ResponseWriter, r *http.Req
 		`DELETE FROM instance_connection_profiles WHERE id = $1 AND user_id = $2`,
 		profileID, userID)
 	if err != nil {
-		h.Logger.Error("failed to remove instance profile", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove instance profile")
+		apiutil.InternalError(w, h.Logger, "Failed to remove instance profile", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -975,8 +951,7 @@ func (h *Handler) HandleGetInstanceBlocklist(w http.ResponseWriter, r *http.Requ
 		 WHERE fpc.instance_id = $1 AND fpc.action = 'block'
 		 ORDER BY fpc.created_at DESC`, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to query blocklist", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get blocklist")
+		apiutil.InternalError(w, h.Logger, "Failed to get blocklist", err)
 		return
 	}
 	defer rows.Close()
@@ -1017,8 +992,7 @@ func (h *Handler) HandleGetInstanceAllowlist(w http.ResponseWriter, r *http.Requ
 		 WHERE fpc.instance_id = $1 AND fpc.action = 'allow'
 		 ORDER BY fpc.created_at DESC`, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to query allowlist", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get allowlist")
+		apiutil.InternalError(w, h.Logger, "Failed to get allowlist", err)
 		return
 	}
 	defer rows.Close()
@@ -1094,8 +1068,7 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 		ProtocolVersion *string  `json:"protocol_version,omitempty"`
 		Capabilities    []string `json:"capabilities,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1104,8 +1077,7 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 			`UPDATE instances SET protocol_version = $1 WHERE id = $2`,
 			*req.ProtocolVersion, h.InstanceID)
 		if err != nil {
-			h.Logger.Error("failed to update protocol version", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update protocol version")
+			apiutil.InternalError(w, h.Logger, "Failed to update protocol version", err)
 			return
 		}
 	}
@@ -1115,8 +1087,7 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 		_, err := h.Pool.Exec(r.Context(),
 			`UPDATE instances SET capabilities = $1 WHERE id = $2`, capsJSON, h.InstanceID)
 		if err != nil {
-			h.Logger.Error("failed to update capabilities", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update capabilities")
+			apiutil.InternalError(w, h.Logger, "Failed to update capabilities", err)
 			return
 		}
 	}

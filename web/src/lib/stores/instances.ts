@@ -3,6 +3,7 @@
 // Instance profiles are persisted server-side and cached in localStorage.
 
 import { writable, derived, get } from 'svelte/store';
+import { createMapStore } from './mapHelpers';
 
 export interface InstanceProfile {
 	id: string;
@@ -24,10 +25,10 @@ export interface InstanceConnection {
 }
 
 // All known instance profiles from the server.
-const instanceProfilesStore = writable<Map<string, InstanceProfile>>(new Map());
+const instanceProfilesStore = createMapStore<string, InstanceProfile>();
 
 // Active connections keyed by instance URL.
-const connectionStore = writable<Map<string, InstanceConnection>>(new Map());
+const connectionStore = createMapStore<string, InstanceConnection>();
 
 // Currently selected instance URL.
 export const activeInstanceUrl = writable<string | null>(null);
@@ -93,7 +94,7 @@ export function loadInstanceProfilesFromCache(): void {
 			for (const p of profiles) {
 				map.set(p.instance_url, p);
 			}
-			instanceProfilesStore.set(map);
+			instanceProfilesStore.setAll(map);
 		}
 	} catch {
 		// Ignore parse errors.
@@ -106,7 +107,7 @@ export function setInstanceProfiles(profiles: InstanceProfile[]): void {
 	for (const p of profiles) {
 		map.set(p.instance_url, p);
 	}
-	instanceProfilesStore.set(map);
+	instanceProfilesStore.setAll(map);
 
 	// Cache to localStorage.
 	try {
@@ -118,23 +119,13 @@ export function setInstanceProfiles(profiles: InstanceProfile[]): void {
 
 // Add or update a single instance profile.
 export function upsertInstanceProfile(profile: InstanceProfile): void {
-	instanceProfilesStore.update((map) => {
-		map.set(profile.instance_url, profile);
-		return new Map(map);
-	});
+	instanceProfilesStore.setEntry(profile.instance_url, profile);
 }
 
 // Remove an instance profile.
 export function removeInstanceProfile(instanceUrl: string): void {
-	instanceProfilesStore.update((map) => {
-		map.delete(instanceUrl);
-		return new Map(map);
-	});
-
-	connectionStore.update((map) => {
-		map.delete(instanceUrl);
-		return new Map(map);
-	});
+	instanceProfilesStore.removeEntry(instanceUrl);
+	connectionStore.removeEntry(instanceUrl);
 }
 
 // Set the active instance by URL.
@@ -164,67 +155,43 @@ export function connectInstance(instanceUrl: string, token: string): void {
 	const profiles = get(instanceProfilesStore);
 	const profile = profiles.get(instanceUrl);
 
-	connectionStore.update((map) => {
-		map.set(instanceUrl, {
-			profile: profile || {
-				id: '',
-				instance_url: instanceUrl,
-				instance_name: null,
-				instance_icon: null,
-				is_primary: false,
-				last_connected: new Date().toISOString(),
-				created_at: new Date().toISOString(),
-			},
-			token,
-			connected: true,
-			unreadCount: 0,
-			mentionCount: 0,
-			error: null,
-		});
-		return new Map(map);
+	connectionStore.setEntry(instanceUrl, {
+		profile: profile || {
+			id: '',
+			instance_url: instanceUrl,
+			instance_name: null,
+			instance_icon: null,
+			is_primary: false,
+			last_connected: new Date().toISOString(),
+			created_at: new Date().toISOString(),
+		},
+		token,
+		connected: true,
+		unreadCount: 0,
+		mentionCount: 0,
+		error: null,
 	});
 }
 
 // Disconnect an instance.
 export function disconnectInstance(instanceUrl: string): void {
-	connectionStore.update((map) => {
-		const conn = map.get(instanceUrl);
-		if (conn) {
-			map.set(instanceUrl, { ...conn, connected: false, token: null });
-			return new Map(map);
-		}
-		return map;
-	});
+	connectionStore.updateEntry(instanceUrl, (conn) => ({ ...conn, connected: false, token: null }));
 }
 
 // Update unread counts for an instance.
 export function updateInstanceUnreads(instanceUrl: string, unreadCount: number, mentionCount: number): void {
-	connectionStore.update((map) => {
-		const conn = map.get(instanceUrl);
-		if (conn) {
-			map.set(instanceUrl, { ...conn, unreadCount, mentionCount });
-			return new Map(map);
-		}
-		return map;
-	});
+	connectionStore.updateEntry(instanceUrl, (conn) => ({ ...conn, unreadCount, mentionCount }));
 }
 
 // Set an error for an instance connection.
 export function setInstanceError(instanceUrl: string, error: string): void {
-	connectionStore.update((map) => {
-		const conn = map.get(instanceUrl);
-		if (conn) {
-			map.set(instanceUrl, { ...conn, error, connected: false });
-			return new Map(map);
-		}
-		return map;
-	});
+	connectionStore.updateEntry(instanceUrl, (conn) => ({ ...conn, error, connected: false }));
 }
 
 // Clear all instance data (for logout).
 export function clearInstanceData(): void {
-	instanceProfilesStore.set(new Map());
-	connectionStore.set(new Map());
+	instanceProfilesStore.clear();
+	connectionStore.clear();
 	activeInstanceUrl.set(null);
 	try {
 		localStorage.removeItem('instance_profiles');

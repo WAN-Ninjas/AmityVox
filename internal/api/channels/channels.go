@@ -214,8 +214,7 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateChannelRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -429,8 +428,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to get messages", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get messages")
+		apiutil.InternalError(w, h.Logger, "Failed to get messages", err)
 		return
 	}
 	defer rows.Close()
@@ -444,8 +442,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
 			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan message", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read messages")
+			apiutil.InternalError(w, h.Logger, "Failed to read messages", err)
 			return
 		}
 		messages = append(messages, m)
@@ -509,8 +506,7 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -618,8 +614,7 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create message", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to send message")
+		apiutil.InternalError(w, h.Logger, "Failed to send message", err)
 		return
 	}
 
@@ -691,8 +686,7 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 	messageID := chi.URLParam(r, "messageID")
 
 	var req updateMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -874,8 +868,7 @@ func (h *Handler) HandleBulkDeleteMessages(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		MessageIDs []string `json:"message_ids"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -893,8 +886,7 @@ func (h *Handler) HandleBulkDeleteMessages(w http.ResponseWriter, r *http.Reques
 		channelID, req.MessageIDs,
 	)
 	if err != nil {
-		h.Logger.Error("failed to bulk delete messages", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete messages")
+		apiutil.InternalError(w, h.Logger, "Failed to delete messages", err)
 		return
 	}
 
@@ -1254,8 +1246,7 @@ func (h *Handler) HandleSetChannelPermission(w http.ResponseWriter, r *http.Requ
 	}
 
 	var req permissionOverrideRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1330,8 +1321,7 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" || len(req.Name) > 100 {
@@ -1362,53 +1352,50 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 
 	threadID := models.NewULID().String()
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create thread")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Create the thread as a new channel linked to the guild, inheriting the parent's auto-archive duration.
 	var thread models.Channel
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, parent_channel_id, last_activity_at, created_at)
-		 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, $6, now(), now())
-		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
-		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
-		           archived, read_only, read_only_role_ids, default_auto_archive_duration,
-		           parent_channel_id, last_activity_at, created_at`,
-		threadID, guildID, req.Name, userID, parentAutoArchive, channelID,
-	).Scan(
-		&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
-		&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,
-		&thread.LastMessageID, &thread.OwnerID, &thread.DefaultPermissions,
-		&thread.UserLimit, &thread.Bitrate,
-		&thread.Locked, &thread.LockedBy, &thread.LockedAt,
-		&thread.Archived, &thread.ReadOnly, &thread.ReadOnlyRoleIDs,
-		&thread.DefaultAutoArchiveDuration, &thread.ParentChannelID, &thread.LastActivityAt, &thread.CreatedAt,
-	)
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Create the thread as a new channel linked to the guild, inheriting the parent's auto-archive duration.
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, parent_channel_id, last_activity_at, created_at)
+			 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, $6, now(), now())
+			 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+			           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+			           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+			           archived, read_only, read_only_role_ids, default_auto_archive_duration,
+			           parent_channel_id, last_activity_at, created_at`,
+			threadID, guildID, req.Name, userID, parentAutoArchive, channelID,
+		).Scan(
+			&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
+			&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,
+			&thread.LastMessageID, &thread.OwnerID, &thread.DefaultPermissions,
+			&thread.UserLimit, &thread.Bitrate,
+			&thread.Locked, &thread.LockedBy, &thread.LockedAt,
+			&thread.Archived, &thread.ReadOnly, &thread.ReadOnlyRoleIDs,
+			&thread.DefaultAutoArchiveDuration, &thread.ParentChannelID, &thread.LastActivityAt, &thread.CreatedAt,
+		); err != nil {
+			return err
+		}
+
+		// Link the parent message to the thread.
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE messages SET thread_id = $1 WHERE id = $2 AND channel_id = $3`,
+			threadID, messageID, channelID); err != nil {
+			return err
+		}
+
+		// Create a system message about thread creation.
+		sysMsgID := models.NewULID().String()
+		if _, err := tx.Exec(r.Context(),
+			`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
+			 VALUES ($1, $2, $3, $4, $5, now())`,
+			sysMsgID, channelID, userID, req.Name, models.MessageTypeThreadCreated); err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to create thread channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create thread")
-		return
-	}
-
-	// Link the parent message to the thread.
-	tx.Exec(r.Context(),
-		`UPDATE messages SET thread_id = $1 WHERE id = $2 AND channel_id = $3`,
-		threadID, messageID, channelID)
-
-	// Create a system message about thread creation.
-	sysMsgID := models.NewULID().String()
-	tx.Exec(r.Context(),
-		`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
-		 VALUES ($1, $2, $3, $4, $5, now())`,
-		sysMsgID, channelID, userID, req.Name, models.MessageTypeThreadCreated)
-
-	if err := tx.Commit(r.Context()); err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create thread")
+		apiutil.InternalError(w, h.Logger, "Failed to create thread", err)
 		return
 	}
 
@@ -1607,8 +1594,7 @@ func (h *Handler) HandleScheduleMessage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req scheduleMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1647,8 +1633,7 @@ func (h *Handler) HandleScheduleMessage(w http.ResponseWriter, r *http.Request) 
 		&scheduled.AttachmentIDs, &scheduled.ScheduledFor, &scheduled.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create scheduled message", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to schedule message")
+		apiutil.InternalError(w, h.Logger, "Failed to schedule message", err)
 		return
 	}
 
@@ -1675,8 +1660,7 @@ func (h *Handler) HandleGetScheduledMessages(w http.ResponseWriter, r *http.Requ
 		channelID, userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get scheduled messages", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get scheduled messages")
+		apiutil.InternalError(w, h.Logger, "Failed to get scheduled messages", err)
 		return
 	}
 	defer rows.Close()
@@ -1688,8 +1672,7 @@ func (h *Handler) HandleGetScheduledMessages(w http.ResponseWriter, r *http.Requ
 			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content,
 			&m.AttachmentIDs, &m.ScheduledFor, &m.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan scheduled message", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read scheduled messages")
+			apiutil.InternalError(w, h.Logger, "Failed to read scheduled messages", err)
 			return
 		}
 		messages = append(messages, m)
@@ -1711,8 +1694,7 @@ func (h *Handler) HandleDeleteScheduledMessage(w http.ResponseWriter, r *http.Re
 		messageID, channelID, userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete scheduled message", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to cancel scheduled message")
+		apiutil.InternalError(w, h.Logger, "Failed to cancel scheduled message", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -2068,8 +2050,7 @@ func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request)
 		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to crosspost message", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to crosspost message")
+		apiutil.InternalError(w, h.Logger, "Failed to crosspost message", err)
 		return
 	}
 
@@ -2114,8 +2095,7 @@ func (h *Handler) HandleFollowChannel(w http.ResponseWriter, r *http.Request) {
 		WebhookID string `json:"webhook_id"`
 		GuildID   string `json:"guild_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.WebhookID == "" || req.GuildID == "" {
@@ -2143,8 +2123,7 @@ func (h *Handler) HandleFollowChannel(w http.ResponseWriter, r *http.Request) {
 		followerID, channelID, req.WebhookID, req.GuildID,
 	).Scan(&follower.ID, &follower.ChannelID, &follower.WebhookID, &follower.GuildID, &follower.CreatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create channel follower", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to follow channel")
+		apiutil.InternalError(w, h.Logger, "Failed to follow channel", err)
 		return
 	}
 
@@ -2184,8 +2163,7 @@ func (h *Handler) HandleGetChannelFollowers(w http.ResponseWriter, r *http.Reque
 		channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get channel followers", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get followers")
+		apiutil.InternalError(w, h.Logger, "Failed to get followers", err)
 		return
 	}
 	defer rows.Close()
@@ -2194,8 +2172,7 @@ func (h *Handler) HandleGetChannelFollowers(w http.ResponseWriter, r *http.Reque
 	for rows.Next() {
 		var f models.ChannelFollower
 		if err := rows.Scan(&f.ID, &f.ChannelID, &f.WebhookID, &f.GuildID, &f.CreatedAt); err != nil {
-			h.Logger.Error("failed to scan channel follower", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read followers")
+			apiutil.InternalError(w, h.Logger, "Failed to read followers", err)
 			return
 		}
 		followers = append(followers, f)
@@ -2222,8 +2199,7 @@ func (h *Handler) HandleUnfollowChannel(w http.ResponseWriter, r *http.Request) 
 		followerID, channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete channel follower", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unfollow channel")
+		apiutil.InternalError(w, h.Logger, "Failed to unfollow channel", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -2290,8 +2266,7 @@ func (h *Handler) HandlePublishMessage(w http.ResponseWriter, r *http.Request) {
 		channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get followers for publish", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get followers")
+		apiutil.InternalError(w, h.Logger, "Failed to get followers", err)
 		return
 	}
 	defer rows.Close()
@@ -2382,8 +2357,7 @@ func (h *Handler) HandleCreateChannelTemplate(w http.ResponseWriter, r *http.Req
 		NSFW                 bool            `json:"nsfw"`
 		PermissionOverwrites json.RawMessage `json:"permission_overwrites"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -2423,8 +2397,7 @@ func (h *Handler) HandleCreateChannelTemplate(w http.ResponseWriter, r *http.Req
 		&tmpl.CreatedBy, &tmpl.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create channel template", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create template")
+		apiutil.InternalError(w, h.Logger, "Failed to create template", err)
 		return
 	}
 
@@ -2468,8 +2441,7 @@ func (h *Handler) HandleGetChannelTemplates(w http.ResponseWriter, r *http.Reque
 			&tmpl.SlowmodeSeconds, &tmpl.NSFW, &tmpl.PermissionOverwrites,
 			&tmpl.CreatedBy, &tmpl.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan channel template", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read templates")
+			apiutil.InternalError(w, h.Logger, "Failed to read templates", err)
 			return
 		}
 		templates = append(templates, tmpl)
@@ -2522,8 +2494,7 @@ func (h *Handler) HandleApplyChannelTemplate(w http.ResponseWriter, r *http.Requ
 		Name       string  `json:"name"`
 		CategoryID *string `json:"category_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -2554,62 +2525,57 @@ func (h *Handler) HandleApplyChannelTemplate(w http.ResponseWriter, r *http.Requ
 
 	channelID := models.NewULID().String()
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Create the channel from the template.
 	var channel models.Channel
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position, slowmode_seconds, nsfw, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, now())
-		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
-		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
-		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
-		           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
-		channelID, guildID, req.CategoryID, tmpl.ChannelType, req.Name, tmpl.Topic,
-		tmpl.SlowmodeSeconds, tmpl.NSFW,
-	).Scan(
-		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
-		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
-		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
-		&channel.UserLimit, &channel.Bitrate,
-		&channel.Locked, &channel.LockedBy, &channel.LockedAt,
-		&channel.Archived, &channel.ReadOnly, &channel.ReadOnlyRoleIDs,
-		&channel.DefaultAutoArchiveDuration, &channel.CreatedAt,
-	)
-	if err != nil {
-		h.Logger.Error("failed to create channel from template", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
-		return
-	}
-
-	// Apply permission overwrites from the template if any.
-	if len(tmpl.PermissionOverwrites) > 0 {
-		var overwrites []struct {
-			TargetType       string `json:"target_type"`
-			TargetID         string `json:"target_id"`
-			PermissionsAllow int64  `json:"permissions_allow"`
-			PermissionsDeny  int64  `json:"permissions_deny"`
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Create the channel from the template.
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position, slowmode_seconds, nsfw, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, now())
+			 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+			           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
+			           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
+			           archived, read_only, read_only_role_ids, default_auto_archive_duration, created_at`,
+			channelID, guildID, req.CategoryID, tmpl.ChannelType, req.Name, tmpl.Topic,
+			tmpl.SlowmodeSeconds, tmpl.NSFW,
+		).Scan(
+			&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
+			&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
+			&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
+			&channel.UserLimit, &channel.Bitrate,
+			&channel.Locked, &channel.LockedBy, &channel.LockedAt,
+			&channel.Archived, &channel.ReadOnly, &channel.ReadOnlyRoleIDs,
+			&channel.DefaultAutoArchiveDuration, &channel.CreatedAt,
+		); err != nil {
+			return err
 		}
-		if jsonErr := json.Unmarshal(tmpl.PermissionOverwrites, &overwrites); jsonErr == nil {
-			for _, ow := range overwrites {
-				tx.Exec(r.Context(),
-					`INSERT INTO channel_permission_overrides (channel_id, target_type, target_id, permissions_allow, permissions_deny)
-					 VALUES ($1, $2, $3, $4, $5)
-					 ON CONFLICT (channel_id, target_id) DO UPDATE SET
-					     permissions_allow = EXCLUDED.permissions_allow,
-					     permissions_deny = EXCLUDED.permissions_deny`,
-					channelID, ow.TargetType, ow.TargetID, ow.PermissionsAllow, ow.PermissionsDeny,
-				)
+
+		// Apply permission overwrites from the template if any.
+		if len(tmpl.PermissionOverwrites) > 0 {
+			var overwrites []struct {
+				TargetType       string `json:"target_type"`
+				TargetID         string `json:"target_id"`
+				PermissionsAllow int64  `json:"permissions_allow"`
+				PermissionsDeny  int64  `json:"permissions_deny"`
+			}
+			if jsonErr := json.Unmarshal(tmpl.PermissionOverwrites, &overwrites); jsonErr == nil {
+				for _, ow := range overwrites {
+					if _, err := tx.Exec(r.Context(),
+						`INSERT INTO channel_permission_overrides (channel_id, target_type, target_id, permissions_allow, permissions_deny)
+						 VALUES ($1, $2, $3, $4, $5)
+						 ON CONFLICT (channel_id, target_id) DO UPDATE SET
+						     permissions_allow = EXCLUDED.permissions_allow,
+						     permissions_deny = EXCLUDED.permissions_deny`,
+						channelID, ow.TargetType, ow.TargetID, ow.PermissionsAllow, ow.PermissionsDeny,
+					); err != nil {
+						return err
+					}
+				}
 			}
 		}
-	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+		return nil
+	})
+	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create channel")
 		return
 	}
@@ -2866,8 +2832,7 @@ func (h *Handler) HandleBatchDecryptMessages(w http.ResponseWriter, r *http.Requ
 			Content string `json:"content"`
 		} `json:"messages"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -2912,8 +2877,7 @@ func (h *Handler) HandleAddGroupDMRecipient(w http.ResponseWriter, r *http.Reque
 	channelID := chi.URLParam(r, "channelID")
 	targetUserID := chi.URLParam(r, "userID")
 
-	if targetUserID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
+	if !apiutil.RequireNonEmpty(w, "User ID", targetUserID) {
 		return
 	}
 
@@ -2979,15 +2943,13 @@ func (h *Handler) HandleAddGroupDMRecipient(w http.ResponseWriter, r *http.Reque
 		channelID, targetUserID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to add group DM recipient", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add recipient")
+		apiutil.InternalError(w, h.Logger, "Failed to add recipient", err)
 		return
 	}
 
 	channel, err := h.getChannel(r.Context(), channelID)
 	if err != nil {
-		h.Logger.Error("failed to get channel after adding recipient", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated channel")
+		apiutil.InternalError(w, h.Logger, "Failed to get updated channel", err)
 		return
 	}
 
@@ -3004,8 +2966,7 @@ func (h *Handler) HandleRemoveGroupDMRecipient(w http.ResponseWriter, r *http.Re
 	channelID := chi.URLParam(r, "channelID")
 	targetUserID := chi.URLParam(r, "userID")
 
-	if targetUserID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_user_id", "User ID is required")
+	if !apiutil.RequireNonEmpty(w, "User ID", targetUserID) {
 		return
 	}
 
@@ -3060,15 +3021,13 @@ func (h *Handler) HandleRemoveGroupDMRecipient(w http.ResponseWriter, r *http.Re
 		channelID, targetUserID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to remove group DM recipient", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove recipient")
+		apiutil.InternalError(w, h.Logger, "Failed to remove recipient", err)
 		return
 	}
 
 	channel, err := h.getChannel(r.Context(), channelID)
 	if err != nil {
-		h.Logger.Error("failed to get channel after removing recipient", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated channel")
+		apiutil.InternalError(w, h.Logger, "Failed to get updated channel", err)
 		return
 	}
 

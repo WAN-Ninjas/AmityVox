@@ -6,7 +6,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -1158,8 +1157,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req auth.RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1202,8 +1200,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
 			return
 		}
-		s.Logger.Error("registration failed", slog.String("error", err.Error()))
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Registration failed")
+		InternalError(w, s.Logger, "Registration failed", err)
 		return
 	}
 
@@ -1222,8 +1219,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // handleLogin handles POST /api/v1/auth/login.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req auth.LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1235,8 +1231,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
 			return
 		}
-		s.Logger.Error("login failed", slog.String("error", err.Error()))
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Login failed")
+		InternalError(w, s.Logger, "Login failed", err)
 		return
 	}
 
@@ -1255,8 +1250,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.AuthService.Logout(r.Context(), sessionID); err != nil {
-		s.Logger.Error("logout failed", slog.String("error", err.Error()))
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Logout failed")
+		InternalError(w, s.Logger, "Logout failed", err)
 		return
 	}
 
@@ -1268,8 +1262,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req auth.ChangePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1283,8 +1276,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
 			return
 		}
-		s.Logger.Error("password change failed", slog.String("error", err.Error()))
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to change password")
+		InternalError(w, s.Logger, "Failed to change password", err)
 		return
 	}
 
@@ -1296,8 +1288,7 @@ func (s *Server) handleChangeEmail(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req auth.ChangeEmailRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1311,8 +1302,7 @@ func (s *Server) handleChangeEmail(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, authErr.Status, authErr.Code, authErr.Message)
 			return
 		}
-		s.Logger.Error("email change failed", slog.String("error", err.Error()))
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to change email")
+		InternalError(w, s.Logger, "Failed to change email", err)
 		return
 	}
 
@@ -1400,6 +1390,18 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 // Delegates to apiutil.WriteNoContent.
 func WriteNoContent(w http.ResponseWriter) {
 	apiutil.WriteNoContent(w)
+}
+
+// DecodeJSON reads JSON from the request body into dst. On failure it writes a
+// 400 error response and returns false. Delegates to apiutil.DecodeJSON.
+func DecodeJSON(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
+	return apiutil.DecodeJSON(w, r, dst)
+}
+
+// InternalError logs the error and writes a 500 response.
+// Delegates to apiutil.InternalError.
+func InternalError(w http.ResponseWriter, logger *slog.Logger, msg string, err error) {
+	apiutil.InternalError(w, logger, msg, err)
 }
 
 // slogMiddleware returns a chi middleware that logs HTTP requests using slog.

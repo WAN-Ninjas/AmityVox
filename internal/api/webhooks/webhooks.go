@@ -747,8 +747,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to look up webhook", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up webhook")
+		apiutil.InternalError(w, h.Logger, "Failed to look up webhook", err)
 		return
 	}
 
@@ -816,12 +815,8 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, NULL, $3, 'webhook', $4)`,
 		messageID, wh.ChannelID, finalContent, now)
 	if err != nil {
-		h.Logger.Error("failed to create webhook message",
-			slog.String("error", err.Error()),
-			slog.String("webhook_id", webhookID),
-		)
 		h.logExecution(r.Context(), webhookID, http.StatusInternalServerError, string(bodyBytes), "", false, "Failed to create message")
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create message")
+		apiutil.InternalError(w, h.Logger, "Failed to create message", err)
 		return
 	}
 
@@ -875,13 +870,11 @@ func (h *Handler) HandlePreviewWebhookMessage(w http.ResponseWriter, r *http.Req
 		TemplateID string          `json:"template_id"`
 		Payload    json.RawMessage `json:"payload"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.TemplateID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_template_id", "template_id is required")
+	if !apiutil.RequireNonEmpty(w, "template_id", req.TemplateID) {
 		return
 	}
 

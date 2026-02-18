@@ -8,43 +8,23 @@
  * Per-user enable/disable persists in localStorage.
  */
 
-const STORAGE_KEY = 'av-voice-noise-reduction';
+import { createLocalStorageCache } from './localStorageCache';
+
+const nrCache = createLocalStorageCache<boolean>('av-voice-noise-reduction');
 const nodes = new Map<string, { highpass: BiquadFilterNode; lowshelf: BiquadFilterNode; source: MediaStreamAudioSourceNode; ctx: AudioContext }>();
-
-let cachedSettings: Record<string, boolean> | null = null;
-
-function loadSettings(): Record<string, boolean> {
-	if (cachedSettings) return cachedSettings;
-	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		cachedSettings = raw ? JSON.parse(raw) : {};
-	} catch {
-		cachedSettings = {};
-	}
-	return cachedSettings!;
-}
-
-function saveSettings() {
-	if (cachedSettings) {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(cachedSettings));
-	}
-}
 
 /** Check if noise reduction is enabled for a user. */
 export function isNoiseReductionEnabled(userId: string): boolean {
-	return loadSettings()[userId] ?? false;
+	return nrCache.get(userId) ?? false;
 }
 
 /** Enable or disable noise reduction for a user. Persists to localStorage. */
 export function setNoiseReduction(userId: string, enabled: boolean) {
-	const settings = loadSettings();
 	if (enabled) {
-		settings[userId] = true;
+		nrCache.set(userId, true);
 	} else {
-		delete settings[userId];
+		nrCache.remove(userId);
 	}
-	cachedSettings = settings;
-	saveSettings();
 
 	// Live-update: toggle the filter bypass if nodes exist.
 	const node = nodes.get(userId);

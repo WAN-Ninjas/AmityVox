@@ -71,8 +71,7 @@ func (h *Handler) HandleShareLocation(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 
 	var req shareLocationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -115,8 +114,7 @@ func (h *Handler) HandleShareLocation(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		id, userID, channelID, req.Latitude, req.Longitude, req.Accuracy, req.Altitude, req.Label, req.Live, expiresAt)
 	if err != nil {
-		h.Logger.Error("failed to create location share", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to share location")
+		apiutil.InternalError(w, h.Logger, "Failed to share location", err)
 		return
 	}
 
@@ -150,8 +148,7 @@ func (h *Handler) HandleUpdateLiveLocation(w http.ResponseWriter, r *http.Reques
 	locationID := chi.URLParam(r, "locationID")
 
 	var req updateLiveLocationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -168,8 +165,7 @@ func (h *Handler) HandleUpdateLiveLocation(w http.ResponseWriter, r *http.Reques
 		   AND (expires_at IS NULL OR expires_at > NOW())`,
 		req.Latitude, req.Longitude, req.Accuracy, req.Altitude, locationID, userID, channelID)
 	if err != nil {
-		h.Logger.Error("failed to update live location", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update location")
+		apiutil.InternalError(w, h.Logger, "Failed to update location", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -207,8 +203,7 @@ func (h *Handler) HandleStopLiveLocation(w http.ResponseWriter, r *http.Request)
 		 WHERE id = $1 AND user_id = $2 AND channel_id = $3 AND live = true`,
 		locationID, userID, channelID)
 	if err != nil {
-		h.Logger.Error("failed to stop live location", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to stop live location")
+		apiutil.InternalError(w, h.Logger, "Failed to stop live location", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -243,8 +238,7 @@ func (h *Handler) HandleGetLocationShares(w http.ResponseWriter, r *http.Request
 		 ORDER BY ls.created_at DESC
 		 LIMIT 50`, channelID)
 	if err != nil {
-		h.Logger.Error("failed to query location shares", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get location shares")
+		apiutil.InternalError(w, h.Logger, "Failed to get location shares", err)
 		return
 	}
 	defer rows.Close()
@@ -298,8 +292,7 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 	messageID := chi.URLParam(r, "messageID")
 
 	var req createEffectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -332,8 +325,7 @@ func (h *Handler) HandleCreateMessageEffect(w http.ResponseWriter, r *http.Reque
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		id, messageID, channelID, userID, req.EffectType, configJSON)
 	if err != nil {
-		h.Logger.Error("failed to create message effect", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create effect")
+		apiutil.InternalError(w, h.Logger, "Failed to create effect", err)
 		return
 	}
 
@@ -379,13 +371,11 @@ func (h *Handler) HandleAddSuperReaction(w http.ResponseWriter, r *http.Request)
 	messageID := chi.URLParam(r, "messageID")
 
 	var req superReactionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Emoji == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_emoji", "Emoji is required")
+	if !apiutil.RequireNonEmpty(w, "emoji", req.Emoji) {
 		return
 	}
 	if req.Intensity < 1 || req.Intensity > 5 {
@@ -409,8 +399,7 @@ func (h *Handler) HandleAddSuperReaction(w http.ResponseWriter, r *http.Request)
 		 ON CONFLICT (message_id, user_id, emoji) DO UPDATE SET intensity = $5`,
 		id, messageID, userID, req.Emoji, req.Intensity)
 	if err != nil {
-		h.Logger.Error("failed to add super reaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add super reaction")
+		apiutil.InternalError(w, h.Logger, "Failed to add super reaction", err)
 		return
 	}
 
@@ -442,7 +431,7 @@ func (h *Handler) HandleGetSuperReactions(w http.ResponseWriter, r *http.Request
 		 WHERE sr.message_id = $1
 		 ORDER BY sr.created_at ASC`, messageID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get super reactions")
+		apiutil.InternalError(w, h.Logger, "Failed to get super reactions", err)
 		return
 	}
 	defer rows.Close()
@@ -488,8 +477,7 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	var req summarizeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -514,8 +502,7 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 			channelID, req.MessageCount)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query messages for summarization", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch messages")
+		apiutil.InternalError(w, h.Logger, "Failed to fetch messages", err)
 		return
 	}
 	defer rows.Close()
@@ -547,8 +534,7 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'extractive')`,
 		id, channelID, userID, summary, len(messages), fromMsgID, toMsgID)
 	if err != nil {
-		h.Logger.Error("failed to store summary", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store summary")
+		apiutil.InternalError(w, h.Logger, "Failed to store summary", err)
 		return
 	}
 
@@ -637,7 +623,7 @@ func (h *Handler) HandleGetSummaries(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY created_at DESC
 		 LIMIT 20`, channelID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get summaries")
+		apiutil.InternalError(w, h.Logger, "Failed to get summaries", err)
 		return
 	}
 	defer rows.Close()
@@ -683,8 +669,7 @@ func (h *Handler) HandleUpdateTranscriptionSettings(w http.ResponseWriter, r *ht
 	channelID := chi.URLParam(r, "channelID")
 
 	var req transcriptionSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -703,8 +688,7 @@ func (h *Handler) HandleUpdateTranscriptionSettings(w http.ResponseWriter, r *ht
 		 ON CONFLICT (channel_id, user_id) DO UPDATE SET enabled = $3, language = $4, updated_at = NOW()`,
 		channelID, userID, enabled, language)
 	if err != nil {
-		h.Logger.Error("failed to update transcription settings", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update settings")
+		apiutil.InternalError(w, h.Logger, "Failed to update settings", err)
 		return
 	}
 
@@ -738,7 +722,7 @@ func (h *Handler) HandleGetTranscriptionSettings(w http.ResponseWriter, r *http.
 		return
 	}
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get settings")
+		apiutil.InternalError(w, h.Logger, "Failed to get settings", err)
 		return
 	}
 
@@ -765,7 +749,7 @@ func (h *Handler) HandleGetTranscriptions(w http.ResponseWriter, r *http.Request
 		 ORDER BY vt.created_at DESC
 		 LIMIT 100`, channelID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get transcriptions")
+		apiutil.InternalError(w, h.Logger, "Failed to get transcriptions", err)
 		return
 	}
 	defer rows.Close()
@@ -825,8 +809,7 @@ func (h *Handler) HandleCreateWhiteboard(w http.ResponseWriter, r *http.Request)
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createWhiteboardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -853,8 +836,7 @@ func (h *Handler) HandleCreateWhiteboard(w http.ResponseWriter, r *http.Request)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, channelID, guildID, req.Name, userID, req.Width, req.Height, req.BackgroundColor)
 	if err != nil {
-		h.Logger.Error("failed to create whiteboard", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create whiteboard")
+		apiutil.InternalError(w, h.Logger, "Failed to create whiteboard", err)
 		return
 	}
 
@@ -890,7 +872,7 @@ func (h *Handler) HandleGetWhiteboards(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY created_at DESC
 		 LIMIT 20`, channelID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get whiteboards")
+		apiutil.InternalError(w, h.Logger, "Failed to get whiteboards", err)
 		return
 	}
 	defer rows.Close()
@@ -932,8 +914,7 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 	whiteboardID := chi.URLParam(r, "whiteboardID")
 
 	var req updateWhiteboardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -947,7 +928,7 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get whiteboard")
+		apiutil.InternalError(w, h.Logger, "Failed to get whiteboard", err)
 		return
 	}
 
@@ -1020,7 +1001,7 @@ func (h *Handler) HandleGetWhiteboardState(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get whiteboard")
+		apiutil.InternalError(w, h.Logger, "Failed to get whiteboard", err)
 		return
 	}
 
@@ -1094,17 +1075,14 @@ func (h *Handler) HandleCreateCodeSnippet(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createCodeSnippetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Code == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_code", "Code content is required")
+	if !apiutil.RequireNonEmpty(w, "code", req.Code) {
 		return
 	}
-	if utf8.RuneCountInString(req.Code) > 100000 {
-		apiutil.WriteError(w, http.StatusBadRequest, "code_too_long", "Code must be at most 100,000 characters")
+	if !apiutil.ValidateStringLength(w, "code", req.Code, 0, 100000) {
 		return
 	}
 	if req.Language == "" {
@@ -1131,8 +1109,7 @@ func (h *Handler) HandleCreateCodeSnippet(w http.ResponseWriter, r *http.Request
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, channelID, userID, req.Title, req.Language, req.Code, req.Stdin, req.Runnable)
 	if err != nil {
-		h.Logger.Error("failed to create code snippet", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create code snippet")
+		apiutil.InternalError(w, h.Logger, "Failed to create code snippet", err)
 		return
 	}
 
@@ -1192,7 +1169,7 @@ func (h *Handler) HandleGetCodeSnippet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get code snippet")
+		apiutil.InternalError(w, h.Logger, "Failed to get code snippet", err)
 		return
 	}
 
@@ -1214,7 +1191,7 @@ func (h *Handler) HandleRunCodeSnippet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get code snippet")
+		apiutil.InternalError(w, h.Logger, "Failed to get code snippet", err)
 		return
 	}
 
@@ -1270,8 +1247,7 @@ func (h *Handler) HandleCreateVideoRecording(w http.ResponseWriter, r *http.Requ
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createVideoRecordingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1288,8 +1264,7 @@ func (h *Handler) HandleCreateVideoRecording(w http.ResponseWriter, r *http.Requ
 		id, channelID, userID, req.Title, req.S3Key, req.S3Bucket,
 		req.DurationMs, req.FileSizeBytes, req.Width, req.Height, req.ThumbnailKey)
 	if err != nil {
-		h.Logger.Error("failed to create video recording", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to register recording")
+		apiutil.InternalError(w, h.Logger, "Failed to register recording", err)
 		return
 	}
 
@@ -1320,7 +1295,7 @@ func (h *Handler) HandleGetRecordings(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY vr.created_at DESC
 		 LIMIT 50`, channelID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get recordings")
+		apiutil.InternalError(w, h.Logger, "Failed to get recordings", err)
 		return
 	}
 	defer rows.Close()
@@ -1391,8 +1366,7 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createKanbanBoardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" {
@@ -1414,8 +1388,7 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		boardID, channelID, guildID, req.Name, req.Description, userID)
 	if err != nil {
-		h.Logger.Error("failed to create kanban board", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create board")
+		apiutil.InternalError(w, h.Logger, "Failed to create board", err)
 		return
 	}
 
@@ -1461,7 +1434,7 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get board")
+		apiutil.InternalError(w, h.Logger, "Failed to get board", err)
 		return
 	}
 
@@ -1470,7 +1443,7 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, name, color, position, wip_limit FROM kanban_columns
 		 WHERE board_id = $1 ORDER BY position ASC`, boardID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get columns")
+		apiutil.InternalError(w, h.Logger, "Failed to get columns", err)
 		return
 	}
 	defer colRows.Close()
@@ -1586,12 +1559,10 @@ func (h *Handler) HandleCreateKanbanColumn(w http.ResponseWriter, r *http.Reques
 	boardID := chi.URLParam(r, "boardID")
 
 	var req createKanbanColumnRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Column name is required")
+	if !apiutil.RequireNonEmpty(w, "name", req.Name) {
 		return
 	}
 	if req.Color == "" {
@@ -1609,8 +1580,7 @@ func (h *Handler) HandleCreateKanbanColumn(w http.ResponseWriter, r *http.Reques
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		colID, boardID, req.Name, req.Color, maxPos+1, req.WipLimit)
 	if err != nil {
-		h.Logger.Error("failed to create kanban column", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create column")
+		apiutil.InternalError(w, h.Logger, "Failed to create column", err)
 		return
 	}
 
@@ -1633,12 +1603,10 @@ func (h *Handler) HandleCreateKanbanCard(w http.ResponseWriter, r *http.Request)
 	columnID := chi.URLParam(r, "columnID")
 
 	var req createKanbanCardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Title == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_title", "Card title is required")
+	if !apiutil.RequireNonEmpty(w, "title", req.Title) {
 		return
 	}
 
@@ -1668,8 +1636,7 @@ func (h *Handler) HandleCreateKanbanCard(w http.ResponseWriter, r *http.Request)
 		cardID, columnID, boardID, req.Title, req.Description, req.Color,
 		maxPos+1, req.AssigneeIDs, req.LabelIDs, dueDate, userID)
 	if err != nil {
-		h.Logger.Error("failed to create kanban card", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create card")
+		apiutil.InternalError(w, h.Logger, "Failed to create card", err)
 		return
 	}
 
@@ -1703,12 +1670,10 @@ func (h *Handler) HandleMoveKanbanCard(w http.ResponseWriter, r *http.Request) {
 	cardID := chi.URLParam(r, "cardID")
 
 	var req moveKanbanCardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.ColumnID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_column_id", "Target column ID is required")
+	if !apiutil.RequireNonEmpty(w, "column_id", req.ColumnID) {
 		return
 	}
 
@@ -1717,8 +1682,7 @@ func (h *Handler) HandleMoveKanbanCard(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $3`,
 		req.ColumnID, req.Position, cardID)
 	if err != nil {
-		h.Logger.Error("failed to move kanban card", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to move card")
+		apiutil.InternalError(w, h.Logger, "Failed to move card", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1745,7 +1709,7 @@ func (h *Handler) HandleDeleteKanbanCard(w http.ResponseWriter, r *http.Request)
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM kanban_cards WHERE id = $1`, cardID)
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete card")
+		apiutil.InternalError(w, h.Logger, "Failed to delete card", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

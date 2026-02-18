@@ -64,8 +64,7 @@ func (h *Handler) verifyBotOwnership(w http.ResponseWriter, r *http.Request, bot
 		return false
 	}
 	if err != nil {
-		h.Logger.Error("failed to verify bot ownership", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Internal error")
+		apiutil.InternalError(w, h.Logger, "Internal error", err)
 		return false
 	}
 	if ownerID == nil || *ownerID != userID {
@@ -109,15 +108,13 @@ func (h *Handler) HandleCreateBot(w http.ResponseWriter, r *http.Request) {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	body.Description = strings.TrimSpace(body.Description)
 
-	if body.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Bot name is required")
+	if !apiutil.RequireNonEmpty(w, "name", body.Name) {
 		return
 	}
 	if len(body.Name) > 32 {
@@ -130,8 +127,7 @@ func (h *Handler) HandleCreateBot(w http.ResponseWriter, r *http.Request) {
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM users WHERE bot_owner_id = $1`, userID,
 	).Scan(&botCount); err != nil {
-		h.Logger.Error("failed to count bots", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bot")
+		apiutil.InternalError(w, h.Logger, "Failed to create bot", err)
 		return
 	}
 	if botCount >= 25 {
@@ -146,8 +142,7 @@ func (h *Handler) HandleCreateBot(w http.ResponseWriter, r *http.Request) {
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT instance_id FROM users WHERE id = $1`, userID,
 	).Scan(&instanceID); err != nil {
-		h.Logger.Error("failed to get user instance_id", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bot")
+		apiutil.InternalError(w, h.Logger, "Failed to create bot", err)
 		return
 	}
 
@@ -193,8 +188,7 @@ func (h *Handler) HandleListMyBots(w http.ResponseWriter, r *http.Request) {
 		 WHERE bot_owner_id = $1
 		 ORDER BY created_at DESC`, userID)
 	if err != nil {
-		h.Logger.Error("failed to list bots", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list bots")
+		apiutil.InternalError(w, h.Logger, "Failed to list bots", err)
 		return
 	}
 	defer rows.Close()
@@ -233,8 +227,7 @@ func (h *Handler) HandleGetBot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get bot", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bot")
+		apiutil.InternalError(w, h.Logger, "Failed to get bot", err)
 		return
 	}
 
@@ -255,8 +248,7 @@ func (h *Handler) HandleUpdateBot(w http.ResponseWriter, r *http.Request) {
 		Name        *string `json:"name"`
 		Description *string `json:"description"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
@@ -305,8 +297,7 @@ func (h *Handler) HandleUpdateBot(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusConflict, "username_taken", "A user with that name already exists")
 			return
 		}
-		h.Logger.Error("failed to update bot", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update bot")
+		apiutil.InternalError(w, h.Logger, "Failed to update bot", err)
 		return
 	}
 
@@ -325,8 +316,7 @@ func (h *Handler) HandleDeleteBot(w http.ResponseWriter, r *http.Request) {
 
 	// Delete the bot user (CASCADE will remove bot_tokens and slash_commands).
 	if _, err := h.Pool.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, botID); err != nil {
-		h.Logger.Error("failed to delete bot", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bot")
+		apiutil.InternalError(w, h.Logger, "Failed to delete bot", err)
 		return
 	}
 
@@ -355,8 +345,7 @@ func (h *Handler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		if !apiutil.DecodeJSON(w, r, &body) {
 			return
 		}
 	}
@@ -374,8 +363,7 @@ func (h *Handler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM bot_tokens WHERE bot_id = $1`, botID,
 	).Scan(&tokenCount); err != nil {
-		h.Logger.Error("failed to count tokens", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
+		apiutil.InternalError(w, h.Logger, "Failed to create token", err)
 		return
 	}
 	if tokenCount >= 10 {
@@ -385,8 +373,7 @@ func (h *Handler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	raw, hash, err := generateToken()
 	if err != nil {
-		h.Logger.Error("failed to generate token", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
+		apiutil.InternalError(w, h.Logger, "Failed to create token", err)
 		return
 	}
 
@@ -399,8 +386,7 @@ func (h *Handler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		tokenID, botID, hash, body.Name,
 	).Scan(&token.ID, &token.BotID, &token.Name, &token.CreatedAt, &token.LastUsedAt)
 	if err != nil {
-		h.Logger.Error("failed to insert token", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
+		apiutil.InternalError(w, h.Logger, "Failed to create token", err)
 		return
 	}
 
@@ -431,8 +417,7 @@ func (h *Handler) HandleListTokens(w http.ResponseWriter, r *http.Request) {
 		 WHERE bot_id = $1
 		 ORDER BY created_at DESC`, botID)
 	if err != nil {
-		h.Logger.Error("failed to list tokens", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list tokens")
+		apiutil.InternalError(w, h.Logger, "Failed to list tokens", err)
 		return
 	}
 	defer rows.Close()
@@ -464,8 +449,7 @@ func (h *Handler) HandleDeleteToken(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM bot_tokens WHERE id = $1 AND bot_id = $2`, tokenID, botID)
 	if err != nil {
-		h.Logger.Error("failed to delete token", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete token")
+		apiutil.InternalError(w, h.Logger, "Failed to delete token", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -499,24 +483,21 @@ func (h *Handler) HandleRegisterCommand(w http.ResponseWriter, r *http.Request) 
 		GuildID     *string         `json:"guild_id"`
 		Options     json.RawMessage `json:"options"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
 	body.Name = strings.TrimSpace(body.Name)
 	body.Description = strings.TrimSpace(body.Description)
 
-	if body.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Command name is required")
+	if !apiutil.RequireNonEmpty(w, "name", body.Name) {
 		return
 	}
 	if !commandNameRegex.MatchString(body.Name) {
 		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Command name must be 1-32 lowercase alphanumeric characters, hyphens, or underscores")
 		return
 	}
-	if body.Description == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "description_required", "Command description is required")
+	if !apiutil.RequireNonEmpty(w, "description", body.Description) {
 		return
 	}
 	if len(body.Description) > 100 {
@@ -546,8 +527,7 @@ func (h *Handler) HandleRegisterCommand(w http.ResponseWriter, r *http.Request) 
 			apiutil.WriteError(w, http.StatusConflict, "command_exists", "A command with that name already exists for this bot in the specified scope")
 			return
 		}
-		h.Logger.Error("failed to register command", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to register command")
+		apiutil.InternalError(w, h.Logger, "Failed to register command", err)
 		return
 	}
 
@@ -594,8 +574,7 @@ func (h *Handler) HandleListCommands(w http.ResponseWriter, r *http.Request) {
 			 ORDER BY name`, botID)
 	}
 	if err != nil {
-		h.Logger.Error("failed to list commands", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list commands")
+		apiutil.InternalError(w, h.Logger, "Failed to list commands", err)
 		return
 	}
 	defer rows.Close()
@@ -632,8 +611,7 @@ func (h *Handler) HandleUpdateCommand(w http.ResponseWriter, r *http.Request) {
 		Description *string         `json:"description"`
 		Options     json.RawMessage `json:"options"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
@@ -693,8 +671,7 @@ func (h *Handler) HandleUpdateCommand(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusConflict, "command_exists", "A command with that name already exists")
 			return
 		}
-		h.Logger.Error("failed to update command", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update command")
+		apiutil.InternalError(w, h.Logger, "Failed to update command", err)
 		return
 	}
 
@@ -715,8 +692,7 @@ func (h *Handler) HandleDeleteCommand(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM slash_commands WHERE id = $1 AND bot_id = $2`, commandID, botID)
 	if err != nil {
-		h.Logger.Error("failed to delete command", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete command")
+		apiutil.InternalError(w, h.Logger, "Failed to delete command", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -757,8 +733,7 @@ func (h *Handler) HandleGetBotGuildPermissions(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get bot guild permissions", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bot permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to get bot permissions", err)
 		return
 	}
 
@@ -781,8 +756,7 @@ func (h *Handler) HandleUpdateBotGuildPermissions(w http.ResponseWriter, r *http
 		Scopes          []string `json:"scopes"`
 		MaxRolePosition *int     `json:"max_role_position"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
@@ -822,8 +796,7 @@ func (h *Handler) HandleUpdateBotGuildPermissions(w http.ResponseWriter, r *http
 		botID, guildID, body.Scopes, maxRolePos,
 	).Scan(&perm.BotID, &perm.GuildID, &perm.Scopes, &perm.MaxRolePosition, &perm.CreatedAt, &perm.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to update bot guild permissions", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update bot permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to update bot permissions", err)
 		return
 	}
 
@@ -851,8 +824,7 @@ func (h *Handler) HandleComponentInteraction(w http.ResponseWriter, r *http.Requ
 		Values []string `json:"values"` // For select menus, the chosen option IDs.
 	}
 	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		if !apiutil.DecodeJSON(w, r, &body) {
 			return
 		}
 	}
@@ -878,8 +850,7 @@ func (h *Handler) HandleComponentInteraction(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get component", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to process interaction")
+		apiutil.InternalError(w, h.Logger, "Failed to process interaction", err)
 		return
 	}
 
@@ -935,8 +906,7 @@ func (h *Handler) HandleGetBotPresence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get bot presence", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bot presence")
+		apiutil.InternalError(w, h.Logger, "Failed to get bot presence", err)
 		return
 	}
 
@@ -958,8 +928,7 @@ func (h *Handler) HandleUpdateBotPresence(w http.ResponseWriter, r *http.Request
 		ActivityType *string `json:"activity_type"`
 		ActivityName *string `json:"activity_name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
@@ -997,8 +966,7 @@ func (h *Handler) HandleUpdateBotPresence(w http.ResponseWriter, r *http.Request
 		botID, body.Status, body.ActivityType, body.ActivityName,
 	).Scan(&pres.BotID, &pres.Status, &pres.ActivityType, &pres.ActivityName, &pres.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to update bot presence", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update bot presence")
+		apiutil.InternalError(w, h.Logger, "Failed to update bot presence", err)
 		return
 	}
 
@@ -1037,21 +1005,18 @@ func (h *Handler) HandleCreateEventSubscription(w http.ResponseWriter, r *http.R
 		EventTypes []string `json:"event_types"`
 		WebhookURL string   `json:"webhook_url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
-	if body.GuildID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "guild_id_required", "guild_id is required")
+	if !apiutil.RequireNonEmpty(w, "guild_id", body.GuildID) {
 		return
 	}
 	if len(body.EventTypes) == 0 {
 		apiutil.WriteError(w, http.StatusBadRequest, "event_types_required", "At least one event type is required")
 		return
 	}
-	if body.WebhookURL == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "webhook_url_required", "webhook_url is required")
+	if !apiutil.RequireNonEmpty(w, "webhook_url", body.WebhookURL) {
 		return
 	}
 	if !strings.HasPrefix(body.WebhookURL, "https://") {
@@ -1102,8 +1067,7 @@ func (h *Handler) HandleCreateEventSubscription(w http.ResponseWriter, r *http.R
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM bot_event_subscriptions WHERE bot_id = $1`, botID,
 	).Scan(&subCount); err != nil {
-		h.Logger.Error("failed to count event subscriptions", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create subscription")
+		apiutil.InternalError(w, h.Logger, "Failed to create subscription", err)
 		return
 	}
 	if subCount >= 50 {
@@ -1120,8 +1084,7 @@ func (h *Handler) HandleCreateEventSubscription(w http.ResponseWriter, r *http.R
 		subID, botID, body.GuildID, body.EventTypes, body.WebhookURL,
 	).Scan(&sub.ID, &sub.BotID, &sub.GuildID, &sub.EventTypes, &sub.WebhookURL, &sub.CreatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create event subscription", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create subscription")
+		apiutil.InternalError(w, h.Logger, "Failed to create subscription", err)
 		return
 	}
 
@@ -1150,8 +1113,7 @@ func (h *Handler) HandleListEventSubscriptions(w http.ResponseWriter, r *http.Re
 		 WHERE bot_id = $1
 		 ORDER BY created_at DESC`, botID)
 	if err != nil {
-		h.Logger.Error("failed to list event subscriptions", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list subscriptions")
+		apiutil.InternalError(w, h.Logger, "Failed to list subscriptions", err)
 		return
 	}
 	defer rows.Close()
@@ -1184,8 +1146,7 @@ func (h *Handler) HandleDeleteEventSubscription(w http.ResponseWriter, r *http.R
 		`DELETE FROM bot_event_subscriptions WHERE id = $1 AND bot_id = $2`,
 		subscriptionID, botID)
 	if err != nil {
-		h.Logger.Error("failed to delete event subscription", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete subscription")
+		apiutil.InternalError(w, h.Logger, "Failed to delete subscription", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1225,8 +1186,7 @@ func (h *Handler) HandleGetBotRateLimit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get bot rate limit", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit")
+		apiutil.InternalError(w, h.Logger, "Failed to get rate limit", err)
 		return
 	}
 
@@ -1248,8 +1208,7 @@ func (h *Handler) HandleUpdateBotRateLimit(w http.ResponseWriter, r *http.Reques
 		RequestsPerSecond *int `json:"requests_per_second"`
 		Burst             *int `json:"burst"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &body) {
 		return
 	}
 
@@ -1281,8 +1240,7 @@ func (h *Handler) HandleUpdateBotRateLimit(w http.ResponseWriter, r *http.Reques
 		botID, rps, burst,
 	).Scan(&rl.BotID, &rl.RequestsPerSecond, &rl.Burst, &rl.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to update bot rate limit", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update rate limit")
+		apiutil.InternalError(w, h.Logger, "Failed to update rate limit", err)
 		return
 	}
 
@@ -1304,8 +1262,7 @@ func (h *Handler) HandleAdminListAllBots(w http.ResponseWriter, r *http.Request)
 		 WHERE flags & $1 != 0
 		 ORDER BY created_at DESC`, models.UserFlagBot)
 	if err != nil {
-		h.Logger.Error("failed to list all bots", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list bots")
+		apiutil.InternalError(w, h.Logger, "Failed to list bots", err)
 		return
 	}
 	defer rows.Close()

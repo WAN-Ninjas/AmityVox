@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface BackupSchedule {
 		id: string;
@@ -34,16 +35,16 @@
 		created_at: string;
 	}
 
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp());
 	let schedules = $state<BackupSchedule[]>([]);
 	let showCreateForm = $state(false);
-	let creating = $state(false);
+	let createOp = $state(createAsyncOp());
 	let triggeringId = $state('');
 
 	// History
 	let historyScheduleId = $state('');
 	let history = $state<BackupEntry[]>([]);
-	let loadingHistory = $state(false);
+	let historyOp = $state(createAsyncOp());
 
 	// Create form
 	let newName = $state('');
@@ -55,19 +56,8 @@
 	let newEnabled = $state(true);
 
 	async function loadSchedules() {
-		loading = true;
-		try {
-			const res = await fetch('/api/v1/admin/backups', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				schedules = json.data || [];
-			}
-		} catch {
-			addToast('Failed to load backup schedules', 'error');
-		}
-		loading = false;
+		const result = await loadOp.run(() => api.getBackupSchedules(), msg => addToast(msg, 'error'));
+		if (!loadOp.error) schedules = result || [];
 	}
 
 	async function createSchedule() {
@@ -75,54 +65,29 @@
 			addToast('Schedule name is required', 'error');
 			return;
 		}
-		creating = true;
-		try {
-			const res = await fetch('/api/v1/admin/backups', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({
-					name: newName,
-					frequency: newFrequency,
-					retention_count: newRetentionCount,
-					include_media: newIncludeMedia,
-					include_database: newIncludeDatabase,
-					storage_path: newStoragePath,
-					enabled: newEnabled
-				})
-			});
-			const json = await res.json();
-			if (res.ok) {
-				addToast('Backup schedule created', 'success');
-				showCreateForm = false;
-				resetForm();
-				await loadSchedules();
-			} else {
-				addToast(json.error?.message || 'Failed to create schedule', 'error');
-			}
-		} catch {
-			addToast('Failed to create backup schedule', 'error');
+		await createOp.run(() => api.createBackupSchedule({
+			name: newName,
+			frequency: newFrequency,
+			retention_count: newRetentionCount,
+			include_media: newIncludeMedia,
+			include_database: newIncludeDatabase,
+			storage_path: newStoragePath,
+			enabled: newEnabled
+		}), msg => addToast(msg, 'error'));
+		if (!createOp.error) {
+			addToast('Backup schedule created', 'success');
+			showCreateForm = false;
+			resetForm();
+			await loadSchedules();
 		}
-		creating = false;
 	}
 
 	async function toggleSchedule(schedule: BackupSchedule) {
 		try {
-			const res = await fetch(`/api/v1/admin/backups/${schedule.id}`, {
-				method: 'PATCH',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({ enabled: !schedule.enabled })
-			});
-			if (res.ok) {
-				schedule.enabled = !schedule.enabled;
-				schedules = [...schedules];
-				addToast(`Schedule ${schedule.enabled ? 'enabled' : 'disabled'}`, 'success');
-			}
+			await api.updateBackupSchedule(schedule.id, { enabled: !schedule.enabled });
+			schedule.enabled = !schedule.enabled;
+			schedules = [...schedules];
+			addToast(`Schedule ${schedule.enabled ? 'enabled' : 'disabled'}`, 'success');
 		} catch {
 			addToast('Failed to update schedule', 'error');
 		}
@@ -131,18 +96,13 @@
 	async function deleteSchedule(scheduleId: string) {
 		if (!confirm('Delete this backup schedule and all its history?')) return;
 		try {
-			const res = await fetch(`/api/v1/admin/backups/${scheduleId}`, {
-				method: 'DELETE',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				schedules = schedules.filter(s => s.id !== scheduleId);
-				if (historyScheduleId === scheduleId) {
-					historyScheduleId = '';
-					history = [];
-				}
-				addToast('Backup schedule deleted', 'success');
+			await api.deleteBackupSchedule(scheduleId);
+			schedules = schedules.filter(s => s.id !== scheduleId);
+			if (historyScheduleId === scheduleId) {
+				historyScheduleId = '';
+				history = [];
 			}
+			addToast('Backup schedule deleted', 'success');
 		} catch {
 			addToast('Failed to delete schedule', 'error');
 		}
@@ -151,41 +111,22 @@
 	async function triggerBackup(scheduleId: string) {
 		triggeringId = scheduleId;
 		try {
-			const res = await fetch(`/api/v1/admin/backups/${scheduleId}/run`, {
-				method: 'POST',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				addToast('Backup triggered successfully', 'success');
-				await loadSchedules();
-				if (historyScheduleId === scheduleId) {
-					await loadHistory(scheduleId);
-				}
-			} else {
-				addToast(json.error?.message || 'Failed to trigger backup', 'error');
+			await api.runBackup(scheduleId);
+			addToast('Backup triggered successfully', 'success');
+			await loadSchedules();
+			if (historyScheduleId === scheduleId) {
+				await loadHistory(scheduleId);
 			}
-		} catch {
-			addToast('Failed to trigger backup', 'error');
+		} catch (e: any) {
+			addToast(e?.message || 'Failed to trigger backup', 'error');
 		}
 		triggeringId = '';
 	}
 
 	async function loadHistory(scheduleId: string) {
 		historyScheduleId = scheduleId;
-		loadingHistory = true;
-		try {
-			const res = await fetch(`/api/v1/admin/backups/${scheduleId}/history`, {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				history = json.data || [];
-			}
-		} catch {
-			addToast('Failed to load backup history', 'error');
-		}
-		loadingHistory = false;
+		const result = await historyOp.run(() => api.getBackupHistory(scheduleId), msg => addToast(msg, 'error'));
+		if (!historyOp.error) history = result || [];
 	}
 
 	function resetForm() {
@@ -299,15 +240,15 @@
 				<button class="btn-secondary px-4 py-2 text-sm" onclick={() => { showCreateForm = false; resetForm(); }}>
 					Cancel
 				</button>
-				<button class="btn-primary px-4 py-2 text-sm" onclick={createSchedule} disabled={creating}>
-					{creating ? 'Creating...' : 'Create Schedule'}
+				<button class="btn-primary px-4 py-2 text-sm" onclick={createSchedule} disabled={createOp.loading}>
+					{createOp.loading ? 'Creating...' : 'Create Schedule'}
 				</button>
 			</div>
 		</div>
 	{/if}
 
 	<!-- Schedules List -->
-	{#if loading && schedules.length === 0}
+	{#if loadOp.loading && schedules.length === 0}
 		<div class="flex justify-center py-12">
 			<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 		</div>
@@ -414,7 +355,7 @@
 				</button>
 			</div>
 
-			{#if loadingHistory}
+			{#if historyOp.loading}
 				<div class="flex justify-center py-6">
 					<div class="animate-spin w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 				</div>

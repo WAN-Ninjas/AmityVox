@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Role } from '$lib/types';
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let {
 		guildId,
@@ -107,12 +108,12 @@
 	let editMentionable = $state(false);
 	let editAllow = $state(0n);
 	let editDeny = $state(0n);
-	let saving = $state(false);
-	let reordering = $state(false);
+	let saveOp = $state(createAsyncOp());
+	let reorderOp = $state(createAsyncOp());
 
 	let newRoleName = $state('');
 	let newRoleColor = $state('#99aab5');
-	let creatingRole = $state(false);
+	let createRoleOp = $state(createAsyncOp());
 
 	const sortedRoles = $derived([...roles].sort((a, b) => b.position - a.position));
 	const selectedRole = $derived(roles.find((r) => r.id === selectedRoleId) ?? null);
@@ -174,18 +175,16 @@
 	}
 
 	async function reorderSwap(a: Role, b: Role) {
-		reordering = true;
-		try {
-			const updated = await api.reorderRoles(guildId, [
+		const updated = await reorderOp.run(
+			() => api.reorderRoles(guildId, [
 				{ id: a.id, position: b.position },
 				{ id: b.id, position: a.position },
-			]);
+			]),
+			msg => onError(msg)
+		);
+		if (updated) {
 			roles = updated;
 			onSuccess('Roles reordered');
-		} catch (err: any) {
-			onError(err.message || 'Failed to reorder roles');
-		} finally {
-			reordering = false;
 		}
 	}
 
@@ -266,15 +265,13 @@
 		handleDragEnd();
 		if (updates.length === 0) return;
 
-		reordering = true;
-		try {
-			const updated = await api.reorderRoles(guildId, updates);
+		const updated = await reorderOp.run(
+			() => api.reorderRoles(guildId, updates),
+			msg => onError(msg)
+		);
+		if (updated) {
 			roles = updated;
 			onSuccess('Roles reordered');
-		} catch (err: any) {
-			onError(err.message || 'Failed to reorder roles');
-		} finally {
-			reordering = false;
 		}
 	}
 
@@ -282,44 +279,41 @@
 
 	async function handleCreateRole() {
 		if (!newRoleName.trim()) return;
-		creatingRole = true;
-		try {
-			const role = await api.createRole(guildId, newRoleName.trim(), {
+		const role = await createRoleOp.run(
+			() => api.createRole(guildId, newRoleName.trim(), {
 				color: newRoleColor !== '#99aab5' ? newRoleColor : undefined
-			});
+			}),
+			msg => onError(msg)
+		);
+		if (role) {
 			roles = [...roles, role];
 			newRoleName = '';
 			newRoleColor = '#99aab5';
 			onSuccess('Role created');
-		} catch (err: any) {
-			onError(err.message || 'Failed to create role');
-		} finally {
-			creatingRole = false;
 		}
 	}
 
 	async function handleSave() {
 		if (!selectedRoleId || !editName.trim()) return;
-		saving = true;
-		try {
-			const data: Record<string, any> = {
-				color: editColor,
-				hoist: editHoist,
-				mentionable: editMentionable,
-				permissions_allow: editAllow.toString(),
-				permissions_deny: editDeny.toString()
-			};
-			// Don't allow renaming @everyone
-			if (!isEveryone) {
-				data.name = editName.trim();
-			}
-			const updated = await api.updateRole(guildId, selectedRoleId, data);
-			roles = roles.map((r) => (r.id === selectedRoleId ? updated : r));
+		const data: Record<string, any> = {
+			color: editColor,
+			hoist: editHoist,
+			mentionable: editMentionable,
+			permissions_allow: editAllow.toString(),
+			permissions_deny: editDeny.toString()
+		};
+		// Don't allow renaming @everyone
+		if (!isEveryone) {
+			data.name = editName.trim();
+		}
+		const roleId = selectedRoleId;
+		const updated = await saveOp.run(
+			() => api.updateRole(guildId, roleId, data),
+			msg => onError(msg)
+		);
+		if (updated) {
+			roles = roles.map((r) => (r.id === roleId ? updated : r));
 			onSuccess('Role updated');
-		} catch (err: any) {
-			onError(err.message || 'Failed to update role');
-		} finally {
-			saving = false;
 		}
 	}
 
@@ -361,8 +355,8 @@
 				/>
 				<input type="color" class="h-9 w-9 cursor-pointer rounded border border-border-primary bg-bg-secondary" bind:value={newRoleColor} title="Role color" />
 			</div>
-			<button class="btn-primary w-full text-sm" onclick={handleCreateRole} disabled={creatingRole || !newRoleName.trim()}>
-				{creatingRole ? 'Creating...' : 'Create Role'}
+			<button class="btn-primary w-full text-sm" onclick={handleCreateRole} disabled={createRoleOp.loading || !newRoleName.trim()}>
+				{createRoleOp.loading ? 'Creating...' : 'Create Role'}
 			</button>
 		</div>
 
@@ -374,7 +368,7 @@
 			{#each sortedRoles as role, idx (role.id)}
 				{@const isEveryoneRole = role.name === '@everyone' && role.position === 0}
 				{#if isEveryoneRole}
-					<!-- @everyone is always pinned at the bottom, no reordering -->
+					<!-- @everyone is always pinned at the bottom, no reorderOp.loading -->
 					<div class="mt-2 border-t border-bg-modifier pt-2">
 						<button
 							class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors {selectedRoleId === role.id ? 'bg-brand-500/20 text-text-primary' : 'text-text-secondary hover:bg-bg-modifier'}"
@@ -423,7 +417,7 @@
 							<button
 								class="rounded p-0.5 text-text-muted hover:text-text-primary disabled:opacity-25 disabled:hover:text-text-muted"
 								title="Move up one"
-								disabled={reordering || !canMoveUp(role)}
+								disabled={reorderOp.loading || !canMoveUp(role)}
 								onclick={() => moveRoleUp(role)}
 							>
 								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -433,7 +427,7 @@
 							<button
 								class="rounded p-0.5 text-text-muted hover:text-text-primary disabled:opacity-25 disabled:hover:text-text-muted"
 								title="Move down one"
-								disabled={reordering || !canMoveDown(role)}
+								disabled={reorderOp.loading || !canMoveDown(role)}
 								onclick={() => moveRoleDown(role)}
 							>
 								<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -535,8 +529,8 @@
 
 				<!-- Action buttons -->
 				<div class="flex items-center justify-between">
-					<button class="btn-primary" onclick={handleSave} disabled={saving || (!isEveryone && !editName.trim())}>
-						{saving ? 'Saving...' : 'Save Changes'}
+					<button class="btn-primary" onclick={handleSave} disabled={saveOp.loading || (!isEveryone && !editName.trim())}>
+						{saveOp.loading ? 'Saving...' : 'Save Changes'}
 					</button>
 					{#if !isEveryone}
 						<button class="text-sm text-red-400 hover:text-red-300" onclick={handleDelete}>

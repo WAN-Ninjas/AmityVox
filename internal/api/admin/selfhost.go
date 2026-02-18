@@ -6,7 +6,6 @@ package admin
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -77,13 +76,11 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 		RegistrationMode string `json:"registration_mode"`
 		Domain          string `json:"domain"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.InstanceName == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Instance name is required")
+	if !apiutil.RequireNonEmpty(w, "Instance name", req.InstanceName) {
 		return
 	}
 
@@ -93,8 +90,7 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $4`,
 		req.InstanceName, req.Description, req.FederationMode, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("setup: failed to update instance", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update instance settings")
+		apiutil.InternalError(w, h.Logger, "Failed to update instance settings", err)
 		return
 	}
 
@@ -195,13 +191,11 @@ func (h *Handler) HandleSetLatestVersion(w http.ResponseWriter, r *http.Request)
 		ReleaseNotes string `json:"release_notes"`
 		ReleaseURL   string `json:"release_url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Version == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_version", "Version is required")
+	if !apiutil.RequireNonEmpty(w, "Version", req.Version) {
 		return
 	}
 
@@ -278,8 +272,7 @@ func (h *Handler) HandleUpdateUpdateConfig(w http.ResponseWriter, r *http.Reques
 		Channel      *string `json:"channel"`
 		NotifyAdmins *bool   `json:"notify_admins"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -490,8 +483,7 @@ func (h *Handler) HandleGetHealthHistory(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to query health history", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get health history")
+		apiutil.InternalError(w, h.Logger, "Failed to get health history", err)
 		return
 	}
 	defer rows.Close()
@@ -558,8 +550,7 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 		 GROUP BY category
 		 ORDER BY total_bytes DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query storage breakdown", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get storage breakdown")
+		apiutil.InternalError(w, h.Logger, "Failed to get storage breakdown", err)
 		return
 	}
 	defer rows.Close()
@@ -705,8 +696,7 @@ func (h *Handler) HandleGetRetentionPolicies(w http.ResponseWriter, r *http.Requ
 		 LEFT JOIN users u ON u.id = drp.created_by
 		 ORDER BY drp.created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query retention policies", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get retention policies")
+		apiutil.InternalError(w, h.Logger, "Failed to get retention policies", err)
 		return
 	}
 	defer rows.Close()
@@ -764,8 +754,7 @@ func (h *Handler) HandleCreateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		DeletePins        *bool   `json:"delete_pins"`
 		Enabled           *bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -807,8 +796,7 @@ func (h *Handler) HandleCreateRetentionPolicy(w http.ResponseWriter, r *http.Req
 			apiutil.WriteError(w, http.StatusConflict, "duplicate_policy", "A retention policy already exists for this scope")
 			return
 		}
-		h.Logger.Error("failed to create retention policy", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to create retention policy", err)
 		return
 	}
 
@@ -840,8 +828,7 @@ func (h *Handler) HandleUpdateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		DeletePins        *bool `json:"delete_pins"`
 		Enabled           *bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -860,8 +847,7 @@ func (h *Handler) HandleUpdateRetentionPolicy(w http.ResponseWriter, r *http.Req
 		 WHERE id = $5`,
 		req.MaxAgeDays, req.DeleteAttachments, req.DeletePins, req.Enabled, policyID)
 	if err != nil {
-		h.Logger.Error("failed to update retention policy", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to update retention policy", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -885,8 +871,7 @@ func (h *Handler) HandleDeleteRetentionPolicy(w http.ResponseWriter, r *http.Req
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM data_retention_policies WHERE id = $1`, policyID)
 	if err != nil {
-		h.Logger.Error("failed to delete retention policy", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to delete retention policy", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -984,8 +969,7 @@ func (h *Handler) HandleGetCustomDomains(w http.ResponseWriter, r *http.Request)
 		 JOIN guilds g ON g.id = gcd.guild_id
 		 ORDER BY gcd.created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query custom domains", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get custom domains")
+		apiutil.InternalError(w, h.Logger, "Failed to get custom domains", err)
 		return
 	}
 	defer rows.Close()
@@ -1029,8 +1013,7 @@ func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Reques
 		GuildID string `json:"guild_id"`
 		Domain  string `json:"domain"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1074,8 +1057,7 @@ func (h *Handler) HandleCreateCustomDomain(w http.ResponseWriter, r *http.Reques
 			apiutil.WriteError(w, http.StatusConflict, "domain_exists", "This domain is already registered")
 			return
 		}
-		h.Logger.Error("failed to create custom domain", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create custom domain")
+		apiutil.InternalError(w, h.Logger, "Failed to create custom domain", err)
 		return
 	}
 
@@ -1107,8 +1089,7 @@ func (h *Handler) HandleVerifyCustomDomain(w http.ResponseWriter, r *http.Reques
 		 WHERE id = $1`,
 		domainID)
 	if err != nil {
-		h.Logger.Error("failed to verify domain", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify domain")
+		apiutil.InternalError(w, h.Logger, "Failed to verify domain", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1135,8 +1116,7 @@ func (h *Handler) HandleDeleteCustomDomain(w http.ResponseWriter, r *http.Reques
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM guild_custom_domains WHERE id = $1`, domainID)
 	if err != nil {
-		h.Logger.Error("failed to delete custom domain", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete custom domain")
+		apiutil.InternalError(w, h.Logger, "Failed to delete custom domain", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1169,8 +1149,7 @@ func (h *Handler) HandleGetBackupSchedules(w http.ResponseWriter, r *http.Reques
 		 JOIN users u ON u.id = bs.created_by
 		 ORDER BY bs.created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query backup schedules", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get backup schedules")
+		apiutil.InternalError(w, h.Logger, "Failed to get backup schedules", err)
 		return
 	}
 	defer rows.Close()
@@ -1229,13 +1208,11 @@ func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		StoragePath     string `json:"storage_path"`
 		Enabled         *bool  `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Schedule name is required")
+	if !apiutil.RequireNonEmpty(w, "Schedule name", req.Name) {
 		return
 	}
 
@@ -1287,8 +1264,7 @@ func (h *Handler) HandleCreateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		scheduleID, req.Name, req.Frequency, req.RetentionCount,
 		includeMedia, includeDB, req.StoragePath, enabled, nextRun, adminID)
 	if err != nil {
-		h.Logger.Error("failed to create backup schedule", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create backup schedule")
+		apiutil.InternalError(w, h.Logger, "Failed to create backup schedule", err)
 		return
 	}
 
@@ -1324,8 +1300,7 @@ func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		StoragePath     *string `json:"storage_path"`
 		Enabled         *bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1358,8 +1333,7 @@ func (h *Handler) HandleUpdateBackupSchedule(w http.ResponseWriter, r *http.Requ
 		req.Name, req.Frequency, req.RetentionCount, req.IncludeMedia,
 		req.IncludeDatabase, req.StoragePath, req.Enabled, scheduleID)
 	if err != nil {
-		h.Logger.Error("failed to update backup schedule", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update backup schedule")
+		apiutil.InternalError(w, h.Logger, "Failed to update backup schedule", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1390,8 +1364,7 @@ func (h *Handler) HandleDeleteBackupSchedule(w http.ResponseWriter, r *http.Requ
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM backup_schedules WHERE id = $1`, scheduleID)
 	if err != nil {
-		h.Logger.Error("failed to delete backup schedule", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete backup schedule")
+		apiutil.InternalError(w, h.Logger, "Failed to delete backup schedule", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1420,8 +1393,7 @@ func (h *Handler) HandleGetBackupHistory(w http.ResponseWriter, r *http.Request)
 		 ORDER BY created_at DESC
 		 LIMIT 50`, scheduleID)
 	if err != nil {
-		h.Logger.Error("failed to query backup history", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get backup history")
+		apiutil.InternalError(w, h.Logger, "Failed to get backup history", err)
 		return
 	}
 	defer rows.Close()

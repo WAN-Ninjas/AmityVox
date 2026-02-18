@@ -5,7 +5,6 @@ package guildevents
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -134,8 +133,7 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -194,8 +192,7 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create guild event", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create event")
+		apiutil.InternalError(w, h.Logger, "Failed to create event", err)
 		return
 	}
 
@@ -316,8 +313,7 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list guild events", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list events")
+		apiutil.InternalError(w, h.Logger, "Failed to list events", err)
 		return
 	}
 	defer rows.Close()
@@ -334,16 +330,14 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 			&evt.UserRSVP,
 		)
 		if err != nil {
-			h.Logger.Error("failed to scan guild event row", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list events")
+			apiutil.InternalError(w, h.Logger, "Failed to list events", err)
 			return
 		}
 		evt.Creator = &creator
 		eventsList = append(eventsList, evt)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating guild event rows", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list events")
+		apiutil.InternalError(w, h.Logger, "Failed to list events", err)
 		return
 	}
 
@@ -391,8 +385,7 @@ func (h *Handler) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild event", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get event")
+		apiutil.InternalError(w, h.Logger, "Failed to get event", err)
 		return
 	}
 	evt.Creator = &creator
@@ -418,8 +411,7 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild event for update", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get event")
+		apiutil.InternalError(w, h.Logger, "Failed to get event", err)
 		return
 	}
 
@@ -429,8 +421,7 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -482,8 +473,7 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to update guild event", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update event")
+		apiutil.InternalError(w, h.Logger, "Failed to update event", err)
 		return
 	}
 
@@ -510,8 +500,7 @@ func (h *Handler) HandleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild event for delete", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get event")
+		apiutil.InternalError(w, h.Logger, "Failed to get event", err)
 		return
 	}
 
@@ -525,8 +514,7 @@ func (h *Handler) HandleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		eventID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete guild event", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete event")
+		apiutil.InternalError(w, h.Logger, "Failed to delete event", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -555,8 +543,7 @@ func (h *Handler) HandleRSVP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req rsvpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -576,46 +563,36 @@ func (h *Handler) HandleRSVP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create RSVP")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Upsert RSVP.
 	var rsvp EventRSVP
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO event_rsvps (event_id, user_id, status, created_at)
-		 VALUES ($1, $2, $3, now())
-		 ON CONFLICT (event_id, user_id)
-		 DO UPDATE SET status = EXCLUDED.status
-		 RETURNING event_id, user_id, status, created_at`,
-		eventID, userID, req.Status,
-	).Scan(&rsvp.EventID, &rsvp.UserID, &rsvp.Status, &rsvp.CreatedAt)
-	if err != nil {
-		h.Logger.Error("failed to upsert RSVP", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create RSVP")
-		return
-	}
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Upsert RSVP.
+		err := tx.QueryRow(r.Context(),
+			`INSERT INTO event_rsvps (event_id, user_id, status, created_at)
+			 VALUES ($1, $2, $3, now())
+			 ON CONFLICT (event_id, user_id)
+			 DO UPDATE SET status = EXCLUDED.status
+			 RETURNING event_id, user_id, status, created_at`,
+			eventID, userID, req.Status,
+		).Scan(&rsvp.EventID, &rsvp.UserID, &rsvp.Status, &rsvp.CreatedAt)
+		if err != nil {
+			return err
+		}
 
-	// Update interested_count on the event.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE guild_events
-		 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
-		 WHERE id = $1`,
-		eventID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to update interested count", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update event")
-		return
-	}
+		// Update interested_count on the event.
+		_, err = tx.Exec(r.Context(),
+			`UPDATE guild_events
+			 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
+			 WHERE id = $1`,
+			eventID,
+		)
+		if err != nil {
+			return err
+		}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit RSVP transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create RSVP")
+		return nil
+	})
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to create RSVP", err)
 		return
 	}
 
@@ -634,44 +611,39 @@ func (h *Handler) HandleDeleteRSVP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete RSVP")
-		return
-	}
-	defer tx.Rollback(r.Context())
+	var rsvpNotFound bool
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(r.Context(),
+			`DELETE FROM event_rsvps WHERE event_id = $1 AND user_id = $2`,
+			eventID, userID,
+		)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			rsvpNotFound = true
+			return nil
+		}
 
-	tag, err := tx.Exec(r.Context(),
-		`DELETE FROM event_rsvps WHERE event_id = $1 AND user_id = $2`,
-		eventID, userID,
-	)
+		// Update interested_count on the event.
+		_, err = tx.Exec(r.Context(),
+			`UPDATE guild_events
+			 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
+			 WHERE id = $1`,
+			eventID,
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to delete RSVP", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete RSVP")
+		apiutil.InternalError(w, h.Logger, "Failed to delete RSVP", err)
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if rsvpNotFound {
 		apiutil.WriteError(w, http.StatusNotFound, "rsvp_not_found", "You have not RSVPed to this event")
-		return
-	}
-
-	// Update interested_count on the event.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE guild_events
-		 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
-		 WHERE id = $1`,
-		eventID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to update interested count", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update event")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit RSVP deletion", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete RSVP")
 		return
 	}
 
@@ -711,8 +683,7 @@ func (h *Handler) HandleListRSVPs(w http.ResponseWriter, r *http.Request) {
 		eventID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to list RSVPs", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list RSVPs")
+		apiutil.InternalError(w, h.Logger, "Failed to list RSVPs", err)
 		return
 	}
 	defer rows.Close()
@@ -726,16 +697,14 @@ func (h *Handler) HandleListRSVPs(w http.ResponseWriter, r *http.Request) {
 			&user.ID, &user.Username, &user.DisplayName, &user.AvatarID,
 		)
 		if err != nil {
-			h.Logger.Error("failed to scan RSVP row", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list RSVPs")
+			apiutil.InternalError(w, h.Logger, "Failed to list RSVPs", err)
 			return
 		}
 		rsvp.User = &user
 		rsvps = append(rsvps, rsvp)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating RSVP rows", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list RSVPs")
+		apiutil.InternalError(w, h.Logger, "Failed to list RSVPs", err)
 		return
 	}
 

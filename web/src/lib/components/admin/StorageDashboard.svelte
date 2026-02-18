@@ -47,13 +47,7 @@
 	async function loadStorage() {
 		loading = true;
 		try {
-			const res = await fetch('/api/v1/admin/storage', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				storage = json.data;
-			}
+			storage = await api.getAdminStorage();
 		} catch {
 			addToast('Failed to load storage data', 'error');
 		}

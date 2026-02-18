@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		channelId: string;
@@ -9,8 +10,8 @@
 	let { channelId }: Props = $props();
 
 	let joined = $state(false);
-	let joining = $state(false);
-	let leaving = $state(false);
+	let joinOp = $state(createAsyncOp());
+	let leaveOp = $state(createAsyncOp());
 	let voiceToken = $state<string | null>(null);
 	let voiceUrl = $state<string | null>(null);
 
@@ -23,8 +24,6 @@
 	$effect(() => {
 		const _id = channelId;
 		joined = false;
-		joining = false;
-		leaving = false;
 		voiceToken = null;
 		voiceUrl = null;
 		speakers = [];
@@ -32,36 +31,32 @@
 	});
 
 	async function joinStage() {
-		if (joining) return;
-		joining = true;
-		try {
-			const result = await api.joinVoice(channelId);
-			voiceToken = result.token;
-			voiceUrl = result.url;
+		if (joinOp.loading) return;
+		const result = await joinOp.run(
+			() => api.joinVoice(channelId),
+			msg => addToast(msg, 'error')
+		);
+		if (!joinOp.error) {
+			voiceToken = result!.token;
+			voiceUrl = result!.url;
 			joined = true;
 			addToast('Joined the stage', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to join stage', 'error');
-		} finally {
-			joining = false;
 		}
 	}
 
 	async function leaveStage() {
-		if (leaving) return;
-		leaving = true;
-		try {
-			await api.leaveVoice(channelId);
+		if (leaveOp.loading) return;
+		await leaveOp.run(
+			() => api.leaveVoice(channelId),
+			msg => addToast(msg, 'error')
+		);
+		if (!leaveOp.error) {
 			joined = false;
 			voiceToken = null;
 			voiceUrl = null;
 			speakers = [];
 			audience = [];
 			addToast('Left the stage', 'info');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to leave stage', 'error');
-		} finally {
-			leaving = false;
 		}
 	}
 
@@ -107,9 +102,9 @@
 					<button
 						class="rounded-md bg-brand-500 px-6 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
 						onclick={joinStage}
-						disabled={joining}
+						disabled={joinOp.loading}
 					>
-						{#if joining}
+						{#if joinOp.loading}
 							<span class="flex items-center gap-2">
 								<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
 								Joining...
@@ -189,9 +184,9 @@
 				<button
 					class="rounded-md bg-red-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
 					onclick={leaveStage}
-					disabled={leaving}
+					disabled={leaveOp.loading}
 				>
-					{#if leaving}
+					{#if leaveOp.loading}
 						Leaving...
 					{:else}
 						Leave Stage

@@ -65,8 +65,7 @@ func (h *Handler) HandleListActivities(w http.ResponseWriter, r *http.Request) {
 			 LIMIT 100`)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query activities", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list activities")
+		apiutil.InternalError(w, h.Logger, "Failed to list activities", err)
 		return
 	}
 	defer rows.Close()
@@ -183,17 +182,14 @@ func (h *Handler) HandleCreateActivity(w http.ResponseWriter, r *http.Request) {
 		Category              string   `json:"category"`
 		SupportedChannelTypes []string `json:"supported_channel_types"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Activity name is required")
+	if !apiutil.RequireNonEmpty(w, "name", req.Name) {
 		return
 	}
-	if req.URL == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Activity URL is required")
+	if !apiutil.RequireNonEmpty(w, "url", req.URL) {
 		return
 	}
 
@@ -228,8 +224,7 @@ func (h *Handler) HandleCreateActivity(w http.ResponseWriter, r *http.Request) {
 		id, req.Name, req.Description, req.ActivityType, req.IconURL, req.URL,
 		userID, req.MaxParticipants, req.MinParticipants, req.Category, req.SupportedChannelTypes)
 	if err != nil {
-		h.Logger.Error("failed to create activity", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create activity")
+		apiutil.InternalError(w, h.Logger, "Failed to create activity", err)
 		return
 	}
 
@@ -254,8 +249,7 @@ func (h *Handler) HandleRateActivity(w http.ResponseWriter, r *http.Request) {
 		Rating int    `json:"rating"`
 		Review string `json:"review"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Rating < 1 || req.Rating > 5 {
@@ -304,12 +298,10 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 	channelID := chi.URLParam(r, "channelID")
 
 	var req startSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.ActivityID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_activity_id", "Activity ID is required")
+	if !apiutil.RequireNonEmpty(w, "activity_id", req.ActivityID) {
 		return
 	}
 
@@ -350,8 +342,7 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 		 VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
 		sessionID, req.ActivityID, channelID, guildID, userID, configJSON)
 	if err != nil {
-		h.Logger.Error("failed to start activity session", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start session")
+		apiutil.InternalError(w, h.Logger, "Failed to start session", err)
 		return
 	}
 
@@ -580,8 +571,7 @@ func (h *Handler) HandleUpdateActivityState(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		State json.RawMessage `json:"state"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -630,8 +620,7 @@ func (h *Handler) HandleCreateGame(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 
 	var req createGameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -655,8 +644,7 @@ func (h *Handler) HandleCreateGame(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, 'waiting', $6)`,
 		gameID, channelID, req.GameType, stateJSON, configJSON, userID)
 	if err != nil {
-		h.Logger.Error("failed to create game", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create game")
+		apiutil.InternalError(w, h.Logger, "Failed to create game", err)
 		return
 	}
 
@@ -872,8 +860,7 @@ func (h *Handler) HandleGameMove(w http.ResponseWriter, r *http.Request) {
 	gameID := chi.URLParam(r, "gameID")
 
 	var req gameMoveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1159,12 +1146,10 @@ func (h *Handler) HandleStartWatchTogether(w http.ResponseWriter, r *http.Reques
 	channelID := chi.URLParam(r, "channelID")
 
 	var req watchTogetherRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.VideoURL == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Video URL is required")
+	if !apiutil.RequireNonEmpty(w, "video_url", req.VideoURL) {
 		return
 	}
 
@@ -1201,8 +1186,7 @@ func (h *Handler) HandleStartWatchTogether(w http.ResponseWriter, r *http.Reques
 		 VALUES ($1, $2, $3, $4, $5)`,
 		wtID, sessionID, req.VideoURL, req.VideoTitle, req.VideoThumbnail)
 	if err != nil {
-		h.Logger.Error("failed to create watch together session", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start watch session")
+		apiutil.InternalError(w, h.Logger, "Failed to start watch session", err)
 		return
 	}
 
@@ -1233,8 +1217,7 @@ func (h *Handler) HandleSyncWatchTogether(w http.ResponseWriter, r *http.Request
 	sessionID := chi.URLParam(r, "sessionID")
 
 	var req watchTogetherSyncRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1293,12 +1276,10 @@ func (h *Handler) HandleStartMusicParty(w http.ResponseWriter, r *http.Request) 
 	channelID := chi.URLParam(r, "channelID")
 
 	var req musicPartyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.TrackURL == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Track URL is required")
+	if !apiutil.RequireNonEmpty(w, "track_url", req.TrackURL) {
 		return
 	}
 
@@ -1333,8 +1314,7 @@ func (h *Handler) HandleStartMusicParty(w http.ResponseWriter, r *http.Request) 
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		mpID, sessionID, req.TrackURL, req.TrackTitle, req.TrackArtist, req.TrackArtwork)
 	if err != nil {
-		h.Logger.Error("failed to create music party", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start music party")
+		apiutil.InternalError(w, h.Logger, "Failed to start music party", err)
 		return
 	}
 
@@ -1366,12 +1346,10 @@ func (h *Handler) HandleAddToMusicQueue(w http.ResponseWriter, r *http.Request) 
 	sessionID := chi.URLParam(r, "sessionID")
 
 	var req musicPartyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.TrackURL == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Track URL is required")
+	if !apiutil.RequireNonEmpty(w, "track_url", req.TrackURL) {
 		return
 	}
 

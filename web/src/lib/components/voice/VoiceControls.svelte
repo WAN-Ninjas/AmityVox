@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let {
 		channelId,
@@ -27,8 +28,8 @@
 	let isPrioritySpeaker = $state(false);
 	let showSettings = $state(false);
 	let pttActive = $state(false);
-	let loading = $state(false);
-	let saving = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let recordingPTTKey = $state(false);
 
 	// Load voice preferences on mount
@@ -70,9 +71,11 @@
 	});
 
 	async function loadPreferences() {
-		try {
-			loading = true;
-			const prefs = await api.getVoicePreferences();
+		const prefs = await loadOp.run(
+			() => api.getVoicePreferences(),
+			msg => console.error('Failed to load voice preferences:', msg)
+		);
+		if (prefs) {
 			inputMode = prefs.input_mode || 'vad';
 			pttKey = prefs.ptt_key || 'Space';
 			vadThreshold = prefs.vad_threshold ?? 0.3;
@@ -81,17 +84,12 @@
 			autoGainControl = prefs.auto_gain_control ?? true;
 			inputVolume = prefs.input_volume ?? 1.0;
 			outputVolume = prefs.output_volume ?? 1.0;
-		} catch (err) {
-			console.error('Failed to load voice preferences:', err);
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function savePreferences() {
-		try {
-			saving = true;
-			await api.updateVoicePreferences({
+		await saveOp.run(
+			() => api.updateVoicePreferences({
 				input_mode: inputMode,
 				ptt_key: pttKey,
 				vad_threshold: vadThreshold,
@@ -100,12 +98,9 @@
 				auto_gain_control: autoGainControl,
 				input_volume: inputVolume,
 				output_volume: outputVolume
-			});
-		} catch (err) {
-			console.error('Failed to save voice preferences:', err);
-		} finally {
-			saving = false;
-		}
+			}),
+			msg => console.error('Failed to save voice preferences:', msg)
+		);
 	}
 
 	async function toggleInputMode() {
@@ -115,14 +110,7 @@
 		// Update active voice state
 		if (connected) {
 			try {
-				await fetch(`/api/v1/voice/${channelId}/input-mode`, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'Authorization': `Bearer ${api.getToken()}`
-					},
-					body: JSON.stringify({ mode: inputMode })
-				});
+				await api.setVoiceInputMode(channelId, inputMode);
 			} catch (err) {
 				console.error('Failed to set input mode:', err);
 			}
@@ -131,23 +119,9 @@
 
 	async function togglePrioritySpeaker() {
 		try {
-			// We need the current user's ID - derive from token context
-			const meRes = await fetch('/api/v1/users/@me', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (!meRes.ok) return;
-			const meJson = await meRes.json();
-			const userId = meJson.data.id;
-
+			const me = await api.getMe();
 			const newState = !isPrioritySpeaker;
-			await fetch(`/api/v1/voice/${channelId}/members/${userId}/priority`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({ priority: newState })
-			});
+			await api.setVoicePrioritySpeaker(channelId, me.id, newState);
 			isPrioritySpeaker = newState;
 		} catch (err) {
 			console.error('Failed to toggle priority speaker:', err);
@@ -363,7 +337,7 @@
 					</div>
 				</div>
 
-				{#if saving}
+				{#if saveOp.loading}
 					<p class="saving-indicator">Saving...</p>
 				{/if}
 			</div>

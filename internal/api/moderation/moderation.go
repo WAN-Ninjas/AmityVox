@@ -119,13 +119,11 @@ func (h *Handler) HandleWarnMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req warnMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Reason == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 
@@ -152,8 +150,7 @@ func (h *Handler) HandleWarnMember(w http.ResponseWriter, r *http.Request) {
 		&warning.ModeratorID, &warning.Reason, &warning.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create warning", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create warning")
+		apiutil.InternalError(w, h.Logger, "Failed to create warning", err)
 		return
 	}
 
@@ -182,8 +179,7 @@ func (h *Handler) HandleGetWarnings(w http.ResponseWriter, r *http.Request) {
 		guildID, memberID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query warnings", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list warnings")
+		apiutil.InternalError(w, h.Logger, "Failed to list warnings", err)
 		return
 	}
 	defer rows.Close()
@@ -196,16 +192,14 @@ func (h *Handler) HandleGetWarnings(w http.ResponseWriter, r *http.Request) {
 			&wr.ID, &wr.GuildID, &wr.UserID, &wr.ModeratorID, &wr.Reason, &wr.CreatedAt,
 			&mod.ID, &mod.Username, &mod.DisplayName,
 		); err != nil {
-			h.Logger.Error("failed to scan warning row", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list warnings")
+			apiutil.InternalError(w, h.Logger, "Failed to list warnings", err)
 			return
 		}
 		wr.Moderator = &mod
 		warnings = append(warnings, wr)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("warning rows iteration error", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list warnings")
+		apiutil.InternalError(w, h.Logger, "Failed to list warnings", err)
 		return
 	}
 
@@ -229,8 +223,7 @@ func (h *Handler) HandleDeleteWarning(w http.ResponseWriter, r *http.Request) {
 		warningID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete warning", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete warning")
+		apiutil.InternalError(w, h.Logger, "Failed to delete warning", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -249,13 +242,11 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 	messageID := chi.URLParam(r, "messageID")
 
 	var req reportMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Reason == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 
@@ -266,8 +257,7 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
 			return
 		}
-		h.Logger.Error("failed to look up channel guild", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to report message")
+		apiutil.InternalError(w, h.Logger, "Failed to report message", err)
 		return
 	}
 
@@ -295,8 +285,7 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 		&report.ResolvedBy, &report.ResolvedAt, &report.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create report", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create report")
+		apiutil.InternalError(w, h.Logger, "Failed to create report", err)
 		return
 	}
 
@@ -340,8 +329,7 @@ func (h *Handler) HandleGetReports(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query reports", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+		apiutil.InternalError(w, h.Logger, "Failed to list reports", err)
 		return
 	}
 	defer rows.Close()
@@ -354,15 +342,13 @@ func (h *Handler) HandleGetReports(w http.ResponseWriter, r *http.Request) {
 			&report.ReporterID, &report.Reason, &report.Status,
 			&report.ResolvedBy, &report.ResolvedAt, &report.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan report row", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+			apiutil.InternalError(w, h.Logger, "Failed to list reports", err)
 			return
 		}
 		reports = append(reports, report)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("report rows iteration error", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+		apiutil.InternalError(w, h.Logger, "Failed to list reports", err)
 		return
 	}
 
@@ -382,8 +368,7 @@ func (h *Handler) HandleResolveReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req resolveReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -410,8 +395,7 @@ func (h *Handler) HandleResolveReport(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "report_not_found", "Report not found")
 			return
 		}
-		h.Logger.Error("failed to resolve report", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve report")
+		apiutil.InternalError(w, h.Logger, "Failed to resolve report", err)
 		return
 	}
 
@@ -430,8 +414,7 @@ func (h *Handler) HandleLockChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
 			return
 		}
-		h.Logger.Error("failed to look up channel guild", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to lock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to lock channel", err)
 		return
 	}
 
@@ -453,8 +436,7 @@ func (h *Handler) HandleLockChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 			return
 		}
-		h.Logger.Error("failed to lock channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to lock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to lock channel", err)
 		return
 	}
 
@@ -475,8 +457,7 @@ func (h *Handler) HandleUnlockChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
 			return
 		}
-		h.Logger.Error("failed to look up channel guild", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unlock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to unlock channel", err)
 		return
 	}
 
@@ -498,8 +479,7 @@ func (h *Handler) HandleUnlockChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 			return
 		}
-		h.Logger.Error("failed to unlock channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unlock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to unlock channel", err)
 		return
 	}
 
@@ -546,13 +526,11 @@ func (h *Handler) HandleGetRaidConfig(w http.ResponseWriter, r *http.Request) {
 				&config.MinAccountAge, &config.LockdownActive, &config.LockdownStartedAt, &config.UpdatedAt,
 			)
 			if err != nil {
-				h.Logger.Error("failed to create default raid config", slog.String("error", err.Error()))
-				apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get raid config")
+				apiutil.InternalError(w, h.Logger, "Failed to get raid config", err)
 				return
 			}
 		} else {
-			h.Logger.Error("failed to query raid config", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get raid config")
+			apiutil.InternalError(w, h.Logger, "Failed to get raid config", err)
 			return
 		}
 	}
@@ -572,8 +550,7 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req updateRaidConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -611,8 +588,7 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 		&config.MinAccountAge, &config.LockdownActive, &config.LockdownStartedAt, &config.UpdatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to update raid config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update raid config")
+		apiutil.InternalError(w, h.Logger, "Failed to update raid config", err)
 		return
 	}
 
@@ -704,13 +680,11 @@ func (h *Handler) HandleReportToAdmin(w http.ResponseWriter, r *http.Request) {
 	messageID := chi.URLParam(r, "messageID")
 
 	var req reportMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Reason == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 
@@ -746,8 +720,7 @@ func (h *Handler) HandleReportToAdmin(w http.ResponseWriter, r *http.Request) {
 		&report.ResolvedBy, &report.ResolvedAt, &report.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create admin report", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to submit report")
+		apiutil.InternalError(w, h.Logger, "Failed to submit report", err)
 		return
 	}
 

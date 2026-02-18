@@ -4,7 +4,6 @@
 package channels
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -53,8 +52,7 @@ func (h *EmojiHandler) HandleGetChannelEmoji(w http.ResponseWriter, r *http.Requ
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
-	if channelID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "Channel ID", channelID) {
 		return
 	}
 
@@ -77,8 +75,7 @@ func (h *EmojiHandler) HandleGetChannelEmoji(w http.ResponseWriter, r *http.Requ
 		channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to list channel emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to list emoji", err)
 		return
 	}
 	defer rows.Close()
@@ -90,8 +87,7 @@ func (h *EmojiHandler) HandleGetChannelEmoji(w http.ResponseWriter, r *http.Requ
 			&e.ID, &e.ChannelID, &e.GuildID, &e.Name,
 			&e.CreatorID, &e.Animated, &e.S3Key, &e.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan channel emoji", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list emoji")
+			apiutil.InternalError(w, h.Logger, "Failed to list emoji", err)
 			return
 		}
 		emoji = append(emoji, e)
@@ -106,27 +102,23 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
-	if channelID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "Channel ID", channelID) {
 		return
 	}
 
 	var req createChannelEmojiRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Emoji name is required")
+	if !apiutil.RequireNonEmpty(w, "Emoji name", req.Name) {
 		return
 	}
 	if len(req.Name) > 32 {
 		apiutil.WriteError(w, http.StatusBadRequest, "name_too_long", "Emoji name must be at most 32 characters")
 		return
 	}
-	if req.FileID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_file_id", "File ID (S3 key) is required")
+	if !apiutil.RequireNonEmpty(w, "File ID (S3 key)", req.FileID) {
 		return
 	}
 
@@ -174,8 +166,7 @@ func (h *EmojiHandler) HandleCreateChannelEmoji(w http.ResponseWriter, r *http.R
 		&e.CreatorID, &e.Animated, &e.S3Key, &e.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create channel emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to create emoji", err)
 		return
 	}
 
@@ -222,8 +213,7 @@ func (h *EmojiHandler) HandleDeleteChannelEmoji(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to check emoji ownership", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to delete emoji", err)
 		return
 	}
 
@@ -244,8 +234,7 @@ func (h *EmojiHandler) HandleDeleteChannelEmoji(w http.ResponseWriter, r *http.R
 		emojiID, channelID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete channel emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to delete emoji", err)
 		return
 	}
 

@@ -53,8 +53,7 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 				apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "No user found with that handle")
 				return
 			}
-			h.Logger.Error("failed to resolve local user", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve handle")
+			apiutil.InternalError(w, h.Logger, "Failed to resolve handle", err)
 			return
 		}
 		h.computeHandle(r.Context(), user)
@@ -66,8 +65,7 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 	var localMode string
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT federation_mode FROM instances WHERE id = $1`, h.InstanceID).Scan(&localMode); err != nil {
-		h.Logger.Error("failed to get local federation mode", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to check federation mode")
+		apiutil.InternalError(w, h.Logger, "Failed to check federation mode", err)
 		return
 	}
 	if localMode == "closed" {
@@ -90,8 +88,7 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 				JOIN instances i ON fp.peer_id = i.id
 				WHERE LOWER(i.domain) = LOWER($1) AND fp.instance_id = $2 AND fp.status = 'active'
 			)`, domain, h.InstanceID).Scan(&peerExists); err != nil {
-			h.Logger.Error("failed to check federation allowlist", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to check federation allowlist")
+			apiutil.InternalError(w, h.Logger, "Failed to check federation allowlist", err)
 			return
 		}
 		if !peerExists {
