@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getDMDisplayName, getDMRecipient } from '../dm';
+import { getDMDisplayName, getDMRecipient, isRemoteUser, getUserHandle, getDisplayNameWithDomain } from '../dm';
 import type { Channel, User } from '$lib/types';
 
 function makeUser(overrides: Partial<User> = {}): User {
@@ -141,5 +141,71 @@ describe('getDMRecipient', () => {
 			recipients: [makeUser({ id: 'me' })],
 		});
 		expect(getDMRecipient(channel, 'me')).toBeUndefined();
+	});
+});
+
+describe('isRemoteUser', () => {
+	it('returns true when instance_id differs from local', () => {
+		const user = makeUser({ instance_id: 'remote-inst' });
+		expect(isRemoteUser(user, 'local-inst')).toBe(true);
+	});
+
+	it('returns false when instance_id matches local', () => {
+		const user = makeUser({ instance_id: 'local-inst' });
+		expect(isRemoteUser(user, 'local-inst')).toBe(false);
+	});
+
+	it('returns false when localInstanceId is undefined', () => {
+		const user = makeUser({ instance_id: 'remote-inst' });
+		expect(isRemoteUser(user, undefined)).toBe(false);
+	});
+
+	it('returns false when user instance_id is empty', () => {
+		const user = makeUser({ instance_id: '' });
+		expect(isRemoteUser(user, 'local-inst')).toBe(false);
+	});
+});
+
+describe('getUserHandle', () => {
+	it('returns @username for local user', () => {
+		const user = makeUser({ username: 'alice', instance_id: 'local' });
+		expect(getUserHandle(user, 'local')).toBe('@alice');
+	});
+
+	it('returns @username@domain for remote user with domain', () => {
+		const user = makeUser({ username: 'bob', instance_id: 'remote' });
+		expect(getUserHandle(user, 'local', 'remote.example.com')).toBe('@bob@remote.example.com');
+	});
+
+	it('returns @username for remote user without domain', () => {
+		const user = makeUser({ username: 'bob', instance_id: 'remote' });
+		expect(getUserHandle(user, 'local')).toBe('@bob');
+	});
+
+	it('returns @username when localInstanceId is undefined', () => {
+		const user = makeUser({ username: 'alice' });
+		expect(getUserHandle(user, undefined)).toBe('@alice');
+	});
+});
+
+describe('getDisplayNameWithDomain', () => {
+	it('returns display_name for local user', () => {
+		const user = makeUser({ display_name: 'Alice W', instance_id: 'local' });
+		expect(getDisplayNameWithDomain(user, 'local')).toBe('Alice W');
+	});
+
+	it('returns username for local user without display_name', () => {
+		const user = makeUser({ display_name: null, username: 'alice', instance_id: 'local' });
+		expect(getDisplayNameWithDomain(user, 'local')).toBe('alice');
+	});
+
+	it('appends domain for remote user', () => {
+		const user = makeUser({ display_name: 'Bob', instance_id: 'remote' });
+		expect(getDisplayNameWithDomain(user, 'local', 'remote.example.com')).toBe('Bob (remote.example.com)');
+	});
+
+	it('returns name without domain when domain not provided for remote user', () => {
+		const user = makeUser({ display_name: 'Bob', instance_id: 'remote' });
+		expect(getDisplayNameWithDomain(user, 'local')).toBe('Bob');
 	});
 });
