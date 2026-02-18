@@ -86,8 +86,23 @@ export async function joinVoice(channelId: string, guildId: string, channelName:
 	voiceParticipants.set(new Map());
 
 	try {
-		// Get LiveKit token from backend
-		const { token, url } = await api.joinVoice(channelId);
+		// Get LiveKit token from backend.
+		// If the channel belongs to a federated guild, the backend returns a redirect
+		// with { federated: true, guild_id, channel_id } and we use the guild-join proxy.
+		let token: string;
+		let url: string;
+		const joinResp = await api.joinVoice(channelId) as Record<string, unknown>;
+		if (joinResp.federated) {
+			const fedResp = await api.joinFederatedVoiceByGuild(
+				joinResp.guild_id as string,
+				joinResp.channel_id as string
+			);
+			token = fedResp.token;
+			url = fedResp.url;
+		} else {
+			token = joinResp.token as string;
+			url = joinResp.url as string;
+		}
 
 		// Load saved device preferences from localStorage.
 		const savedInputDevice = localStorage.getItem('av-voice-input-device') || undefined;

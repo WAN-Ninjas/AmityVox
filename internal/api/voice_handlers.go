@@ -65,6 +65,28 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is a remote (federated) guild channel.
+	if guildID != nil {
+		var remoteInstanceDomain *string
+		s.DB.Pool.QueryRow(r.Context(),
+			`SELECT i.domain FROM federation_guild_cache fgc
+			 JOIN instances i ON i.id = fgc.instance_id
+			 WHERE fgc.guild_id = $1 AND fgc.user_id = $2 LIMIT 1`,
+			*guildID, userID,
+		).Scan(&remoteInstanceDomain)
+		if remoteInstanceDomain != nil {
+			// This is a federated guild — return redirect info for the client
+			// to use the federated voice proxy endpoint instead.
+			WriteJSON(w, http.StatusOK, map[string]interface{}{
+				"federated":       true,
+				"instance_domain": *remoteInstanceDomain,
+				"guild_id":        *guildID,
+				"channel_id":      channelID,
+			})
+			return
+		}
+	}
+
 	// Check Connect permission.
 	if guildID != nil {
 		if !checkGuildPerm(r.Context(), s.DB.Pool, *guildID, userID, permissions.Connect) {
