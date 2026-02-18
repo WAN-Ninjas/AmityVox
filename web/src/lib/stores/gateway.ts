@@ -4,7 +4,7 @@ import { writable, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
-import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, guilds as guildsStore } from './guilds';
+import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, guilds as guildsStore, currentGuildId } from './guilds';
 import { updateChannel, removeChannel, channels as channelsStore, currentChannelId } from './channels';
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
@@ -165,9 +165,15 @@ export function connectGateway(token: string) {
 				let isMention = msg.mention_here ||
 						(selfId ? msg.mention_user_ids?.includes(selfId) : false);
 				if (!isMention && selfId && msg.mention_role_ids?.length > 0) {
-					const member = get(guildMembers).get(selfId);
-					if (member?.roles?.some(r => msg.mention_role_ids.includes(r))) {
-						isMention = true;
+					// Only check role mentions if the message's channel belongs to the
+					// currently viewed guild, since guildMembers only holds members for
+					// that guild.
+					const activeGuildId = get(currentGuildId);
+					if (activeGuildId && msgChannel?.guild_id === activeGuildId) {
+						const member = get(guildMembers).get(selfId);
+						if (member?.roles?.some(r => msg.mention_role_ids.includes(r))) {
+							isMention = true;
+						}
 					}
 				}
 					incrementUnread(msg.channel_id, isMention);
