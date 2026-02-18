@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -24,7 +25,7 @@ var errRemoteUserNotFound = errors.New("remote user not found")
 func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 	handle := r.URL.Query().Get("handle")
 	if handle == "" {
-		writeError(w, http.StatusBadRequest, "missing_handle", "The handle query parameter is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_handle", "The handle query parameter is required")
 		return
 	}
 
@@ -40,7 +41,7 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !federation.UsernameRegex.MatchString(username) {
-		writeError(w, http.StatusBadRequest, "invalid_handle", "Invalid username format")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_handle", "Invalid username format")
 		return
 	}
 
@@ -49,15 +50,14 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 		user, err := h.resolveLocalUser(r, username)
 		if err != nil {
 			if err == pgx.ErrNoRows {
-				writeError(w, http.StatusNotFound, "user_not_found", "No user found with that handle")
+				apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "No user found with that handle")
 				return
 			}
-			h.Logger.Error("failed to resolve local user", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve handle")
+			apiutil.InternalError(w, h.Logger, "Failed to resolve handle", err)
 			return
 		}
 		h.computeHandle(r.Context(), user)
-		writeJSON(w, http.StatusOK, user)
+		apiutil.WriteJSON(w, http.StatusOK, user)
 		return
 	}
 
@@ -65,18 +65,17 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 	var localMode string
 	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT federation_mode FROM instances WHERE id = $1`, h.InstanceID).Scan(&localMode); err != nil {
-		h.Logger.Error("failed to get local federation mode", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check federation mode")
+		apiutil.InternalError(w, h.Logger, "Failed to check federation mode", err)
 		return
 	}
 	if localMode == "closed" {
-		writeError(w, http.StatusForbidden, "federation_disabled", "Federated lookups are not enabled on this instance")
+		apiutil.WriteError(w, http.StatusForbidden, "federation_disabled", "Federated lookups are not enabled on this instance")
 		return
 	}
 
 	// Validate the remote domain to prevent SSRF.
 	if err := federation.ValidateFederationDomain(domain); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_domain", "Invalid federation domain")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_domain", "Invalid federation domain")
 		return
 	}
 
@@ -89,12 +88,11 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 				JOIN instances i ON fp.peer_id = i.id
 				WHERE LOWER(i.domain) = LOWER($1) AND fp.instance_id = $2 AND fp.status = 'active'
 			)`, domain, h.InstanceID).Scan(&peerExists); err != nil {
-			h.Logger.Error("failed to check federation allowlist", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check federation allowlist")
+			apiutil.InternalError(w, h.Logger, "Failed to check federation allowlist", err)
 			return
 		}
 		if !peerExists {
-			writeError(w, http.StatusForbidden, "peer_not_allowed", "This instance is not an approved federation peer")
+			apiutil.WriteError(w, http.StatusForbidden, "peer_not_allowed", "This instance is not an approved federation peer")
 			return
 		}
 	}
@@ -106,14 +104,14 @@ func (h *Handler) HandleResolveHandle(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()),
 			slog.String("domain", domain))
 		if errors.Is(err, errRemoteUserNotFound) {
-			writeError(w, http.StatusNotFound, "user_not_found", "No user found with that handle")
+			apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "No user found with that handle")
 		} else {
-			writeError(w, http.StatusBadGateway, "remote_lookup_failed", "Failed to look up user on remote instance")
+			apiutil.WriteError(w, http.StatusBadGateway, "remote_lookup_failed", "Failed to look up user on remote instance")
 		}
 		return
 	}
 	h.computeHandle(r.Context(), user)
-	writeJSON(w, http.StatusOK, user)
+	apiutil.WriteJSON(w, http.StatusOK, user)
 }
 
 func (h *Handler) resolveLocalUser(r *http.Request, username string) (*models.User, error) {

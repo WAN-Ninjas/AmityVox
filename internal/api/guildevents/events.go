@@ -5,7 +5,6 @@ package guildevents
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -93,20 +93,6 @@ type rsvpRequest struct {
 
 // --- Helpers ---
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
-}
-
 func (h *Handler) isMember(ctx context.Context, guildID, userID string) bool {
 	var exists bool
 	h.Pool.QueryRow(ctx,
@@ -142,28 +128,27 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
 	var req createEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Name == "" || len(req.Name) > 100 {
-		writeError(w, http.StatusBadRequest, "invalid_name", "Event name must be 1-100 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Event name must be 1-100 characters")
 		return
 	}
 
 	scheduledStart, err := time.Parse(time.RFC3339, req.ScheduledStart)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_scheduled_start", "scheduled_start must be a valid RFC3339 timestamp")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_scheduled_start", "scheduled_start must be a valid RFC3339 timestamp")
 		return
 	}
 	if !scheduledStart.After(time.Now()) {
-		writeError(w, http.StatusBadRequest, "invalid_scheduled_start", "scheduled_start must be in the future")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_scheduled_start", "scheduled_start must be in the future")
 		return
 	}
 
@@ -171,11 +156,11 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	if req.ScheduledEnd != nil {
 		t, err := time.Parse(time.RFC3339, *req.ScheduledEnd)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_scheduled_end", "scheduled_end must be a valid RFC3339 timestamp")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_scheduled_end", "scheduled_end must be a valid RFC3339 timestamp")
 			return
 		}
 		if !t.After(scheduledStart) {
-			writeError(w, http.StatusBadRequest, "invalid_scheduled_end", "scheduled_end must be after scheduled_start")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_scheduled_end", "scheduled_end must be after scheduled_start")
 			return
 		}
 		scheduledEnd = &t
@@ -186,7 +171,7 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	autoCancelMinutes := 30 // default
 	if req.AutoCancelMinutes != nil {
 		if *req.AutoCancelMinutes < 0 || *req.AutoCancelMinutes > 1440 {
-			writeError(w, http.StatusBadRequest, "invalid_auto_cancel", "auto_cancel_minutes must be between 0 and 1440")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_auto_cancel", "auto_cancel_minutes must be between 0 and 1440")
 			return
 		}
 		autoCancelMinutes = *req.AutoCancelMinutes
@@ -207,14 +192,13 @@ func (h *Handler) HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create guild event", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create event")
+		apiutil.InternalError(w, h.Logger, "Failed to create event", err)
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildEventCreate, "GUILD_EVENT_CREATE", evt)
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildEventCreate, "GUILD_EVENT_CREATE", evt.GuildID, evt)
 
-	writeJSON(w, http.StatusCreated, evt)
+	apiutil.WriteJSON(w, http.StatusCreated, evt)
 }
 
 // autoCancelOverdueEvents checks for events in a guild that are past their
@@ -258,7 +242,7 @@ func (h *Handler) autoCancelOverdueEvents(ctx context.Context, guildID string) {
 			for rows.Next() {
 				var id, gID, creatorID, name, status string
 				if rows.Scan(&id, &gID, &creatorID, &name, &status) == nil {
-					h.EventBus.PublishJSON(ctx, events.SubjectGuildEventUpdate, "GUILD_EVENT_UPDATE", map[string]string{
+					h.EventBus.PublishGuildEvent(ctx, events.SubjectGuildEventUpdate, "GUILD_EVENT_UPDATE", gID, map[string]string{
 						"id":       id,
 						"guild_id": gID,
 						"status":   status,
@@ -277,7 +261,7 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -329,8 +313,7 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list guild events", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list events")
+		apiutil.InternalError(w, h.Logger, "Failed to list events", err)
 		return
 	}
 	defer rows.Close()
@@ -347,20 +330,18 @@ func (h *Handler) HandleListEvents(w http.ResponseWriter, r *http.Request) {
 			&evt.UserRSVP,
 		)
 		if err != nil {
-			h.Logger.Error("failed to scan guild event row", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list events")
+			apiutil.InternalError(w, h.Logger, "Failed to list events", err)
 			return
 		}
 		evt.Creator = &creator
 		eventsList = append(eventsList, evt)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating guild event rows", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list events")
+		apiutil.InternalError(w, h.Logger, "Failed to list events", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, eventsList)
+	apiutil.WriteJSON(w, http.StatusOK, eventsList)
 }
 
 // HandleGetEvent returns a single guild event by ID.
@@ -375,7 +356,7 @@ func (h *Handler) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 	h.autoCancelOverdueEvents(r.Context(), guildID)
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -400,17 +381,16 @@ func (h *Handler) HandleGetEvent(w http.ResponseWriter, r *http.Request) {
 		&evt.UserRSVP,
 	)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "event_not_found", "Event not found")
+		apiutil.WriteError(w, http.StatusNotFound, "event_not_found", "Event not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild event", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get event")
+		apiutil.InternalError(w, h.Logger, "Failed to get event", err)
 		return
 	}
 	evt.Creator = &creator
 
-	writeJSON(w, http.StatusOK, evt)
+	apiutil.WriteJSON(w, http.StatusOK, evt)
 }
 
 // HandleUpdateEvent updates a guild event. Only the creator or a guild admin can update.
@@ -427,28 +407,26 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 		eventID, guildID,
 	).Scan(&creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "event_not_found", "Event not found")
+		apiutil.WriteError(w, http.StatusNotFound, "event_not_found", "Event not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild event for update", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get event")
+		apiutil.InternalError(w, h.Logger, "Failed to get event", err)
 		return
 	}
 
 	if !h.isCreatorOrAdmin(r.Context(), guildID, userID, creatorID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to update this event")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to update this event")
 		return
 	}
 
 	var req updateEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Name != nil && (len(*req.Name) == 0 || len(*req.Name) > 100) {
-		writeError(w, http.StatusBadRequest, "invalid_name", "Event name must be 1-100 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Event name must be 1-100 characters")
 		return
 	}
 
@@ -456,7 +434,7 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	if req.ScheduledStart != nil {
 		t, err := time.Parse(time.RFC3339, *req.ScheduledStart)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_scheduled_start", "scheduled_start must be a valid RFC3339 timestamp")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_scheduled_start", "scheduled_start must be a valid RFC3339 timestamp")
 			return
 		}
 		scheduledStart = &t
@@ -466,7 +444,7 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	if req.ScheduledEnd != nil {
 		t, err := time.Parse(time.RFC3339, *req.ScheduledEnd)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_scheduled_end", "scheduled_end must be a valid RFC3339 timestamp")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_scheduled_end", "scheduled_end must be a valid RFC3339 timestamp")
 			return
 		}
 		scheduledEnd = &t
@@ -495,14 +473,13 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 		&evt.ScheduledEnd, &evt.Status, &evt.InterestedCount, &evt.AutoCancelMinutes, &evt.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to update guild event", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update event")
+		apiutil.InternalError(w, h.Logger, "Failed to update event", err)
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildEventUpdate, "GUILD_EVENT_UPDATE", evt)
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildEventUpdate, "GUILD_EVENT_UPDATE", guildID, evt)
 
-	writeJSON(w, http.StatusOK, evt)
+	apiutil.WriteJSON(w, http.StatusOK, evt)
 }
 
 // HandleDeleteEvent deletes a guild event. Only the creator or a guild admin can delete.
@@ -519,17 +496,16 @@ func (h *Handler) HandleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		eventID, guildID,
 	).Scan(&creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "event_not_found", "Event not found")
+		apiutil.WriteError(w, http.StatusNotFound, "event_not_found", "Event not found")
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild event for delete", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get event")
+		apiutil.InternalError(w, h.Logger, "Failed to get event", err)
 		return
 	}
 
 	if !h.isCreatorOrAdmin(r.Context(), guildID, userID, creatorID) {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to delete this event")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to delete this event")
 		return
 	}
 
@@ -538,16 +514,15 @@ func (h *Handler) HandleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		eventID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete guild event", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete event")
+		apiutil.InternalError(w, h.Logger, "Failed to delete event", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "event_not_found", "Event not found")
+		apiutil.WriteError(w, http.StatusNotFound, "event_not_found", "Event not found")
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildEventDelete, "GUILD_EVENT_DELETE", map[string]string{
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildEventDelete, "GUILD_EVENT_DELETE", guildID, map[string]string{
 		"id":       eventID,
 		"guild_id": guildID,
 	})
@@ -563,18 +538,17 @@ func (h *Handler) HandleRSVP(w http.ResponseWriter, r *http.Request) {
 	eventID := chi.URLParam(r, "eventID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
 	var req rsvpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Status != "interested" && req.Status != "going" {
-		writeError(w, http.StatusBadRequest, "invalid_status", "RSVP status must be \"interested\" or \"going\"")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "RSVP status must be \"interested\" or \"going\"")
 		return
 	}
 
@@ -585,54 +559,44 @@ func (h *Handler) HandleRSVP(w http.ResponseWriter, r *http.Request) {
 		eventID, guildID,
 	).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusNotFound, "event_not_found", "Event not found")
+		apiutil.WriteError(w, http.StatusNotFound, "event_not_found", "Event not found")
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create RSVP")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Upsert RSVP.
 	var rsvp EventRSVP
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO event_rsvps (event_id, user_id, status, created_at)
-		 VALUES ($1, $2, $3, now())
-		 ON CONFLICT (event_id, user_id)
-		 DO UPDATE SET status = EXCLUDED.status
-		 RETURNING event_id, user_id, status, created_at`,
-		eventID, userID, req.Status,
-	).Scan(&rsvp.EventID, &rsvp.UserID, &rsvp.Status, &rsvp.CreatedAt)
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Upsert RSVP.
+		err := tx.QueryRow(r.Context(),
+			`INSERT INTO event_rsvps (event_id, user_id, status, created_at)
+			 VALUES ($1, $2, $3, now())
+			 ON CONFLICT (event_id, user_id)
+			 DO UPDATE SET status = EXCLUDED.status
+			 RETURNING event_id, user_id, status, created_at`,
+			eventID, userID, req.Status,
+		).Scan(&rsvp.EventID, &rsvp.UserID, &rsvp.Status, &rsvp.CreatedAt)
+		if err != nil {
+			return err
+		}
+
+		// Update interested_count on the event.
+		_, err = tx.Exec(r.Context(),
+			`UPDATE guild_events
+			 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
+			 WHERE id = $1`,
+			eventID,
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to upsert RSVP", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create RSVP")
+		apiutil.InternalError(w, h.Logger, "Failed to create RSVP", err)
 		return
 	}
 
-	// Update interested_count on the event.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE guild_events
-		 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
-		 WHERE id = $1`,
-		eventID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to update interested count", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update event")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit RSVP transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create RSVP")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, rsvp)
+	apiutil.WriteJSON(w, http.StatusOK, rsvp)
 }
 
 // HandleDeleteRSVP removes a user's RSVP for a guild event.
@@ -643,48 +607,43 @@ func (h *Handler) HandleDeleteRSVP(w http.ResponseWriter, r *http.Request) {
 	eventID := chi.URLParam(r, "eventID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
+	var rsvpNotFound bool
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(r.Context(),
+			`DELETE FROM event_rsvps WHERE event_id = $1 AND user_id = $2`,
+			eventID, userID,
+		)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			rsvpNotFound = true
+			return nil
+		}
+
+		// Update interested_count on the event.
+		_, err = tx.Exec(r.Context(),
+			`UPDATE guild_events
+			 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
+			 WHERE id = $1`,
+			eventID,
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete RSVP")
+		apiutil.InternalError(w, h.Logger, "Failed to delete RSVP", err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-
-	tag, err := tx.Exec(r.Context(),
-		`DELETE FROM event_rsvps WHERE event_id = $1 AND user_id = $2`,
-		eventID, userID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to delete RSVP", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete RSVP")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "rsvp_not_found", "You have not RSVPed to this event")
-		return
-	}
-
-	// Update interested_count on the event.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE guild_events
-		 SET interested_count = (SELECT COUNT(*) FROM event_rsvps WHERE event_id = $1)
-		 WHERE id = $1`,
-		eventID,
-	)
-	if err != nil {
-		h.Logger.Error("failed to update interested count", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update event")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit RSVP deletion", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete RSVP")
+	if rsvpNotFound {
+		apiutil.WriteError(w, http.StatusNotFound, "rsvp_not_found", "You have not RSVPed to this event")
 		return
 	}
 
@@ -699,7 +658,7 @@ func (h *Handler) HandleListRSVPs(w http.ResponseWriter, r *http.Request) {
 	eventID := chi.URLParam(r, "eventID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -710,7 +669,7 @@ func (h *Handler) HandleListRSVPs(w http.ResponseWriter, r *http.Request) {
 		eventID, guildID,
 	).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusNotFound, "event_not_found", "Event not found")
+		apiutil.WriteError(w, http.StatusNotFound, "event_not_found", "Event not found")
 		return
 	}
 
@@ -724,8 +683,7 @@ func (h *Handler) HandleListRSVPs(w http.ResponseWriter, r *http.Request) {
 		eventID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to list RSVPs", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list RSVPs")
+		apiutil.InternalError(w, h.Logger, "Failed to list RSVPs", err)
 		return
 	}
 	defer rows.Close()
@@ -739,18 +697,16 @@ func (h *Handler) HandleListRSVPs(w http.ResponseWriter, r *http.Request) {
 			&user.ID, &user.Username, &user.DisplayName, &user.AvatarID,
 		)
 		if err != nil {
-			h.Logger.Error("failed to scan RSVP row", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list RSVPs")
+			apiutil.InternalError(w, h.Logger, "Failed to list RSVPs", err)
 			return
 		}
 		rsvp.User = &user
 		rsvps = append(rsvps, rsvp)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating RSVP rows", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list RSVPs")
+		apiutil.InternalError(w, h.Logger, "Failed to list RSVPs", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, rsvps)
+	apiutil.WriteJSON(w, http.StatusOK, rsvps)
 }

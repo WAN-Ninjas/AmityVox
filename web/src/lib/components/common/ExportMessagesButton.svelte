@@ -12,16 +12,7 @@
 		error = '';
 		success = '';
 		try {
-			const token = api.getToken();
-			const res = await fetch(`/api/v1/channels/${channelId}/export?format=json`, {
-				headers: { Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Export failed');
-			}
-			const data = await res.json();
-			const exportData = data.data ?? data;
+			const exportData = await api.exportChannelMessages(channelId, 'json');
 			const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');

@@ -1,7 +1,8 @@
 // Client-side nicknames store — personal nicknames visible only to the current user.
 // Persisted in localStorage under 'av-client-nicknames'.
 
-import { writable, get } from 'svelte/store';
+import { get } from 'svelte/store';
+import { createMapStore } from './mapHelpers';
 
 const STORAGE_KEY = 'av-client-nicknames';
 const hasStorage = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
@@ -24,7 +25,8 @@ function saveToStorage(map: Map<string, string>) {
 	} catch { /* ignore storage failures */ }
 }
 
-export const clientNicknames = writable<Map<string, string>>(loadFromStorage());
+export const clientNicknames = createMapStore<string, string>();
+clientNicknames.setAll(loadFromStorage());
 
 /** Get the client-side nickname for a user, or null if none set. */
 export function getClientNickname(userId: string): string | null {
@@ -33,15 +35,11 @@ export function getClientNickname(userId: string): string | null {
 
 /** Set a client-side nickname for a user. Pass empty string to clear. */
 export function setClientNickname(userId: string, nickname: string) {
-	clientNicknames.update((map) => {
-		const next = new Map(map);
-		const trimmed = nickname.trim();
-		if (trimmed) {
-			next.set(userId, trimmed);
-		} else {
-			next.delete(userId);
-		}
-		saveToStorage(next);
-		return next;
-	});
+	const trimmed = nickname.trim();
+	if (trimmed) {
+		clientNicknames.setEntry(userId, trimmed);
+	} else {
+		clientNicknames.removeEntry(userId);
+	}
+	saveToStorage(get(clientNicknames));
 }

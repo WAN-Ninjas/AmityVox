@@ -32,14 +32,6 @@
 	// Collapsed state
 	let collapsedGroups = $state<Set<string>>(new Set());
 
-	function authHeaders(includeContentType = false): Record<string, string> {
-		const token = api.getToken();
-		const headers: Record<string, string> = {};
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-		if (includeContentType) headers['Content-Type'] = 'application/json';
-		return headers;
-	}
-
 	onMount(async () => {
 		await loadGroups();
 		// Restore collapsed state from localStorage.
@@ -57,15 +49,7 @@
 	async function loadGroups() {
 		loading = true;
 		try {
-			const res = await fetch('/api/v1/users/@me/channel-groups', {
-				headers: authHeaders()
-			});
-			if (!res.ok) {
-				groups = [];
-				return;
-			}
-			const data = await res.json();
-			groups = data.data ?? [];
+			groups = await api.getChannelGroups();
 		} catch {
 			groups = [];
 		} finally {
@@ -88,20 +72,10 @@
 		if (!newGroupName.trim()) return;
 		creating = true;
 		try {
-			const res = await fetch('/api/v1/users/@me/channel-groups', {
-				method: 'POST',
-				headers: authHeaders(true),
-				body: JSON.stringify({
-					name: newGroupName.trim(),
-					color: newGroupColor
-				})
+			const group = await api.createChannelGroup({
+				name: newGroupName.trim(),
+				color: newGroupColor
 			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to create group');
-			}
-			const data = await res.json();
-			const group = data.data ?? data;
 			groups = [...groups, group];
 			showCreateModal = false;
 			newGroupName = '';
@@ -117,20 +91,10 @@
 	async function updateGroup(groupId: string) {
 		if (!editGroupName.trim()) return;
 		try {
-			const res = await fetch(`/api/v1/users/@me/channel-groups/${groupId}`, {
-				method: 'PATCH',
-				headers: authHeaders(true),
-				body: JSON.stringify({
-					name: editGroupName.trim(),
-					color: editGroupColor
-				})
+			const updated = await api.updateChannelGroup(groupId, {
+				name: editGroupName.trim(),
+				color: editGroupColor
 			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to update group');
-			}
-			const data = await res.json();
-			const updated = data.data ?? data;
 			groups = groups.map(g => g.id === groupId ? updated : g);
 			editingGroupId = null;
 		} catch (err: any) {
@@ -141,13 +105,7 @@
 	async function deleteGroup(groupId: string) {
 		if (!confirm('Delete this channel group?')) return;
 		try {
-			const res = await fetch(`/api/v1/users/@me/channel-groups/${groupId}`, {
-				method: 'DELETE',
-				headers: authHeaders()
-			});
-			if (!res.ok && res.status !== 204) {
-				throw new Error('Failed to delete group');
-			}
+			await api.deleteChannelGroup(groupId);
 			groups = groups.filter(g => g.id !== groupId);
 			addToast('Channel group deleted', 'info');
 		} catch (err: any) {
@@ -157,13 +115,7 @@
 
 	async function removeChannel(groupId: string, channelId: string) {
 		try {
-			const res = await fetch(`/api/v1/users/@me/channel-groups/${groupId}/channels/${channelId}`, {
-				method: 'DELETE',
-				headers: authHeaders()
-			});
-			if (!res.ok && res.status !== 204) {
-				throw new Error('Failed to remove channel');
-			}
+			await api.removeChannelFromGroup(groupId, channelId);
 			groups = groups.map(g => {
 				if (g.id === groupId) {
 					return { ...g, channels: g.channels.filter(c => c !== channelId) };
@@ -220,17 +172,11 @@
 		if (group?.channels.includes(channelId)) return;
 
 		try {
-			const res = await fetch(`/api/v1/users/@me/channel-groups/${groupId}/channels`, {
-				method: 'PUT',
-				headers: authHeaders(true),
-				body: JSON.stringify({ channel_id: channelId })
-			});
-			if (!res.ok && res.status !== 204) {
-				throw new Error('Failed to add channel');
-			}
+			const updatedChannels = [...(group?.channels ?? []), channelId];
+			await api.setChannelGroupChannels(groupId, updatedChannels);
 			groups = groups.map(g => {
 				if (g.id === groupId) {
-					return { ...g, channels: [...g.channels, channelId] };
+					return { ...g, channels: updatedChannels };
 				}
 				return g;
 			});

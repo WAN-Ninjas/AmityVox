@@ -1,14 +1,15 @@
 // Muting store — tracks channel and guild mute preferences for notification suppression.
 
-import { writable, derived, get } from 'svelte/store';
+import { derived, get } from 'svelte/store';
 import { api } from '$lib/api/client';
 import type { ChannelNotificationPreference, NotificationPreference } from '$lib/types';
+import { createMapStore } from './mapHelpers';
 
 // Per-channel mute preferences (keyed by channel_id).
-const channelMuteMap = writable<Map<string, ChannelNotificationPreference>>(new Map());
+const channelMuteMap = createMapStore<string, ChannelNotificationPreference>();
 
 // Per-guild mute preferences (keyed by guild_id).
-const guildMuteMap = writable<Map<string, NotificationPreference>>(new Map());
+const guildMuteMap = createMapStore<string, NotificationPreference>();
 
 // Expose derived readonly stores.
 export const channelMutePrefs = derived(channelMuteMap, ($m) => $m);
@@ -22,7 +23,7 @@ export async function loadChannelMutePrefs() {
 		for (const p of prefs) {
 			map.set(p.channel_id, p);
 		}
-		channelMuteMap.set(map);
+		channelMuteMap.setAll(map);
 	} catch {
 		// Silently fail — muting is non-critical.
 	}
@@ -64,10 +65,7 @@ export async function muteChannel(channelId: string, durationMs?: number) {
 			level: 'none',
 			muted_until: mutedUntil
 		});
-		channelMuteMap.update((map) => {
-			map.set(channelId, pref);
-			return new Map(map);
-		});
+		channelMuteMap.setEntry(channelId, pref);
 	} catch {
 		// Silently fail.
 	}
@@ -77,10 +75,7 @@ export async function muteChannel(channelId: string, durationMs?: number) {
 export async function unmuteChannel(channelId: string) {
 	try {
 		await api.deleteChannelNotificationPreference(channelId);
-		channelMuteMap.update((map) => {
-			map.delete(channelId);
-			return new Map(map);
-		});
+		channelMuteMap.removeEntry(channelId);
 	} catch {
 		// Silently fail.
 	}
@@ -98,10 +93,7 @@ export async function muteGuild(guildId: string, durationMs?: number) {
 			level: 'none',
 			muted_until: mutedUntil
 		});
-		guildMuteMap.update((map) => {
-			map.set(guildId, pref);
-			return new Map(map);
-		});
+		guildMuteMap.setEntry(guildId, pref);
 	} catch {
 		// Silently fail.
 	}
@@ -115,10 +107,7 @@ export async function unmuteGuild(guildId: string) {
 			level: 'mentions',
 			muted_until: null
 		});
-		guildMuteMap.update((map) => {
-			map.delete(guildId);
-			return new Map(map);
-		});
+		guildMuteMap.removeEntry(guildId);
 	} catch {
 		// Silently fail.
 	}
@@ -126,10 +115,7 @@ export async function unmuteGuild(guildId: string) {
 
 // Update the guild mute map from server data (called when loading guild prefs).
 export function setGuildMutePref(guildId: string, pref: NotificationPreference) {
-	guildMuteMap.update((map) => {
-		map.set(guildId, pref);
-		return new Map(map);
-	});
+	guildMuteMap.setEntry(guildId, pref);
 }
 
 // Get all currently muted channels (for settings page display).
@@ -150,8 +136,8 @@ export function getMutedChannels(): ChannelNotificationPreference[] {
 
 // Reset stores (for testing only).
 export function _resetForTests() {
-	channelMuteMap.set(new Map());
-	guildMuteMap.set(new Map());
+	channelMuteMap.clear();
+	guildMuteMap.clear();
 }
 
 // Get all currently muted guilds (for settings page display).

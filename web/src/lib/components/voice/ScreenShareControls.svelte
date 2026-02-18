@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getRoom } from '$lib/stores/voice';
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let {
 		channelId,
@@ -16,7 +17,7 @@
 
 	let isSharing = $state(false);
 	let starting = $state(false);
-	let stopping = $state(false);
+	let stopOp = $state(createAsyncOp());
 	let error = $state<string | null>(null);
 
 	// Settings
@@ -94,17 +95,12 @@
 	async function stopScreenShare() {
 		const room = getRoom();
 		if (!room) return;
-
-		try {
-			stopping = true;
-			error = null;
-			await room.localParticipant.setScreenShareEnabled(false);
-			isSharing = false;
-		} catch (err: any) {
-			error = err.message || 'Failed to stop screen share';
-		} finally {
-			stopping = false;
-		}
+		error = null;
+		await stopOp.run(
+			() => room.localParticipant.setScreenShareEnabled(false),
+			msg => (error = msg)
+		);
+		if (!stopOp.error) isSharing = false;
 	}
 </script>
 
@@ -126,9 +122,9 @@
 				<button
 					class="w-full rounded bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
 					onclick={stopScreenShare}
-					disabled={stopping}
+					disabled={stopOp.loading}
 				>
-					{stopping ? 'Stopping...' : 'Stop Sharing'}
+					{stopOp.loading ? 'Stopping...' : 'Stop Sharing'}
 				</button>
 			</div>
 		{:else if showSettings}

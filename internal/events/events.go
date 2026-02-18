@@ -217,7 +217,15 @@ func (b *Bus) Publish(_ context.Context, subject string, event Event) error {
 
 // PublishJSON is a convenience method that marshals arbitrary data into an Event
 // and publishes it to the specified subject.
+//
+// Deprecated: Use PublishGuildEvent, PublishChannelEvent, PublishUserEvent, or
+// PublishBroadcastEvent instead, which populate the routing envelope fields
+// required by the gateway's shouldDispatchTo logic.
 func (b *Bus) PublishJSON(ctx context.Context, subject, eventType string, data interface{}) error {
+	b.logger.Warn("PublishJSON called without routing envelope — use typed publish methods instead",
+		slog.String("subject", subject),
+		slog.String("type", eventType),
+	)
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshaling event data: %w", err)
@@ -226,6 +234,58 @@ func (b *Bus) PublishJSON(ctx context.Context, subject, eventType string, data i
 	return b.Publish(ctx, subject, Event{
 		Type: eventType,
 		Data: raw,
+	})
+}
+
+// PublishGuildEvent publishes an event routed to all members of a guild.
+func (b *Bus) PublishGuildEvent(ctx context.Context, subject, eventType, guildID string, data interface{}) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshaling event data: %w", err)
+	}
+	return b.Publish(ctx, subject, Event{
+		Type:    eventType,
+		GuildID: guildID,
+		Data:    raw,
+	})
+}
+
+// PublishChannelEvent publishes an event routed to all viewers of a channel.
+func (b *Bus) PublishChannelEvent(ctx context.Context, subject, eventType, channelID string, data interface{}) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshaling event data: %w", err)
+	}
+	return b.Publish(ctx, subject, Event{
+		Type:      eventType,
+		ChannelID: channelID,
+		Data:      raw,
+	})
+}
+
+// PublishUserEvent publishes an event targeted at a specific user.
+func (b *Bus) PublishUserEvent(ctx context.Context, subject, eventType, userID string, data interface{}) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshaling event data: %w", err)
+	}
+	return b.Publish(ctx, subject, Event{
+		Type:   eventType,
+		UserID: userID,
+		Data:   raw,
+	})
+}
+
+// PublishBroadcastEvent publishes an event to all connected clients.
+func (b *Bus) PublishBroadcastEvent(ctx context.Context, subject, eventType string, data interface{}) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshaling event data: %w", err)
+	}
+	return b.Publish(ctx, subject, Event{
+		Type:    eventType,
+		GuildID: "__broadcast__",
+		Data:    raw,
 	})
 }
 

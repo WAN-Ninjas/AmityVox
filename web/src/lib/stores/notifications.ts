@@ -4,6 +4,7 @@ import { writable, derived, get } from 'svelte/store';
 import { currentChannelId } from './channels';
 import { isDndActive, notificationSoundsEnabled, notificationSoundPreset, notificationVolume } from './settings';
 import { playNotificationSound } from '$lib/utils/sounds';
+import { createMapStore } from './mapHelpers';
 
 export type NotificationType = 'mention' | 'reply' | 'dm' | 'friend_request';
 
@@ -22,7 +23,7 @@ export interface AppNotification {
 	created_at: string;
 }
 
-const notificationMap = writable<Map<string, AppNotification>>(new Map());
+const notificationMap = createMapStore<string, AppNotification>();
 
 let counter = 0;
 
@@ -117,14 +118,7 @@ export function addNotification(notification: Omit<AppNotification, 'id' | 'read
 
 // Mark a single notification as read.
 export function markNotificationRead(id: string) {
-	notificationMap.update((map) => {
-		const entry = map.get(id);
-		if (entry && !entry.read) {
-			map.set(id, { ...entry, read: true });
-			return new Map(map);
-		}
-		return map;
-	});
+	notificationMap.updateEntry(id, (entry) => ({ ...entry, read: true }));
 }
 
 // Mark all notifications as read.
@@ -143,18 +137,12 @@ export function markAllNotificationsRead() {
 
 // Remove a single notification.
 export function removeNotification(id: string) {
-	notificationMap.update((map) => {
-		if (map.has(id)) {
-			map.delete(id);
-			return new Map(map);
-		}
-		return map;
-	});
+	notificationMap.removeEntry(id);
 }
 
 // Clear all notifications.
 export function clearAllNotifications() {
-	notificationMap.set(new Map());
+	notificationMap.clear();
 }
 
 // Mark all notifications for a specific channel as read.

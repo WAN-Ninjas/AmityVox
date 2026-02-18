@@ -93,6 +93,12 @@ type Client struct {
 	cancelRead     context.CancelFunc
 }
 
+// channelGuildEntry caches the result of a channel→guild lookup.
+type channelGuildEntry struct {
+	guildID *string // nil means DM/group channel (no guild)
+	expires time.Time
+}
+
 // Server manages WebSocket connections and event dispatch.
 type Server struct {
 	authService       *auth.Service
@@ -113,7 +119,12 @@ type Server struct {
 	userClients   map[string]map[*Client]struct{}
 	userClientsMu sync.RWMutex
 
-	httpServer *http.Server
+	// channelGuildCache maps channelID → guild ownership for dispatch routing.
+	// Entries expire after 60 seconds to avoid stale data after channel moves.
+	channelGuildCache sync.Map
+
+	httpServer     *http.Server
+	originPatterns []string
 }
 
 // ServerConfig holds the configuration for creating a gateway Server.
@@ -128,10 +139,16 @@ type ServerConfig struct {
 	ListenAddr        string
 	BuildVersion      string
 	Logger            *slog.Logger
+	CORSOrigins       []string // Allowed WebSocket origin patterns; empty = allow all.
 }
 
 // NewServer creates a new WebSocket gateway server.
 func NewServer(cfg ServerConfig) *Server {
+	origins := cfg.CORSOrigins
+	if len(origins) == 0 {
+		origins = []string{"*"}
+	}
+
 	return &Server{
 		authService:       cfg.AuthService,
 		eventBus:          cfg.EventBus,
@@ -145,6 +162,7 @@ func NewServer(cfg ServerConfig) *Server {
 		logger:            cfg.Logger,
 		clients:           make(map[*Client]struct{}),
 		userClients:       make(map[string]map[*Client]struct{}),
+		originPatterns:    origins,
 	}
 }
 
@@ -198,7 +216,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // client lifecycle: HELLO -> IDENTIFY -> event loop.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"*"},
+		OriginPatterns: s.originPatterns,
 	})
 	if err != nil {
 		s.logger.Error("WebSocket accept failed", slog.String("error", err.Error()))
@@ -924,34 +942,40 @@ func (s *Server) dispatchEvent(subject string, event events.Event) {
 }
 
 // shouldDispatchTo determines if a client should receive a given event based on
-// guild membership and event targeting.
+// the routing envelope fields (GuildID, ChannelID, UserID) set by the typed
+// publish methods, with subject-based fallbacks for legacy PublishJSON calls.
 func (s *Server) shouldDispatchTo(client *Client, subject string, event events.Event) bool {
-	// Presence and user profile updates: dispatch to the user themselves,
-	// plus all clients that share a guild or are friends with the user.
+	// 1. Broadcast events: dispatch to ALL identified clients.
+	if event.GuildID == "__broadcast__" {
+		return true
+	}
+
+	// 2. Announcement events: broadcast to ALL identified clients.
+	if strings.HasPrefix(subject, "amityvox.announcement.") {
+		return true
+	}
+
+	// 3. Presence and user profile updates: dispatch to the user themselves,
+	//    plus all clients that share a guild or are friends with the user.
 	if (event.Type == "PRESENCE_UPDATE" || event.Type == "USER_UPDATE") && event.UserID != "" {
-		// Always deliver to the user themselves.
 		if event.UserID == client.userID {
 			return true
 		}
-		// Collect the event user's guild IDs from any connected client, then
-		// check for overlap with the target client. Uses two separate lock
-		// scopes to avoid nested locking (prevents ABBA deadlock).
+		// Use userClients map for O(1) lookup instead of iterating all clients.
+		s.userClientsMu.RLock()
+		eventUserClients := s.userClients[event.UserID]
 		var eventUserGuildIDs []string
-		s.clientsMu.RLock()
-		for otherClient := range s.clients {
-			if otherClient.userID == event.UserID {
-				otherClient.mu.Lock()
-				for gid := range otherClient.guildIDs {
-					eventUserGuildIDs = append(eventUserGuildIDs, gid)
-				}
-				otherClient.mu.Unlock()
-				break
+		for c := range eventUserClients {
+			c.mu.Lock()
+			for gid := range c.guildIDs {
+				eventUserGuildIDs = append(eventUserGuildIDs, gid)
 			}
+			c.mu.Unlock()
+			break // only need one client to get guild list
 		}
-		s.clientsMu.RUnlock()
+		s.userClientsMu.RUnlock()
 
 		client.mu.Lock()
-		// Check if the event user is a friend of the target client.
 		isFriend := client.friendIDs[event.UserID]
 		client.mu.Unlock()
 		if isFriend {
@@ -973,16 +997,17 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		return shared
 	}
 
-	// User-specific events: only dispatch to the targeted user.
-	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
-		if event.Type == "RELATIONSHIP_ADD" ||
-			event.Type == "RELATIONSHIP_UPDATE" ||
-			event.Type == "RELATIONSHIP_REMOVE" {
-			return event.UserID == client.userID
-		}
+	// 4. CHANNEL_ACK: only dispatch to the user who performed the ack (privacy fix).
+	if event.Type == "CHANNEL_ACK" && event.UserID != "" {
+		return event.UserID == client.userID
 	}
 
-	// Guild events: only dispatch to guild members.
+	// 5. User-specific events: only dispatch to the targeted user.
+	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
+		return event.UserID == client.userID
+	}
+
+	// 6. Guild-scoped events: only dispatch to guild members.
 	if event.GuildID != "" {
 		client.mu.Lock()
 		isMember := client.guildIDs[event.GuildID]
@@ -990,85 +1015,107 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		return isMember
 	}
 
-	// Call ring events: dispatch to channel recipients EXCEPT the caller.
-	// Must be checked before the generic voice/channel dispatch paths below.
+	// 7. Call ring events: dispatch to channel recipients EXCEPT the caller.
 	if subject == events.SubjectCallRing && event.ChannelID != "" && s.pool != nil {
-		// Don't ring the caller themselves.
 		if event.UserID == client.userID {
 			return false
 		}
 		var isRecipient bool
-		s.pool.QueryRow(context.Background(),
+		_ = s.pool.QueryRow(context.Background(),
 			`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
 			event.ChannelID, client.userID).Scan(&isRecipient)
 		return isRecipient
 	}
 
-	// If the subject indicates a guild or voice event, try to extract guild context from data.
-	if strings.HasPrefix(subject, "amityvox.guild.") || strings.HasPrefix(subject, "amityvox.voice.") {
-		var data struct {
-			GuildID string `json:"guild_id"`
-		}
-		if json.Unmarshal(event.Data, &data) == nil && data.GuildID != "" {
-			client.mu.Lock()
-			isMember := client.guildIDs[data.GuildID]
-			client.mu.Unlock()
-			return isMember
-		}
-	}
-
-	// Channel events: look up which guild the channel belongs to.
+	// 8. Channel-scoped events: look up which guild the channel belongs to.
 	if event.ChannelID != "" && s.pool != nil {
-		var guildID *string
-		s.pool.QueryRow(context.Background(),
-			`SELECT guild_id FROM channels WHERE id = $1`, event.ChannelID).Scan(&guildID)
-		if guildID != nil {
-			client.mu.Lock()
-			isMember := client.guildIDs[*guildID]
-			client.mu.Unlock()
-			return isMember
-		}
-		// DM/group channel — verify the user is a participant via channel_recipients.
-		var isRecipient bool
-		s.pool.QueryRow(context.Background(),
-			`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
-			event.ChannelID, client.userID).Scan(&isRecipient)
-		return isRecipient
+		return s.checkChannelAccess(client, event.ChannelID)
 	}
 
-	// Typing events for specific channels — require channel access check.
-	if strings.HasPrefix(subject, "amityvox.channel.") && s.pool != nil {
-		// Extract channel ID from the event data if available.
-		var data struct {
-			ChannelID string `json:"channel_id"`
+	// 9. Fallback: extract routing info from event data for events that didn't
+	//    populate envelope fields (legacy PublishJSON or struct-based publish).
+	return s.fallbackDispatch(client, subject, event)
+}
+
+// lookupChannelGuild returns the guild_id for a channel, using a short-lived
+// cache to avoid repeated DB queries during dispatch loops.
+func (s *Server) lookupChannelGuild(channelID string) *string {
+	now := time.Now()
+	if cached, ok := s.channelGuildCache.Load(channelID); ok {
+		entry := cached.(channelGuildEntry)
+		if now.Before(entry.expires) {
+			return entry.guildID
 		}
-		if json.Unmarshal(event.Data, &data) == nil && data.ChannelID != "" {
-			// Check if it's a guild channel or DM.
-			var chGuildID *string
-			s.pool.QueryRow(context.Background(),
-				`SELECT guild_id FROM channels WHERE id = $1`, data.ChannelID).Scan(&chGuildID)
-			if chGuildID != nil {
-				client.mu.Lock()
-				isMember := client.guildIDs[*chGuildID]
-				client.mu.Unlock()
-				return isMember
-			}
-			// DM/group — check recipient membership.
-			var isRecipient bool
-			s.pool.QueryRow(context.Background(),
-				`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
-				data.ChannelID, client.userID).Scan(&isRecipient)
-			return isRecipient
-		}
+		s.channelGuildCache.Delete(channelID)
+	}
+	var guildID *string
+	_ = s.pool.QueryRow(context.Background(),
+		`SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	s.channelGuildCache.Store(channelID, channelGuildEntry{
+		guildID: guildID,
+		expires: now.Add(60 * time.Second),
+	})
+	return guildID
+}
+
+// checkChannelAccess checks if a client has access to a channel by looking up
+// the channel's guild (for guild channels) or checking recipient membership
+// (for DM/group channels).
+func (s *Server) checkChannelAccess(client *Client, channelID string) bool {
+	guildID := s.lookupChannelGuild(channelID)
+	if guildID != nil {
+		client.mu.Lock()
+		isMember := client.guildIDs[*guildID]
+		client.mu.Unlock()
+		return isMember
+	}
+	// DM/group channel — verify the user is a participant.
+	var isRecipient bool
+	_ = s.pool.QueryRow(context.Background(),
+		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
+		channelID, client.userID).Scan(&isRecipient)
+	return isRecipient
+}
+
+// fallbackDispatch handles events where envelope fields are empty by extracting
+// routing information from the event data based on the NATS subject prefix.
+func (s *Server) fallbackDispatch(client *Client, subject string, event events.Event) bool {
+	// Try to extract guild_id and/or channel_id from the event data payload.
+	var data struct {
+		GuildID   string `json:"guild_id"`
+		ChannelID string `json:"channel_id"`
+		ID        string `json:"id"`
+	}
+	if json.Unmarshal(event.Data, &data) != nil {
 		return false
 	}
 
-	// Announcement events: broadcast to ALL identified clients (instance-wide).
-	if strings.HasPrefix(subject, "amityvox.announcement.") {
-		return true
+	// Guild/voice/automod subjects: route by guild_id in data.
+	if strings.HasPrefix(subject, "amityvox.guild.") ||
+		strings.HasPrefix(subject, "amityvox.voice.") ||
+		strings.HasPrefix(subject, "amityvox.automod.") {
+		gid := data.GuildID
+		if gid == "" {
+			gid = data.ID // Guild structs use "id" not "guild_id"
+		}
+		if gid != "" {
+			client.mu.Lock()
+			isMember := client.guildIDs[gid]
+			client.mu.Unlock()
+			return isMember
+		}
 	}
 
-	// Default: deny dispatch for unrecognized events (fail-closed).
+	// Message/poll/channel subjects: route by channel_id in data.
+	if strings.HasPrefix(subject, "amityvox.message.") ||
+		strings.HasPrefix(subject, "amityvox.poll.") ||
+		strings.HasPrefix(subject, "amityvox.channel.") {
+		if data.ChannelID != "" && s.pool != nil {
+			return s.checkChannelAccess(client, data.ChannelID)
+		}
+	}
+
+	// Default: deny (fail-closed).
 	return false
 }
 

@@ -21,6 +21,7 @@
 	import { clientNicknames } from '$lib/stores/nicknames';
 	import { blockedUsers } from '$lib/stores/blocked';
 	import { goto } from '$app/navigation';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	// Members are derived from the guildMembers store so real-time updates
 	// (e.g. avatar changes via USER_UPDATE) are reflected immediately.
@@ -46,7 +47,7 @@
 	// Role data for the submenu
 	let guildRoles = $state<Role[]>([]);
 	let memberRoleIds = $state<Set<string>>(new Set());
-	let rolesLoading = $state(false);
+	let rolesOp = $state(createAsyncOp());
 
 	$effect(() => {
 		const guildId = $currentGuildId;
@@ -217,14 +218,18 @@
 		showTimeoutSubmenu = false;
 		showRolesSubmenu = !showRolesSubmenu;
 		if (showRolesSubmenu && contextMenu) {
-			rolesLoading = true;
-			try {
-				const guildId = $currentGuildId;
-				if (!guildId) return;
-				const [roles, mRoles] = await Promise.all([
+			const guildId = $currentGuildId;
+			if (!guildId) return;
+			const member = contextMenu.member;
+			const result = await rolesOp.run(
+				() => Promise.all([
 					api.getRoles(guildId),
-					api.getMemberRoles(guildId, contextMenu.member.user_id),
-				]);
+					api.getMemberRoles(guildId, member.user_id),
+				]),
+				msg => addToast(msg, 'error')
+			);
+			if (result) {
+				const [roles, mRoles] = result;
 				// Filter out @everyone and roles at or above the actor's highest position (unless owner)
 				guildRoles = roles.filter((r) => {
 					if (r.name === '@everyone') return false;
@@ -232,10 +237,6 @@
 					return true;
 				});
 				memberRoleIds = new Set(mRoles.map((r) => r.id));
-			} catch {
-				addToast('Failed to load roles', 'error');
-			} finally {
-				rolesLoading = false;
 			}
 		}
 	}
@@ -294,7 +295,7 @@
 	let showReportUserModal = $state(false);
 	let reportUserTarget = $state<GuildMember | null>(null);
 	let reportUserReason = $state('');
-	let reportUserSubmitting = $state(false);
+	let reportUserOp = $state(createAsyncOp());
 
 	function openReportUser(member: GuildMember) {
 		reportUserTarget = member;
@@ -305,15 +306,13 @@
 
 	async function submitReportUser() {
 		if (!reportUserTarget || !reportUserReason.trim()) return;
-		reportUserSubmitting = true;
-		try {
-			await api.reportUser(reportUserTarget.user_id, reportUserReason.trim(), $currentGuildId ?? undefined);
+		await reportUserOp.run(
+			() => api.reportUser(reportUserTarget!.user_id, reportUserReason.trim(), $currentGuildId ?? undefined),
+			msg => addToast(msg, 'error')
+		);
+		if (!reportUserOp.error) {
 			addToast('User reported to moderators', 'success');
 			showReportUserModal = false;
-		} catch {
-			addToast('Failed to report user', 'error');
-		} finally {
-			reportUserSubmitting = false;
 		}
 	}
 
@@ -415,7 +414,7 @@
 							onclick={(e) => e.stopPropagation()}
 							onkeydown={() => {}}
 						>
-							{#if rolesLoading}
+							{#if rolesOp.loading}
 								<div class="px-2 py-1.5 text-sm text-text-muted">Loading...</div>
 							{:else if guildRoles.length === 0}
 								<div class="px-2 py-1.5 text-sm text-text-muted">No roles</div>
@@ -533,9 +532,9 @@
 				>Cancel</button>
 				<button
 					class="rounded-md bg-red-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
-					disabled={!reportUserReason.trim() || reportUserSubmitting}
+					disabled={!reportUserReason.trim() || reportUserOp.loading}
 					onclick={submitReportUser}
-				>{reportUserSubmitting ? 'Submitting...' : 'Report'}</button>
+				>{reportUserOp.loading ? 'Submitting...' : 'Report'}</button>
 			</div>
 		</div>
 	</div>

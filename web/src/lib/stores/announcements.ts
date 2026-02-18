@@ -1,6 +1,7 @@
 // Announcement store — manages real-time instance announcements.
 
-import { writable, derived, readable } from 'svelte/store';
+import { derived, readable } from 'svelte/store';
+import { createMapStore } from './mapHelpers';
 
 export interface AnnouncementData {
 	id: string;
@@ -11,7 +12,7 @@ export interface AnnouncementData {
 	expires_at?: string | null;
 }
 
-const announcements = writable<Map<string, AnnouncementData>>(new Map());
+const announcements = createMapStore<string, AnnouncementData>();
 
 // Tick every 60s so expired announcements auto-dismiss.
 const now = readable(Date.now(), (set) => {
@@ -32,36 +33,22 @@ export function setAnnouncements(list: AnnouncementData[]) {
 	for (const a of list) {
 		map.set(a.id, a);
 	}
-	announcements.set(map);
+	announcements.setAll(map);
 }
 
 export function addAnnouncement(a: AnnouncementData) {
-	announcements.update((map) => {
-		const next = new Map(map);
-		next.set(a.id, a);
-		return next;
-	});
+	announcements.setEntry(a.id, a);
 }
 
 export function updateAnnouncement(data: { id: string; active?: boolean | null; title?: string | null; content?: string | null }) {
-	announcements.update((map) => {
-		const existing = map.get(data.id);
-		if (!existing) return map;
-		const next = new Map(map);
-		next.set(data.id, {
-			...existing,
-			...(data.active !== undefined && data.active !== null ? { active: data.active } : {}),
-			...(data.title !== undefined && data.title !== null ? { title: data.title } : {}),
-			...(data.content !== undefined && data.content !== null ? { content: data.content } : {})
-		});
-		return next;
-	});
+	announcements.updateEntry(data.id, (existing) => ({
+		...existing,
+		...(data.active !== undefined && data.active !== null ? { active: data.active } : {}),
+		...(data.title !== undefined && data.title !== null ? { title: data.title } : {}),
+		...(data.content !== undefined && data.content !== null ? { content: data.content } : {})
+	}));
 }
 
 export function removeAnnouncement(id: string) {
-	announcements.update((map) => {
-		const next = new Map(map);
-		next.delete(id);
-		return next;
-	});
+	announcements.removeEntry(id);
 }

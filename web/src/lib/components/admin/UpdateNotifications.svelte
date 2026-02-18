@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface UpdateInfo {
 		current_version: string;
@@ -22,21 +23,13 @@
 	let loading = $state(true);
 	let updateInfo = $state<UpdateInfo | null>(null);
 	let config = $state<UpdateConfig>({ auto_check: true, channel: 'stable', notify_admins: true });
-	let saving = $state(false);
-	let checking = $state(false);
-	let dismissing = $state(false);
+	let saveOp = $state(createAsyncOp());
+	let checkOp = $state(createAsyncOp());
+	let dismissOp = $state(createAsyncOp());
 
 	async function loadUpdateInfo() {
 		try {
-			const res = await fetch('/api/v1/admin/updates', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (!res.ok) {
-				addToast('Failed to load update info', 'error');
-				return;
-			}
-			updateInfo = json.data ?? json;
+			updateInfo = await api.getAdminUpdates();
 		} catch {
 			addToast('Failed to load update info', 'error');
 		}
@@ -44,15 +37,7 @@
 
 	async function loadConfig() {
 		try {
-			const res = await fetch('/api/v1/admin/updates/config', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (!res.ok) {
-				addToast('Failed to load update config', 'error');
-				return;
-			}
-			const data = json.data ?? json;
+			const data = await api.getAdminUpdatesConfig();
 			config = {
 				auto_check: data.auto_check ?? true,
 				channel: data.channel ?? 'stable',
@@ -66,61 +51,26 @@
 	}
 
 	async function saveConfig() {
-		saving = true;
-		try {
-			const res = await fetch('/api/v1/admin/updates/config', {
-				method: 'PATCH',
-				headers: {
-					'Authorization': `Bearer ${api.getToken()}`,
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify(config)
-			});
-			if (res.ok) {
-				addToast('Update settings saved', 'success');
-			} else {
-				addToast('Failed to save settings', 'error');
-			}
-		} catch {
-			addToast('Failed to save settings', 'error');
-		}
-		saving = false;
+		await saveOp.run(() => api.updateAdminUpdatesConfig(config), msg => addToast(msg, 'error'));
+		if (!saveOp.error) addToast('Update settings saved', 'success');
 	}
 
 	async function checkNow() {
-		checking = true;
-		try {
-			const res = await fetch('/api/v1/admin/updates', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				updateInfo = json.data ?? json;
-				addToast('Update check complete', 'success');
-			}
-		} catch {
-			addToast('Failed to check for updates', 'error');
+		const result = await checkOp.run(() => api.getAdminUpdates(), msg => addToast(msg, 'error'));
+		if (!checkOp.error) {
+			updateInfo = result!;
+			addToast('Update check complete', 'success');
 		}
-		checking = false;
 	}
 
 	async function dismissUpdate() {
-		dismissing = true;
-		try {
-			const res = await fetch('/api/v1/admin/updates/dismiss', {
-				method: 'POST',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				if (updateInfo) {
-					updateInfo = { ...updateInfo, update_available: false, dismissed: true };
-				}
-				addToast('Update notification dismissed', 'success');
+		await dismissOp.run(() => api.dismissAdminUpdate(), msg => addToast(msg, 'error'));
+		if (!dismissOp.error) {
+			if (updateInfo) {
+				updateInfo = { ...updateInfo, update_available: false, dismissed: true };
 			}
-		} catch {
-			addToast('Failed to dismiss update', 'error');
+			addToast('Update notification dismissed', 'success');
 		}
-		dismissing = false;
 	}
 
 	onMount(() => {
@@ -181,9 +131,9 @@
 						<button
 							class="btn-secondary text-sm"
 							onclick={dismissUpdate}
-							disabled={dismissing}
+							disabled={dismissOp.loading}
 						>
-							{dismissing ? 'Dismissing...' : 'Dismiss'}
+							{dismissOp.loading ? 'Dismissing...' : 'Dismiss'}
 						</button>
 					</div>
 				</div>
@@ -194,8 +144,8 @@
 			{/if}
 		</div>
 
-		<button class="btn-secondary text-sm" onclick={checkNow} disabled={checking}>
-			{checking ? 'Checking...' : 'Check for Updates Now'}
+		<button class="btn-secondary text-sm" onclick={checkNow} disabled={checkOp.loading}>
+			{checkOp.loading ? 'Checking...' : 'Check for Updates Now'}
 		</button>
 
 		<!-- Update Configuration -->
@@ -230,8 +180,8 @@
 			</div>
 		</div>
 
-		<button class="btn-primary" onclick={saveConfig} disabled={saving}>
-			{saving ? 'Saving...' : 'Save Update Settings'}
+		<button class="btn-primary" onclick={saveConfig} disabled={saveOp.loading}>
+			{saveOp.loading ? 'Saving...' : 'Save Update Settings'}
 		</button>
 	</div>
 {/if}

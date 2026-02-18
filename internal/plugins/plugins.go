@@ -348,7 +348,7 @@ func (rt *Runtime) processAction(instance *PluginInstance, action PluginAction) 
 		}
 
 		// Publish event.
-		rt.eventBus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", map[string]string{
+		rt.eventBus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", payload.ChannelID, map[string]string{
 			"id":         msgID,
 			"channel_id": payload.ChannelID,
 			"author_id":  authorID,

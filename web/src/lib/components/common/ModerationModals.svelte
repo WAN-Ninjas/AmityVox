@@ -3,30 +3,29 @@
 	import { api } from '$lib/api/client';
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	// --- Kick Modal ---
 	let kickReason = $state('');
-	let kickSubmitting = $state(false);
+	let kickOp = $state(createAsyncOp());
 
 	$effect(() => {
 		if ($kickModalTarget) {
 			kickReason = '';
-			kickSubmitting = false;
+			kickOp = createAsyncOp();
 		}
 	});
 
 	async function submitKick() {
 		const target = $kickModalTarget;
 		if (!target || !kickReason.trim()) return;
-		kickSubmitting = true;
-		try {
-			await api.kickMember(target.guildId, target.userId, kickReason.trim());
+		await kickOp.run(
+			() => api.kickMember(target.guildId, target.userId, kickReason.trim()),
+			msg => addToast(msg, 'error')
+		);
+		if (!kickOp.error) {
 			addToast(`Kicked ${target.displayName}`, 'success');
 			$kickModalTarget = null;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to kick member', 'error');
-		} finally {
-			kickSubmitting = false;
 		}
 	}
 
@@ -35,7 +34,7 @@
 	let banDuration = $state('permanent');
 	let banCustomMinutes = $state('');
 	let banCleanup = $state('0');
-	let banSubmitting = $state(false);
+	let banOp = $state(createAsyncOp());
 
 	$effect(() => {
 		if ($banModalTarget) {
@@ -43,7 +42,7 @@
 			banDuration = 'permanent';
 			banCustomMinutes = '';
 			banCleanup = '0';
-			banSubmitting = false;
+			banOp = createAsyncOp();
 		}
 	});
 
@@ -86,21 +85,19 @@
 			addToast('Please enter a valid number of minutes for the custom ban duration', 'error');
 			return;
 		}
-		banSubmitting = true;
-		try {
-			const deleteMessageSeconds = parseInt(banCleanup, 10) || undefined;
-			await api.banUser(target.guildId, target.userId, {
+		const deleteMessageSeconds = parseInt(banCleanup, 10) || undefined;
+		await banOp.run(
+			() => api.banUser(target.guildId, target.userId, {
 				reason: banReason.trim(),
 				duration_seconds: durationSeconds,
 				delete_message_seconds: deleteMessageSeconds,
-			});
+			}),
+			msg => addToast(msg, 'error')
+		);
+		if (!banOp.error) {
 			const durLabel = durationSeconds ? banDurationOptions.find(o => o.value === banDuration)?.label ?? 'timed' : 'permanently';
 			addToast(`Banned ${target.displayName} ${durationSeconds ? `for ${durLabel}` : 'permanently'}`, 'success');
 			$banModalTarget = null;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to ban user', 'error');
-		} finally {
-			banSubmitting = false;
 		}
 	}
 </script>
@@ -124,9 +121,9 @@
 		>Cancel</button>
 		<button
 			class="rounded-md bg-red-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
-			disabled={!kickReason.trim() || kickSubmitting}
+			disabled={!kickReason.trim() || kickOp.loading}
 			onclick={submitKick}
-		>{kickSubmitting ? 'Kicking...' : 'Kick'}</button>
+		>{kickOp.loading ? 'Kicking...' : 'Kick'}</button>
 	</div>
 </Modal>
 
@@ -182,8 +179,8 @@
 		>Cancel</button>
 		<button
 			class="rounded-md bg-red-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
-			disabled={!banReason.trim() || banSubmitting}
+			disabled={!banReason.trim() || banOp.loading}
 			onclick={submitBan}
-		>{banSubmitting ? 'Banning...' : 'Ban'}</button>
+		>{banOp.loading ? 'Banning...' : 'Ban'}</button>
 	</div>
 </Modal>

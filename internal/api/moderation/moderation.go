@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -113,18 +114,16 @@ func (h *Handler) HandleWarnMember(w http.ResponseWriter, r *http.Request) {
 	memberID := chi.URLParam(r, "memberID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
 	var req warnMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 
@@ -135,7 +134,7 @@ func (h *Handler) HandleWarnMember(w http.ResponseWriter, r *http.Request) {
 		guildID, memberID,
 	).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusNotFound, "member_not_found", "Member not found in this guild")
+		apiutil.WriteError(w, http.StatusNotFound, "member_not_found", "Member not found in this guild")
 		return
 	}
 
@@ -151,12 +150,11 @@ func (h *Handler) HandleWarnMember(w http.ResponseWriter, r *http.Request) {
 		&warning.ModeratorID, &warning.Reason, &warning.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create warning", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create warning")
+		apiutil.InternalError(w, h.Logger, "Failed to create warning", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, warning)
+	apiutil.WriteJSON(w, http.StatusCreated, warning)
 }
 
 // HandleGetWarnings lists warnings for a guild member.
@@ -167,7 +165,7 @@ func (h *Handler) HandleGetWarnings(w http.ResponseWriter, r *http.Request) {
 	memberID := chi.URLParam(r, "memberID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -181,8 +179,7 @@ func (h *Handler) HandleGetWarnings(w http.ResponseWriter, r *http.Request) {
 		guildID, memberID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query warnings", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list warnings")
+		apiutil.InternalError(w, h.Logger, "Failed to list warnings", err)
 		return
 	}
 	defer rows.Close()
@@ -195,20 +192,18 @@ func (h *Handler) HandleGetWarnings(w http.ResponseWriter, r *http.Request) {
 			&wr.ID, &wr.GuildID, &wr.UserID, &wr.ModeratorID, &wr.Reason, &wr.CreatedAt,
 			&mod.ID, &mod.Username, &mod.DisplayName,
 		); err != nil {
-			h.Logger.Error("failed to scan warning row", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list warnings")
+			apiutil.InternalError(w, h.Logger, "Failed to list warnings", err)
 			return
 		}
 		wr.Moderator = &mod
 		warnings = append(warnings, wr)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("warning rows iteration error", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list warnings")
+		apiutil.InternalError(w, h.Logger, "Failed to list warnings", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, warnings)
+	apiutil.WriteJSON(w, http.StatusOK, warnings)
 }
 
 // HandleDeleteWarning deletes a specific warning.
@@ -219,7 +214,7 @@ func (h *Handler) HandleDeleteWarning(w http.ResponseWriter, r *http.Request) {
 	warningID := chi.URLParam(r, "warningID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -228,12 +223,11 @@ func (h *Handler) HandleDeleteWarning(w http.ResponseWriter, r *http.Request) {
 		warningID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete warning", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete warning")
+		apiutil.InternalError(w, h.Logger, "Failed to delete warning", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "warning_not_found", "Warning not found")
+		apiutil.WriteError(w, http.StatusNotFound, "warning_not_found", "Warning not found")
 		return
 	}
 
@@ -248,13 +242,11 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 	messageID := chi.URLParam(r, "messageID")
 
 	var req reportMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 
@@ -262,11 +254,10 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 	guildID, err := h.getGuildIDForChannel(r.Context(), channelID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
 			return
 		}
-		h.Logger.Error("failed to look up channel guild", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to report message")
+		apiutil.InternalError(w, h.Logger, "Failed to report message", err)
 		return
 	}
 
@@ -277,7 +268,7 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 		messageID, channelID,
 	).Scan(&msgExists)
 	if err != nil || !msgExists {
-		writeError(w, http.StatusNotFound, "message_not_found", "Message not found in this channel")
+		apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found in this channel")
 		return
 	}
 
@@ -294,12 +285,11 @@ func (h *Handler) HandleReportMessage(w http.ResponseWriter, r *http.Request) {
 		&report.ResolvedBy, &report.ResolvedAt, &report.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create report", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create report")
+		apiutil.InternalError(w, h.Logger, "Failed to create report", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, report)
+	apiutil.WriteJSON(w, http.StatusCreated, report)
 }
 
 // HandleGetReports lists message reports for a guild.
@@ -309,7 +299,7 @@ func (h *Handler) HandleGetReports(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -339,8 +329,7 @@ func (h *Handler) HandleGetReports(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query reports", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+		apiutil.InternalError(w, h.Logger, "Failed to list reports", err)
 		return
 	}
 	defer rows.Close()
@@ -353,19 +342,17 @@ func (h *Handler) HandleGetReports(w http.ResponseWriter, r *http.Request) {
 			&report.ReporterID, &report.Reason, &report.Status,
 			&report.ResolvedBy, &report.ResolvedAt, &report.CreatedAt,
 		); err != nil {
-			h.Logger.Error("failed to scan report row", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+			apiutil.InternalError(w, h.Logger, "Failed to list reports", err)
 			return
 		}
 		reports = append(reports, report)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("report rows iteration error", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+		apiutil.InternalError(w, h.Logger, "Failed to list reports", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, reports)
+	apiutil.WriteJSON(w, http.StatusOK, reports)
 }
 
 // HandleResolveReport updates a report's status to resolved or dismissed.
@@ -376,18 +363,17 @@ func (h *Handler) HandleResolveReport(w http.ResponseWriter, r *http.Request) {
 	reportID := chi.URLParam(r, "reportID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
 	var req resolveReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	if req.Status != "resolved" && req.Status != "dismissed" {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status must be 'resolved' or 'dismissed'")
 		return
 	}
 
@@ -406,15 +392,14 @@ func (h *Handler) HandleResolveReport(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "report_not_found", "Report not found")
+			apiutil.WriteError(w, http.StatusNotFound, "report_not_found", "Report not found")
 			return
 		}
-		h.Logger.Error("failed to resolve report", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve report")
+		apiutil.InternalError(w, h.Logger, "Failed to resolve report", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, report)
+	apiutil.WriteJSON(w, http.StatusOK, report)
 }
 
 // HandleLockChannel locks a channel, preventing non-admin messages.
@@ -426,16 +411,15 @@ func (h *Handler) HandleLockChannel(w http.ResponseWriter, r *http.Request) {
 	guildID, err := h.getGuildIDForChannel(r.Context(), channelID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
 			return
 		}
-		h.Logger.Error("failed to look up channel guild", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to lock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to lock channel", err)
 		return
 	}
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -449,17 +433,16 @@ func (h *Handler) HandleLockChannel(w http.ResponseWriter, r *http.Request) {
 	).Scan(&resp.ID, &resp.Locked, &resp.LockedBy, &resp.LockedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 			return
 		}
-		h.Logger.Error("failed to lock channel", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to lock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to lock channel", err)
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", resp)
+	h.EventBus.PublishChannelEvent(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", channelID, resp)
 
-	writeJSON(w, http.StatusOK, resp)
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // HandleUnlockChannel unlocks a previously locked channel.
@@ -471,16 +454,15 @@ func (h *Handler) HandleUnlockChannel(w http.ResponseWriter, r *http.Request) {
 	guildID, err := h.getGuildIDForChannel(r.Context(), channelID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found or not in a guild")
 			return
 		}
-		h.Logger.Error("failed to look up channel guild", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unlock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to unlock channel", err)
 		return
 	}
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -494,17 +476,16 @@ func (h *Handler) HandleUnlockChannel(w http.ResponseWriter, r *http.Request) {
 	).Scan(&resp.ID, &resp.Locked, &resp.LockedBy, &resp.LockedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 			return
 		}
-		h.Logger.Error("failed to unlock channel", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unlock channel")
+		apiutil.InternalError(w, h.Logger, "Failed to unlock channel", err)
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", resp)
+	h.EventBus.PublishChannelEvent(r.Context(), events.SubjectChannelUpdate, "CHANNEL_UPDATE", channelID, resp)
 
-	writeJSON(w, http.StatusOK, resp)
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // HandleGetRaidConfig returns the raid protection configuration for a guild.
@@ -514,7 +495,7 @@ func (h *Handler) HandleGetRaidConfig(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
@@ -545,18 +526,16 @@ func (h *Handler) HandleGetRaidConfig(w http.ResponseWriter, r *http.Request) {
 				&config.MinAccountAge, &config.LockdownActive, &config.LockdownStartedAt, &config.UpdatedAt,
 			)
 			if err != nil {
-				h.Logger.Error("failed to create default raid config", slog.String("error", err.Error()))
-				writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get raid config")
+				apiutil.InternalError(w, h.Logger, "Failed to get raid config", err)
 				return
 			}
 		} else {
-			h.Logger.Error("failed to query raid config", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get raid config")
+			apiutil.InternalError(w, h.Logger, "Failed to get raid config", err)
 			return
 		}
 	}
 
-	writeJSON(w, http.StatusOK, config)
+	apiutil.WriteJSON(w, http.StatusOK, config)
 }
 
 // HandleUpdateRaidConfig updates the raid protection configuration for a guild.
@@ -566,13 +545,12 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You must be the guild owner or an instance admin")
 		return
 	}
 
 	var req updateRaidConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -610,8 +588,7 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 		&config.MinAccountAge, &config.LockdownActive, &config.LockdownStartedAt, &config.UpdatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to update raid config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update raid config")
+		apiutil.InternalError(w, h.Logger, "Failed to update raid config", err)
 		return
 	}
 
@@ -620,7 +597,7 @@ func (h *Handler) HandleUpdateRaidConfig(w http.ResponseWriter, r *http.Request)
 		h.publishLockdownAlert(r.Context(), guildID, config)
 	}
 
-	writeJSON(w, http.StatusOK, config)
+	apiutil.WriteJSON(w, http.StatusOK, config)
 }
 
 // publishLockdownAlert creates a system_lockdown message in the guild's first
@@ -703,13 +680,11 @@ func (h *Handler) HandleReportToAdmin(w http.ResponseWriter, r *http.Request) {
 	messageID := chi.URLParam(r, "messageID")
 
 	var req reportMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 
@@ -724,7 +699,7 @@ func (h *Handler) HandleReportToAdmin(w http.ResponseWriter, r *http.Request) {
 		messageID, channelID,
 	).Scan(&msgAuthorID, &msgContent)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "message_not_found", "Message not found in this channel")
+		apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found in this channel")
 		return
 	}
 
@@ -745,12 +720,11 @@ func (h *Handler) HandleReportToAdmin(w http.ResponseWriter, r *http.Request) {
 		&report.ResolvedBy, &report.ResolvedAt, &report.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to create admin report", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to submit report")
+		apiutil.InternalError(w, h.Logger, "Failed to submit report", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, report)
+	apiutil.WriteJSON(w, http.StatusCreated, report)
 }
 
 // HandleGetAdminReports lists reports escalated to instance admins.
@@ -763,7 +737,7 @@ func (h *Handler) HandleGetAdminReports(w http.ResponseWriter, r *http.Request) 
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
 	if err != nil || flags&models.UserFlagAdmin == 0 {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -777,7 +751,7 @@ func (h *Handler) HandleGetAdminReports(w http.ResponseWriter, r *http.Request) 
 		 ORDER BY mr.created_at DESC
 		 LIMIT 50`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list reports")
 		return
 	}
 	defer rows.Close()
@@ -801,27 +775,7 @@ func (h *Handler) HandleGetAdminReports(w http.ResponseWriter, r *http.Request) 
 		reports = append(reports, r)
 	}
 
-	writeJSON(w, http.StatusOK, reports)
-}
-
-// --- JSON helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
-}
-
-func writeNoContent(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusNoContent)
+	apiutil.WriteJSON(w, http.StatusOK, reports)
 }
 
 // hasGuildPermission checks if a user has a specific permission in a guild.

@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface WhiteboardData {
 		id: string;
@@ -44,8 +45,8 @@
 	let ctx: CanvasRenderingContext2D | null = null;
 	let whiteboard = $state<WhiteboardData | null>(null);
 	let objects = $state<DrawObject[]>([]);
-	let loading = $state(false);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
 
 	// Drawing state.
 	let tool = $state<'pen' | 'rect' | 'circle' | 'line' | 'arrow' | 'text' | 'eraser'>('pen');
@@ -58,7 +59,6 @@
 
 	// Create mode.
 	let boardName = $state('Untitled Whiteboard');
-	let creating = $state(false);
 	let showCreateForm = $state(!whiteboardId);
 
 	const tools = [
@@ -73,45 +73,30 @@
 	const colors = ['#ffffff', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'];
 
 	async function createWhiteboard() {
-		creating = true;
-		error = '';
-		try {
-			const result = await api.request<WhiteboardData>(
-				'POST',
-				`/channels/${channelId}/experimental/whiteboards`,
-				{ name: boardName, width: 1920, height: 1080, background_color: '#1a1a2e' }
-			);
-			if (result) {
-				whiteboard = result;
-				whiteboardId = result.id;
-				showCreateForm = false;
-				initCanvas();
-			}
-		} catch (err: any) {
-			error = err.message || 'Failed to create whiteboard';
-		} finally {
-			creating = false;
+		const result = await createOp.run(() => api.request<WhiteboardData>(
+			'POST',
+			`/channels/${channelId}/experimental/whiteboards`,
+			{ name: boardName, width: 1920, height: 1080, background_color: '#1a1a2e' }
+		));
+		if (!createOp.error && result) {
+			whiteboard = result;
+			whiteboardId = result.id;
+			showCreateForm = false;
+			initCanvas();
 		}
 	}
 
 	async function loadWhiteboard() {
 		if (!whiteboardId) return;
-		loading = true;
-		try {
-			const data = await api.request<WhiteboardData>(
-				'GET',
-				`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`
-			);
-			if (data) {
-				whiteboard = data;
-				objects = data.state?.objects ?? [];
-				initCanvas();
-				redraw();
-			}
-		} catch (err: any) {
-			error = err.message || 'Failed to load whiteboard';
-		} finally {
-			loading = false;
+		const data = await loadOp.run(() => api.request<WhiteboardData>(
+			'GET',
+			`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`
+		));
+		if (!loadOp.error && data) {
+			whiteboard = data;
+			objects = data.state?.objects ?? [];
+			initCanvas();
+			redraw();
 		}
 	}
 
@@ -351,8 +336,8 @@
 {#if showCreateForm}
 	<div class="p-4 bg-bg-secondary border border-border-primary rounded-lg max-w-md">
 		<h3 class="text-text-primary font-medium mb-3">Create Whiteboard</h3>
-		{#if error}
-			<div class="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{error}</div>
+		{#if createOp.error}
+			<div class="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">{createOp.error}</div>
 		{/if}
 		<input
 			type="text"
@@ -364,8 +349,8 @@
 			{#if onclose}
 				<button type="button" class="btn-secondary text-sm px-3 py-1.5 rounded" onclick={onclose}>Cancel</button>
 			{/if}
-			<button type="button" class="btn-primary text-sm px-3 py-1.5 rounded" disabled={creating} onclick={createWhiteboard}>
-				{creating ? 'Creating...' : 'Create'}
+			<button type="button" class="btn-primary text-sm px-3 py-1.5 rounded" disabled={createOp.loading} onclick={createWhiteboard}>
+				{createOp.loading ? 'Creating...' : 'Create'}
 			</button>
 		</div>
 	</div>
@@ -443,7 +428,7 @@
 
 		<!-- Canvas -->
 		<div class="flex-1 overflow-auto relative" style="min-height: 400px;">
-			{#if loading}
+			{#if loadOp.loading}
 				<div class="absolute inset-0 flex items-center justify-center">
 					<span class="text-text-muted">Loading whiteboard...</span>
 				</div>
@@ -459,9 +444,9 @@
 				></canvas>
 			{/if}
 
-			{#if error}
+			{#if loadOp.error}
 				<div class="absolute bottom-2 left-2 right-2 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">
-					{error}
+					{loadOp.error}
 				</div>
 			{/if}
 		</div>

@@ -213,7 +213,7 @@ func (ss *SyncService) HandleFederatedGuildJoin(w http.ResponseWriter, r *http.R
 
 		ss.addInstanceToGuildChannelPeers(ctx, guildID, instanceID)
 
-		ss.bus.PublishJSON(ctx, events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD", map[string]interface{}{
+		ss.bus.PublishGuildEvent(ctx, events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD", guildID, map[string]interface{}{
 			"guild_id": guildID,
 			"user_id":  req.UserID,
 			"username": req.Username,
@@ -299,7 +299,7 @@ func (ss *SyncService) HandleFederatedGuildLeave(w http.ResponseWriter, r *http.
 			senderID, guildID)
 	}
 
-	ss.bus.PublishJSON(ctx, events.SubjectGuildMemberRemove, "GUILD_MEMBER_REMOVE", map[string]interface{}{
+	ss.bus.PublishGuildEvent(ctx, events.SubjectGuildMemberRemove, "GUILD_MEMBER_REMOVE", guildID, map[string]interface{}{
 		"guild_id": guildID,
 		"user_id":  req.UserID,
 	})
@@ -396,7 +396,7 @@ func (ss *SyncService) HandleFederatedGuildInviteAccept(w http.ResponseWriter, r
 		ss.fed.pool.Exec(ctx, `UPDATE guilds SET member_count = member_count + 1 WHERE id = $1`, guildID)
 		ss.addInstanceToGuildChannelPeers(ctx, guildID, instanceID)
 
-		ss.bus.PublishJSON(ctx, events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD", map[string]interface{}{
+		ss.bus.PublishGuildEvent(ctx, events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD", guildID, map[string]interface{}{
 			"guild_id": guildID, "user_id": req.UserID, "username": req.Username,
 		})
 	}
@@ -626,7 +626,7 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 		"id": msgID, "channel_id": channelID, "guild_id": guildID,
 		"author_id": req.UserID, "content": req.Content, "created_at": now,
 	}
-	ss.bus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", channelID, msg)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

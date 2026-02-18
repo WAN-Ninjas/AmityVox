@@ -201,7 +201,7 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 		"name":         req.GroupName,
 		"created_at":   now,
 	}
-	ss.bus.PublishJSON(ctx, events.SubjectChannelCreate, "CHANNEL_CREATE", channel)
+	ss.bus.PublishChannelEvent(ctx, events.SubjectChannelCreate, "CHANNEL_CREATE", localChannelID, channel)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -306,7 +306,7 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	if req.Message.Embeds != nil {
 		msg["embeds"] = req.Message.Embeds
 	}
-	ss.bus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", msg)
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", localChannelID, msg)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

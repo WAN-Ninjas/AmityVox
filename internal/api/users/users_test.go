@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, map[string]string{"id": "user123"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"id": "user123"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -33,7 +35,7 @@ func TestWriteJSON(t *testing.T) {
 
 func TestWriteError(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeError(w, http.StatusNotFound, "user_not_found", "User not found")
+	apiutil.WriteError(w, http.StatusNotFound, "user_not_found", "User not found")
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
@@ -87,7 +89,7 @@ func TestUpdateSelfRequest_Empty(t *testing.T) {
 
 func TestWriteJSON_Array(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeJSON(w, http.StatusOK, make([]map[string]string, 0))
+	apiutil.WriteJSON(w, http.StatusOK, make([]map[string]string, 0))
 
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -115,7 +117,7 @@ func TestWriteError_Various(t *testing.T) {
 
 	for _, tc := range tests {
 		w := httptest.NewRecorder()
-		writeError(w, tc.status, tc.code, "test")
+		apiutil.WriteError(w, tc.status, tc.code, "test")
 		if w.Code != tc.status {
 			t.Errorf("status = %d, want %d for code %s", w.Code, tc.status, tc.code)
 		}

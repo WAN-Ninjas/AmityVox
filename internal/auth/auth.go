@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
@@ -518,12 +519,14 @@ func validateUsername(username string) *AuthError {
 }
 
 // validateTOTP checks a TOTP code against the secret, allowing ±1 time step drift.
+// Uses constant-time comparison to prevent timing attacks.
 func (s *Service) validateTOTP(secret, code string) bool {
 	now := time.Now().Unix()
 	timeStep := now / 30
 
 	for _, offset := range []int64{-1, 0, 1} {
-		if generateTOTPCode(secret, timeStep+offset) == code {
+		expected := generateTOTPCode(secret, timeStep+offset)
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
 			return true
 		}
 	}

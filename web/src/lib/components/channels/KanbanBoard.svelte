@@ -1,6 +1,7 @@
 <!-- KanbanBoard.svelte — Kanban board channel type for project management within a guild. -->
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { currentUser } from '$lib/stores/auth';
 
 	interface KanbanCard {
@@ -52,19 +53,20 @@
 	let { channelId, boardId }: Props = $props();
 
 	let board = $state<BoardData | null>(null);
-	let loading = $state(false);
 	let error = $state('');
+
+	let loadOp = $state(createAsyncOp());
+	let createBoardOp = $state(createAsyncOp());
+	let createCardOp = $state(createAsyncOp());
 
 	// Create mode.
 	let showCreateForm = $state(!boardId);
 	let boardName = $state('Project Board');
 	let boardDescription = $state('');
-	let creating = $state(false);
 
 	// Card creation state.
 	let addingToColumn = $state<string | null>(null);
 	let newCardTitle = $state('');
-	let creatingCard = $state(false);
 
 	// Column creation state.
 	let addingColumn = $state(false);
@@ -79,54 +81,42 @@
 	let selectedCard = $state<KanbanCard | null>(null);
 
 	async function createBoard() {
-		creating = true;
 		error = '';
-		try {
-			const result = await api.createKanbanBoard<BoardData>(channelId, { name: boardName, description: boardDescription });
-			if (result) {
-				boardId = result.id;
-				showCreateForm = false;
-				await loadBoard();
-			}
-		} catch (err: any) {
-			error = err.message || 'Failed to create board';
-		} finally {
-			creating = false;
+		const result = await createBoardOp.run(
+			() => api.createKanbanBoard<BoardData>(channelId, { name: boardName, description: boardDescription }),
+			msg => (error = msg)
+		);
+		if (result) {
+			boardId = result.id;
+			showCreateForm = false;
+			await loadBoard();
 		}
 	}
 
 	async function loadBoard() {
 		if (!boardId) return;
-		loading = true;
 		error = '';
-		try {
-			const data = await api.getKanbanBoard<BoardData>(channelId, boardId);
-			if (data) {
-				board = data;
-			}
-		} catch (err: any) {
-			error = err.message || 'Failed to load board';
-		} finally {
-			loading = false;
-		}
+		const data = await loadOp.run(
+			() => api.getKanbanBoard<BoardData>(channelId, boardId!),
+			msg => (error = msg)
+		);
+		if (data) board = data;
 	}
 
 	async function addCard(columnId: string) {
 		if (!newCardTitle.trim() || !boardId) return;
-		creatingCard = true;
-		try {
-			await api.createKanbanCard(channelId, boardId, columnId, {
+		await createCardOp.run(
+			() => api.createKanbanCard(channelId, boardId!, columnId, {
 				title: newCardTitle,
 				assignee_ids: [],
 				label_ids: []
-			});
+			}),
+			msg => (error = msg)
+		);
+		if (!createCardOp.error) {
 			newCardTitle = '';
 			addingToColumn = null;
 			await loadBoard();
-		} catch (err: any) {
-			error = err.message || 'Failed to create card';
-		} finally {
-			creatingCard = false;
 		}
 	}
 
@@ -241,14 +231,14 @@
 			<button
 				type="button"
 				class="btn-primary w-full text-sm py-2 rounded"
-				disabled={creating || !boardName.trim()}
+				disabled={createBoardOp.loading || !boardName.trim()}
 				onclick={createBoard}
 			>
-				{creating ? 'Creating...' : 'Create Board'}
+				{createBoardOp.loading ? 'Creating...' : 'Create Board'}
 			</button>
 		</div>
 	</div>
-{:else if loading}
+{:else if loadOp.loading}
 	<div class="flex items-center justify-center h-64 text-text-muted">Loading board...</div>
 {:else if board}
 	<div class="flex flex-col h-full">
@@ -346,7 +336,7 @@
 									/>
 									<div class="flex justify-end gap-1 mt-2">
 										<button type="button" class="text-text-muted text-xs px-2 py-1 hover:text-text-primary" onclick={() => (addingToColumn = null)}>Cancel</button>
-										<button type="button" class="btn-primary text-xs px-2 py-1 rounded" disabled={creatingCard || !newCardTitle.trim()} onclick={() => addCard(column.id)}>Add</button>
+										<button type="button" class="btn-primary text-xs px-2 py-1 rounded" disabled={createCardOp.loading || !newCardTitle.trim()} onclick={() => addCard(column.id)}>Add</button>
 									</div>
 								</div>
 							{:else}

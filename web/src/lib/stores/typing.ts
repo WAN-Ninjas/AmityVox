@@ -1,13 +1,13 @@
 // Typing store — tracks who is typing in each channel.
 // Typing indicators auto-expire after 8 seconds.
 
-import { writable, derived } from 'svelte/store';
+import { derived, get } from 'svelte/store';
 import { currentChannelId } from './channels';
 import { currentUser } from './auth';
-import { get } from 'svelte/store';
+import { createMapStore } from '$lib/stores/mapHelpers';
 
 // Map of channel ID -> Map of user ID -> timeout handle
-const typingState = writable<Map<string, Map<string, ReturnType<typeof setTimeout>>>>(new Map());
+const typingState = createMapStore<string, Map<string, ReturnType<typeof setTimeout>>>();
 
 // Derived: user IDs typing in the current channel (excluding self)
 export const currentTypingUsers = derived(

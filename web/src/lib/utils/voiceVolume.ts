@@ -5,44 +5,24 @@
  * volume adjustment (0–200%). Volumes persist in localStorage.
  */
 
-const STORAGE_KEY = 'av-voice-user-volumes';
+import { createLocalStorageCache } from './localStorageCache';
+
+const volumeCache = createLocalStorageCache<number>('av-voice-user-volumes');
 const nodes = new Map<string, { gain: GainNode; source: MediaStreamAudioSourceNode; ctx: AudioContext; analyser: AnalyserNode }>();
-
-let cachedVolumes: Record<string, number> | null = null;
-
-function loadVolumes(): Record<string, number> {
-	if (cachedVolumes) return cachedVolumes;
-	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		cachedVolumes = raw ? JSON.parse(raw) : {};
-	} catch {
-		cachedVolumes = {};
-	}
-	return cachedVolumes!;
-}
-
-function saveVolumes() {
-	if (cachedVolumes) {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(cachedVolumes));
-	}
-}
 
 /** Get the stored volume for a user (default 100 = 100%). */
 export function getUserVolume(userId: string): number {
-	return loadVolumes()[userId] ?? 100;
+	return volumeCache.get(userId) ?? 100;
 }
 
 /** Set and persist the volume for a user (0–200). */
 export function setUserVolume(userId: string, volume: number) {
-	const vols = loadVolumes();
 	const clamped = Math.max(0, Math.min(200, Math.round(volume)));
 	if (clamped === 100) {
-		delete vols[userId];
+		volumeCache.remove(userId);
 	} else {
-		vols[userId] = clamped;
+		volumeCache.set(userId, clamped);
 	}
-	cachedVolumes = vols;
-	saveVolumes();
 
 	// Live-update the gain node if one exists.
 	const node = nodes.get(userId);

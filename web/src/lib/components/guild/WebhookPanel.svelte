@@ -1,8 +1,7 @@
 <script lang="ts">
 	import type { Webhook, Channel } from '$lib/types';
 	import { api } from '$lib/api/client';
-
-	const API_BASE = '/api/v1';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	// Props
 	let {
@@ -27,28 +26,28 @@
 	let newWebhookType = $state<'incoming' | 'outgoing'>('incoming');
 	let newOutgoingUrl = $state('');
 	let newOutgoingEvents = $state<string[]>([]);
-	let creatingWebhook = $state(false);
+	let createWebhookOp = $state(createAsyncOp());
 
 	// Templates
 	let templates = $state<WebhookTemplate[]>([]);
-	let loadingTemplates = $state(false);
+	let loadTemplatesOp = $state(createAsyncOp());
 	let selectedTemplateId = $state<string | null>(null);
 
 	// Preview
 	let previewPayload = $state('');
 	let previewResult = $state<{ content: string; embeds?: unknown[] } | null>(null);
-	let previewLoading = $state(false);
+	let previewOp = $state(createAsyncOp());
 	let previewError = $state('');
 
 	// Execution Logs
 	let selectedWebhookForLogs = $state<string | null>(null);
 	let executionLogs = $state<WebhookExecutionLog[]>([]);
-	let loadingLogs = $state(false);
+	let loadLogsOp = $state(createAsyncOp());
 	let expandedLogId = $state<string | null>(null);
 
 	// Outgoing events list
 	let availableOutgoingEvents = $state<string[]>([]);
-	let loadingOutgoingEvents = $state(false);
+	let loadOutgoingEventsOp = $state(createAsyncOp());
 
 	// Edit webhook
 	let editingWebhookId = $state<string | null>(null);
@@ -57,7 +56,7 @@
 	let editWebhookType = $state<'incoming' | 'outgoing'>('incoming');
 	let editOutgoingUrl = $state('');
 	let editOutgoingEvents = $state<string[]>([]);
-	let savingEdit = $state(false);
+	let saveEditOp = $state(createAsyncOp());
 
 	// Sub-tab
 	type SubTab = 'list' | 'templates' | 'create';
@@ -85,22 +84,6 @@
 	}
 
 	// --- Helpers ---
-
-	async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-		const token = localStorage.getItem('token');
-		const headers: Record<string, string> = {
-			'Content-Type': 'application/json'
-		};
-		if (token) {
-			headers['Authorization'] = `Bearer ${token}`;
-		}
-		const res = await fetch(`${API_BASE}${path}`, { ...options, headers: { ...headers, ...options?.headers } });
-		const json = await res.json();
-		if (!res.ok) {
-			throw new Error(json.error?.message || res.statusText);
-		}
-		return json.data as T;
-	}
 
 	function formatDate(iso: string): string {
 		return new Date(iso).toLocaleString();
@@ -149,41 +132,34 @@
 
 	async function loadTemplates() {
 		if (templates.length > 0) return;
-		loadingTemplates = true;
-		try {
-			templates = await fetchJSON<WebhookTemplate[]>('/webhooks/templates');
-		} catch (err: any) {
-			onError(err.message || 'Failed to load templates');
-		} finally {
-			loadingTemplates = false;
-		}
+		const result = await loadTemplatesOp.run(
+			() => api.getWebhookTemplates() as Promise<WebhookTemplate[]>,
+			msg => onError(msg)
+		);
+		if (result) templates = result;
 	}
 
 	async function loadOutgoingEvents() {
 		if (availableOutgoingEvents.length > 0) return;
-		loadingOutgoingEvents = true;
-		try {
-			availableOutgoingEvents = await fetchJSON<string[]>('/webhooks/outgoing-events');
-		} catch {
+		const result = await loadOutgoingEventsOp.run(
+			() => api.getOutgoingWebhookEvents() as Promise<string[]>
+		);
+		if (result) {
+			availableOutgoingEvents = result;
+		} else {
 			// Fallback to hardcoded list if endpoint not available yet.
 			availableOutgoingEvents = Object.keys(eventLabels);
-		} finally {
-			loadingOutgoingEvents = false;
 		}
 	}
 
 	async function loadExecutionLogs(webhookId: string) {
 		selectedWebhookForLogs = webhookId;
-		loadingLogs = true;
 		expandedLogId = null;
-		try {
-			executionLogs = await fetchJSON<WebhookExecutionLog[]>(`/guilds/${guildId}/webhooks/${webhookId}/logs`);
-		} catch (err: any) {
-			onError(err.message || 'Failed to load execution logs');
-			executionLogs = [];
-		} finally {
-			loadingLogs = false;
-		}
+		const result = await loadLogsOp.run(
+			() => api.getWebhookLogs(guildId, webhookId) as Promise<WebhookExecutionLog[]>,
+			msg => onError(msg)
+		);
+		executionLogs = result ?? [];
 	}
 
 	// --- Actions ---
@@ -191,16 +167,17 @@
 	async function handleCreateWebhook() {
 		if (!newWebhookName.trim() || !newWebhookChannel) return;
 		if (newWebhookType === 'outgoing' && !newOutgoingUrl.trim()) return;
-		creatingWebhook = true;
-		try {
+		const whType = newWebhookType;
+		const whName = newWebhookName.trim();
+		await createWebhookOp.run(async () => {
 			const webhook = await api.createWebhook(guildId, {
-				name: newWebhookName.trim(),
+				name: whName,
 				channel_id: newWebhookChannel
 			});
 			// If outgoing type, update it with outgoing fields.
-			if (newWebhookType === 'outgoing') {
+			if (whType === 'outgoing') {
 				const updated = await api.updateWebhook(guildId, webhook.id, {
-					name: newWebhookName.trim()
+					name: whName
 				});
 				// Note: outgoing_url and outgoing_events will need server.go route
 				// updates to fully work through the existing PATCH endpoint.
@@ -208,16 +185,14 @@
 			} else {
 				webhooks = [...webhooks, webhook];
 			}
+		}, msg => onError(msg));
+		if (!createWebhookOp.error) {
 			newWebhookName = '';
 			newWebhookChannel = '';
 			newWebhookType = 'incoming';
 			newOutgoingUrl = '';
 			newOutgoingEvents = [];
 			onSuccess('Webhook created successfully');
-		} catch (err: any) {
-			onError(err.message || 'Failed to create webhook');
-		} finally {
-			creatingWebhook = false;
 		}
 	}
 
@@ -258,19 +233,18 @@
 
 	async function handleSaveEdit() {
 		if (!editingWebhookId || !editWebhookName.trim()) return;
-		savingEdit = true;
-		try {
-			const updated = await api.updateWebhook(guildId, editingWebhookId, {
+		const whId = editingWebhookId;
+		const updated = await saveEditOp.run(
+			() => api.updateWebhook(guildId, whId, {
 				name: editWebhookName.trim(),
 				channel_id: editWebhookChannel
-			});
-			webhooks = webhooks.map((w) => (w.id === editingWebhookId ? updated : w));
+			}),
+			msg => onError(msg)
+		);
+		if (updated) {
+			webhooks = webhooks.map((w) => (w.id === whId ? updated : w));
 			editingWebhookId = null;
 			onSuccess('Webhook updated');
-		} catch (err: any) {
-			onError(err.message || 'Failed to update webhook');
-		} finally {
-			savingEdit = false;
 		}
 	}
 
@@ -278,28 +252,26 @@
 
 	async function handlePreview() {
 		if (!selectedTemplateId || !previewPayload.trim()) return;
-		previewLoading = true;
 		previewError = '';
 		previewResult = null;
+		let parsedPayload: unknown;
 		try {
-			let parsedPayload: unknown;
-			try {
-				parsedPayload = JSON.parse(previewPayload);
-			} catch {
-				previewError = 'Invalid JSON payload';
-				return;
-			}
-			previewResult = await fetchJSON<{ content: string; embeds?: unknown[] }>('/webhooks/preview', {
-				method: 'POST',
-				body: JSON.stringify({
-					template_id: selectedTemplateId,
-					payload: parsedPayload
-				})
-			});
-		} catch (err: any) {
-			previewError = err.message || 'Preview failed';
-		} finally {
-			previewLoading = false;
+			parsedPayload = JSON.parse(previewPayload);
+		} catch {
+			previewError = 'Invalid JSON payload';
+			return;
+		}
+		const tmplId = selectedTemplateId;
+		const result = await previewOp.run(
+			() => api.previewWebhook({
+				template_id: tmplId,
+				payload: parsedPayload
+			}) as Promise<{ content: string; embeds?: unknown[] }>
+		);
+		if (previewOp.error) {
+			previewError = previewOp.error;
+		} else if (result) {
+			previewResult = result;
 		}
 	}
 
@@ -435,9 +407,9 @@
 			<button
 				class="btn-primary"
 				onclick={handleCreateWebhook}
-				disabled={creatingWebhook || !newWebhookName.trim() || !newWebhookChannel || (newWebhookType === 'outgoing' && !newOutgoingUrl.trim())}
+				disabled={createWebhookOp.loading || !newWebhookName.trim() || !newWebhookChannel || (newWebhookType === 'outgoing' && !newOutgoingUrl.trim())}
 			>
-				{creatingWebhook ? 'Creating...' : 'Create Webhook'}
+				{createWebhookOp.loading ? 'Creating...' : 'Create Webhook'}
 			</button>
 		</div>
 
@@ -452,7 +424,7 @@
 					Select a template and use its sample payload to preview the output.
 				</p>
 
-				{#if loadingTemplates}
+				{#if loadTemplatesOp.loading}
 					<p class="text-sm text-text-muted">Loading templates...</p>
 				{:else if templates.length === 0}
 					<p class="text-sm text-text-muted">No templates available.</p>
@@ -511,9 +483,9 @@
 				<button
 					class="btn-primary"
 					onclick={handlePreview}
-					disabled={previewLoading || !selectedTemplateId || !previewPayload.trim()}
+					disabled={previewOp.loading || !selectedTemplateId || !previewPayload.trim()}
 				>
-					{previewLoading ? 'Previewing...' : 'Preview Message'}
+					{previewOp.loading ? 'Previewing...' : 'Preview Message'}
 				</button>
 
 				{#if previewError}
@@ -582,8 +554,8 @@
 								{/if}
 
 								<div class="flex gap-2">
-									<button class="btn-primary text-xs" onclick={handleSaveEdit} disabled={savingEdit || !editWebhookName.trim()}>
-										{savingEdit ? 'Saving...' : 'Save'}
+									<button class="btn-primary text-xs" onclick={handleSaveEdit} disabled={saveEditOp.loading || !editWebhookName.trim()}>
+										{saveEditOp.loading ? 'Saving...' : 'Save'}
 									</button>
 									<button class="btn-secondary text-xs" onclick={cancelEditing}>Cancel</button>
 								</div>
@@ -658,7 +630,7 @@
 										</button>
 									</div>
 
-									{#if loadingLogs}
+									{#if loadLogsOp.loading}
 										<p class="text-xs text-text-muted">Loading logs...</p>
 									{:else if executionLogs.length === 0}
 										<p class="text-xs text-text-muted">No execution logs yet.</p>

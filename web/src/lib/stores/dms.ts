@@ -3,8 +3,9 @@
 import { writable, derived } from 'svelte/store';
 import type { Channel, User } from '$lib/types';
 import { api } from '$lib/api/client';
+import { createMapStore } from '$lib/stores/mapHelpers';
 
-export const dmChannels = writable<Map<string, Channel>>(new Map());
+export const dmChannels = createMapStore<string, Channel>();
 export const dmLoaded = writable(false);
 
 export const dmList = derived(dmChannels, ($dms) =>
@@ -34,27 +35,15 @@ export async function loadDMs() {
 }
 
 export function addDMChannel(channel: Channel) {
-	dmChannels.update((map) => {
-		map.set(channel.id, channel);
-		return new Map(map);
-	});
+	dmChannels.setEntry(channel.id, channel);
 }
 
 export function removeDMChannel(channelId: string) {
-	dmChannels.update((map) => {
-		map.delete(channelId);
-		return new Map(map);
-	});
+	dmChannels.removeEntry(channelId);
 }
 
 export function updateDMChannel(channel: Channel) {
-	dmChannels.update((map) => {
-		if (map.has(channel.id)) {
-			map.set(channel.id, channel);
-			return new Map(map);
-		}
-		return map;
-	});
+	dmChannels.updateEntry(channel.id, () => channel);
 }
 
 /**

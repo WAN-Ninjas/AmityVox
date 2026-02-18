@@ -1,30 +1,7 @@
 <script lang="ts">
-	import { api, ApiRequestError } from '$lib/api/client';
+	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-
-	const API_BASE = '/api/v1';
-
-	async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		const token = api.getToken();
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-		const res = await fetch(`${API_BASE}${path}`, {
-			method,
-			headers,
-			body: body ? JSON.stringify(body) : undefined
-		});
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		if (!res.ok) {
-			const err = json as { error?: { message?: string; code?: string } };
-			throw new ApiRequestError(
-				err.error?.message || res.statusText,
-				err.error?.code || 'unknown',
-				res.status
-			);
-		}
-		return (json as { data: T }).data;
-	}
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface ChannelWidget {
 		id: string;
@@ -48,12 +25,11 @@
 	let { channelId, guildId }: Props = $props();
 
 	let widgets = $state<ChannelWidget[]>([]);
-	let loading = $state(false);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp());
 	let showAddForm = $state(false);
 	let newTitle = $state('');
 	let newType = $state('notes');
-	let creating = $state(false);
+	let createOp = $state(createAsyncOp());
 
 	const widgetTypeLabels: Record<string, string> = {
 		notes: 'Collaborative Notes',
@@ -75,16 +51,11 @@
 	});
 
 	async function loadWidgets(chId: string) {
-		loading = true;
-		error = '';
-		try {
-			const resp = await apiRequest<ChannelWidget[]>('GET', `/channels/${chId}/widgets`);
-			widgets = resp;
-		} catch (err: any) {
-			error = err.message || 'Failed to load widgets';
+		const result = await loadOp.run(() => api.getChannelWidgets(chId));
+		if (!loadOp.error) {
+			widgets = result!;
+		} else {
 			widgets = [];
-		} finally {
-			loading = false;
 		}
 	}
 
@@ -93,27 +64,25 @@
 			addToast('Widget title is required', 'error');
 			return;
 		}
-		creating = true;
-		try {
-			const widget = await apiRequest<ChannelWidget>('POST', `/channels/${channelId}/widgets`, {
+		const widget = await createOp.run(
+			() => api.createChannelWidget(channelId, {
 				widget_type: newType,
 				title: newTitle.trim(),
 				config: {}
-			});
-			widgets = [...widgets, widget];
+			}),
+			msg => addToast(msg, 'error')
+		);
+		if (!createOp.error) {
+			widgets = [...widgets, widget!];
 			showAddForm = false;
 			newTitle = '';
 			addToast('Widget added', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to add widget', 'error');
-		} finally {
-			creating = false;
 		}
 	}
 
 	async function removeWidget(widgetId: string) {
 		try {
-			await apiRequest('DELETE', `/channels/${channelId}/widgets/${widgetId}`);
+			await api.deleteChannelWidget(channelId, widgetId);
 			widgets = widgets.filter((w) => w.id !== widgetId);
 			addToast('Widget removed', 'success');
 		} catch (err: any) {
@@ -123,7 +92,7 @@
 
 	async function toggleWidget(widget: ChannelWidget) {
 		try {
-			await apiRequest('PATCH', `/channels/${channelId}/widgets/${widget.id}`, {
+			await api.updateChannelWidget(channelId, widget.id, {
 				active: !widget.active
 			});
 			widgets = widgets.map((w) =>
@@ -173,19 +142,19 @@
 			<button
 				class="btn-primary w-full"
 				onclick={addWidget}
-				disabled={creating || !newTitle.trim()}
+				disabled={createOp.loading || !newTitle.trim()}
 			>
-				{creating ? 'Creating...' : 'Create Widget'}
+				{createOp.loading ? 'Creating...' : 'Create Widget'}
 			</button>
 		</div>
 	{/if}
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-8">
 			<span class="inline-block h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></span>
 		</div>
-	{:else if error}
-		<div class="rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>
+	{:else if loadOp.error}
+		<div class="rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{loadOp.error}</div>
 	{:else if widgets.length === 0}
 		<p class="py-4 text-center text-sm text-text-muted">
 			No widgets in this channel. Add one to get started.

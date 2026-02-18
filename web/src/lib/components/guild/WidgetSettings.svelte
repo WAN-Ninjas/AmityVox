@@ -1,31 +1,7 @@
 <script lang="ts">
-	import { api, ApiRequestError } from '$lib/api/client';
+	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import type { Channel } from '$lib/types';
-
-	const API_BASE = '/api/v1';
-
-	async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		const token = api.getToken();
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-		const res = await fetch(`${API_BASE}${path}`, {
-			method,
-			headers,
-			body: body ? JSON.stringify(body) : undefined
-		});
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		if (!res.ok) {
-			const err = json as { error?: { message?: string; code?: string } };
-			throw new ApiRequestError(
-				err.error?.message || res.statusText,
-				err.error?.code || 'unknown',
-				res.status
-			);
-		}
-		return (json as { data: T }).data;
-	}
 
 	interface GuildWidgetConfig {
 		guild_id: string;
@@ -67,7 +43,7 @@
 		loading = true;
 		error = '';
 		try {
-			const resp = await apiRequest<GuildWidgetConfig>('GET', `/guilds/${gId}/widget`);
+			const resp = await api.getGuildWidget(gId) as GuildWidgetConfig;
 			config = resp;
 			enabled = resp.enabled;
 			inviteChannelId = resp.invite_channel_id || '';
@@ -82,11 +58,11 @@
 	async function saveWidget() {
 		saving = true;
 		try {
-			const resp = await apiRequest<GuildWidgetConfig>('PATCH', `/guilds/${guildId}/widget`, {
+			const resp = await api.updateGuildWidget(guildId, {
 				enabled,
 				invite_channel_id: inviteChannelId || null,
 				style
-			});
+			}) as GuildWidgetConfig;
 			config = resp;
 			addToast('Widget settings saved', 'success');
 		} catch (err: any) {

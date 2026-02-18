@@ -106,7 +106,7 @@
 
 <svelte:document onclick={handleClickOutside} onkeydown={handleKeydown} />
 
-<div class="sticker-picker absolute bottom-full right-0 z-50 mb-2 w-80 rounded-lg bg-bg-floating shadow-xl">
+<div class="sticker-picker absolute bottom-full right-0 z-50 mb-2 w-80 rounded-lg bg-bg-floating shadow-xl" role="dialog" aria-label="Sticker picker">
 	<!-- Search -->
 	<div class="border-b border-bg-modifier p-2">
 		<input
