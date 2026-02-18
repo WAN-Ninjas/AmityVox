@@ -37,7 +37,7 @@ const permissionGroupKeys = [
 	// Members
 	'KickMembers', 'BanMembers', 'TimeoutMembers', 'ManageRoles', 'AssignRoles', 'ManageNicknames', 'RemoveAvatars',
 	// Information
-	'ViewAuditLog', 'ViewGuildInsights', 'MentionEveryone', 'ManagePermissions',
+	'ViewAuditLog', 'ViewGuildInsights', 'MentionHere', 'ManagePermissions',
 	// Channel
 	'ViewChannel', 'ReadHistory', 'SendMessages', 'ManageMessages', 'EmbedLinks',
 	'UploadFiles', 'AddReactions', 'UseExternalEmoji', 'Masquerade', 'ManageThreads', 'CreateThreads',

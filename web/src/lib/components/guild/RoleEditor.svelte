@@ -56,7 +56,7 @@
 			perms: [
 				{ key: 'ViewAuditLog', label: 'View Audit Log', bit: 1n << 14n },
 				{ key: 'ViewGuildInsights', label: 'View Insights', bit: 1n << 15n },
-				{ key: 'MentionEveryone', label: 'Mention @everyone', bit: 1n << 16n },
+				{ key: 'MentionHere', label: 'Mention @here', bit: 1n << 16n },
 				{ key: 'ManagePermissions', label: 'Manage Permissions', bit: 1n << 2n },
 			]
 		},

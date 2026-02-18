@@ -16,7 +16,7 @@ import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
 import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
 import { loadPermissions, invalidatePermissions } from './permissions';
 import { loadChannelMutePrefs, isChannelMuted, isGuildMuted } from './muting';
-import { updateGuildMember, updateUserInMembers } from './members';
+import { updateGuildMember, updateUserInMembers, guildMembers } from './members';
 import { startIdleDetection, stopIdleDetection, setManualStatus } from '$lib/utils/idle';
 import { addToast } from './toast';
 import { clearChannelMessages } from './messages';
@@ -161,8 +161,15 @@ export function connectGateway(token: string) {
 				let selfId: string | undefined;
 				currentUser.subscribe((u) => (selfId = u?.id ?? undefined))();
 				if (msg.author_id !== selfId) {
-					const isMention = msg.mention_everyone ||
+					// Check if this message mentions the current user (direct, @here, or role mention).
+				let isMention = msg.mention_here ||
 						(selfId ? msg.mention_user_ids?.includes(selfId) : false);
+				if (!isMention && selfId && msg.mention_role_ids?.length > 0) {
+					const member = get(guildMembers).get(selfId);
+					if (member?.roles?.some(r => msg.mention_role_ids.includes(r))) {
+						isMention = true;
+					}
+				}
 					incrementUnread(msg.channel_id, isMention);
 
 					// Build notification for mentions, replies, and DMs.
