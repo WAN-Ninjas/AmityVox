@@ -3,8 +3,6 @@
 package users
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -47,8 +45,7 @@ func (h *Handler) HandleGetUserEmoji(w http.ResponseWriter, r *http.Request) {
 		userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get user emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to get emoji", err)
 		return
 	}
 	defer rows.Close()
@@ -57,15 +54,13 @@ func (h *Handler) HandleGetUserEmoji(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var e UserEmoji
 		if err := rows.Scan(&e.ID, &e.UserID, &e.Name, &e.FileID, &e.Animated, &e.CreatedAt); err != nil {
-			h.Logger.Error("failed to scan user emoji", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read emoji")
+			apiutil.InternalError(w, h.Logger, "Failed to read emoji", err)
 			return
 		}
 		emoji = append(emoji, e)
 	}
 	if err := rows.Err(); err != nil {
-		h.Logger.Error("error iterating user emoji rows", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to read emoji", err)
 		return
 	}
 
@@ -79,8 +74,7 @@ func (h *Handler) HandleCreateUserEmoji(w http.ResponseWriter, r *http.Request) 
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req createUserEmojiRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -89,8 +83,7 @@ func (h *Handler) HandleCreateUserEmoji(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.FileID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_file_id", "file_id is required")
+	if !apiutil.RequireNonEmpty(w, "file_id", req.FileID) {
 		return
 	}
 
@@ -101,8 +94,7 @@ func (h *Handler) HandleCreateUserEmoji(w http.ResponseWriter, r *http.Request) 
 		userID,
 	).Scan(&count)
 	if err != nil {
-		h.Logger.Error("failed to count user emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to create emoji", err)
 		return
 	}
 	if count >= maxUserEmoji {
@@ -132,8 +124,7 @@ func (h *Handler) HandleCreateUserEmoji(w http.ResponseWriter, r *http.Request) 
 		emojiID, userID, req.Name, req.FileID, req.Animated,
 	).Scan(&emoji.ID, &emoji.UserID, &emoji.Name, &emoji.FileID, &emoji.Animated, &emoji.CreatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create user emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to create emoji", err)
 		return
 	}
 
@@ -157,8 +148,7 @@ func (h *Handler) HandleDeleteUserEmoji(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to check emoji ownership", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to delete emoji", err)
 		return
 	}
 	if ownerID != userID {
@@ -171,8 +161,7 @@ func (h *Handler) HandleDeleteUserEmoji(w http.ResponseWriter, r *http.Request) 
 		emojiID, userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete user emoji", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete emoji")
+		apiutil.InternalError(w, h.Logger, "Failed to delete emoji", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

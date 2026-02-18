@@ -82,8 +82,7 @@ func (h *Handler) HandleGetInstance(w http.ResponseWriter, r *http.Request) {
 		&inst.CreatedAt, &inst.LastSeenAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to get instance", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get instance")
+		apiutil.InternalError(w, h.Logger, "Failed to get instance", err)
 		return
 	}
 
@@ -98,8 +97,7 @@ func (h *Handler) HandleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateInstanceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -128,8 +126,7 @@ func (h *Handler) HandleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 		&inst.CreatedAt, &inst.LastSeenAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to update instance", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update instance")
+		apiutil.InternalError(w, h.Logger, "Failed to update instance", err)
 		return
 	}
 
@@ -151,8 +148,7 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 		 WHERE fp.instance_id = $1
 		 ORDER BY fp.established_at DESC`, h.InstanceID)
 	if err != nil {
-		h.Logger.Error("failed to query federation peers", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get federation peers")
+		apiutil.InternalError(w, h.Logger, "Failed to get federation peers", err)
 		return
 	}
 	defer rows.Close()
@@ -171,8 +167,7 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 			&p.InstanceID, &p.PeerID, &p.Status, &p.EstablishedAt, &p.LastSyncedAt,
 			&p.PeerDomain, &p.PeerName, &p.PeerSoftware,
 		); err != nil {
-			h.Logger.Error("failed to scan federation peer", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read federation peers")
+			apiutil.InternalError(w, h.Logger, "Failed to read federation peers", err)
 			return
 		}
 		peers = append(peers, p)
@@ -189,12 +184,10 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 	}
 
 	var req addPeerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Domain == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_domain", "Peer domain is required")
+	if !apiutil.RequireNonEmpty(w, "Peer domain", req.Domain) {
 		return
 	}
 
@@ -208,8 +201,7 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to look up peer", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up peer")
+		apiutil.InternalError(w, h.Logger, "Failed to look up peer", err)
 		return
 	}
 
@@ -220,8 +212,7 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		 ON CONFLICT (instance_id, peer_id) DO UPDATE SET status = $3`,
 		h.InstanceID, peerID, models.FederationPeerActive, now)
 	if err != nil {
-		h.Logger.Error("failed to add federation peer", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add federation peer")
+		apiutil.InternalError(w, h.Logger, "Failed to add federation peer", err)
 		return
 	}
 
@@ -247,8 +238,7 @@ func (h *Handler) HandleRemoveFederationPeer(w http.ResponseWriter, r *http.Requ
 		`DELETE FROM federation_peers WHERE instance_id = $1 AND peer_id = $2`,
 		h.InstanceID, peerID)
 	if err != nil {
-		h.Logger.Error("failed to remove federation peer", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove federation peer")
+		apiutil.InternalError(w, h.Logger, "Failed to remove federation peer", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -482,8 +472,7 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Admin bool `json:"admin"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -513,8 +502,7 @@ func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GlobalMod bool `json:"global_mod"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -679,8 +667,7 @@ func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.
 		Mode    *string `json:"mode"`
 		Message *string `json:"message"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -719,8 +706,7 @@ func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.R
 		Note      *string `json:"note"`
 		ExpiresIn *int    `json:"expires_in_hours"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -742,8 +728,7 @@ func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.R
 		 VALUES ($1, $2, $3, $4, $5)`,
 		tokenID, adminID, req.MaxUses, req.Note, expiresAt)
 	if err != nil {
-		h.Logger.Error("failed to create registration token", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
+		apiutil.InternalError(w, h.Logger, "Failed to create token", err)
 		return
 	}
 
@@ -844,8 +829,7 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 		Severity  string `json:"severity"`
 		ExpiresIn *int   `json:"expires_in_hours"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -878,8 +862,7 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		announcementID, adminID, req.Title, req.Content, req.Severity, expiresAt)
 	if err != nil {
-		h.Logger.Error("failed to create announcement", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create announcement")
+		apiutil.InternalError(w, h.Logger, "Failed to create announcement", err)
 		return
 	}
 
@@ -1003,8 +986,7 @@ func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Reques
 		Title   *string `json:"title"`
 		Content *string `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1153,8 +1135,7 @@ func (h *Handler) HandleListGuilds(w http.ResponseWriter, r *http.Request) {
 		rows, err = h.Pool.Query(r.Context(), baseQuery, limit, offset)
 	}
 	if err != nil {
-		h.Logger.Error("failed to list guilds", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list guilds")
+		apiutil.InternalError(w, h.Logger, "Failed to list guilds", err)
 		return
 	}
 	defer rows.Close()
@@ -1232,8 +1213,7 @@ func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get guild details", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild details")
+		apiutil.InternalError(w, h.Logger, "Failed to get guild details", err)
 		return
 	}
 
@@ -1252,8 +1232,7 @@ func (h *Handler) HandleAdminDeleteGuild(w http.ResponseWriter, r *http.Request)
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM guilds WHERE id = $1`, guildID)
 	if err != nil {
-		h.Logger.Error("failed to delete guild", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete guild")
+		apiutil.InternalError(w, h.Logger, "Failed to delete guild", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1293,8 +1272,7 @@ func (h *Handler) HandleGetUserGuilds(w http.ResponseWriter, r *http.Request) {
 		 WHERE gm.user_id = $1
 		 ORDER BY gm.joined_at DESC`, userID)
 	if err != nil {
-		h.Logger.Error("failed to get user guilds", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user guilds")
+		apiutil.InternalError(w, h.Logger, "Failed to get user guilds", err)
 		return
 	}
 	defer rows.Close()
@@ -1354,8 +1332,7 @@ func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request
 		 ORDER BY total_requests DESC
 		 LIMIT 50`)
 	if err != nil {
-		h.Logger.Error("failed to query rate limit stats", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit stats")
+		apiutil.InternalError(w, h.Logger, "Failed to get rate limit stats", err)
 		return
 	}
 	defer rows.Close()
@@ -1451,8 +1428,7 @@ func (h *Handler) HandleGetRateLimitLog(w http.ResponseWriter, r *http.Request) 
 			 LIMIT $1 OFFSET $2`, limit, offset)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query rate limit log", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit log")
+		apiutil.InternalError(w, h.Logger, "Failed to get rate limit log", err)
 		return
 	}
 	defer rows.Close()
@@ -1495,8 +1471,7 @@ func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Req
 		RequestsPerWindow *string `json:"requests_per_window"`
 		WindowSeconds     *string `json:"window_seconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1540,8 +1515,7 @@ func (h *Handler) HandleGetContentScanRules(w http.ResponseWriter, r *http.Reque
 		 FROM content_scan_rules
 		 ORDER BY created_at DESC`)
 	if err != nil {
-		h.Logger.Error("failed to query content scan rules", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan rules")
+		apiutil.InternalError(w, h.Logger, "Failed to get content scan rules", err)
 		return
 	}
 	defer rows.Close()
@@ -1583,17 +1557,14 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 		Target  string `json:"target"`
 		Enabled *bool  `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Rule name is required")
+	if !apiutil.RequireNonEmpty(w, "Rule name", req.Name) {
 		return
 	}
-	if req.Pattern == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_pattern", "Regex pattern is required")
+	if !apiutil.RequireNonEmpty(w, "Regex pattern", req.Pattern) {
 		return
 	}
 
@@ -1635,8 +1606,7 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		ruleID, req.Name, req.Pattern, req.Action, req.Target, enabled)
 	if err != nil {
-		h.Logger.Error("failed to create content scan rule", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create content scan rule")
+		apiutil.InternalError(w, h.Logger, "Failed to create content scan rule", err)
 		return
 	}
 
@@ -1668,8 +1638,7 @@ func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Req
 		Target  *string `json:"target"`
 		Enabled *bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1713,8 +1682,7 @@ func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Req
 		 WHERE id = $6`,
 		req.Name, req.Pattern, req.Action, req.Target, req.Enabled, ruleID)
 	if err != nil {
-		h.Logger.Error("failed to update content scan rule", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update content scan rule")
+		apiutil.InternalError(w, h.Logger, "Failed to update content scan rule", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1737,8 +1705,7 @@ func (h *Handler) HandleDeleteContentScanRule(w http.ResponseWriter, r *http.Req
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM content_scan_rules WHERE id = $1`, ruleID)
 	if err != nil {
-		h.Logger.Error("failed to delete content scan rule", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete content scan rule")
+		apiutil.InternalError(w, h.Logger, "Failed to delete content scan rule", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1798,8 +1765,7 @@ func (h *Handler) HandleGetContentScanLog(w http.ResponseWriter, r *http.Request
 			 LIMIT $1 OFFSET $2`, limit, offset)
 	}
 	if err != nil {
-		h.Logger.Error("failed to query content scan log", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan log")
+		apiutil.InternalError(w, h.Logger, "Failed to get content scan log", err)
 		return
 	}
 	defer rows.Close()
@@ -1877,8 +1843,7 @@ func (h *Handler) HandleUpdateCaptchaConfig(w http.ResponseWriter, r *http.Reque
 		SiteKey   *string `json:"site_key"`
 		SecretKey *string `json:"secret_key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 

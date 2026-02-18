@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Role } from '$lib/types';
 
 	let { guildId }: { guildId: string } = $props();
@@ -15,7 +16,6 @@
 		role_name: string;
 	}
 
-	let loading = $state(false);
 	let error = $state('');
 	let success = $state('');
 
@@ -25,18 +25,17 @@
 	let newRoleId = $state('');
 	let newRuleType = $state<'on_join' | 'after_delay' | 'on_verify'>('on_join');
 	let newDelaySeconds = $state(600);
-	let creating = $state(false);
+
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
 
 	async function loadAutoRoles() {
-		loading = true;
 		error = '';
-		try {
-			autoRoles = await api.request<AutoRole[]>('GET', `/guilds/${guildId}/auto-roles`);
-		} catch (err: any) {
-			error = err.message || 'Failed to load auto roles';
-		} finally {
-			loading = false;
-		}
+		const result = await loadOp.run(
+			() => api.request<AutoRole[]>('GET', `/guilds/${guildId}/auto-roles`),
+			msg => (error = msg)
+		);
+		if (result) autoRoles = result;
 	}
 
 	async function loadRoles() {
@@ -47,27 +46,25 @@
 
 	async function createAutoRole() {
 		if (!newRoleId) return;
-		creating = true;
 		error = '';
 		success = '';
-		try {
-			const ar = await api.request<AutoRole>(
+		const ar = await createOp.run(
+			() => api.request<AutoRole>(
 				'POST', `/guilds/${guildId}/auto-roles`, {
 					role_id: newRoleId,
 					rule_type: newRuleType,
 					delay_seconds: newRuleType === 'after_delay' ? newDelaySeconds : 0
 				}
-			);
-			autoRoles = [...autoRoles, ar];
+			),
+			msg => (error = msg)
+		);
+		if (!createOp.error) {
+			autoRoles = [...autoRoles, ar!];
 			newRoleId = '';
 			newRuleType = 'on_join';
 			newDelaySeconds = 600;
 			success = 'Auto-role created';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to create auto role';
-		} finally {
-			creating = false;
 		}
 	}
 
@@ -136,7 +133,7 @@
 		<div class="rounded bg-green-500/10 px-4 py-3 text-sm text-green-400">{success}</div>
 	{/if}
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
@@ -227,9 +224,9 @@
 				<button
 					class="btn-primary"
 					onclick={createAutoRole}
-					disabled={creating || !newRoleId}
+					disabled={createOp.loading || !newRoleId}
 				>
-					{creating ? 'Creating...' : 'Add Auto-Role'}
+					{createOp.loading ? 'Creating...' : 'Add Auto-Role'}
 				</button>
 			</div>
 		</div>

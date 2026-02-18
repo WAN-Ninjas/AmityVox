@@ -3,8 +3,9 @@
 import { writable, derived } from 'svelte/store';
 import type { Channel } from '$lib/types';
 import { api } from '$lib/api/client';
+import { createMapStore } from '$lib/stores/mapHelpers';
 
-export const channels = writable<Map<string, Channel>>(new Map());
+export const channels = createMapStore<string, Channel>();
 export const currentChannelId = writable<string | null>(null);
 
 // When set, the channel page should open this thread in its side panel.
@@ -159,11 +160,7 @@ export function setThreadActivityFilter(channelId: string, minutes: number | nul
 
 export async function loadChannels(guildId: string) {
 	const list = await api.getGuildChannels(guildId);
-	const map = new Map<string, Channel>();
-	for (const c of list) {
-		map.set(c.id, c);
-	}
-	channels.set(map);
+	channels.setAll(list.map(c => [c.id, c]));
 }
 
 export function setChannel(id: string | null) {
@@ -171,15 +168,9 @@ export function setChannel(id: string | null) {
 }
 
 export function updateChannel(channel: Channel) {
-	channels.update((map) => {
-		map.set(channel.id, channel);
-		return new Map(map);
-	});
+	channels.setEntry(channel.id, channel);
 }
 
 export function removeChannel(channelId: string) {
-	channels.update((map) => {
-		map.delete(channelId);
-		return new Map(map);
-	});
+	channels.removeEntry(channelId);
 }

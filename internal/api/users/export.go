@@ -128,8 +128,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	// 1. User profile
 	profile, err := h.collectUserProfile(ctx, userID)
 	if err != nil {
-		h.Logger.Error("export: failed to collect user profile", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
+		apiutil.InternalError(w, h.Logger, "Failed to export user data", err)
 		return
 	}
 	export.User = profile
@@ -147,8 +146,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	// 3. Guild memberships
 	guilds, err := h.collectGuildMemberships(ctx, userID)
 	if err != nil {
-		h.Logger.Error("export: failed to collect guild memberships", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
+		apiutil.InternalError(w, h.Logger, "Failed to export user data", err)
 		return
 	}
 	export.Guilds = guilds
@@ -156,8 +154,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	// 4. Messages (last 10000)
 	messages, err := h.collectMessages(ctx, userID)
 	if err != nil {
-		h.Logger.Error("export: failed to collect messages", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
+		apiutil.InternalError(w, h.Logger, "Failed to export user data", err)
 		return
 	}
 	export.Messages = messages
@@ -266,8 +263,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err != nil {
-		h.Logger.Error("export: failed to get channel", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get channel")
+		apiutil.InternalError(w, h.Logger, "Failed to get channel", err)
 		return
 	}
 
@@ -307,8 +303,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 		channelID,
 	)
 	if err != nil {
-		h.Logger.Error("export: failed to query messages", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export messages")
+		apiutil.InternalError(w, h.Logger, "Failed to export messages", err)
 		return
 	}
 	defer rows.Close()
@@ -321,8 +316,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 		var createdAt time.Time
 		if err := rows.Scan(&msg.ID, &msg.AuthorID, &msg.AuthorName, &msg.Content,
 			&msg.MessageType, &editedAt, &createdAt); err != nil {
-			h.Logger.Error("export: failed to scan message", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read messages")
+			apiutil.InternalError(w, h.Logger, "Failed to read messages", err)
 			return
 		}
 		msg.CreatedAt = createdAt.UTC().Format(time.RFC3339)
@@ -441,8 +435,7 @@ func (h *Handler) HandleExportAccount(w http.ResponseWriter, r *http.Request) {
 	).Scan(&username, &displayName, &bio, &statusText, &statusEmoji, &presenceStr,
 		&pronouns, &accentColor)
 	if err != nil {
-		h.Logger.Error("export account: failed to get user", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export account")
+		apiutil.InternalError(w, h.Logger, "Failed to export account", err)
 		return
 	}
 	statusPresence = &presenceStr
@@ -503,8 +496,7 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req importAccountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -557,8 +549,7 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 			p.StatusPresence, p.Pronouns, p.AccentColor,
 		)
 		if err != nil {
-			h.Logger.Error("import account: failed to update profile", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to import profile")
+			apiutil.InternalError(w, h.Logger, "Failed to import profile", err)
 			return
 		}
 	}
@@ -572,8 +563,7 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 			userID, req.Settings,
 		)
 		if err != nil {
-			h.Logger.Error("import account: failed to update settings", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to import settings")
+			apiutil.InternalError(w, h.Logger, "Failed to import settings", err)
 			return
 		}
 	}
@@ -581,8 +571,7 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 	// Return the updated user profile.
 	user, err := h.getUser(ctx, userID)
 	if err != nil {
-		h.Logger.Error("import account: failed to get updated user", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated profile")
+		apiutil.InternalError(w, h.Logger, "Failed to get updated profile", err)
 		return
 	}
 

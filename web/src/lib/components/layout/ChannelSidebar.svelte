@@ -27,6 +27,7 @@
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let dmProfileUserId = $state<string | null>(null);
 
@@ -48,22 +49,20 @@
 	let reportIssueTitle = $state('');
 	let reportIssueDescription = $state('');
 	let reportIssueCategory = $state('general');
-	let reportIssueSubmitting = $state(false);
+	let reportIssueOp = $state(createAsyncOp());
 
 	async function submitReportIssue() {
 		if (!reportIssueTitle.trim() || !reportIssueDescription.trim()) return;
-		reportIssueSubmitting = true;
-		try {
-			await api.createIssue(reportIssueTitle.trim(), reportIssueDescription.trim(), reportIssueCategory);
+		await reportIssueOp.run(
+			() => api.createIssue(reportIssueTitle.trim(), reportIssueDescription.trim(), reportIssueCategory),
+			msg => addToast(msg, 'error')
+		);
+		if (!reportIssueOp.error) {
 			addToast('Issue reported successfully', 'success');
 			showReportIssue = false;
 			reportIssueTitle = '';
 			reportIssueDescription = '';
 			reportIssueCategory = 'general';
-		} catch (err: any) {
-			addToast(err.message || 'Failed to report issue', 'error');
-		} finally {
-			reportIssueSubmitting = false;
 		}
 	}
 
@@ -145,7 +144,7 @@
 	let showCreateChannel = $state(false);
 	let newChannelName = $state('');
 	let newChannelType = $state<'text' | 'voice' | 'forum' | 'gallery'>('text');
-	let creatingChannel = $state(false);
+	let createChannelOp = $state(createAsyncOp());
 	let channelError = $state('');
 
 	// Edit channel modal
@@ -266,18 +265,17 @@
 	async function handleCreateChannel() {
 		const guildId = $currentGuildId;
 		if (!guildId || !newChannelName.trim()) return;
-		creatingChannel = true;
 		channelError = '';
-		try {
-			const channel = await api.createChannel(guildId, newChannelName.trim(), newChannelType);
+		const channel = await createChannelOp.run(
+			() => api.createChannel(guildId, newChannelName.trim(), newChannelType)
+		);
+		if (createChannelOp.error) {
+			channelError = createChannelOp.error;
+		} else if (channel) {
 			updateChannelStore(channel);
 			showCreateChannel = false;
 			newChannelName = '';
 			newChannelType = 'text';
-		} catch (err: any) {
-			channelError = err.message || 'Failed to create channel';
-		} finally {
-			creatingChannel = false;
 		}
 	}
 
@@ -1228,8 +1226,8 @@
 
 	<div class="flex justify-end gap-2">
 		<button class="btn-secondary" onclick={() => (showCreateChannel = false)}>Cancel</button>
-		<button class="btn-primary" onclick={handleCreateChannel} disabled={creatingChannel || !newChannelName.trim()}>
-			{creatingChannel ? 'Creating...' : 'Create'}
+		<button class="btn-primary" onclick={handleCreateChannel} disabled={createChannelOp.loading || !newChannelName.trim()}>
+			{createChannelOp.loading ? 'Creating...' : 'Create'}
 		</button>
 	</div>
 </Modal>
@@ -1366,8 +1364,8 @@
 	</div>
 	<div class="flex justify-end gap-2">
 		<button class="btn-secondary" onclick={() => (showReportIssue = false)}>Cancel</button>
-		<button class="btn-primary" onclick={submitReportIssue} disabled={reportIssueSubmitting || !reportIssueTitle.trim() || !reportIssueDescription.trim()}>
-			{reportIssueSubmitting ? 'Submitting...' : 'Submit'}
+		<button class="btn-primary" onclick={submitReportIssue} disabled={reportIssueOp.loading || !reportIssueTitle.trim() || !reportIssueDescription.trim()}>
+			{reportIssueOp.loading ? 'Submitting...' : 'Submit'}
 		</button>
 	</div>
 </Modal>

@@ -4,8 +4,13 @@
 package apiutil
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ErrorResponse is the standard error envelope returned by the API.
@@ -58,4 +63,38 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 // WriteNoContent writes a 204 No Content response with no body.
 func WriteNoContent(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// DecodeJSON reads JSON from the request body into dst. On failure it writes a
+// 400 error response and returns false so the caller can return early.
+func DecodeJSON(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return false
+	}
+	return true
+}
+
+// InternalError logs the error and writes a generic 500 response. The msg
+// parameter is used both as the log message and the user-facing message.
+func InternalError(w http.ResponseWriter, logger *slog.Logger, msg string, err error) {
+	logger.Error(msg, slog.String("error", err.Error()))
+	WriteError(w, http.StatusInternalServerError, "internal_error", msg)
+}
+
+// WithTx runs fn inside a database transaction. It begins a transaction, calls
+// fn, and commits if fn returns nil. If fn returns an error or panics, the
+// transaction is rolled back. Post-commit work (event publishing, writing the
+// HTTP response) should happen after WithTx returns nil.
+func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

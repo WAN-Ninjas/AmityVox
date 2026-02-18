@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -17,8 +18,8 @@
 		embed_image_url: string | null;
 	}
 
-	let loading = $state(false);
-	let saving = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let error = $state('');
 	let success = $state('');
 
@@ -37,14 +38,12 @@
 	let channels = $state<Channel[]>([]);
 
 	async function loadConfig() {
-		loading = true;
 		error = '';
-		try {
-			config = await api.request<WelcomeConfig>('GET', `/guilds/${guildId}/welcome`);
-		} catch (err: any) {
-			error = err.message || 'Failed to load welcome config';
-		} finally {
-			loading = false;
+		const result = await loadOp.run(() => api.request<WelcomeConfig>('GET', `/guilds/${guildId}/welcome`));
+		if (!loadOp.error) {
+			config = result!;
+		} else {
+			error = loadOp.error;
 		}
 	}
 
@@ -56,29 +55,27 @@
 	}
 
 	async function saveConfig() {
-		saving = true;
 		error = '';
 		success = '';
-		try {
-			config = await api.request<WelcomeConfig>(
-				'PATCH', `/guilds/${guildId}/welcome`, {
-					enabled: config.enabled,
-					channel_id: config.channel_id,
-					message: config.message,
-					dm_enabled: config.dm_enabled,
-					dm_message: config.dm_message,
-					embed_enabled: config.embed_enabled,
-					embed_color: config.embed_color,
-					embed_title: config.embed_title,
-					embed_image_url: config.embed_image_url
-				}
-			);
+		const result = await saveOp.run(() => api.request<WelcomeConfig>(
+			'PATCH', `/guilds/${guildId}/welcome`, {
+				enabled: config.enabled,
+				channel_id: config.channel_id,
+				message: config.message,
+				dm_enabled: config.dm_enabled,
+				dm_message: config.dm_message,
+				embed_enabled: config.embed_enabled,
+				embed_color: config.embed_color,
+				embed_title: config.embed_title,
+				embed_image_url: config.embed_image_url
+			}
+		));
+		if (!saveOp.error) {
+			config = result!;
 			success = 'Settings saved';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to save config';
-		} finally {
-			saving = false;
+		} else {
+			error = saveOp.error;
 		}
 	}
 
@@ -111,7 +108,7 @@
 		<div class="rounded bg-green-500/10 px-4 py-3 text-sm text-green-400">{success}</div>
 	{/if}
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
@@ -221,8 +218,8 @@
 				{/if}
 			</div>
 
-			<button class="btn-primary" onclick={saveConfig} disabled={saving}>
-				{saving ? 'Saving...' : 'Save Settings'}
+			<button class="btn-primary" onclick={saveConfig} disabled={saveOp.loading}>
+				{saveOp.loading ? 'Saving...' : 'Save Settings'}
 			</button>
 		</div>
 	{/if}

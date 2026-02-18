@@ -6,7 +6,6 @@ package social
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -119,8 +118,7 @@ func (h *Handler) HandleGetInsights(w http.ResponseWriter, r *http.Request) {
 		guildID, days,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query insights", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load insights")
+		apiutil.InternalError(w, h.Logger, "Failed to load insights", err)
 		return
 	}
 	defer rows.Close()
@@ -148,8 +146,7 @@ func (h *Handler) HandleGetInsights(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query hourly insights", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load insights")
+		apiutil.InternalError(w, h.Logger, "Failed to load insights", err)
 		return
 	}
 	defer hourRows.Close()
@@ -316,8 +313,7 @@ func (h *Handler) HandleGetBoosts(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query boosts", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load boosts")
+		apiutil.InternalError(w, h.Logger, "Failed to load boosts", err)
 		return
 	}
 	defer rows.Close()
@@ -376,8 +372,7 @@ func (h *Handler) HandleCreateBoost(w http.ResponseWriter, r *http.Request) {
 		id, guildID, userID,
 	).Scan(&b.ID, &b.GuildID, &b.UserID, &b.Tier, &startedAt, &b.Active)
 	if err != nil {
-		h.Logger.Error("failed to create boost", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create boost")
+		apiutil.InternalError(w, h.Logger, "Failed to create boost", err)
 		return
 	}
 	b.StartedAt = startedAt.Format(time.RFC3339)
@@ -408,8 +403,7 @@ func (h *Handler) HandleRemoveBoost(w http.ResponseWriter, r *http.Request) {
 		guildID, userID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to remove boost", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove boost")
+		apiutil.InternalError(w, h.Logger, "Failed to remove boost", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -475,8 +469,7 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req vanityClaimRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -494,60 +487,60 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin tx for vanity claim", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Check if code is already taken.
-	var existingGuild string
-	err = tx.QueryRow(r.Context(),
-		`SELECT guild_id FROM vanity_url_claims WHERE code = $1`, code,
-	).Scan(&existingGuild)
-	if err == nil {
-		if existingGuild == guildID {
-			apiutil.WriteError(w, http.StatusConflict, "already_claimed", "Your guild already owns this vanity URL")
-		} else {
-			apiutil.WriteError(w, http.StatusConflict, "code_taken", "This vanity code is already claimed")
-		}
-		return
-	}
-	if err != pgx.ErrNoRows {
-		h.Logger.Error("failed to check vanity claim", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
-		return
-	}
-
-	// Release any existing claim by this guild.
-	tx.Exec(r.Context(),
-		`DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID,
-	)
-
-	// Insert new claim.
 	var claimedAt time.Time
-	err = tx.QueryRow(r.Context(),
-		`INSERT INTO vanity_url_claims (code, guild_id, claimed_by, claimed_at)
-		 VALUES ($1, $2, $3, NOW())
-		 RETURNING claimed_at`,
-		code, guildID, userID,
-	).Scan(&claimedAt)
+	var conflictCode string // "already_claimed" or "code_taken" if conflict detected
+
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Check if code is already taken.
+		var existingGuild string
+		err := tx.QueryRow(r.Context(),
+			`SELECT guild_id FROM vanity_url_claims WHERE code = $1`, code,
+		).Scan(&existingGuild)
+		if err == nil {
+			if existingGuild == guildID {
+				conflictCode = "already_claimed"
+			} else {
+				conflictCode = "code_taken"
+			}
+			return nil
+		}
+		if err != pgx.ErrNoRows {
+			return err
+		}
+
+		// Release any existing claim by this guild.
+		tx.Exec(r.Context(),
+			`DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID,
+		)
+
+		// Insert new claim.
+		err = tx.QueryRow(r.Context(),
+			`INSERT INTO vanity_url_claims (code, guild_id, claimed_by, claimed_at)
+			 VALUES ($1, $2, $3, NOW())
+			 RETURNING claimed_at`,
+			code, guildID, userID,
+		).Scan(&claimedAt)
+		if err != nil {
+			return err
+		}
+
+		// Also update guilds.vanity_url.
+		tx.Exec(r.Context(),
+			`UPDATE guilds SET vanity_url = $2 WHERE id = $1`, guildID, code,
+		)
+
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to insert vanity claim", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
+		apiutil.InternalError(w, h.Logger, "Failed to claim vanity URL", err)
 		return
 	}
-
-	// Also update guilds.vanity_url.
-	tx.Exec(r.Context(),
-		`UPDATE guilds SET vanity_url = $2 WHERE id = $1`, guildID, code,
-	)
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit vanity claim", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
+	if conflictCode == "already_claimed" {
+		apiutil.WriteError(w, http.StatusConflict, "already_claimed", "Your guild already owns this vanity URL")
+		return
+	}
+	if conflictCode == "code_taken" {
+		apiutil.WriteError(w, http.StatusConflict, "code_taken", "This vanity code is already claimed")
 		return
 	}
 
@@ -570,17 +563,12 @@ func (h *Handler) HandleReleaseVanityURL(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tx, err := h.Pool.Begin(r.Context())
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		tx.Exec(r.Context(), `DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID)
+		tx.Exec(r.Context(), `UPDATE guilds SET vanity_url = NULL WHERE id = $1`, guildID)
+		return nil
+	})
 	if err != nil {
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to release vanity URL")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	tx.Exec(r.Context(), `DELETE FROM vanity_url_claims WHERE guild_id = $1`, guildID)
-	tx.Exec(r.Context(), `UPDATE guilds SET vanity_url = NULL WHERE id = $1`, guildID)
-
-	if err := tx.Commit(r.Context()); err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to release vanity URL")
 		return
 	}
@@ -592,8 +580,7 @@ func (h *Handler) HandleReleaseVanityURL(w http.ResponseWriter, r *http.Request)
 // GET /api/v1/guilds/vanity-check?code=mycode
 func (h *Handler) HandleCheckVanityAvailability(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("code")))
-	if code == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_code", "code query parameter is required")
+	if !apiutil.RequireNonEmpty(w, "code query parameter", code) {
 		return
 	}
 
@@ -645,8 +632,7 @@ func (h *Handler) HandleGetAchievements(w http.ResponseWriter, r *http.Request) 
 		 ORDER BY category, criteria_threshold ASC`,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query achievements", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load achievements")
+		apiutil.InternalError(w, h.Logger, "Failed to load achievements", err)
 		return
 	}
 	defer rows.Close()
@@ -682,8 +668,7 @@ func (h *Handler) HandleGetUserAchievements(w http.ResponseWriter, r *http.Reque
 		targetUserID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query user achievements", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load achievements")
+		apiutil.InternalError(w, h.Logger, "Failed to load achievements", err)
 		return
 	}
 	defer rows.Close()
@@ -864,8 +849,7 @@ func (h *Handler) HandleGetLevelingConfig(w http.ResponseWriter, r *http.Request
 			StackRoles:        true,
 		}
 	} else if err != nil {
-		h.Logger.Error("failed to query leveling config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load leveling config")
+		apiutil.InternalError(w, h.Logger, "Failed to load leveling config", err)
 		return
 	}
 
@@ -875,8 +859,7 @@ func (h *Handler) HandleGetLevelingConfig(w http.ResponseWriter, r *http.Request
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query level roles", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load leveling config")
+		apiutil.InternalError(w, h.Logger, "Failed to load leveling config", err)
 		return
 	}
 	defer roleRows.Close()
@@ -916,8 +899,7 @@ func (h *Handler) HandleUpdateLevelingConfig(w http.ResponseWriter, r *http.Requ
 	}
 
 	var req updateLevelingConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -948,8 +930,7 @@ func (h *Handler) HandleUpdateLevelingConfig(w http.ResponseWriter, r *http.Requ
 	).Scan(&cfg.GuildID, &cfg.Enabled, &cfg.XPPerMessage, &cfg.XPCooldownSeconds,
 		&cfg.LevelUpChannelID, &cfg.LevelUpMessage, &cfg.StackRoles)
 	if err != nil {
-		h.Logger.Error("failed to update leveling config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update leveling config")
+		apiutil.InternalError(w, h.Logger, "Failed to update leveling config", err)
 		return
 	}
 
@@ -973,8 +954,7 @@ func (h *Handler) HandleAddLevelRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req addLevelRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -982,8 +962,7 @@ func (h *Handler) HandleAddLevelRole(w http.ResponseWriter, r *http.Request) {
 		apiutil.WriteError(w, http.StatusBadRequest, "invalid_level", "Level must be between 1 and 100")
 		return
 	}
-	if req.RoleID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_role_id", "role_id is required")
+	if !apiutil.RequireNonEmpty(w, "role_id", req.RoleID) {
 		return
 	}
 
@@ -1000,8 +979,7 @@ func (h *Handler) HandleAddLevelRole(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusConflict, "already_exists", "A level role already exists for this level and role")
 			return
 		}
-		h.Logger.Error("failed to add level role", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add level role")
+		apiutil.InternalError(w, h.Logger, "Failed to add level role", err)
 		return
 	}
 
@@ -1025,8 +1003,7 @@ func (h *Handler) HandleDeleteLevelRole(w http.ResponseWriter, r *http.Request) 
 		roleMapID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete level role", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete level role")
+		apiutil.InternalError(w, h.Logger, "Failed to delete level role", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -1066,8 +1043,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 		guildID, limit,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query leaderboard", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load leaderboard")
+		apiutil.InternalError(w, h.Logger, "Failed to load leaderboard", err)
 		return
 	}
 	defer rows.Close()
@@ -1114,8 +1090,7 @@ func (h *Handler) HandleGetMemberXP(w http.ResponseWriter, r *http.Request) {
 	if err == pgx.ErrNoRows {
 		m = MemberXP{GuildID: guildID, UserID: memberID, XP: 0, Level: 0, MessagesCounted: 0}
 	} else if err != nil {
-		h.Logger.Error("failed to query member xp", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load member XP")
+		apiutil.InternalError(w, h.Logger, "Failed to load member XP", err)
 		return
 	}
 
@@ -1306,8 +1281,7 @@ func (h *Handler) HandleGetStarboardConfig(w http.ResponseWriter, r *http.Reques
 			SelfStar:  false,
 		}
 	} else if err != nil {
-		h.Logger.Error("failed to query starboard config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load starboard config")
+		apiutil.InternalError(w, h.Logger, "Failed to load starboard config", err)
 		return
 	}
 
@@ -1335,8 +1309,7 @@ func (h *Handler) HandleUpdateStarboardConfig(w http.ResponseWriter, r *http.Req
 	}
 
 	var req updateStarboardConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1369,8 +1342,7 @@ func (h *Handler) HandleUpdateStarboardConfig(w http.ResponseWriter, r *http.Req
 	).Scan(&cfg.GuildID, &cfg.Enabled, &cfg.ChannelID, &cfg.Emoji,
 		&cfg.Threshold, &cfg.SelfStar, &cfg.NSFWAllowed)
 	if err != nil {
-		h.Logger.Error("failed to update starboard config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update starboard config")
+		apiutil.InternalError(w, h.Logger, "Failed to update starboard config", err)
 		return
 	}
 
@@ -1405,8 +1377,7 @@ func (h *Handler) HandleGetStarboardEntries(w http.ResponseWriter, r *http.Reque
 		guildID, limit,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query starboard entries", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load starboard")
+		apiutil.InternalError(w, h.Logger, "Failed to load starboard", err)
 		return
 	}
 	defer rows.Close()
@@ -1600,8 +1571,7 @@ func (h *Handler) HandleGetWelcomeConfig(w http.ResponseWriter, r *http.Request)
 			DMMessage: "Welcome to {guild}! Please read the rules.",
 		}
 	} else if err != nil {
-		h.Logger.Error("failed to query welcome config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load welcome config")
+		apiutil.InternalError(w, h.Logger, "Failed to load welcome config", err)
 		return
 	}
 
@@ -1632,8 +1602,7 @@ func (h *Handler) HandleUpdateWelcomeConfig(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req updateWelcomeConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1672,8 +1641,7 @@ func (h *Handler) HandleUpdateWelcomeConfig(w http.ResponseWriter, r *http.Reque
 		&cfg.DMEnabled, &cfg.DMMessage, &cfg.EmbedEnabled,
 		&cfg.EmbedColor, &cfg.EmbedTitle, &cfg.EmbedImageURL)
 	if err != nil {
-		h.Logger.Error("failed to update welcome config", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update welcome config")
+		apiutil.InternalError(w, h.Logger, "Failed to update welcome config", err)
 		return
 	}
 
@@ -1762,8 +1730,7 @@ func (h *Handler) HandleGetAutoRoles(w http.ResponseWriter, r *http.Request) {
 		guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to query auto roles", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load auto roles")
+		apiutil.InternalError(w, h.Logger, "Failed to load auto roles", err)
 		return
 	}
 	defer rows.Close()
@@ -1801,13 +1768,11 @@ func (h *Handler) HandleCreateAutoRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createAutoRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.RoleID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_role_id", "role_id is required")
+	if !apiutil.RequireNonEmpty(w, "role_id", req.RoleID) {
 		return
 	}
 
@@ -1837,8 +1802,7 @@ func (h *Handler) HandleCreateAutoRole(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusConflict, "already_exists", "An auto-role for this role already exists")
 			return
 		}
-		h.Logger.Error("failed to create auto role", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create auto role")
+		apiutil.InternalError(w, h.Logger, "Failed to create auto role", err)
 		return
 	}
 	ar.CreatedAt = createdAt.Format(time.RFC3339)
@@ -1865,8 +1829,7 @@ func (h *Handler) HandleUpdateAutoRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateAutoRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1895,8 +1858,7 @@ func (h *Handler) HandleUpdateAutoRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to update auto role", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update auto role")
+		apiutil.InternalError(w, h.Logger, "Failed to update auto role", err)
 		return
 	}
 	ar.CreatedAt = createdAt.Format(time.RFC3339)
@@ -1921,8 +1883,7 @@ func (h *Handler) HandleDeleteAutoRole(w http.ResponseWriter, r *http.Request) {
 		ruleID, guildID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to delete auto role", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete auto role")
+		apiutil.InternalError(w, h.Logger, "Failed to delete auto role", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

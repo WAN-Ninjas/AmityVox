@@ -1,6 +1,7 @@
 <!-- Transcription.svelte — Voice channel transcription UI with opt-in toggle and live transcript display. -->
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { currentUser } from '$lib/stores/auth';
 
 	interface TranscriptionEntry {
@@ -34,8 +35,8 @@
 
 	let settings = $state<TranscriptionSettings | null>(null);
 	let transcriptions = $state<TranscriptionEntry[]>([]);
-	let loading = $state(false);
-	let saving = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let error = $state('');
 	let autoScroll = $state(true);
 	let transcriptContainer: HTMLDivElement;
@@ -98,40 +99,29 @@
 	}
 
 	async function updateSettings(enabled: boolean, language?: string) {
-		saving = true;
 		error = '';
-		try {
-			const data = await api.request<TranscriptionSettings>(
+		const data = await saveOp.run(
+			() => api.request<TranscriptionSettings>(
 				'PATCH',
 				`/channels/${channelId}/experimental/transcription/settings`,
 				{
 					enabled,
 					language: language ?? settings?.language ?? 'en'
 				}
-			);
-			if (data) {
-				settings = data;
-			}
-		} catch (err: any) {
-			error = err.message || 'Failed to update settings';
-		} finally {
-			saving = false;
-		}
+			),
+			msg => (error = msg)
+		);
+		if (data) settings = data;
 	}
 
 	async function loadTranscriptions() {
-		loading = true;
-		try {
-			const data = await api.request<TranscriptionEntry[]>(
+		const data = await loadOp.run(
+			() => api.request<TranscriptionEntry[]>(
 				'GET',
 				`/channels/${channelId}/experimental/transcriptions`
-			);
-			transcriptions = (data ?? []).reverse(); // chronological order
-		} catch {
-			// Ignore load errors.
-		} finally {
-			loading = false;
-		}
+			)
+		);
+		if (data) transcriptions = data.reverse(); // chronological order
 	}
 
 	function scrollToBottom() {
@@ -213,7 +203,7 @@
 						class="relative w-10 h-5 rounded-full transition-colors {settings?.enabled ? 'bg-brand-500' : 'bg-bg-tertiary'}"
 						role="switch"
 						aria-checked={settings?.enabled}
-						disabled={saving}
+						disabled={saveOp.loading}
 						onclick={() => updateSettings(!settings?.enabled)}
 					>
 						<span
@@ -231,7 +221,7 @@
 				class="bg-bg-primary border border-border-primary rounded px-2 py-1 text-xs text-text-primary focus:border-brand-500 focus:outline-none"
 				value={settings?.language ?? 'en'}
 				onchange={(e) => updateSettings(settings?.enabled ?? false, (e.target as HTMLSelectElement).value)}
-				disabled={saving}
+				disabled={saveOp.loading}
 			>
 				{#each supportedLanguages as lang}
 					<option value={lang.code}>{lang.name}</option>
@@ -250,7 +240,7 @@
 
 	<!-- Transcript -->
 	<div class="flex-1 overflow-y-auto px-4 py-2" bind:this={transcriptContainer}>
-		{#if loading && transcriptions.length === 0}
+		{#if loadOp.loading && transcriptions.length === 0}
 			<div class="text-text-muted text-sm py-4 text-center">Loading transcriptions...</div>
 		{:else if transcriptions.length === 0}
 			<div class="text-center py-8">

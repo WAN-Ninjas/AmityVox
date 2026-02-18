@@ -15,7 +15,9 @@ import (
 
 	"github.com/alexedwards/argon2id"
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -54,13 +56,11 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req TOTPEnableRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Password == "" {
-		WriteError(w, http.StatusBadRequest, "missing_password", "Password is required to enable TOTP")
+	if !apiutil.RequireNonEmpty(w, "Password", req.Password) {
 		return
 	}
 
@@ -134,13 +134,11 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req TOTPVerifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Code == "" {
-		WriteError(w, http.StatusBadRequest, "missing_code", "TOTP code is required")
+	if !apiutil.RequireNonEmpty(w, "TOTP code", req.Code) {
 		return
 	}
 
@@ -175,8 +173,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req TOTPDisableRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -280,27 +277,21 @@ func (s *Server) handleGenerateBackupCodes(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Delete old codes and insert new ones.
-	tx, err := s.DB.Pool.Begin(r.Context())
+	err = apiutil.WithTx(r.Context(), s.DB.Pool, func(tx pgx.Tx) error {
+		tx.Exec(r.Context(), `DELETE FROM backup_codes WHERE user_id = $1`, userID)
+		for _, code := range codes {
+			hash, err := argon2id.CreateHash(code, argon2id.DefaultParams)
+			if err != nil {
+				return err
+			}
+			tx.Exec(r.Context(),
+				`INSERT INTO backup_codes (user_id, code_hash, used) VALUES ($1, $2, false)`,
+				userID, hash)
+		}
+		return nil
+	})
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate codes")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	tx.Exec(r.Context(), `DELETE FROM backup_codes WHERE user_id = $1`, userID)
-	for _, code := range codes {
-		hash, err := argon2id.CreateHash(code, argon2id.DefaultParams)
-		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to hash code")
-			return
-		}
-		tx.Exec(r.Context(),
-			`INSERT INTO backup_codes (user_id, code_hash, used) VALUES ($1, $2, false)`,
-			userID, hash)
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to save codes")
 		return
 	}
 
@@ -489,8 +480,7 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 
 	user, err := s.loadWebAuthnUser(r, userID)
 	if err != nil {
-		s.Logger.Error("failed to load user for WebAuthn", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load user data")
+		InternalError(w, s.Logger, "Failed to load user data", err)
 		return
 	}
 
@@ -503,8 +493,7 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 
 	// Store session data in cache with 5-minute TTL.
 	if err := s.Cache.Set(r.Context(), webauthnSessionKey(userID, "register"), session, 5*time.Minute); err != nil {
-		s.Logger.Error("failed to store WebAuthn session", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store session")
+		InternalError(w, s.Logger, "Failed to store session", err)
 		return
 	}
 
@@ -562,8 +551,7 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 		credID, userID, credential.ID, credential.PublicKey, credential.Authenticator.SignCount, credName,
 	)
 	if err != nil {
-		s.Logger.Error("failed to store WebAuthn credential", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store credential")
+		InternalError(w, s.Logger, "Failed to store credential", err)
 		return
 	}
 
@@ -608,8 +596,7 @@ func (s *Server) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request
 
 	// Store session data in cache with 5-minute TTL.
 	if err := s.Cache.Set(r.Context(), webauthnSessionKey(userID, "login"), session, 5*time.Minute); err != nil {
-		s.Logger.Error("failed to store WebAuthn login session", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to store session")
+		InternalError(w, s.Logger, "Failed to store session", err)
 		return
 	}
 

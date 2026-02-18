@@ -36,7 +36,7 @@
 	<div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-modifier">
 		{#if post.author?.avatar_id}
 			<img
-				src="/api/v1/media/avatars/{post.author.avatar_id}"
+				src="/api/v1/files/{post.author.avatar_id}"
 				alt=""
 				class="h-full w-full object-cover"
 			/>

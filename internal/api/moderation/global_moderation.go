@@ -1,7 +1,6 @@
 package moderation
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -42,12 +41,10 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 		ContextGuildID   *string `json:"context_guild_id"`
 		ContextChannelID *string `json:"context_channel_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Reason == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_reason", "Reason is required")
+	if !apiutil.RequireNonEmpty(w, "Reason", req.Reason) {
 		return
 	}
 	if len(req.Reason) > 2000 {
@@ -64,8 +61,7 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 	// Verify reported user exists.
 	var exists bool
 	if err := h.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, reportedUserID).Scan(&exists); err != nil {
-		h.Logger.Error("failed to check user existence", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify user")
+		apiutil.InternalError(w, h.Logger, "Failed to verify user", err)
 		return
 	}
 	if !exists {
@@ -79,8 +75,7 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		id, reporterID, reportedUserID, req.Reason, req.ContextGuildID, req.ContextChannelID)
 	if err != nil {
-		h.Logger.Error("failed to create user report", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create report")
+		apiutil.InternalError(w, h.Logger, "Failed to create report", err)
 		return
 	}
 
@@ -92,8 +87,7 @@ func (h *Handler) HandleReportUser(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -152,8 +146,7 @@ func (h *Handler) HandleGetUserReports(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleResolveUserReport(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -168,8 +161,7 @@ func (h *Handler) HandleResolveUserReport(w http.ResponseWriter, r *http.Request
 		Status string  `json:"status"`
 		Notes  *string `json:"notes"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -204,8 +196,7 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 		Category    string `json:"category"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Title == "" || req.Description == "" {
@@ -234,8 +225,7 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO reported_issues (id, reporter_id, title, description, category) VALUES ($1, $2, $3, $4, $5)`,
 		id, reporterID, req.Title, req.Description, req.Category)
 	if err != nil {
-		h.Logger.Error("failed to create issue", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create issue")
+		apiutil.InternalError(w, h.Logger, "Failed to create issue", err)
 		return
 	}
 
@@ -246,8 +236,7 @@ func (h *Handler) HandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -308,8 +297,7 @@ func (h *Handler) HandleGetIssues(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -324,8 +312,7 @@ func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 		Status string  `json:"status"`
 		Notes  *string `json:"notes"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -362,8 +349,7 @@ func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -397,8 +383,7 @@ func (h *Handler) HandleGetModerationStats(w http.ResponseWriter, r *http.Reques
 func (h *Handler) HandleGetAllMessageReports(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -495,8 +480,7 @@ func (h *Handler) HandleGetMyIssues(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.isGlobalModOrAdmin(r)
 	if err != nil {
-		h.Logger.Error("failed to check moderation permissions", "error", err)
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify permissions")
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
 		return
 	}
 	if !ok {
@@ -510,8 +494,7 @@ func (h *Handler) HandleResolveMessageReport(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Status string `json:"status"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 

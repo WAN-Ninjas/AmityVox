@@ -132,8 +132,7 @@ func (h *Handler) HandleListIntegrations(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list integrations", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list integrations")
+		apiutil.InternalError(w, h.Logger, "Failed to list integrations", err)
 		return
 	}
 	defer rows.Close()
@@ -161,8 +160,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 	guildID := chi.URLParam(r, "guildID")
 
 	var req createIntegrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -175,8 +173,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.ChannelID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_channel", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "channel_id", req.ChannelID) {
 		return
 	}
 	if req.Name == "" || utf8.RuneCountInString(req.Name) > 100 {
@@ -212,8 +209,7 @@ func (h *Handler) HandleCreateIntegration(w http.ResponseWriter, r *http.Request
 		&integration.ChannelID, &integration.Name, &integration.Enabled,
 		&configJSON, &integration.CreatedBy, &integration.CreatedAt, &integration.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create integration", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create integration")
+		apiutil.InternalError(w, h.Logger, "Failed to create integration", err)
 		return
 	}
 	json.Unmarshal(configJSON, &integration.Config)
@@ -247,8 +243,7 @@ func (h *Handler) HandleGetIntegration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get integration", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get integration")
+		apiutil.InternalError(w, h.Logger, "Failed to get integration", err)
 		return
 	}
 	json.Unmarshal(configJSON, &i.Config)
@@ -263,8 +258,7 @@ func (h *Handler) HandleUpdateIntegration(w http.ResponseWriter, r *http.Request
 	integrationID := chi.URLParam(r, "integrationID")
 
 	var req updateIntegrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -274,8 +268,7 @@ func (h *Handler) HandleUpdateIntegration(w http.ResponseWriter, r *http.Request
 	argIdx := 3
 
 	if req.Name != nil {
-		if utf8.RuneCountInString(*req.Name) > 100 {
-			apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Name must be at most 100 characters")
+		if !apiutil.ValidateStringLength(w, "name", *req.Name, 0, 100) {
 			return
 		}
 		setClauses = append(setClauses, "name = $"+itoa(argIdx))
@@ -308,8 +301,7 @@ func (h *Handler) HandleUpdateIntegration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to update integration", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update integration")
+		apiutil.InternalError(w, h.Logger, "Failed to update integration", err)
 		return
 	}
 	json.Unmarshal(configJSON, &i.Config)
@@ -327,8 +319,7 @@ func (h *Handler) HandleDeleteIntegration(w http.ResponseWriter, r *http.Request
 		`DELETE FROM guild_integrations WHERE id = $1 AND guild_id = $2`,
 		integrationID, guildID)
 	if err != nil {
-		h.Logger.Error("failed to delete integration", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete integration")
+		apiutil.InternalError(w, h.Logger, "Failed to delete integration", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -359,8 +350,7 @@ func (h *Handler) HandleListActivityPubFollows(w http.ResponseWriter, r *http.Re
 		 FROM activitypub_follows WHERE integration_id = $1 ORDER BY created_at DESC`,
 		integrationID)
 	if err != nil {
-		h.Logger.Error("failed to list follows", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list follows")
+		apiutil.InternalError(w, h.Logger, "Failed to list follows", err)
 		return
 	}
 	defer rows.Close()
@@ -384,13 +374,11 @@ func (h *Handler) HandleAddActivityPubFollow(w http.ResponseWriter, r *http.Requ
 	integrationID := chi.URLParam(r, "integrationID")
 
 	var req addActivityPubFollowRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.ActorURI == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_uri", "Actor URI is required")
+	if !apiutil.RequireNonEmpty(w, "actor_uri", req.ActorURI) {
 		return
 	}
 	if _, err := url.ParseRequestURI(req.ActorURI); err != nil {
@@ -426,8 +414,7 @@ func (h *Handler) HandleAddActivityPubFollow(w http.ResponseWriter, r *http.Requ
 			apiutil.WriteError(w, http.StatusConflict, "already_following", "Already following this actor")
 			return
 		}
-		h.Logger.Error("failed to add follow", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add follow")
+		apiutil.InternalError(w, h.Logger, "Failed to add follow", err)
 		return
 	}
 
@@ -444,8 +431,7 @@ func (h *Handler) HandleRemoveActivityPubFollow(w http.ResponseWriter, r *http.R
 		`DELETE FROM activitypub_follows WHERE id = $1 AND integration_id = $2`,
 		followID, integrationID)
 	if err != nil {
-		h.Logger.Error("failed to remove follow", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove follow")
+		apiutil.InternalError(w, h.Logger, "Failed to remove follow", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -479,8 +465,7 @@ func (h *Handler) HandleListBridgeConnections(w http.ResponseWriter, r *http.Req
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list bridge connections", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list bridge connections")
+		apiutil.InternalError(w, h.Logger, "Failed to list bridge connections", err)
 		return
 	}
 	defer rows.Close()
@@ -508,8 +493,7 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 	guildID := chi.URLParam(r, "guildID")
 
 	var req createBridgeConnectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -519,12 +503,10 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if req.ChannelID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_channel", "Channel ID is required")
+	if !apiutil.RequireNonEmpty(w, "channel_id", req.ChannelID) {
 		return
 	}
-	if req.RemoteID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_remote_id", "Remote ID is required (Telegram chat ID, Slack channel, or IRC channel)")
+	if !apiutil.RequireNonEmpty(w, "remote_id", req.RemoteID) {
 		return
 	}
 
@@ -556,8 +538,7 @@ func (h *Handler) HandleCreateBridgeConnection(w http.ResponseWriter, r *http.Re
 			apiutil.WriteError(w, http.StatusConflict, "already_exists", "A bridge connection for this remote channel already exists")
 			return
 		}
-		h.Logger.Error("failed to create bridge connection", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bridge connection")
+		apiutil.InternalError(w, h.Logger, "Failed to create bridge connection", err)
 		return
 	}
 	json.Unmarshal(configJSON, &bc.Config)
@@ -578,8 +559,7 @@ func (h *Handler) HandleUpdateBridgeConnection(w http.ResponseWriter, r *http.Re
 	connectionID := chi.URLParam(r, "connectionID")
 
 	var req updateBridgeConnectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -619,8 +599,7 @@ func (h *Handler) HandleUpdateBridgeConnection(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to update bridge connection", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update bridge connection")
+		apiutil.InternalError(w, h.Logger, "Failed to update bridge connection", err)
 		return
 	}
 	json.Unmarshal(configJSON, &bc.Config)
@@ -638,8 +617,7 @@ func (h *Handler) HandleDeleteBridgeConnection(w http.ResponseWriter, r *http.Re
 		`DELETE FROM bridge_connections WHERE id = $1 AND guild_id = $2`,
 		connectionID, guildID)
 	if err != nil {
-		h.Logger.Error("failed to delete bridge connection", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bridge connection")
+		apiutil.InternalError(w, h.Logger, "Failed to delete bridge connection", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -671,8 +649,7 @@ func (h *Handler) HandleGetIntegrationLog(w http.ResponseWriter, r *http.Request
 		 LIMIT $2`,
 		guildID, limit)
 	if err != nil {
-		h.Logger.Error("failed to get integration log", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get integration log")
+		apiutil.InternalError(w, h.Logger, "Failed to get integration log", err)
 		return
 	}
 	defer rows.Close()

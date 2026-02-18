@@ -43,12 +43,10 @@ func (h *Handler) HandleCreateBanList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createBanListRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Ban list name is required")
+	if !apiutil.RequireNonEmpty(w, "Ban list name", req.Name) {
 		return
 	}
 
@@ -59,8 +57,7 @@ func (h *Handler) HandleCreateBanList(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
 		id, guildID, req.Name, req.Description, req.Public, userID, now)
 	if err != nil {
-		h.Logger.Error("failed to create ban list", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create ban list")
+		apiutil.InternalError(w, h.Logger, "Failed to create ban list", err)
 		return
 	}
 
@@ -167,12 +164,10 @@ func (h *Handler) HandleAddBanListEntry(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req addBanListEntryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.UserID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "user_id_required", "user_id is required")
+	if !apiutil.RequireNonEmpty(w, "user_id", req.UserID) {
 		return
 	}
 
@@ -192,8 +187,7 @@ func (h *Handler) HandleAddBanListEntry(w http.ResponseWriter, r *http.Request) 
 		 ON CONFLICT (ban_list_id, user_id) DO UPDATE SET reason = EXCLUDED.reason, username = EXCLUDED.username`,
 		id, listID, req.UserID, req.Username, req.Reason, userID)
 	if err != nil {
-		h.Logger.Error("failed to add ban list entry", "error", err.Error())
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add entry")
+		apiutil.InternalError(w, h.Logger, "Failed to add entry", err)
 		return
 	}
 
@@ -380,8 +374,7 @@ func (h *Handler) HandleImportBanList(w http.ResponseWriter, r *http.Request) {
 			Reason   *string `json:"reason"`
 		} `json:"entries"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&importData); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid import data")
+	if !apiutil.DecodeJSON(w, r, &importData) {
 		return
 	}
 
@@ -426,8 +419,7 @@ func (h *Handler) HandleSubscribeBanList(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req subscribeBanListRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 

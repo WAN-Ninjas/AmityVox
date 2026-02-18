@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId, channels = [] }: { guildId: string; channels: Channel[] } = $props();
 
@@ -36,7 +37,8 @@
 	// --- State ---
 	let integrations = $state<Integration[]>([]);
 	let bridges = $state<BridgeConnection[]>([]);
-	let loading = $state(false);
+	let loadIntegrationsOp = $state(createAsyncOp());
+	let loadBridgesOp = $state(createAsyncOp());
 	let error = $state('');
 	let success = $state('');
 
@@ -45,14 +47,14 @@
 	let newType = $state<string>('activitypub');
 	let newName = $state('');
 	let newChannelId = $state('');
-	let creating = $state(false);
+	let createIntegrationOp = $state(createAsyncOp());
 
 	// Create bridge form.
 	let showBridgeForm = $state(false);
 	let newBridgeType = $state<string>('telegram');
 	let newBridgeChannelId = $state('');
 	let newRemoteId = $state('');
-	let creatingBridge = $state(false);
+	let createBridgeOp = $state(createAsyncOp());
 
 	// Detail view.
 	let selectedIntegration = $state<Integration | null>(null);
@@ -71,7 +73,7 @@
 		error_message: string | null;
 		created_at: string;
 	}>>([]);
-	let loadingLog = $state(false);
+	let loadLogOp = $state(createAsyncOp());
 
 	const integrationTypes = [
 		{ value: 'activitypub', label: 'ActivityPub (Mastodon/Lemmy)' },
@@ -85,62 +87,59 @@
 
 	// --- Data loading ---
 	async function loadIntegrations() {
-		loading = true;
 		error = '';
-		try {
-			integrations = await api.request('GET', `/guilds/${guildId}/integrations`);
-		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : 'Failed to load integrations';
-		} finally {
-			loading = false;
+		const result = await loadIntegrationsOp.run(
+			() => api.request('GET', `/guilds/${guildId}/integrations`)
+		);
+		if (loadIntegrationsOp.error) {
+			error = loadIntegrationsOp.error;
+		} else if (result) {
+			integrations = result as Integration[];
 		}
 	}
 
 	async function loadBridges() {
-		loading = true;
 		error = '';
-		try {
-			bridges = await api.request('GET', `/guilds/${guildId}/bridge-connections`);
-		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : 'Failed to load bridge connections';
-		} finally {
-			loading = false;
+		const result = await loadBridgesOp.run(
+			() => api.request('GET', `/guilds/${guildId}/bridge-connections`)
+		);
+		if (loadBridgesOp.error) {
+			error = loadBridgesOp.error;
+		} else if (result) {
+			bridges = result as BridgeConnection[];
 		}
 	}
 
 	async function loadLog() {
-		loadingLog = true;
-		try {
-			logEntries = await api.request('GET', `/guilds/${guildId}/integrations/log`);
-		} catch {
-			// Silently fail for log.
-		} finally {
-			loadingLog = false;
+		const result = await loadLogOp.run(
+			() => api.request('GET', `/guilds/${guildId}/integrations/log`)
+		);
+		if (result) {
+			logEntries = result as typeof logEntries;
 		}
 	}
 
 	// --- Integration CRUD ---
 	async function createIntegration() {
 		if (!newName.trim() || !newChannelId) return;
-		creating = true;
 		error = '';
-		try {
-			const integration: Integration = await api.request('POST', `/guilds/${guildId}/integrations`, {
+		const integration = await createIntegrationOp.run(
+			() => api.request<Integration>('POST', `/guilds/${guildId}/integrations`, {
 				integration_type: newType,
 				channel_id: newChannelId,
 				name: newName.trim(),
 				config: {},
-			});
+			})
+		);
+		if (createIntegrationOp.error) {
+			error = createIntegrationOp.error;
+		} else if (integration) {
 			integrations = [integration, ...integrations];
 			showCreateForm = false;
 			newName = '';
 			newChannelId = '';
 			success = 'Integration created successfully';
 			setTimeout(() => success = '', 3000);
-		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : 'Failed to create integration';
-		} finally {
-			creating = false;
 		}
 	}
 
@@ -171,25 +170,24 @@
 	// --- Bridge CRUD ---
 	async function createBridge() {
 		if (!newBridgeChannelId || !newRemoteId.trim()) return;
-		creatingBridge = true;
 		error = '';
-		try {
-			const bridge: BridgeConnection = await api.request('POST', `/guilds/${guildId}/bridge-connections`, {
+		const bridge = await createBridgeOp.run(
+			() => api.request<BridgeConnection>('POST', `/guilds/${guildId}/bridge-connections`, {
 				bridge_type: newBridgeType,
 				channel_id: newBridgeChannelId,
 				remote_id: newRemoteId.trim(),
 				config: {},
-			});
+			})
+		);
+		if (createBridgeOp.error) {
+			error = createBridgeOp.error;
+		} else if (bridge) {
 			bridges = [bridge, ...bridges];
 			showBridgeForm = false;
 			newRemoteId = '';
 			newBridgeChannelId = '';
 			success = 'Bridge connection created';
 			setTimeout(() => success = '', 3000);
-		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : 'Failed to create bridge connection';
-		} finally {
-			creatingBridge = false;
 		}
 	}
 
@@ -352,14 +350,14 @@
 					<button
 						class="btn-primary text-sm"
 						onclick={createIntegration}
-						disabled={creating || !newName.trim() || !newChannelId}
+						disabled={createIntegrationOp.loading || !newName.trim() || !newChannelId}
 					>
-						{creating ? 'Creating...' : 'Create Integration'}
+						{createIntegrationOp.loading ? 'Creating...' : 'Create Integration'}
 					</button>
 				</div>
 			{/if}
 
-			{#if loading}
+			{#if loadIntegrationsOp.loading}
 				<div class="text-text-muted text-sm">Loading integrations...</div>
 			{:else if integrations.length === 0}
 				<div class="bg-bg-secondary rounded-lg p-6 text-center text-text-muted">
@@ -448,14 +446,14 @@
 				<button
 					class="btn-primary text-sm"
 					onclick={createBridge}
-					disabled={creatingBridge || !newBridgeChannelId || !newRemoteId.trim()}
+					disabled={createBridgeOp.loading || !newBridgeChannelId || !newRemoteId.trim()}
 				>
-					{creatingBridge ? 'Creating...' : 'Create Bridge'}
+					{createBridgeOp.loading ? 'Creating...' : 'Create Bridge'}
 				</button>
 			</div>
 		{/if}
 
-		{#if loading}
+		{#if loadBridgesOp.loading}
 			<div class="text-text-muted text-sm">Loading bridges...</div>
 		{:else if bridges.length === 0}
 			<div class="bg-bg-secondary rounded-lg p-6 text-center text-text-muted">
@@ -508,7 +506,7 @@
 	{#if selectedTab === 'log'}
 		<h3 class="text-lg font-semibold text-text-primary">Integration Message Log</h3>
 
-		{#if loadingLog}
+		{#if loadLogOp.loading}
 			<div class="text-text-muted text-sm">Loading log...</div>
 		{:else if logEntries.length === 0}
 			<div class="bg-bg-secondary rounded-lg p-6 text-center text-text-muted">

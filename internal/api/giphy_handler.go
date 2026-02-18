@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 )
 
@@ -39,8 +40,7 @@ func (s *Server) handleGiphySearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query().Get("q")
-	if query == "" {
-		WriteError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+	if !apiutil.RequireNonEmpty(w, "q", query) {
 		return
 	}
 

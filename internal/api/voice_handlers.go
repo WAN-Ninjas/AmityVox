@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -113,8 +114,7 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 		`SELECT username, display_name, avatar_id FROM users WHERE id = $1`, userID,
 	).Scan(&username, &displayName, &avatarID)
 	if err != nil {
-		s.Logger.Error("failed to fetch user for voice metadata", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch user")
+		InternalError(w, s.Logger, "Failed to fetch user", err)
 		return
 	}
 
@@ -133,8 +133,7 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 	// Generate LiveKit token.
 	token, err := s.Voice.GenerateToken(userID, channelID, canSpeak, true, canSpeak, string(metaBytes))
 	if err != nil {
-		s.Logger.Error("failed to generate voice token", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate voice token")
+		InternalError(w, s.Logger, "Failed to generate voice token", err)
 		return
 	}
 
@@ -272,8 +271,7 @@ func (s *Server) handleVoiceServerMute(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Muted bool `json:"muted"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -342,8 +340,7 @@ func (s *Server) handleVoiceServerDeafen(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		Deafened bool `json:"deafened"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -480,8 +477,7 @@ func (s *Server) handleVoiceMoveUser(w http.ResponseWriter, r *http.Request) {
 	canSpeak := checkGuildPerm(r.Context(), s.DB.Pool, *guildID, targetUserID, permissions.Speak)
 	token, err := s.Voice.GenerateToken(targetUserID, req.TargetChannelID, canSpeak, true, canSpeak, "")
 	if err != nil {
-		s.Logger.Error("failed to generate move token", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to generate voice token for move")
+		InternalError(w, s.Logger, "Failed to generate voice token for move", err)
 		return
 	}
 
@@ -523,8 +519,7 @@ func (s *Server) handleGetVoicePreferences(w http.ResponseWriter, r *http.Reques
 	userID := auth.UserIDFromContext(r.Context())
 	prefs, err := s.Voice.GetVoicePreferences(r.Context(), userID)
 	if err != nil {
-		s.Logger.Error("failed to get voice preferences", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get voice preferences")
+		InternalError(w, s.Logger, "Failed to get voice preferences", err)
 		return
 	}
 
@@ -556,8 +551,7 @@ func (s *Server) handleUpdateVoicePreferences(w http.ResponseWriter, r *http.Req
 		ScreenshareFramerate  *int     `json:"screenshare_framerate"`
 		ScreenshareAudio      *bool    `json:"screenshare_audio"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -615,8 +609,7 @@ func (s *Server) handleUpdateVoicePreferences(w http.ResponseWriter, r *http.Req
 	// Load existing preferences and apply updates.
 	prefs, err := s.Voice.GetVoicePreferences(r.Context(), userID)
 	if err != nil {
-		s.Logger.Error("failed to get voice preferences", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get voice preferences")
+		InternalError(w, s.Logger, "Failed to get voice preferences", err)
 		return
 	}
 
@@ -661,8 +654,7 @@ func (s *Server) handleUpdateVoicePreferences(w http.ResponseWriter, r *http.Req
 	}
 
 	if err := s.Voice.UpdateVoicePreferences(r.Context(), prefs); err != nil {
-		s.Logger.Error("failed to update voice preferences", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update voice preferences")
+		InternalError(w, s.Logger, "Failed to update voice preferences", err)
 		return
 	}
 
@@ -686,8 +678,7 @@ func (s *Server) handleSetInputMode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Mode string `json:"mode"` // "vad" or "ptt"
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.Mode != "vad" && req.Mode != "ptt" {
@@ -763,8 +754,7 @@ func (s *Server) handleSetPrioritySpeaker(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Priority bool `json:"priority"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -814,8 +804,7 @@ func (s *Server) handleGetSoundboardSounds(w http.ResponseWriter, r *http.Reques
 
 	sounds, err := s.Voice.GetSoundboardSounds(r.Context(), guildID)
 	if err != nil {
-		s.Logger.Error("failed to get soundboard sounds", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get sounds")
+		InternalError(w, s.Logger, "Failed to get sounds", err)
 		return
 	}
 	if sounds == nil {
@@ -849,17 +838,14 @@ func (s *Server) handleCreateSoundboardSound(w http.ResponseWriter, r *http.Requ
 		DurationMs int     `json:"duration_ms"`
 		Emoji      *string `json:"emoji,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		WriteError(w, http.StatusBadRequest, "name_required", "Sound name is required")
+	if !apiutil.RequireNonEmpty(w, "Sound name", req.Name) {
 		return
 	}
-	if req.FileURL == "" {
-		WriteError(w, http.StatusBadRequest, "file_required", "File URL is required")
+	if !apiutil.RequireNonEmpty(w, "File URL", req.FileURL) {
 		return
 	}
 	if req.DurationMs <= 0 || req.DurationMs > 5000 {
@@ -880,8 +866,7 @@ func (s *Server) handleCreateSoundboardSound(w http.ResponseWriter, r *http.Requ
 	}
 	count, err := s.Voice.CountSoundboardSounds(r.Context(), guildID)
 	if err != nil {
-		s.Logger.Error("failed to count sounds", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to count sounds")
+		InternalError(w, s.Logger, "Failed to count sounds", err)
 		return
 	}
 	if count >= cfg.MaxSounds {
@@ -902,8 +887,7 @@ func (s *Server) handleCreateSoundboardSound(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := s.Voice.CreateSoundboardSound(r.Context(), sound); err != nil {
-		s.Logger.Error("failed to create soundboard sound", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create sound")
+		InternalError(w, s.Logger, "Failed to create sound", err)
 		return
 	}
 
@@ -946,8 +930,7 @@ func (s *Server) handleDeleteSoundboardSound(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := s.Voice.DeleteSoundboardSound(r.Context(), soundID); err != nil {
-		s.Logger.Error("failed to delete soundboard sound", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete sound")
+		InternalError(w, s.Logger, "Failed to delete sound", err)
 		return
 	}
 
@@ -1059,8 +1042,7 @@ func (s *Server) handleGetSoundboardConfig(w http.ResponseWriter, r *http.Reques
 
 	cfg, err := s.Voice.GetSoundboardConfig(r.Context(), guildID)
 	if err != nil {
-		s.Logger.Error("failed to get soundboard config", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get config")
+		InternalError(w, s.Logger, "Failed to get config", err)
 		return
 	}
 
@@ -1090,8 +1072,7 @@ func (s *Server) handleUpdateSoundboardConfig(w http.ResponseWriter, r *http.Req
 		CooldownSeconds *int  `json:"cooldown_seconds"`
 		AllowExternal   *bool `json:"allow_external"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1123,8 +1104,7 @@ func (s *Server) handleUpdateSoundboardConfig(w http.ResponseWriter, r *http.Req
 	}
 
 	if err := s.Voice.UpdateSoundboardConfig(r.Context(), cfg); err != nil {
-		s.Logger.Error("failed to update soundboard config", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update config")
+		InternalError(w, s.Logger, "Failed to update config", err)
 		return
 	}
 
@@ -1207,8 +1187,7 @@ func (s *Server) handleStartBroadcast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.Voice.CreateBroadcast(r.Context(), broadcast); err != nil {
-		s.Logger.Error("failed to create broadcast", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start broadcast")
+		InternalError(w, s.Logger, "Failed to start broadcast", err)
 		return
 	}
 
@@ -1256,8 +1235,7 @@ func (s *Server) handleStopBroadcast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.Voice.EndBroadcast(r.Context(), broadcast.ID); err != nil {
-		s.Logger.Error("failed to end broadcast", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to stop broadcast")
+		InternalError(w, s.Logger, "Failed to stop broadcast", err)
 		return
 	}
 
@@ -1354,8 +1332,7 @@ func (s *Server) handleStartScreenShare(w http.ResponseWriter, r *http.Request) 
 		AudioEnabled bool   `json:"audio_enabled"`
 		MaxViewers   int    `json:"max_viewers"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1387,8 +1364,7 @@ func (s *Server) handleStartScreenShare(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := s.Voice.CreateScreenShareSession(r.Context(), session); err != nil {
-		s.Logger.Error("failed to create screen share session", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start screen share")
+		InternalError(w, s.Logger, "Failed to start screen share", err)
 		return
 	}
 
@@ -1445,8 +1421,7 @@ func (s *Server) handleStopScreenShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.Voice.EndScreenShareSession(r.Context(), session.ID); err != nil {
-		s.Logger.Error("failed to end screen share", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to stop screen share")
+		InternalError(w, s.Logger, "Failed to stop screen share", err)
 		return
 	}
 
@@ -1493,8 +1468,7 @@ func (s *Server) handleUpdateScreenShare(w http.ResponseWriter, r *http.Request)
 		Framerate    *int    `json:"framerate"`
 		AudioEnabled *bool   `json:"audio_enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -1566,8 +1540,7 @@ func (s *Server) handleGetScreenShares(w http.ResponseWriter, r *http.Request) {
 
 	sessions, err := s.Voice.GetChannelScreenShares(r.Context(), channelID)
 	if err != nil {
-		s.Logger.Error("failed to get screen shares", "error", err.Error())
-		WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get screen shares")
+		InternalError(w, s.Logger, "Failed to get screen shares", err)
 		return
 	}
 	if sessions == nil {

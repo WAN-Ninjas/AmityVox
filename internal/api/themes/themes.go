@@ -120,8 +120,7 @@ func (h *Handler) HandleListSharedThemes(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
-		h.Logger.Error("failed to list shared themes", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list themes")
+		apiutil.InternalError(w, h.Logger, "Failed to list themes", err)
 		return
 	}
 	defer rows.Close()
@@ -135,8 +134,7 @@ func (h *Handler) HandleListSharedThemes(w http.ResponseWriter, r *http.Request)
 			&t.ShareCode, &t.Downloads, &t.CreatedAt,
 			&t.LikeCount, &t.Liked,
 		); err != nil {
-			h.Logger.Error("failed to scan shared theme", slog.String("error", err.Error()))
-			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list themes")
+			apiutil.InternalError(w, h.Logger, "Failed to list themes", err)
 			return
 		}
 		themes = append(themes, t)
@@ -151,13 +149,11 @@ func (h *Handler) HandleShareTheme(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req shareThemeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	if req.Name == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Theme name is required")
+	if !apiutil.RequireNonEmpty(w, "name", req.Name) {
 		return
 	}
 	if len(req.Name) > 64 {
@@ -182,8 +178,7 @@ func (h *Handler) HandleShareTheme(w http.ResponseWriter, r *http.Request) {
 	id := models.NewULID().String()
 	shareCode, err := generateShareCode()
 	if err != nil {
-		h.Logger.Error("failed to generate share code", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create theme")
+		apiutil.InternalError(w, h.Logger, "Failed to create theme", err)
 		return
 	}
 
@@ -199,8 +194,7 @@ func (h *Handler) HandleShareTheme(w http.ResponseWriter, r *http.Request) {
 		&t.ShareCode, &t.Downloads, &t.CreatedAt,
 	)
 	if err != nil {
-		h.Logger.Error("failed to insert shared theme", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create theme")
+		apiutil.InternalError(w, h.Logger, "Failed to create theme", err)
 		return
 	}
 
@@ -226,8 +220,7 @@ func (h *Handler) HandleGetSharedTheme(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	shareCode := chi.URLParam(r, "shareCode")
 
-	if shareCode == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_share_code", "Share code is required")
+	if !apiutil.RequireNonEmpty(w, "share_code", shareCode) {
 		return
 	}
 
@@ -253,8 +246,7 @@ func (h *Handler) HandleGetSharedTheme(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get shared theme", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get theme")
+		apiutil.InternalError(w, h.Logger, "Failed to get theme", err)
 		return
 	}
 
@@ -272,8 +264,7 @@ func (h *Handler) HandleLikeTheme(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	themeID := chi.URLParam(r, "themeID")
 
-	if themeID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_theme_id", "Theme ID is required")
+	if !apiutil.RequireNonEmpty(w, "theme_id", themeID) {
 		return
 	}
 
@@ -294,8 +285,7 @@ func (h *Handler) HandleLikeTheme(w http.ResponseWriter, r *http.Request) {
 		userID, themeID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to like theme", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to like theme")
+		apiutil.InternalError(w, h.Logger, "Failed to like theme", err)
 		return
 	}
 
@@ -308,8 +298,7 @@ func (h *Handler) HandleUnlikeTheme(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	themeID := chi.URLParam(r, "themeID")
 
-	if themeID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_theme_id", "Theme ID is required")
+	if !apiutil.RequireNonEmpty(w, "theme_id", themeID) {
 		return
 	}
 
@@ -318,8 +307,7 @@ func (h *Handler) HandleUnlikeTheme(w http.ResponseWriter, r *http.Request) {
 		userID, themeID,
 	)
 	if err != nil {
-		h.Logger.Error("failed to unlike theme", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unlike theme")
+		apiutil.InternalError(w, h.Logger, "Failed to unlike theme", err)
 		return
 	}
 
@@ -332,8 +320,7 @@ func (h *Handler) HandleDeleteSharedTheme(w http.ResponseWriter, r *http.Request
 	userID := auth.UserIDFromContext(r.Context())
 	themeID := chi.URLParam(r, "themeID")
 
-	if themeID == "" {
-		apiutil.WriteError(w, http.StatusBadRequest, "missing_theme_id", "Theme ID is required")
+	if !apiutil.RequireNonEmpty(w, "theme_id", themeID) {
 		return
 	}
 
@@ -347,8 +334,7 @@ func (h *Handler) HandleDeleteSharedTheme(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to check theme ownership", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete theme")
+		apiutil.InternalError(w, h.Logger, "Failed to delete theme", err)
 		return
 	}
 
@@ -366,8 +352,7 @@ func (h *Handler) HandleDeleteSharedTheme(w http.ResponseWriter, r *http.Request
 	_, err = h.Pool.Exec(r.Context(),
 		`DELETE FROM shared_themes WHERE id = $1`, themeID)
 	if err != nil {
-		h.Logger.Error("failed to delete shared theme", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete theme")
+		apiutil.InternalError(w, h.Logger, "Failed to delete theme", err)
 		return
 	}
 

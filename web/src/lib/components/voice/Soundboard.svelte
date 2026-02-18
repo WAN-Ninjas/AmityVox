@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, ApiRequestError } from '$lib/api/client';
 
 	let {
 		guildId,
@@ -39,18 +39,9 @@
 		try {
 			loading = true;
 			error = null;
-			const res = await fetch(`/api/v1/guilds/${guildId}/soundboard/sounds`, {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				const json = await res.json();
-				sounds = json.data || [];
-			} else {
-				const errJson = await res.json();
-				error = errJson.error?.message || 'Failed to load sounds';
-			}
-		} catch (err) {
-			error = 'Failed to load soundboard sounds';
+			sounds = await api.getSoundboardSounds(guildId) || [];
+		} catch (err: any) {
+			error = err.message || 'Failed to load soundboard sounds';
 			console.error('Soundboard load error:', err);
 		} finally {
 			loading = false;
@@ -64,23 +55,7 @@
 			playing = sound.id;
 			error = null;
 
-			const res = await fetch(`/api/v1/guilds/${guildId}/soundboard/sounds/${sound.id}/play`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				}
-			});
-
-			if (!res.ok) {
-				const errJson = await res.json();
-				if (res.status === 429) {
-					cooldownActive = true;
-					setTimeout(() => cooldownActive = false, 5000);
-				}
-				error = errJson.error?.message || 'Failed to play sound';
-				return;
-			}
+			await api.playSoundboardSound(guildId, sound.id);
 
 			// Play the sound locally as preview
 			const audio = new Audio(`/api/v1/files/${sound.file_url}`);
@@ -92,8 +67,12 @@
 				playing = null;
 			}, sound.duration_ms);
 
-		} catch (err) {
-			error = 'Failed to play sound';
+		} catch (err: any) {
+			if (err instanceof ApiRequestError && err.status === 429) {
+				cooldownActive = true;
+				setTimeout(() => cooldownActive = false, 5000);
+			}
+			error = err.message || 'Failed to play sound';
 			console.error('Sound play error:', err);
 		} finally {
 			// Clear playing state after a short delay if not already cleared

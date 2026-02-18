@@ -46,8 +46,7 @@ func (h *Handler) HandleGetInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get invite", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get invite")
+		apiutil.InternalError(w, h.Logger, "Failed to get invite", err)
 		return
 	}
 
@@ -97,8 +96,7 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get invite", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get invite")
+		apiutil.InternalError(w, h.Logger, "Failed to get invite", err)
 		return
 	}
 
@@ -127,8 +125,7 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
 		inv.GuildID, userID).Scan(&exists)
 	if err != nil {
-		h.Logger.Error("failed to check membership", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to check membership")
+		apiutil.InternalError(w, h.Logger, "Failed to check membership", err)
 		return
 	}
 	if exists {
@@ -147,37 +144,27 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	tx, err := h.Pool.Begin(r.Context())
-	if err != nil {
-		h.Logger.Error("failed to begin transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
-		return
-	}
-	defer tx.Rollback(r.Context())
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Add guild member.
+		_, err := tx.Exec(r.Context(),
+			`INSERT INTO guild_members (guild_id, user_id, nickname, joined_at, deaf, mute)
+			 VALUES ($1, $2, NULL, $3, false, false)`,
+			inv.GuildID, userID, now)
+		if err != nil {
+			return err
+		}
 
-	// Add guild member.
-	_, err = tx.Exec(r.Context(),
-		`INSERT INTO guild_members (guild_id, user_id, nickname, joined_at, deaf, mute)
-		 VALUES ($1, $2, NULL, $3, false, false)`,
-		inv.GuildID, userID, now)
-	if err != nil {
-		h.Logger.Error("failed to add member", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
-		return
-	}
+		// Increment invite usage.
+		_, err = tx.Exec(r.Context(),
+			`UPDATE invites SET uses = uses + 1 WHERE code = $1`, code)
+		if err != nil {
+			return err
+		}
 
-	// Increment invite usage.
-	_, err = tx.Exec(r.Context(),
-		`UPDATE invites SET uses = uses + 1 WHERE code = $1`, code)
+		return nil
+	})
 	if err != nil {
-		h.Logger.Error("failed to increment invite uses", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update invite")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.Logger.Error("failed to commit transaction", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to join guild")
+		apiutil.InternalError(w, h.Logger, "Failed to join guild", err)
 		return
 	}
 
@@ -211,8 +198,7 @@ func (h *Handler) HandleDeleteInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Logger.Error("failed to get invite", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get invite")
+		apiutil.InternalError(w, h.Logger, "Failed to get invite", err)
 		return
 	}
 
@@ -243,8 +229,7 @@ func (h *Handler) HandleDeleteInvite(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM invites WHERE code = $1`, code)
 	if err != nil {
-		h.Logger.Error("failed to delete invite", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete invite")
+		apiutil.InternalError(w, h.Logger, "Failed to delete invite", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

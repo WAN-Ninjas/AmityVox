@@ -1,8 +1,6 @@
 package guilds
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -51,8 +49,7 @@ func (h *Handler) HandleGetGuildRetentionPolicies(w http.ResponseWriter, r *http
 		 WHERE guild_id = $1
 		 ORDER BY created_at DESC`, guildID)
 	if err != nil {
-		h.Logger.Error("failed to list retention policies", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list retention policies")
+		apiutil.InternalError(w, h.Logger, "Failed to list retention policies", err)
 		return
 	}
 	defer rows.Close()
@@ -91,8 +88,7 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		DeleteAttachments *bool   `json:"delete_attachments"`
 		DeletePins        *bool   `json:"delete_pins"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -142,8 +138,7 @@ func (h *Handler) HandleCreateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		&p.DeletePins, &p.Enabled, &p.LastRunAt, &p.NextRunAt, &p.MessagesDeleted,
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to create retention policy", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to create retention policy", err)
 		return
 	}
 
@@ -181,8 +176,7 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		DeletePins        *bool `json:"delete_pins"`
 		Enabled           *bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -239,8 +233,7 @@ func (h *Handler) HandleUpdateGuildRetentionPolicy(w http.ResponseWriter, r *htt
 		&p.DeletePins, &p.Enabled, &p.LastRunAt, &p.NextRunAt, &p.MessagesDeleted,
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
-		h.Logger.Error("failed to update retention policy", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to update retention policy", err)
 		return
 	}
 
@@ -262,8 +255,7 @@ func (h *Handler) HandleDeleteGuildRetentionPolicy(w http.ResponseWriter, r *htt
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM data_retention_policies WHERE id = $1 AND guild_id = $2`, policyID, guildID)
 	if err != nil {
-		h.Logger.Error("failed to delete retention policy", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete retention policy")
+		apiutil.InternalError(w, h.Logger, "Failed to delete retention policy", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {

@@ -88,8 +88,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 
 	// Parse request body.
 	var req translateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 	if req.TargetLang == "" {
@@ -113,8 +112,7 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 			apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found")
 			return
 		}
-		h.Logger.Error("failed to fetch message for translation", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch message")
+		apiutil.InternalError(w, h.Logger, "Failed to fetch message", err)
 		return
 	}
 	if content == nil || *content == "" {

@@ -1,13 +1,14 @@
 // Blocked users store -- tracks which users the current user has blocked.
 // Supports two-tier blocking: 'ignore' (show placeholder) and 'block' (completely hide).
 
-import { writable, derived, get } from 'svelte/store';
+import { derived, get } from 'svelte/store';
 import { api } from '$lib/api/client';
+import { createMapStore } from './mapHelpers';
 
 export type BlockLevel = 'ignore' | 'block';
 
 /** Map from user ID to their block level. */
-const blockedUsers = writable<Map<string, BlockLevel>>(new Map());
+const blockedUsers = createMapStore<string, BlockLevel>();
 
 /** Backward-compatible set of all blocked user IDs (any level). */
 const blockedUserIds = derived(blockedUsers, $map => new Set($map.keys()));
@@ -19,35 +20,22 @@ export async function loadBlockedUsers() {
 		for (const b of blocks) {
 			map.set(b.target_id, (b.level as BlockLevel) ?? 'block');
 		}
-		blockedUsers.set(map);
+		blockedUsers.setAll(map);
 	} catch {
 		// Silently fail -- blocked list may not be available yet.
 	}
 }
 
 export function addBlockedUser(userId: string, level: BlockLevel = 'block') {
-	blockedUsers.update(map => {
-		const next = new Map(map);
-		next.set(userId, level);
-		return next;
-	});
+	blockedUsers.setEntry(userId, level);
 }
 
 export function updateBlockedUserLevel(userId: string, level: BlockLevel) {
-	blockedUsers.update(map => {
-		if (!map.has(userId)) return map;
-		const next = new Map(map);
-		next.set(userId, level);
-		return next;
-	});
+	blockedUsers.updateEntry(userId, () => level);
 }
 
 export function removeBlockedUser(userId: string) {
-	blockedUsers.update(map => {
-		const next = new Map(map);
-		next.delete(userId);
-		return next;
-	});
+	blockedUsers.removeEntry(userId);
 }
 
 export function getBlockLevel(userId: string): BlockLevel | null {

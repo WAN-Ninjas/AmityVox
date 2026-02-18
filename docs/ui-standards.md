@@ -84,38 +84,41 @@ let { title, children }: Props = $props();
 
 ## Store Patterns
 
-### Writable + Derived
+### Map Stores (`createMapStore`)
 
-Use Map-based stores for entity collections:
+Use `createMapStore` for entity collections. It wraps Svelte's `writable` with convenience methods that handle `new Map(map)` reactivity automatically:
+
 ```ts
-import { writable, derived } from 'svelte/store';
+import { derived } from 'svelte/store';
+import { createMapStore } from '$lib/stores/mapHelpers';
 
-export const guilds = writable<Map<string, Guild>>(new Map());
+export const guilds = createMapStore<string, Guild>();
 export const currentGuildId = writable<string | null>(null);
 
 export const guildList = derived(guilds, ($guilds) =>
   Array.from($guilds.values())
 );
+```
 
-export const currentGuild = derived(
-  [guilds, currentGuildId],
-  ([$guilds, $id]) => ($id ? $guilds.get($id) ?? null : null)
-);
+Available methods:
+```ts
+guilds.setEntry(id, guild);              // Add/update one entry
+guilds.updateEntry(id, g => ({...g}));   // Update existing entry via function
+guilds.removeEntry(id);                  // Remove one entry
+guilds.setAll(entries);                  // Replace entire map (accepts Map or [K,V][])
+guilds.clear();                          // Empty the map
 ```
 
 ### Mutation Functions
 
-Export named functions, never expose the raw writable:
+Export named functions that use the map store helpers:
 ```ts
 export function updateGuild(guild: Guild) {
-  guilds.update((map) => {
-    map.set(guild.id, guild);
-    return new Map(map);
-  });
+  guilds.setEntry(guild.id, guild);
 }
 ```
 
-Always return `new Map(map)` to trigger reactivity.
+`createMapStore` is fully compatible with `derived`, `get`, `subscribe`, `set`, and `update` from `svelte/store`.
 
 ---
 
@@ -158,7 +161,41 @@ Backend returns `{"data": ...}` for success, `{"error": {"code": "...", "message
 
 ## Error Handling in Components
 
-### Pattern: State-Based Error Display
+### Pattern: `createAsyncOp` (Preferred)
+
+Use `createAsyncOp()` to eliminate loading/error/try-catch boilerplate:
+
+```svelte
+<script lang="ts">
+import { createAsyncOp } from '$lib/utils/asyncOp';
+import { api } from '$lib/api/client';
+import { addToast } from '$lib/stores/toasts';
+
+let saveOp = $state(createAsyncOp());
+
+async function handleSubmit() {
+  await saveOp.run(() => api.doSomething(), msg => addToast(msg, 'error'));
+}
+</script>
+
+{#if saveOp.error}
+  <div class="rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{saveOp.error}</div>
+{/if}
+
+<button class="btn-primary" disabled={saveOp.loading}>
+  {saveOp.loading ? 'Saving...' : 'Save'}
+</button>
+```
+
+Multiple independent operations get separate `AsyncOp` instances:
+```ts
+let saveOp = $state(createAsyncOp());
+let deleteOp = $state(createAsyncOp());
+```
+
+### Pattern: Manual Error Display (Simple Cases)
+
+For simple one-off operations where `createAsyncOp` would be overkill:
 
 ```svelte
 <script lang="ts">
@@ -374,6 +411,26 @@ Sidebars collapse to drawers on `< md`.
 
 ---
 
+## Shared Utilities
+
+### `localStorageCache` — Cached Per-Key Storage
+
+For utilities that need per-user/per-entity localStorage persistence (e.g., voice volume, noise reduction settings):
+
+```ts
+import { createLocalStorageCache } from '$lib/utils/localStorageCache';
+
+const volumeCache = createLocalStorageCache<number>('av-voice-user-volumes');
+
+volumeCache.get('user123');        // number | undefined
+volumeCache.set('user123', 150);   // persists immediately
+volumeCache.remove('user123');     // removes entry
+```
+
+Lazy-loads from localStorage on first access, caches in memory for subsequent reads.
+
+---
+
 ## File Structure
 
 ```
@@ -391,6 +448,7 @@ web/src/lib/
 │   └── ...
 ├── stores/
 │   ├── __tests__/         # Store tests (*.test.ts)
+│   ├── mapHelpers.ts      # createMapStore utility
 │   ├── auth.ts
 │   ├── guilds.ts
 │   ├── channels.ts
@@ -400,6 +458,12 @@ web/src/lib/
 │   ├── unreads.ts
 │   ├── settings.ts
 │   └── toasts.ts
+├── utils/
+│   ├── __tests__/         # Utility tests
+│   ├── asyncOp.ts         # createAsyncOp — loading/error wrapper
+│   ├── localStorageCache.ts # createLocalStorageCache
+│   ├── voiceVolume.ts     # Per-user voice volume (GainNode)
+│   └── noiseReduction.ts  # Per-user noise reduction (BiquadFilter)
 └── types/
     └── index.ts           # Shared TypeScript interfaces
 ```

@@ -42,13 +42,7 @@
 	async function loadPolicies() {
 		loading = true;
 		try {
-			const res = await fetch('/api/v1/admin/retention', {
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				policies = json.data || [];
-			}
+			policies = await api.getAdminRetentionPolicies() || [];
 		} catch {
 			addToast('Failed to load retention policies', 'error');
 		}
@@ -70,44 +64,23 @@
 				body.channel_id = newChannelId;
 			}
 
-			const res = await fetch('/api/v1/admin/retention', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify(body)
-			});
-			const json = await res.json();
-			if (res.ok) {
-				addToast('Retention policy created', 'success');
-				showCreateForm = false;
-				resetForm();
-				await loadPolicies();
-			} else {
-				addToast(json.error?.message || 'Failed to create policy', 'error');
-			}
-		} catch {
-			addToast('Failed to create retention policy', 'error');
+			await api.createAdminRetentionPolicy(body);
+			addToast('Retention policy created', 'success');
+			showCreateForm = false;
+			resetForm();
+			await loadPolicies();
+		} catch (e: any) {
+			addToast(e?.message || 'Failed to create retention policy', 'error');
 		}
 		creating = false;
 	}
 
 	async function togglePolicy(policy: RetentionPolicy) {
 		try {
-			const res = await fetch(`/api/v1/admin/retention/${policy.id}`, {
-				method: 'PATCH',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${api.getToken()}`
-				},
-				body: JSON.stringify({ enabled: !policy.enabled })
-			});
-			if (res.ok) {
-				policy.enabled = !policy.enabled;
-				policies = [...policies];
-				addToast(`Policy ${policy.enabled ? 'enabled' : 'disabled'}`, 'success');
-			}
+			await api.updateAdminRetentionPolicy(policy.id, { enabled: !policy.enabled });
+			policy.enabled = !policy.enabled;
+			policies = [...policies];
+			addToast(`Policy ${policy.enabled ? 'enabled' : 'disabled'}`, 'success');
 		} catch {
 			addToast('Failed to update policy', 'error');
 		}
@@ -116,14 +89,9 @@
 	async function deletePolicy(policyId: string) {
 		if (!confirm('Delete this retention policy? This action cannot be undone.')) return;
 		try {
-			const res = await fetch(`/api/v1/admin/retention/${policyId}`, {
-				method: 'DELETE',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			if (res.ok) {
-				policies = policies.filter(p => p.id !== policyId);
-				addToast('Retention policy deleted', 'success');
-			}
+			await api.deleteAdminRetentionPolicy(policyId);
+			policies = policies.filter(p => p.id !== policyId);
+			addToast('Retention policy deleted', 'success');
 		} catch {
 			addToast('Failed to delete policy', 'error');
 		}
@@ -133,19 +101,11 @@
 		if (!confirm('Run this retention policy now? Messages older than the retention period will be permanently deleted.')) return;
 		runningPolicyId = policyId;
 		try {
-			const res = await fetch(`/api/v1/admin/retention/${policyId}/run`, {
-				method: 'POST',
-				headers: { 'Authorization': `Bearer ${api.getToken()}` }
-			});
-			const json = await res.json();
-			if (res.ok) {
-				addToast(`Deleted ${json.data?.messages_deleted || 0} messages`, 'success');
-				await loadPolicies();
-			} else {
-				addToast(json.error?.message || 'Failed to run policy', 'error');
-			}
-		} catch {
-			addToast('Failed to run retention policy', 'error');
+			const result = await api.runAdminRetentionPolicy(policyId);
+			addToast(`Deleted ${result?.messages_deleted || 0} messages`, 'success');
+			await loadPolicies();
+		} catch (e: any) {
+			addToast(e?.message || 'Failed to run retention policy', 'error');
 		}
 		runningPolicyId = '';
 	}

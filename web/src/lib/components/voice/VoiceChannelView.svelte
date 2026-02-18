@@ -17,6 +17,7 @@
 		type VoiceParticipant
 	} from '$lib/stores/voice';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import Avatar from '$components/common/Avatar.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
 	import MessageInput from '$components/chat/MessageInput.svelte';
@@ -33,12 +34,12 @@
 
 	let { channelId, guildId }: Props = $props();
 
-	let joining = $state(false);
+	let joinOp = $state(createAsyncOp());
+	let cameraOp = $state(createAsyncOp());
 	let showSettings = $state(false);
 	let showSoundboard = $state(false);
 	let showScreenShare = $state(false);
 	let textCollapsed = $state(false);
-	let cameraToggling = $state(false);
 	let pinnedId = $state<string | null>(null);
 
 	const connected = $derived($voiceState === 'connected');
@@ -79,14 +80,10 @@
 	}
 
 	async function handleJoin() {
-		joining = true;
-		try {
-			await joinVoice(channelId, guildId, $currentChannel?.name ?? 'Voice');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to join voice channel', 'error');
-		} finally {
-			joining = false;
-		}
+		await joinOp.run(
+			() => joinVoice(channelId, guildId, $currentChannel?.name ?? 'Voice'),
+			msg => addToast(msg, 'error')
+		);
 	}
 
 	async function handleLeave() {
@@ -98,14 +95,10 @@
 	}
 
 	async function handleToggleCamera() {
-		cameraToggling = true;
-		try {
-			await toggleCamera();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to toggle camera', 'error');
-		} finally {
-			cameraToggling = false;
-		}
+		await cameraOp.run(
+			() => toggleCamera(),
+			msg => addToast(msg, 'error')
+		);
 	}
 </script>
 
@@ -155,9 +148,9 @@
 			<button
 				class="rounded-lg bg-green-600 px-8 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
 				onclick={handleJoin}
-				disabled={joining}
+				disabled={joinOp.loading}
 			>
-				{#if joining}
+				{#if joinOp.loading}
 					<span class="flex items-center gap-2">
 						<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
 							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -306,10 +299,10 @@
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {$selfCamera ? 'bg-brand-500/20 text-brand-400 hover:bg-brand-500/30' : 'bg-bg-modifier text-text-secondary hover:bg-bg-floating hover:text-text-primary'}"
 					onclick={handleToggleCamera}
-					disabled={cameraToggling}
+					disabled={cameraOp.loading}
 					title={$selfCamera ? 'Turn off camera' : 'Turn on camera'}
 				>
-					{#if cameraToggling}
+					{#if cameraOp.loading}
 						<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
 							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>

@@ -3,8 +3,6 @@
 package users
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 
 	"github.com/amityvox/amityvox/internal/api/apiutil"
@@ -30,8 +28,7 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req updateActivityRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -76,8 +73,7 @@ func (h *Handler) HandleUpdateActivity(w http.ResponseWriter, r *http.Request) {
 		userID, req.ActivityType, req.ActivityName,
 	).Scan(&actType, &actName)
 	if err != nil {
-		h.Logger.Error("failed to update activity", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update activity")
+		apiutil.InternalError(w, h.Logger, "Failed to update activity", err)
 		return
 	}
 
@@ -104,8 +100,7 @@ func (h *Handler) HandleGetActivity(w http.ResponseWriter, r *http.Request) {
 		userID,
 	).Scan(&actType, &actName)
 	if err != nil {
-		h.Logger.Error("failed to get activity", slog.String("error", err.Error()))
-		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get activity")
+		apiutil.InternalError(w, h.Logger, "Failed to get activity", err)
 		return
 	}
 
