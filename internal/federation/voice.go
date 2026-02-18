@@ -1,12 +1,16 @@
 package federation
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // federatedVoiceTokenRequest is the signed payload for requesting a LiveKit token
@@ -62,7 +66,18 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Enforce voice-capable channel type.
+	if channelType == nil || (*channelType != models.ChannelTypeVoice &&
+		*channelType != models.ChannelTypeStage &&
+		*channelType != models.ChannelTypeDM &&
+		*channelType != models.ChannelTypeGroup) {
+		http.Error(w, "Voice is not supported in this channel type", http.StatusBadRequest)
+		return
+	}
+
 	// Authorization: verify the user has access to this channel.
+	canPublish := true
+	canVideo := true
 	if guildID != nil {
 		// Guild channel — verify membership.
 		var isMember bool
@@ -79,9 +94,19 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 			return
 		}
 
-		// Check private channel access.
-		if channelType != nil && *channelType == "private" {
-			http.Error(w, "Channel not accessible", http.StatusForbidden)
+		// Check CONNECT permission.
+		if !checkFederatedGuildPerm(ctx, ss.fed.pool, *guildID, req.UserID, permissions.Connect) {
+			http.Error(w, "Missing CONNECT permission", http.StatusForbidden)
+			return
+		}
+
+		// Derive publish/video from SPEAK permission.
+		canPublish = checkFederatedGuildPerm(ctx, ss.fed.pool, *guildID, req.UserID, permissions.Speak)
+		canVideo = canPublish
+
+		// Check STREAM permission for screen share.
+		if req.ScreenShare && !checkFederatedGuildPerm(ctx, ss.fed.pool, *guildID, req.UserID, permissions.Stream) {
+			http.Error(w, "Missing STREAM permission", http.StatusForbidden)
 			return
 		}
 	} else {
@@ -99,6 +124,11 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 			http.Error(w, "Not a channel participant", http.StatusForbidden)
 			return
 		}
+	}
+
+	// Screen share grants video publish even if canVideo was false (DM/group case).
+	if req.ScreenShare {
+		canVideo = true
 	}
 
 	// Ensure the LiveKit room exists.
@@ -120,10 +150,7 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 	}
 	metaBytes, _ := json.Marshal(metaMap)
 
-	// Federated users get publish + subscribe. Screen share grants video publish.
-	canPublish := true
 	canSubscribe := true
-	canVideo := req.ScreenShare
 
 	token, err := ss.voiceSvc.GenerateToken(req.UserID, req.ChannelID, canPublish, canSubscribe, canVideo, string(metaBytes))
 	if err != nil {
@@ -323,6 +350,55 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoinByGuild(w http.ResponseWrite
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": voiceResp})
+}
+
+// checkFederatedGuildPerm checks if a user has a specific permission in a guild.
+// This mirrors the logic in internal/api/voice_handlers.go:checkGuildPerm but
+// lives in the federation package to avoid circular imports.
+func checkFederatedGuildPerm(ctx context.Context, pool *pgxpool.Pool, guildID, userID string, perm uint64) bool {
+	// Owner has all permissions.
+	var ownerID string
+	if err := pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		return false
+	}
+	if userID == ownerID {
+		return true
+	}
+
+	// Admin flag.
+	var userFlags int
+	pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
+	if userFlags&models.UserFlagAdmin != 0 {
+		return true
+	}
+
+	// Compute from default + role permissions.
+	var defaultPerms int64
+	pool.QueryRow(ctx, `SELECT default_permissions FROM guilds WHERE id = $1`, guildID).Scan(&defaultPerms)
+	computed := uint64(defaultPerms)
+
+	rows, _ := pool.Query(ctx,
+		`SELECT r.permissions_allow, r.permissions_deny
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		guildID, userID,
+	)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var allow, deny int64
+			rows.Scan(&allow, &deny)
+			computed |= uint64(allow)
+			computed &^= uint64(deny)
+		}
+	}
+
+	if computed&permissions.Administrator != 0 {
+		return true
+	}
+	return computed&perm != 0
 }
 
 // voiceTokenTestRequest is used by tests.
