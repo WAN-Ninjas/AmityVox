@@ -535,6 +535,16 @@ class ApiClient {
 		return this.patch('/voice/preferences', prefs);
 	}
 
+	// --- Federation Voice ---
+
+	joinFederatedVoice(instanceDomain: string, channelId: string, screenShare = false): Promise<{ token: string; url: string; channel_id: string }> {
+		return this.post('/federation/voice/join', { instance_domain: instanceDomain, channel_id: channelId, screen_share: screenShare });
+	}
+
+	joinFederatedVoiceByGuild(guildId: string, channelId: string, screenShare = false): Promise<{ token: string; url: string; channel_id: string }> {
+		return this.post('/federation/voice/guild-join', { guild_id: guildId, channel_id: channelId, screen_share: screenShare });
+	}
+
 	// --- Federation Guilds ---
 
 	joinFederatedGuild(instanceDomain: string, guildId?: string, inviteCode?: string): Promise<unknown> {

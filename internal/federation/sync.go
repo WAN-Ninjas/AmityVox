@@ -52,11 +52,19 @@ type peerTarget struct {
 
 // SyncService handles federation message routing and delivery.
 type SyncService struct {
-	fed    *Service
-	bus    *events.Bus
-	hlc    *HLC
-	logger *slog.Logger
-	client *http.Client
+	fed        *Service
+	bus        *events.Bus
+	hlc        *HLC
+	logger     *slog.Logger
+	client     *http.Client
+	voiceSvc   VoiceTokenGenerator // optional, for federated voice
+	liveKitURL string              // public LiveKit URL for this instance
+}
+
+// VoiceTokenGenerator is the subset of voice.Service that federation needs.
+type VoiceTokenGenerator interface {
+	GenerateToken(userID, channelID string, canPublish, canSubscribe, canVideo bool, metadata string) (string, error)
+	EnsureRoom(ctx context.Context, channelID string) error
 }
 
 // NewSyncService creates a new federation sync service.
@@ -68,6 +76,12 @@ func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger) *SyncSer
 		logger: logger,
 		client: &http.Client{Timeout: 15 * time.Second},
 	}
+}
+
+// SetVoiceService configures the voice service for federated voice token generation.
+func (ss *SyncService) SetVoiceService(voiceSvc VoiceTokenGenerator, liveKitPublicURL string) {
+	ss.voiceSvc = voiceSvc
+	ss.liveKitURL = liveKitPublicURL
 }
 
 // HandleInbox handles POST /federation/v1/inbox — receives signed messages from

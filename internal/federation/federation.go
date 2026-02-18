@@ -65,6 +65,7 @@ type DiscoveryResponse struct {
 	APIEndpoint        string   `json:"api_endpoint"`
 	SupportedProtocols []string `json:"supported_protocols"`
 	Capabilities       []string `json:"capabilities,omitempty"`
+	LiveKitURL         string   `json:"livekit_url,omitempty"`
 }
 
 // HandshakeRequest is sent by an initiating instance to establish a federation
@@ -172,6 +173,12 @@ func (s *Service) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		caps = DefaultCapabilities
 	}
 
+	// Fetch LiveKit public URL for federated voice.
+	var liveKitURL *string
+	s.pool.QueryRow(r.Context(),
+		`SELECT livekit_url FROM instances WHERE id = $1`, s.instanceID,
+	).Scan(&liveKitURL)
+
 	resp := DiscoveryResponse{
 		InstanceID:         inst.ID,
 		Domain:             inst.Domain,
@@ -183,6 +190,9 @@ func (s *Service) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		APIEndpoint:        fmt.Sprintf("https://%s/federation/v1", inst.Domain),
 		SupportedProtocols: SupportedVersions,
 		Capabilities:       caps,
+	}
+	if liveKitURL != nil {
+		resp.LiveKitURL = *liveKitURL
 	}
 
 	w.Header().Set("Content-Type", "application/json")
