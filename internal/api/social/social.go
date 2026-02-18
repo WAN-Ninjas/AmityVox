@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -29,22 +30,6 @@ type Handler struct {
 	Pool     *pgxpool.Pool
 	EventBus *events.Bus
 	Logger   *slog.Logger
-}
-
-// --- JSON helpers (local copies matching project convention) ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
 }
 
 // --- Permission helpers ---
@@ -110,7 +95,7 @@ func (h *Handler) HandleGetInsights(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can view insights")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can view insights")
 		return
 	}
 
@@ -135,7 +120,7 @@ func (h *Handler) HandleGetInsights(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to query insights", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load insights")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load insights")
 		return
 	}
 	defer rows.Close()
@@ -164,7 +149,7 @@ func (h *Handler) HandleGetInsights(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to query hourly insights", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load insights")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load insights")
 		return
 	}
 	defer hourRows.Close()
@@ -207,7 +192,7 @@ func (h *Handler) HandleGetInsights(w http.ResponseWriter, r *http.Request) {
 		GrowthRate:    math.Round(growthRate*100) / 100,
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	apiutil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ensureTodaySnapshot creates or updates today's insight row from live data.
@@ -317,7 +302,7 @@ func (h *Handler) HandleGetBoosts(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -332,7 +317,7 @@ func (h *Handler) HandleGetBoosts(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to query boosts", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load boosts")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load boosts")
 		return
 	}
 	defer rows.Close()
@@ -360,7 +345,7 @@ func (h *Handler) HandleGetBoosts(w http.ResponseWriter, r *http.Request) {
 	boostCount := len(boosters)
 	boostTier := computeBoostTier(boostCount)
 
-	writeJSON(w, http.StatusOK, BoostSummary{
+	apiutil.WriteJSON(w, http.StatusOK, BoostSummary{
 		BoostCount:  boostCount,
 		BoostTier:   boostTier,
 		Boosters:    boosters,
@@ -375,7 +360,7 @@ func (h *Handler) HandleCreateBoost(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -392,7 +377,7 @@ func (h *Handler) HandleCreateBoost(w http.ResponseWriter, r *http.Request) {
 	).Scan(&b.ID, &b.GuildID, &b.UserID, &b.Tier, &startedAt, &b.Active)
 	if err != nil {
 		h.Logger.Error("failed to create boost", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create boost")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create boost")
 		return
 	}
 	b.StartedAt = startedAt.Format(time.RFC3339)
@@ -403,13 +388,13 @@ func (h *Handler) HandleCreateBoost(w http.ResponseWriter, r *http.Request) {
 	// Award achievement.
 	h.awardAchievement(r.Context(), userID, "achv_booster")
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectGuildUpdate, "GUILD_UPDATE", map[string]interface{}{
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectGuildUpdate, "GUILD_UPDATE", guildID, map[string]interface{}{
 		"id":       guildID,
 		"boosted":  true,
 		"booster":  userID,
 	})
 
-	writeJSON(w, http.StatusCreated, b)
+	apiutil.WriteJSON(w, http.StatusCreated, b)
 }
 
 // HandleRemoveBoost removes a user's boost from a guild.
@@ -424,11 +409,11 @@ func (h *Handler) HandleRemoveBoost(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to remove boost", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove boost")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove boost")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_boosted", "You are not boosting this guild")
+		apiutil.WriteError(w, http.StatusNotFound, "not_boosted", "You are not boosting this guild")
 		return
 	}
 
@@ -485,26 +470,26 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can claim vanity URLs")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can claim vanity URLs")
 		return
 	}
 
 	var req vanityClaimRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	code := strings.TrimSpace(strings.ToLower(req.Code))
 	if len(code) < 3 || len(code) > 32 {
-		writeError(w, http.StatusBadRequest, "invalid_code", "Vanity code must be 3-32 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_code", "Vanity code must be 3-32 characters")
 		return
 	}
 
 	// Only alphanumeric and hyphens.
 	for _, c := range code {
 		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
-			writeError(w, http.StatusBadRequest, "invalid_code", "Vanity code may only contain lowercase letters, numbers, and hyphens")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_code", "Vanity code may only contain lowercase letters, numbers, and hyphens")
 			return
 		}
 	}
@@ -512,7 +497,7 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
 		h.Logger.Error("failed to begin tx for vanity claim", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
 		return
 	}
 	defer tx.Rollback(r.Context())
@@ -524,15 +509,15 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 	).Scan(&existingGuild)
 	if err == nil {
 		if existingGuild == guildID {
-			writeError(w, http.StatusConflict, "already_claimed", "Your guild already owns this vanity URL")
+			apiutil.WriteError(w, http.StatusConflict, "already_claimed", "Your guild already owns this vanity URL")
 		} else {
-			writeError(w, http.StatusConflict, "code_taken", "This vanity code is already claimed")
+			apiutil.WriteError(w, http.StatusConflict, "code_taken", "This vanity code is already claimed")
 		}
 		return
 	}
 	if err != pgx.ErrNoRows {
 		h.Logger.Error("failed to check vanity claim", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
 		return
 	}
 
@@ -551,7 +536,7 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 	).Scan(&claimedAt)
 	if err != nil {
 		h.Logger.Error("failed to insert vanity claim", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
 		return
 	}
 
@@ -562,11 +547,11 @@ func (h *Handler) HandleClaimVanityURL(w http.ResponseWriter, r *http.Request) {
 
 	if err := tx.Commit(r.Context()); err != nil {
 		h.Logger.Error("failed to commit vanity claim", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to claim vanity URL")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, VanityClaimInfo{
+	apiutil.WriteJSON(w, http.StatusCreated, VanityClaimInfo{
 		Code:      code,
 		GuildID:   guildID,
 		ClaimedBy: userID,
@@ -581,13 +566,13 @@ func (h *Handler) HandleReleaseVanityURL(w http.ResponseWriter, r *http.Request)
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can release vanity URLs")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can release vanity URLs")
 		return
 	}
 
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to release vanity URL")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to release vanity URL")
 		return
 	}
 	defer tx.Rollback(r.Context())
@@ -596,7 +581,7 @@ func (h *Handler) HandleReleaseVanityURL(w http.ResponseWriter, r *http.Request)
 	tx.Exec(r.Context(), `UPDATE guilds SET vanity_url = NULL WHERE id = $1`, guildID)
 
 	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to release vanity URL")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to release vanity URL")
 		return
 	}
 
@@ -608,7 +593,7 @@ func (h *Handler) HandleReleaseVanityURL(w http.ResponseWriter, r *http.Request)
 func (h *Handler) HandleCheckVanityAvailability(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("code")))
 	if code == "" {
-		writeError(w, http.StatusBadRequest, "missing_code", "code query parameter is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_code", "code query parameter is required")
 		return
 	}
 
@@ -617,7 +602,7 @@ func (h *Handler) HandleCheckVanityAvailability(w http.ResponseWriter, r *http.R
 		`SELECT EXISTS(SELECT 1 FROM vanity_url_claims WHERE code = $1)`, code,
 	).Scan(&exists)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"code":      code,
 		"available": !exists,
 	})
@@ -661,7 +646,7 @@ func (h *Handler) HandleGetAchievements(w http.ResponseWriter, r *http.Request) 
 	)
 	if err != nil {
 		h.Logger.Error("failed to query achievements", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load achievements")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load achievements")
 		return
 	}
 	defer rows.Close()
@@ -676,7 +661,7 @@ func (h *Handler) HandleGetAchievements(w http.ResponseWriter, r *http.Request) 
 		defs = append(defs, d)
 	}
 
-	writeJSON(w, http.StatusOK, defs)
+	apiutil.WriteJSON(w, http.StatusOK, defs)
 }
 
 // HandleGetUserAchievements returns achievements earned by a user.
@@ -698,7 +683,7 @@ func (h *Handler) HandleGetUserAchievements(w http.ResponseWriter, r *http.Reque
 	)
 	if err != nil {
 		h.Logger.Error("failed to query user achievements", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load achievements")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load achievements")
 		return
 	}
 	defer rows.Close()
@@ -715,7 +700,7 @@ func (h *Handler) HandleGetUserAchievements(w http.ResponseWriter, r *http.Reque
 		achievements = append(achievements, a)
 	}
 
-	writeJSON(w, http.StatusOK, achievements)
+	apiutil.WriteJSON(w, http.StatusOK, achievements)
 }
 
 // awardAchievement grants an achievement to a user if not already earned.
@@ -747,7 +732,7 @@ func (h *Handler) HandleCheckAchievements(w http.ResponseWriter, r *http.Request
 		`SELECT id, criteria_type, criteria_threshold FROM achievement_definitions`,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check achievements")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to check achievements")
 		return
 	}
 	defer rows.Close()
@@ -811,7 +796,7 @@ func (h *Handler) HandleCheckAchievements(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]int{"awarded": awarded})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]int{"awarded": awarded})
 }
 
 // ============================================================
@@ -856,7 +841,7 @@ func (h *Handler) HandleGetLevelingConfig(w http.ResponseWriter, r *http.Request
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -880,7 +865,7 @@ func (h *Handler) HandleGetLevelingConfig(w http.ResponseWriter, r *http.Request
 		}
 	} else if err != nil {
 		h.Logger.Error("failed to query leveling config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load leveling config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load leveling config")
 		return
 	}
 
@@ -891,7 +876,7 @@ func (h *Handler) HandleGetLevelingConfig(w http.ResponseWriter, r *http.Request
 	)
 	if err != nil {
 		h.Logger.Error("failed to query level roles", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load leveling config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load leveling config")
 		return
 	}
 	defer roleRows.Close()
@@ -904,7 +889,7 @@ func (h *Handler) HandleGetLevelingConfig(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"config": cfg,
 		"level_roles": levelRoles,
 	})
@@ -926,13 +911,13 @@ func (h *Handler) HandleUpdateLevelingConfig(w http.ResponseWriter, r *http.Requ
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can update leveling config")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can update leveling config")
 		return
 	}
 
 	var req updateLevelingConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -964,11 +949,11 @@ func (h *Handler) HandleUpdateLevelingConfig(w http.ResponseWriter, r *http.Requ
 		&cfg.LevelUpChannelID, &cfg.LevelUpMessage, &cfg.StackRoles)
 	if err != nil {
 		h.Logger.Error("failed to update leveling config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update leveling config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update leveling config")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, cfg)
+	apiutil.WriteJSON(w, http.StatusOK, cfg)
 }
 
 type addLevelRoleRequest struct {
@@ -983,22 +968,22 @@ func (h *Handler) HandleAddLevelRole(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage level roles")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage level roles")
 		return
 	}
 
 	var req addLevelRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Level < 1 || req.Level > 100 {
-		writeError(w, http.StatusBadRequest, "invalid_level", "Level must be between 1 and 100")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_level", "Level must be between 1 and 100")
 		return
 	}
 	if req.RoleID == "" {
-		writeError(w, http.StatusBadRequest, "missing_role_id", "role_id is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_role_id", "role_id is required")
 		return
 	}
 
@@ -1012,15 +997,15 @@ func (h *Handler) HandleAddLevelRole(w http.ResponseWriter, r *http.Request) {
 	).Scan(&lr.ID, &lr.GuildID, &lr.Level, &lr.RoleID)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			writeError(w, http.StatusConflict, "already_exists", "A level role already exists for this level and role")
+			apiutil.WriteError(w, http.StatusConflict, "already_exists", "A level role already exists for this level and role")
 			return
 		}
 		h.Logger.Error("failed to add level role", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add level role")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add level role")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, lr)
+	apiutil.WriteJSON(w, http.StatusCreated, lr)
 }
 
 // HandleDeleteLevelRole removes a level role reward.
@@ -1031,7 +1016,7 @@ func (h *Handler) HandleDeleteLevelRole(w http.ResponseWriter, r *http.Request) 
 	roleMapID := chi.URLParam(r, "roleMapID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage level roles")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage level roles")
 		return
 	}
 
@@ -1041,11 +1026,11 @@ func (h *Handler) HandleDeleteLevelRole(w http.ResponseWriter, r *http.Request) 
 	)
 	if err != nil {
 		h.Logger.Error("failed to delete level role", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete level role")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete level role")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Level role not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Level role not found")
 		return
 	}
 
@@ -1059,7 +1044,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -1082,7 +1067,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to query leaderboard", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load leaderboard")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load leaderboard")
 		return
 	}
 	defer rows.Close()
@@ -1097,7 +1082,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 		leaderboard = append(leaderboard, m)
 	}
 
-	writeJSON(w, http.StatusOK, leaderboard)
+	apiutil.WriteJSON(w, http.StatusOK, leaderboard)
 }
 
 // HandleGetMemberXP returns a specific member's XP.
@@ -1112,7 +1097,7 @@ func (h *Handler) HandleGetMemberXP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -1130,14 +1115,14 @@ func (h *Handler) HandleGetMemberXP(w http.ResponseWriter, r *http.Request) {
 		m = MemberXP{GuildID: guildID, UserID: memberID, XP: 0, Level: 0, MessagesCounted: 0}
 	} else if err != nil {
 		h.Logger.Error("failed to query member xp", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load member XP")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load member XP")
 		return
 	}
 
 	// Compute XP needed for next level.
 	nextLevelXP := XPForLevel(m.Level + 1)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"member":       m,
 		"next_level_xp": nextLevelXP,
 	})
@@ -1228,7 +1213,7 @@ func (h *Handler) AwardXP(ctx context.Context, guildID, userID string) {
 				msgID, *levelUpChannelID, userID, msg,
 			)
 
-			h.EventBus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", map[string]interface{}{
+			h.EventBus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", *levelUpChannelID, map[string]interface{}{
 				"id":         msgID,
 				"channel_id": *levelUpChannelID,
 				"author_id":  userID,
@@ -1300,7 +1285,7 @@ func (h *Handler) HandleGetStarboardConfig(w http.ResponseWriter, r *http.Reques
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -1322,11 +1307,11 @@ func (h *Handler) HandleGetStarboardConfig(w http.ResponseWriter, r *http.Reques
 		}
 	} else if err != nil {
 		h.Logger.Error("failed to query starboard config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load starboard config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load starboard config")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, cfg)
+	apiutil.WriteJSON(w, http.StatusOK, cfg)
 }
 
 type updateStarboardConfigRequest struct {
@@ -1345,18 +1330,18 @@ func (h *Handler) HandleUpdateStarboardConfig(w http.ResponseWriter, r *http.Req
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can update starboard config")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can update starboard config")
 		return
 	}
 
 	var req updateStarboardConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Threshold != nil && (*req.Threshold < 1 || *req.Threshold > 100) {
-		writeError(w, http.StatusBadRequest, "invalid_threshold", "Threshold must be between 1 and 100")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_threshold", "Threshold must be between 1 and 100")
 		return
 	}
 
@@ -1385,11 +1370,11 @@ func (h *Handler) HandleUpdateStarboardConfig(w http.ResponseWriter, r *http.Req
 		&cfg.Threshold, &cfg.SelfStar, &cfg.NSFWAllowed)
 	if err != nil {
 		h.Logger.Error("failed to update starboard config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update starboard config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update starboard config")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, cfg)
+	apiutil.WriteJSON(w, http.StatusOK, cfg)
 }
 
 // HandleGetStarboardEntries returns starred messages for a guild.
@@ -1399,7 +1384,7 @@ func (h *Handler) HandleGetStarboardEntries(w http.ResponseWriter, r *http.Reque
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -1421,7 +1406,7 @@ func (h *Handler) HandleGetStarboardEntries(w http.ResponseWriter, r *http.Reque
 	)
 	if err != nil {
 		h.Logger.Error("failed to query starboard entries", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load starboard")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load starboard")
 		return
 	}
 	defer rows.Close()
@@ -1438,7 +1423,7 @@ func (h *Handler) HandleGetStarboardEntries(w http.ResponseWriter, r *http.Reque
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // CheckStarboard evaluates whether a message has reached the starboard threshold
@@ -1560,7 +1545,7 @@ func (h *Handler) CheckStarboard(ctx context.Context, guildID, channelID, messag
 		entryID, starMsgID,
 	)
 
-	h.EventBus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", map[string]interface{}{
+	h.EventBus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", *cfg.ChannelID, map[string]interface{}{
 		"id":         starMsgID,
 		"channel_id": *cfg.ChannelID,
 		"author_id":  authorID,
@@ -1593,7 +1578,7 @@ func (h *Handler) HandleGetWelcomeConfig(w http.ResponseWriter, r *http.Request)
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -1616,11 +1601,11 @@ func (h *Handler) HandleGetWelcomeConfig(w http.ResponseWriter, r *http.Request)
 		}
 	} else if err != nil {
 		h.Logger.Error("failed to query welcome config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load welcome config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load welcome config")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, cfg)
+	apiutil.WriteJSON(w, http.StatusOK, cfg)
 }
 
 type updateWelcomeConfigRequest struct {
@@ -1642,13 +1627,13 @@ func (h *Handler) HandleUpdateWelcomeConfig(w http.ResponseWriter, r *http.Reque
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can update welcome config")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can update welcome config")
 		return
 	}
 
 	var req updateWelcomeConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -1688,11 +1673,11 @@ func (h *Handler) HandleUpdateWelcomeConfig(w http.ResponseWriter, r *http.Reque
 		&cfg.EmbedColor, &cfg.EmbedTitle, &cfg.EmbedImageURL)
 	if err != nil {
 		h.Logger.Error("failed to update welcome config", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update welcome config")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update welcome config")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, cfg)
+	apiutil.WriteJSON(w, http.StatusOK, cfg)
 }
 
 // SendWelcomeMessage sends a welcome message when a user joins a guild.
@@ -1730,7 +1715,7 @@ func (h *Handler) SendWelcomeMessage(ctx context.Context, guildID, userID string
 			msgID, *cfg.ChannelID, userID, msg,
 		)
 
-		h.EventBus.PublishJSON(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", map[string]interface{}{
+		h.EventBus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", *cfg.ChannelID, map[string]interface{}{
 			"id":           msgID,
 			"channel_id":   *cfg.ChannelID,
 			"author_id":    userID,
@@ -1763,7 +1748,7 @@ func (h *Handler) HandleGetAutoRoles(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isMember(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return
 	}
 
@@ -1778,7 +1763,7 @@ func (h *Handler) HandleGetAutoRoles(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to query auto roles", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load auto roles")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load auto roles")
 		return
 	}
 	defer rows.Close()
@@ -1795,7 +1780,7 @@ func (h *Handler) HandleGetAutoRoles(w http.ResponseWriter, r *http.Request) {
 		rules = append(rules, ar)
 	}
 
-	writeJSON(w, http.StatusOK, rules)
+	apiutil.WriteJSON(w, http.StatusOK, rules)
 }
 
 type createAutoRoleRequest struct {
@@ -1811,24 +1796,24 @@ func (h *Handler) HandleCreateAutoRole(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage auto roles")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage auto roles")
 		return
 	}
 
 	var req createAutoRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.RoleID == "" {
-		writeError(w, http.StatusBadRequest, "missing_role_id", "role_id is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_role_id", "role_id is required")
 		return
 	}
 
 	validRuleTypes := map[string]bool{"on_join": true, "after_delay": true, "on_verify": true}
 	if !validRuleTypes[req.RuleType] {
-		writeError(w, http.StatusBadRequest, "invalid_rule_type", "rule_type must be on_join, after_delay, or on_verify")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_rule_type", "rule_type must be on_join, after_delay, or on_verify")
 		return
 	}
 
@@ -1849,16 +1834,16 @@ func (h *Handler) HandleCreateAutoRole(w http.ResponseWriter, r *http.Request) {
 		&ar.DelaySeconds, &ar.Enabled, &createdAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			writeError(w, http.StatusConflict, "already_exists", "An auto-role for this role already exists")
+			apiutil.WriteError(w, http.StatusConflict, "already_exists", "An auto-role for this role already exists")
 			return
 		}
 		h.Logger.Error("failed to create auto role", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create auto role")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create auto role")
 		return
 	}
 	ar.CreatedAt = createdAt.Format(time.RFC3339)
 
-	writeJSON(w, http.StatusCreated, ar)
+	apiutil.WriteJSON(w, http.StatusCreated, ar)
 }
 
 type updateAutoRoleRequest struct {
@@ -1875,20 +1860,20 @@ func (h *Handler) HandleUpdateAutoRole(w http.ResponseWriter, r *http.Request) {
 	ruleID := chi.URLParam(r, "ruleID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage auto roles")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage auto roles")
 		return
 	}
 
 	var req updateAutoRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.RuleType != nil {
 		validRuleTypes := map[string]bool{"on_join": true, "after_delay": true, "on_verify": true}
 		if !validRuleTypes[*req.RuleType] {
-			writeError(w, http.StatusBadRequest, "invalid_rule_type", "rule_type must be on_join, after_delay, or on_verify")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_rule_type", "rule_type must be on_join, after_delay, or on_verify")
 			return
 		}
 	}
@@ -1906,17 +1891,17 @@ func (h *Handler) HandleUpdateAutoRole(w http.ResponseWriter, r *http.Request) {
 	).Scan(&ar.ID, &ar.GuildID, &ar.RoleID, &ar.RuleType,
 		&ar.DelaySeconds, &ar.Enabled, &createdAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Auto-role rule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Auto-role rule not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to update auto role", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update auto role")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update auto role")
 		return
 	}
 	ar.CreatedAt = createdAt.Format(time.RFC3339)
 
-	writeJSON(w, http.StatusOK, ar)
+	apiutil.WriteJSON(w, http.StatusOK, ar)
 }
 
 // HandleDeleteAutoRole deletes an auto-role rule.
@@ -1927,7 +1912,7 @@ func (h *Handler) HandleDeleteAutoRole(w http.ResponseWriter, r *http.Request) {
 	ruleID := chi.URLParam(r, "ruleID")
 
 	if !h.isGuildAdmin(r.Context(), guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage auto roles")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild admins can manage auto roles")
 		return
 	}
 
@@ -1937,11 +1922,11 @@ func (h *Handler) HandleDeleteAutoRole(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to delete auto role", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete auto role")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete auto role")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Auto-role rule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Auto-role rule not found")
 		return
 	}
 

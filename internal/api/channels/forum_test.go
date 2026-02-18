@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 )
 
 // TestJoinStrings validates the string joining helper used in forum tag updates.
@@ -208,7 +210,7 @@ func TestForumTagCreateResponse(t *testing.T) {
 		"position":   0,
 	}
 
-	writeJSON(w, http.StatusCreated, tag)
+	apiutil.WriteJSON(w, http.StatusCreated, tag)
 
 	if w.Code != http.StatusCreated {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusCreated)
@@ -253,7 +255,7 @@ func TestForumPostListResponse(t *testing.T) {
 		},
 	}
 
-	writeJSON(w, http.StatusOK, posts)
+	apiutil.WriteJSON(w, http.StatusOK, posts)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)

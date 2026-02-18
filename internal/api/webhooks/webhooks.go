@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -620,7 +621,7 @@ func ValidOutgoingEvents() []string {
 func (h *Handler) DeliverOutgoingWebhook(ctx context.Context, webhookID, outgoingURL string, eventType string, payload json.RawMessage) {
 	reqBody := string(payload)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := safeHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, outgoingURL, bytes.NewReader(payload))
 	if err != nil {
 		h.logExecution(ctx, webhookID, 0, reqBody, "", false, fmt.Sprintf("failed to create request: %v", err))
@@ -742,37 +743,37 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
 	)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "webhook_not_found", "Unknown webhook")
+		apiutil.WriteError(w, http.StatusNotFound, "webhook_not_found", "Unknown webhook")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to look up webhook", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up webhook")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up webhook")
 		return
 	}
 
 	// Constant-time token comparison to prevent timing attacks.
 	if subtle.ConstantTimeCompare([]byte(wh.Token), []byte(token)) != 1 {
-		writeError(w, http.StatusUnauthorized, "invalid_token", "Invalid webhook token")
+		apiutil.WriteError(w, http.StatusUnauthorized, "invalid_token", "Invalid webhook token")
 		return
 	}
 
 	if wh.WebhookType != models.WebhookTypeIncoming {
-		writeError(w, http.StatusBadRequest, "wrong_type", "This webhook does not accept incoming messages")
+		apiutil.WriteError(w, http.StatusBadRequest, "wrong_type", "This webhook does not accept incoming messages")
 		return
 	}
 
 	// Read raw body for logging, then decode.
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Failed to read request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Failed to read request body")
 		return
 	}
 
 	var req executeWebhookRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		h.logExecution(r.Context(), webhookID, http.StatusBadRequest, string(bodyBytes), "", false, "Invalid request body")
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -783,7 +784,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.logExecution(r.Context(), webhookID, http.StatusBadRequest, string(bodyBytes), "", false,
 				fmt.Sprintf("Template transformation failed: %v", err))
-			writeError(w, http.StatusBadRequest, "template_error", fmt.Sprintf("Template transformation failed: %v", err))
+			apiutil.WriteError(w, http.StatusBadRequest, "template_error", fmt.Sprintf("Template transformation failed: %v", err))
 			return
 		}
 		finalContent = result.Content
@@ -791,12 +792,12 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	if finalContent == "" {
 		h.logExecution(r.Context(), webhookID, http.StatusBadRequest, string(bodyBytes), "", false, "Message content cannot be empty")
-		writeError(w, http.StatusBadRequest, "empty_content", "Message content cannot be empty")
+		apiutil.WriteError(w, http.StatusBadRequest, "empty_content", "Message content cannot be empty")
 		return
 	}
 	if len(finalContent) > 4000 {
 		h.logExecution(r.Context(), webhookID, http.StatusBadRequest, string(bodyBytes), "", false, "Message content exceeds 4000 characters")
-		writeError(w, http.StatusBadRequest, "content_too_long", "Message content exceeds 4000 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "content_too_long", "Message content exceeds 4000 characters")
 		return
 	}
 
@@ -820,7 +821,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			slog.String("webhook_id", webhookID),
 		)
 		h.logExecution(r.Context(), webhookID, http.StatusInternalServerError, string(bodyBytes), "", false, "Failed to create message")
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create message")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create message")
 		return
 	}
 
@@ -829,7 +830,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, messageID, wh.ChannelID)
 
 	// Publish message create event.
-	h.EventBus.PublishJSON(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE",
+	h.EventBus.PublishChannelEvent(r.Context(), events.SubjectMessageCreate, "MESSAGE_CREATE", wh.ChannelID,
 		map[string]interface{}{
 			"id":           messageID,
 			"channel_id":   wh.ChannelID,
@@ -857,13 +858,13 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	respBytes, _ := json.Marshal(respData)
 	h.logExecution(r.Context(), webhookID, http.StatusOK, string(bodyBytes), string(respBytes), true, "")
 
-	writeJSON(w, http.StatusOK, respData)
+	apiutil.WriteJSON(w, http.StatusOK, respData)
 }
 
 // HandleGetWebhookTemplates returns the list of built-in webhook templates.
 // GET /api/v1/webhooks/templates
 func (h *Handler) HandleGetWebhookTemplates(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, builtinTemplates)
+	apiutil.WriteJSON(w, http.StatusOK, builtinTemplates)
 }
 
 // HandlePreviewWebhookMessage accepts a payload + template_id and returns the
@@ -875,32 +876,32 @@ func (h *Handler) HandlePreviewWebhookMessage(w http.ResponseWriter, r *http.Req
 		Payload    json.RawMessage `json:"payload"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.TemplateID == "" {
-		writeError(w, http.StatusBadRequest, "missing_template_id", "template_id is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_template_id", "template_id is required")
 		return
 	}
 
 	if _, exists := templatesByID[req.TemplateID]; !exists {
-		writeError(w, http.StatusBadRequest, "unknown_template", "Unknown template: "+req.TemplateID)
+		apiutil.WriteError(w, http.StatusBadRequest, "unknown_template", "Unknown template: "+req.TemplateID)
 		return
 	}
 
 	if len(req.Payload) == 0 {
-		writeError(w, http.StatusBadRequest, "missing_payload", "payload is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_payload", "payload is required")
 		return
 	}
 
 	result, err := transformPayload(req.TemplateID, req.Payload)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "transform_error", fmt.Sprintf("Failed to transform payload: %v", err))
+		apiutil.WriteError(w, http.StatusBadRequest, "transform_error", fmt.Sprintf("Failed to transform payload: %v", err))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"content":     result.Content,
 		"embeds":      result.Embeds,
 		"template_id": req.TemplateID,
@@ -919,15 +920,15 @@ func (h *Handler) HandleGetWebhookLogs(w http.ResponseWriter, r *http.Request) {
 		`SELECT guild_id FROM webhooks WHERE id = $1`, webhookID,
 	).Scan(&whGuildID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found")
+		apiutil.WriteError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up webhook")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up webhook")
 		return
 	}
 	if whGuildID != guildID {
-		writeError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found in this guild")
+		apiutil.WriteError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found in this guild")
 		return
 	}
 
@@ -940,7 +941,7 @@ func (h *Handler) HandleGetWebhookLogs(w http.ResponseWriter, r *http.Request) {
 		webhookID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get webhook logs")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get webhook logs")
 		return
 	}
 	defer rows.Close()
@@ -952,33 +953,17 @@ func (h *Handler) HandleGetWebhookLogs(w http.ResponseWriter, r *http.Request) {
 			&log.ID, &log.WebhookID, &log.StatusCode, &log.RequestBody,
 			&log.ResponsePreview, &log.Success, &log.ErrorMessage, &log.CreatedAt,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhook logs")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhook logs")
 			return
 		}
 		logs = append(logs, log)
 	}
 
-	writeJSON(w, http.StatusOK, logs)
+	apiutil.WriteJSON(w, http.StatusOK, logs)
 }
 
 // HandleGetOutgoingEvents returns the list of valid outgoing event types.
 // GET /api/v1/webhooks/outgoing-events
 func (h *Handler) HandleGetOutgoingEvents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, ValidOutgoingEvents())
-}
-
-// --- Helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
+	apiutil.WriteJSON(w, http.StatusOK, ValidOutgoingEvents())
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -51,20 +52,6 @@ type addPeerRequest struct {
 
 // --- Helpers ---
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
-}
-
 // isAdmin checks whether the requesting user has the admin flag set in the
 // users.flags bitfield.
 func (h *Handler) isAdmin(r *http.Request) bool {
@@ -81,7 +68,7 @@ func (h *Handler) isAdmin(r *http.Request) bool {
 // HandleGetInstance handles GET /api/v1/admin/instance.
 func (h *Handler) HandleGetInstance(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -96,30 +83,30 @@ func (h *Handler) HandleGetInstance(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to get instance", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get instance")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get instance")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, inst)
+	apiutil.WriteJSON(w, http.StatusOK, inst)
 }
 
 // HandleUpdateInstance handles PATCH /api/v1/admin/instance.
 func (h *Handler) HandleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
 	var req updateInstanceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.FederationMode != nil {
 		valid := map[string]bool{"open": true, "allowlist": true, "closed": true}
 		if !valid[*req.FederationMode] {
-			writeError(w, http.StatusBadRequest, "invalid_federation_mode",
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_federation_mode",
 				"Federation mode must be one of: open, allowlist, closed")
 			return
 		}
@@ -142,17 +129,17 @@ func (h *Handler) HandleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.Logger.Error("failed to update instance", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update instance")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update instance")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, inst)
+	apiutil.WriteJSON(w, http.StatusOK, inst)
 }
 
 // HandleGetFederationPeers handles GET /api/v1/admin/federation/peers.
 func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -165,7 +152,7 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 		 ORDER BY fp.established_at DESC`, h.InstanceID)
 	if err != nil {
 		h.Logger.Error("failed to query federation peers", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get federation peers")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get federation peers")
 		return
 	}
 	defer rows.Close()
@@ -185,29 +172,29 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 			&p.PeerDomain, &p.PeerName, &p.PeerSoftware,
 		); err != nil {
 			h.Logger.Error("failed to scan federation peer", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read federation peers")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read federation peers")
 			return
 		}
 		peers = append(peers, p)
 	}
 
-	writeJSON(w, http.StatusOK, peers)
+	apiutil.WriteJSON(w, http.StatusOK, peers)
 }
 
 // HandleAddFederationPeer handles POST /api/v1/admin/federation/peers.
 func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
 	var req addPeerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.Domain == "" {
-		writeError(w, http.StatusBadRequest, "missing_domain", "Peer domain is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_domain", "Peer domain is required")
 		return
 	}
 
@@ -216,13 +203,13 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT id FROM instances WHERE domain = $1`, req.Domain).Scan(&peerID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "peer_not_found",
+		apiutil.WriteError(w, http.StatusNotFound, "peer_not_found",
 			"No known instance with that domain. The instance must be discovered first.")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to look up peer", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to look up peer")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up peer")
 		return
 	}
 
@@ -234,11 +221,11 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		h.InstanceID, peerID, models.FederationPeerActive, now)
 	if err != nil {
 		h.Logger.Error("failed to add federation peer", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add federation peer")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add federation peer")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"instance_id":    h.InstanceID,
 		"peer_id":        peerID,
 		"peer_domain":    req.Domain,
@@ -250,7 +237,7 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 // HandleRemoveFederationPeer handles DELETE /api/v1/admin/federation/peers/{peerID}.
 func (h *Handler) HandleRemoveFederationPeer(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -261,11 +248,11 @@ func (h *Handler) HandleRemoveFederationPeer(w http.ResponseWriter, r *http.Requ
 		h.InstanceID, peerID)
 	if err != nil {
 		h.Logger.Error("failed to remove federation peer", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove federation peer")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove federation peer")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "peer_not_found", "Federation peer not found")
+		apiutil.WriteError(w, http.StatusNotFound, "peer_not_found", "Federation peer not found")
 		return
 	}
 
@@ -275,7 +262,7 @@ func (h *Handler) HandleRemoveFederationPeer(w http.ResponseWriter, r *http.Requ
 // HandleGetStats handles GET /api/v1/admin/stats.
 func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -371,13 +358,13 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 		s.Uptime = time.Since(createdAt).Truncate(time.Second).String()
 	}
 
-	writeJSON(w, http.StatusOK, s)
+	apiutil.WriteJSON(w, http.StatusOK, s)
 }
 
 // HandleListUsers handles GET /api/v1/admin/users.
 func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -418,7 +405,7 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 			 LIMIT $1 OFFSET $2`, limit, offset)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list users")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list users")
 		return
 	}
 	defer rows.Close()
@@ -447,13 +434,13 @@ func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 		users = []adminUser{}
 	}
 
-	writeJSON(w, http.StatusOK, users)
+	apiutil.WriteJSON(w, http.StatusOK, users)
 }
 
 // HandleSuspendUser handles POST /api/v1/admin/users/{userID}/suspend.
 func (h *Handler) HandleSuspendUser(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 	userID := chi.URLParam(r, "userID")
@@ -461,16 +448,16 @@ func (h *Handler) HandleSuspendUser(w http.ResponseWriter, r *http.Request) {
 	_, err := h.Pool.Exec(r.Context(),
 		`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagSuspended, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to suspend user")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to suspend user")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "suspended"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "suspended"})
 }
 
 // HandleUnsuspendUser handles POST /api/v1/admin/users/{userID}/unsuspend.
 func (h *Handler) HandleUnsuspendUser(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 	userID := chi.URLParam(r, "userID")
@@ -478,16 +465,16 @@ func (h *Handler) HandleUnsuspendUser(w http.ResponseWriter, r *http.Request) {
 	_, err := h.Pool.Exec(r.Context(),
 		`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagSuspended, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unsuspend user")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unsuspend user")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "unsuspended"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "unsuspended"})
 }
 
 // HandleSetAdmin handles POST /api/v1/admin/users/{userID}/set-admin.
 func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 	userID := chi.URLParam(r, "userID")
@@ -496,7 +483,7 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 		Admin bool `json:"admin"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -509,16 +496,16 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagAdmin, userID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update admin status")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update admin status")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"admin": req.Admin})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"admin": req.Admin})
 }
 
 // HandleSetGlobalMod handles POST /api/v1/admin/users/{userID}/set-globalmod.
 func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 	userID := chi.URLParam(r, "userID")
@@ -527,7 +514,7 @@ func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
 		GlobalMod bool `json:"global_mod"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -541,21 +528,21 @@ func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
 			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update global mod status")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update global mod status")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "User not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "User not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"global_mod": req.GlobalMod})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"global_mod": req.GlobalMod})
 }
 
 // HandleInstanceBanUser bans a user at the instance level (suspends + records reason).
 // POST /api/v1/admin/users/{userID}/instance-ban
 func (h *Handler) HandleInstanceBanUser(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 	targetID := chi.URLParam(r, "userID")
@@ -569,7 +556,7 @@ func (h *Handler) HandleInstanceBanUser(w http.ResponseWriter, r *http.Request) 
 	_, err := h.Pool.Exec(r.Context(),
 		`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagSuspended, targetID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to ban user")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to ban user")
 		return
 	}
 
@@ -584,14 +571,14 @@ func (h *Handler) HandleInstanceBanUser(w http.ResponseWriter, r *http.Request) 
 	// Invalidate all sessions for the banned user.
 	h.Pool.Exec(r.Context(), `DELETE FROM user_sessions WHERE user_id = $1`, targetID)
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "banned"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "banned"})
 }
 
 // HandleInstanceUnbanUser unbans a user at the instance level.
 // POST /api/v1/admin/users/{userID}/instance-unban
 func (h *Handler) HandleInstanceUnbanUser(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 	targetID := chi.URLParam(r, "userID")
@@ -599,20 +586,20 @@ func (h *Handler) HandleInstanceUnbanUser(w http.ResponseWriter, r *http.Request
 	_, err := h.Pool.Exec(r.Context(),
 		`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagSuspended, targetID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unban user")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unban user")
 		return
 	}
 
 	h.Pool.Exec(r.Context(), `DELETE FROM instance_bans WHERE user_id = $1`, targetID)
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "unbanned"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "unbanned"})
 }
 
 // HandleGetInstanceBans lists all instance-level banned users.
 // GET /api/v1/admin/instance-bans
 func (h *Handler) HandleGetInstanceBans(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -623,7 +610,7 @@ func (h *Handler) HandleGetInstanceBans(w http.ResponseWriter, r *http.Request) 
 		 JOIN users u ON u.id = ib.user_id
 		 ORDER BY ib.created_at DESC`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get bans")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get bans")
 		return
 	}
 	defer rows.Close()
@@ -650,14 +637,14 @@ func (h *Handler) HandleGetInstanceBans(w http.ResponseWriter, r *http.Request) 
 		bans = append(bans, b)
 	}
 
-	writeJSON(w, http.StatusOK, bans)
+	apiutil.WriteJSON(w, http.StatusOK, bans)
 }
 
 // HandleGetRegistrationConfig returns the instance registration settings.
 // GET /api/v1/admin/registration
 func (h *Handler) HandleGetRegistrationConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -674,7 +661,7 @@ func (h *Handler) HandleGetRegistrationConfig(w http.ResponseWriter, r *http.Req
 			(SELECT value FROM instance_settings WHERE key = 'registration_message'), ''
 		)`).Scan(&message)
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"mode":    mode,
 		"message": message,
 	})
@@ -684,7 +671,7 @@ func (h *Handler) HandleGetRegistrationConfig(w http.ResponseWriter, r *http.Req
 // PATCH /api/v1/admin/registration
 func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -693,7 +680,7 @@ func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.
 		Message *string `json:"message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -704,7 +691,7 @@ func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.
 				`INSERT INTO instance_settings (key, value) VALUES ('registration_mode', $1)
 				 ON CONFLICT (key) DO UPDATE SET value = $1`, *req.Mode)
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_mode", "Mode must be 'open', 'invite_only', or 'closed'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_mode", "Mode must be 'open', 'invite_only', or 'closed'")
 			return
 		}
 	}
@@ -714,7 +701,7 @@ func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.
 			 ON CONFLICT (key) DO UPDATE SET value = $1`, *req.Message)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // --- Registration Token Handlers ---
@@ -723,7 +710,7 @@ func (h *Handler) HandleUpdateRegistrationConfig(w http.ResponseWriter, r *http.
 // POST /api/v1/admin/registration/tokens
 func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -733,7 +720,7 @@ func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.R
 		ExpiresIn *int    `json:"expires_in_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -756,11 +743,11 @@ func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.R
 		tokenID, adminID, req.MaxUses, req.Note, expiresAt)
 	if err != nil {
 		h.Logger.Error("failed to create registration token", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create token")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":         tokenID,
 		"max_uses":   req.MaxUses,
 		"uses":       0,
@@ -774,7 +761,7 @@ func (h *Handler) HandleCreateRegistrationToken(w http.ResponseWriter, r *http.R
 // GET /api/v1/admin/registration/tokens
 func (h *Handler) HandleListRegistrationTokens(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -785,7 +772,7 @@ func (h *Handler) HandleListRegistrationTokens(w http.ResponseWriter, r *http.Re
 		 JOIN users u ON u.id = rt.created_by
 		 ORDER BY rt.created_at DESC`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list tokens")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list tokens")
 		return
 	}
 	defer rows.Close()
@@ -815,14 +802,14 @@ func (h *Handler) HandleListRegistrationTokens(w http.ResponseWriter, r *http.Re
 		tokens = append(tokens, t)
 	}
 
-	writeJSON(w, http.StatusOK, tokens)
+	apiutil.WriteJSON(w, http.StatusOK, tokens)
 }
 
 // HandleDeleteRegistrationToken deletes a registration token.
 // DELETE /api/v1/admin/registration/tokens/{tokenID}
 func (h *Handler) HandleDeleteRegistrationToken(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -830,11 +817,11 @@ func (h *Handler) HandleDeleteRegistrationToken(w http.ResponseWriter, r *http.R
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM registration_tokens WHERE id = $1`, tokenID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete token")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete token")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Token not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Token not found")
 		return
 	}
 
@@ -847,7 +834,7 @@ func (h *Handler) HandleDeleteRegistrationToken(w http.ResponseWriter, r *http.R
 // POST /api/v1/admin/announcements
 func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -858,12 +845,12 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 		ExpiresIn *int   `json:"expires_in_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Title == "" || req.Content == "" {
-		writeError(w, http.StatusBadRequest, "missing_fields", "Title and content are required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_fields", "Title and content are required")
 		return
 	}
 
@@ -873,7 +860,7 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 	case "":
 		req.Severity = "info"
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_severity", "Severity must be info, warning, or critical")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_severity", "Severity must be info, warning, or critical")
 		return
 	}
 
@@ -892,7 +879,7 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 		announcementID, adminID, req.Title, req.Content, req.Severity, expiresAt)
 	if err != nil {
 		h.Logger.Error("failed to create announcement", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create announcement")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create announcement")
 		return
 	}
 
@@ -907,10 +894,10 @@ func (h *Handler) HandleCreateAnnouncement(w http.ResponseWriter, r *http.Reques
 
 	// Publish real-time event so all connected clients see the announcement immediately.
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), events.SubjectAnnouncementCreate, "ANNOUNCEMENT_CREATE", announcement)
+		h.EventBus.PublishBroadcastEvent(r.Context(), events.SubjectAnnouncementCreate, "ANNOUNCEMENT_CREATE", announcement)
 	}
 
-	writeJSON(w, http.StatusCreated, announcement)
+	apiutil.WriteJSON(w, http.StatusCreated, announcement)
 }
 
 // HandleGetAnnouncements returns active instance announcements.
@@ -925,7 +912,7 @@ func (h *Handler) HandleGetAnnouncements(w http.ResponseWriter, r *http.Request)
 		 ORDER BY ia.created_at DESC
 		 LIMIT 10`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get announcements")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get announcements")
 		return
 	}
 	defer rows.Close()
@@ -952,14 +939,14 @@ func (h *Handler) HandleGetAnnouncements(w http.ResponseWriter, r *http.Request)
 		announcements = append(announcements, a)
 	}
 
-	writeJSON(w, http.StatusOK, announcements)
+	apiutil.WriteJSON(w, http.StatusOK, announcements)
 }
 
 // HandleListAllAnnouncements returns all announcements (admin only, including inactive).
 // GET /api/v1/admin/announcements
 func (h *Handler) HandleListAllAnnouncements(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -971,7 +958,7 @@ func (h *Handler) HandleListAllAnnouncements(w http.ResponseWriter, r *http.Requ
 		 ORDER BY ia.created_at DESC
 		 LIMIT 50`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get announcements")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get announcements")
 		return
 	}
 	defer rows.Close()
@@ -998,14 +985,14 @@ func (h *Handler) HandleListAllAnnouncements(w http.ResponseWriter, r *http.Requ
 		announcements = append(announcements, a)
 	}
 
-	writeJSON(w, http.StatusOK, announcements)
+	apiutil.WriteJSON(w, http.StatusOK, announcements)
 }
 
 // HandleUpdateAnnouncement deactivates an announcement or updates it.
 // PATCH /api/v1/admin/announcements/{announcementID}
 func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1017,7 +1004,7 @@ func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Reques
 		Content *string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -1029,17 +1016,17 @@ func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Reques
 		 WHERE id = $4`,
 		req.Active, req.Title, req.Content, announcementID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update announcement")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update announcement")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Announcement not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Announcement not found")
 		return
 	}
 
 	// Publish real-time update event.
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), events.SubjectAnnouncementUpdate, "ANNOUNCEMENT_UPDATE", map[string]interface{}{
+		h.EventBus.PublishBroadcastEvent(r.Context(), events.SubjectAnnouncementUpdate, "ANNOUNCEMENT_UPDATE", map[string]interface{}{
 			"id":      announcementID,
 			"active":  req.Active,
 			"title":   req.Title,
@@ -1047,14 +1034,14 @@ func (h *Handler) HandleUpdateAnnouncement(w http.ResponseWriter, r *http.Reques
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleDeleteAnnouncement removes an announcement permanently.
 // DELETE /api/v1/admin/announcements/{announcementID}
 func (h *Handler) HandleDeleteAnnouncement(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1062,17 +1049,17 @@ func (h *Handler) HandleDeleteAnnouncement(w http.ResponseWriter, r *http.Reques
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM instance_announcements WHERE id = $1`, announcementID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete announcement")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete announcement")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Announcement not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Announcement not found")
 		return
 	}
 
 	// Publish real-time delete event.
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), events.SubjectAnnouncementDelete, "ANNOUNCEMENT_DELETE", map[string]string{
+		h.EventBus.PublishBroadcastEvent(r.Context(), events.SubjectAnnouncementDelete, "ANNOUNCEMENT_DELETE", map[string]string{
 			"id": announcementID,
 		})
 	}
@@ -1088,7 +1075,7 @@ func (h *Handler) HandleDeleteAnnouncement(w http.ResponseWriter, r *http.Reques
 // GET /api/v1/admin/guilds
 func (h *Handler) HandleListGuilds(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1167,7 +1154,7 @@ func (h *Handler) HandleListGuilds(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.Logger.Error("failed to list guilds", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list guilds")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list guilds")
 		return
 	}
 	defer rows.Close()
@@ -1187,14 +1174,14 @@ func (h *Handler) HandleListGuilds(w http.ResponseWriter, r *http.Request) {
 		guilds = append(guilds, g)
 	}
 
-	writeJSON(w, http.StatusOK, guilds)
+	apiutil.WriteJSON(w, http.StatusOK, guilds)
 }
 
 // HandleGetGuildDetails returns detailed info for a single guild (admin view).
 // GET /api/v1/admin/guilds/{guildID}
 func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1241,23 +1228,23 @@ func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) 
 		&g.EmojiCount, &g.InviteCount, &g.MessageCount, &g.MessagesToday, &g.BanCount,
 	)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Guild not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Guild not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get guild details", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild details")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild details")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, g)
+	apiutil.WriteJSON(w, http.StatusOK, g)
 }
 
 // HandleAdminDeleteGuild forcefully deletes a guild (admin action).
 // DELETE /api/v1/admin/guilds/{guildID}
 func (h *Handler) HandleAdminDeleteGuild(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1266,22 +1253,22 @@ func (h *Handler) HandleAdminDeleteGuild(w http.ResponseWriter, r *http.Request)
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM guilds WHERE id = $1`, guildID)
 	if err != nil {
 		h.Logger.Error("failed to delete guild", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete guild")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete guild")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Guild not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Guild not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // HandleGetUserGuilds returns all guilds a specific user is a member of (admin view).
 // GET /api/v1/admin/users/{userID}/guilds
 func (h *Handler) HandleGetUserGuilds(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1307,7 +1294,7 @@ func (h *Handler) HandleGetUserGuilds(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY gm.joined_at DESC`, userID)
 	if err != nil {
 		h.Logger.Error("failed to get user guilds", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get user guilds")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get user guilds")
 		return
 	}
 	defer rows.Close()
@@ -1322,7 +1309,7 @@ func (h *Handler) HandleGetUserGuilds(w http.ResponseWriter, r *http.Request) {
 		guilds = append(guilds, g)
 	}
 
-	writeJSON(w, http.StatusOK, guilds)
+	apiutil.WriteJSON(w, http.StatusOK, guilds)
 }
 
 func parseInt(s string) (int, error) {
@@ -1344,7 +1331,7 @@ func parseInt(s string) (int, error) {
 // GET /api/v1/admin/rate-limits/stats
 func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1368,7 +1355,7 @@ func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request
 		 LIMIT 50`)
 	if err != nil {
 		h.Logger.Error("failed to query rate limit stats", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit stats")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit stats")
 		return
 	}
 	defer rows.Close()
@@ -1398,7 +1385,7 @@ func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request
 	h.Pool.QueryRow(r.Context(),
 		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'rate_limit_window_seconds'), '60')`).Scan(&windowSecs)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"top_ips":                    topIPs,
 		"total_entries_24h":          totalEntries,
 		"blocked_entries_24h":        blockedEntries,
@@ -1412,7 +1399,7 @@ func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request
 // GET /api/v1/admin/rate-limits/log
 func (h *Handler) HandleGetRateLimitLog(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1465,7 +1452,7 @@ func (h *Handler) HandleGetRateLimitLog(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil {
 		h.Logger.Error("failed to query rate limit log", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit log")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get rate limit log")
 		return
 	}
 	defer rows.Close()
@@ -1493,14 +1480,14 @@ func (h *Handler) HandleGetRateLimitLog(w http.ResponseWriter, r *http.Request) 
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // HandleUpdateRateLimitConfig updates rate limiting configuration.
 // PATCH /api/v1/admin/rate-limits/config
 func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1509,13 +1496,13 @@ func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Req
 		WindowSeconds     *string `json:"window_seconds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.RequestsPerWindow != nil {
 		if v, err := parseInt(*req.RequestsPerWindow); err != nil || v < 1 || v > 100000 {
-			writeError(w, http.StatusBadRequest, "invalid_value", "requests_per_window must be between 1 and 100000")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_value", "requests_per_window must be between 1 and 100000")
 			return
 		}
 		h.Pool.Exec(r.Context(),
@@ -1525,7 +1512,7 @@ func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Req
 
 	if req.WindowSeconds != nil {
 		if v, err := parseInt(*req.WindowSeconds); err != nil || v < 1 || v > 3600 {
-			writeError(w, http.StatusBadRequest, "invalid_value", "window_seconds must be between 1 and 3600")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_value", "window_seconds must be between 1 and 3600")
 			return
 		}
 		h.Pool.Exec(r.Context(),
@@ -1533,7 +1520,7 @@ func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Req
 			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.WindowSeconds)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // =============================================================================
@@ -1544,7 +1531,7 @@ func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Req
 // GET /api/v1/admin/content-scan/rules
 func (h *Handler) HandleGetContentScanRules(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1554,7 +1541,7 @@ func (h *Handler) HandleGetContentScanRules(w http.ResponseWriter, r *http.Reque
 		 ORDER BY created_at DESC`)
 	if err != nil {
 		h.Logger.Error("failed to query content scan rules", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan rules")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan rules")
 		return
 	}
 	defer rows.Close()
@@ -1578,14 +1565,14 @@ func (h *Handler) HandleGetContentScanRules(w http.ResponseWriter, r *http.Reque
 		rules = append(rules, r)
 	}
 
-	writeJSON(w, http.StatusOK, rules)
+	apiutil.WriteJSON(w, http.StatusOK, rules)
 }
 
 // HandleCreateContentScanRule creates a new content scan rule.
 // POST /api/v1/admin/content-scan/rules
 func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1597,22 +1584,22 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 		Enabled *bool  `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Rule name is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Rule name is required")
 		return
 	}
 	if req.Pattern == "" {
-		writeError(w, http.StatusBadRequest, "missing_pattern", "Regex pattern is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_pattern", "Regex pattern is required")
 		return
 	}
 
 	// Validate the regex pattern.
 	if _, err := regexp.Compile(req.Pattern); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_pattern", "Invalid regex pattern: "+err.Error())
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_pattern", "Invalid regex pattern: "+err.Error())
 		return
 	}
 
@@ -1622,7 +1609,7 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 	case "":
 		req.Action = "log"
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_action", "Action must be 'block', 'flag', or 'log'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_action", "Action must be 'block', 'flag', or 'log'")
 		return
 	}
 
@@ -1632,7 +1619,7 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 	case "":
 		req.Target = "filename"
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_target", "Target must be 'filename', 'content_type', or 'text_content'")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Target must be 'filename', 'content_type', or 'text_content'")
 		return
 	}
 
@@ -1649,11 +1636,11 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 		ruleID, req.Name, req.Pattern, req.Action, req.Target, enabled)
 	if err != nil {
 		h.Logger.Error("failed to create content scan rule", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create content scan rule")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create content scan rule")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":         ruleID,
 		"name":       req.Name,
 		"pattern":    req.Pattern,
@@ -1668,7 +1655,7 @@ func (h *Handler) HandleCreateContentScanRule(w http.ResponseWriter, r *http.Req
 // PATCH /api/v1/admin/content-scan/rules/{ruleID}
 func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1682,14 +1669,14 @@ func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Req
 		Enabled *bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	// Validate pattern if provided.
 	if req.Pattern != nil {
 		if _, err := regexp.Compile(*req.Pattern); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_pattern", "Invalid regex pattern: "+err.Error())
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_pattern", "Invalid regex pattern: "+err.Error())
 			return
 		}
 	}
@@ -1700,7 +1687,7 @@ func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Req
 		case "block", "flag", "log":
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_action", "Action must be 'block', 'flag', or 'log'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_action", "Action must be 'block', 'flag', or 'log'")
 			return
 		}
 	}
@@ -1711,7 +1698,7 @@ func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Req
 		case "filename", "content_type", "text_content":
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_target", "Target must be 'filename', 'content_type', or 'text_content'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_target", "Target must be 'filename', 'content_type', or 'text_content'")
 			return
 		}
 	}
@@ -1727,22 +1714,22 @@ func (h *Handler) HandleUpdateContentScanRule(w http.ResponseWriter, r *http.Req
 		req.Name, req.Pattern, req.Action, req.Target, req.Enabled, ruleID)
 	if err != nil {
 		h.Logger.Error("failed to update content scan rule", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update content scan rule")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update content scan rule")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Content scan rule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Content scan rule not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleDeleteContentScanRule deletes a content scan rule.
 // DELETE /api/v1/admin/content-scan/rules/{ruleID}
 func (h *Handler) HandleDeleteContentScanRule(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1751,11 +1738,11 @@ func (h *Handler) HandleDeleteContentScanRule(w http.ResponseWriter, r *http.Req
 		`DELETE FROM content_scan_rules WHERE id = $1`, ruleID)
 	if err != nil {
 		h.Logger.Error("failed to delete content scan rule", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete content scan rule")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete content scan rule")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Content scan rule not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Content scan rule not found")
 		return
 	}
 
@@ -1766,7 +1753,7 @@ func (h *Handler) HandleDeleteContentScanRule(w http.ResponseWriter, r *http.Req
 // GET /api/v1/admin/content-scan/log
 func (h *Handler) HandleGetContentScanLog(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1812,7 +1799,7 @@ func (h *Handler) HandleGetContentScanLog(w http.ResponseWriter, r *http.Request
 	}
 	if err != nil {
 		h.Logger.Error("failed to query content scan log", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan log")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get content scan log")
 		return
 	}
 	defer rows.Close()
@@ -1839,7 +1826,7 @@ func (h *Handler) HandleGetContentScanLog(w http.ResponseWriter, r *http.Request
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // =============================================================================
@@ -1850,7 +1837,7 @@ func (h *Handler) HandleGetContentScanLog(w http.ResponseWriter, r *http.Request
 // GET /api/v1/admin/captcha
 func (h *Handler) HandleGetCaptchaConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1870,7 +1857,7 @@ func (h *Handler) HandleGetCaptchaConfig(w http.ResponseWriter, r *http.Request)
 		maskedSecret = "****"
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 		"provider":   provider,
 		"site_key":   siteKey,
 		"secret_key": maskedSecret,
@@ -1881,7 +1868,7 @@ func (h *Handler) HandleGetCaptchaConfig(w http.ResponseWriter, r *http.Request)
 // PATCH /api/v1/admin/captcha
 func (h *Handler) HandleUpdateCaptchaConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
-		writeError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
 		return
 	}
 
@@ -1891,7 +1878,7 @@ func (h *Handler) HandleUpdateCaptchaConfig(w http.ResponseWriter, r *http.Reque
 		SecretKey *string `json:"secret_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -1902,7 +1889,7 @@ func (h *Handler) HandleUpdateCaptchaConfig(w http.ResponseWriter, r *http.Reque
 				`INSERT INTO instance_settings (key, value, updated_at) VALUES ('captcha_provider', $1, now())
 				 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.Provider)
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_provider", "Provider must be 'none', 'hcaptcha', or 'recaptcha'")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_provider", "Provider must be 'none', 'hcaptcha', or 'recaptcha'")
 			return
 		}
 	}
@@ -1919,5 +1906,5 @@ func (h *Handler) HandleUpdateCaptchaConfig(w http.ResponseWriter, r *http.Reque
 			 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`, *req.SecretKey)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

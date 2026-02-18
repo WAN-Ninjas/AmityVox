@@ -1009,7 +1009,7 @@ class ApiClient {
 	}
 
 	ackWelcome(welcomeId: string): Promise<void> {
-		return this.post(`/encryption/welcome/${welcomeId}/ack`);
+		return this.del(`/encryption/welcome/${welcomeId}`);
 	}
 
 	deleteKeyPackage(keyPackageId: string): Promise<void> {
@@ -1414,8 +1414,8 @@ class ApiClient {
 
 	// --- Activities ---
 
-	getActiveSession<T>(channelId: string): Promise<T> {
-		return this.get(`/channels/${channelId}/activities/sessions/active`);
+	getActiveSession<T>(activityId: string): Promise<T> {
+		return this.get(`/activities/${activityId}/sessions/active`);
 	}
 
 	listActivities<T>(category?: string): Promise<T> {
@@ -1423,20 +1423,20 @@ class ApiClient {
 		return this.get(url);
 	}
 
-	createActivitySession<T>(channelId: string, body: unknown): Promise<T> {
-		return this.post(`/channels/${channelId}/activities/sessions`, body);
+	createActivitySession<T>(activityId: string, body: unknown): Promise<T> {
+		return this.post(`/activities/${activityId}/sessions`, body);
 	}
 
-	joinActivitySession(channelId: string, sessionId: string): Promise<void> {
-		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/join`);
+	joinActivitySession(sessionId: string): Promise<void> {
+		return this.post(`/activities/sessions/${sessionId}/join`);
 	}
 
-	leaveActivitySession(channelId: string, sessionId: string): Promise<void> {
-		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/leave`);
+	leaveActivitySession(sessionId: string): Promise<void> {
+		return this.post(`/activities/sessions/${sessionId}/leave`);
 	}
 
-	endActivitySession(channelId: string, sessionId: string): Promise<void> {
-		return this.post(`/channels/${channelId}/activities/sessions/${sessionId}/end`);
+	endActivitySession(sessionId: string): Promise<void> {
+		return this.post(`/activities/sessions/${sessionId}/end`);
 	}
 
 	// --- Kanban ---

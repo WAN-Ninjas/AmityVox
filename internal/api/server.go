@@ -17,7 +17,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/api/activities"
 	"github.com/amityvox/amityvox/internal/api/admin"
 	"github.com/amityvox/amityvox/internal/api/bookmarks"
@@ -44,6 +46,7 @@ import (
 	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/media"
+	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/notifications"
 	"github.com/amityvox/amityvox/internal/presence"
 	"github.com/amityvox/amityvox/internal/search"
@@ -117,6 +120,28 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bus *
 // services (Notifications, Encryption, AutoMod, etc.) are set on the Server.
 func (s *Server) RegisterRoutes() {
 	s.registerRoutes()
+}
+
+// RequireAdmin returns middleware that checks the user's flags for admin
+// privilege. It must be mounted AFTER auth.RequireAuth so UserIDFromContext is
+// populated. Returns 403 if the user is not an admin.
+func RequireAdmin(pool *pgxpool.Pool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := auth.UserIDFromContext(r.Context())
+			if userID == "" {
+				WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+				return
+			}
+			var flags int
+			err := pool.QueryRow(r.Context(), `SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
+			if err != nil || flags&models.UserFlagAdmin == 0 {
+				WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // registerMiddleware adds global middleware to the router.
@@ -959,8 +984,9 @@ func (s *Server) registerRoutes() {
 			// Instance announcements (visible to all logged-in users).
 			r.Get("/announcements", adminH.HandleGetAnnouncements)
 
-			// Admin routes.
+			// Admin routes — protected by RequireAdmin middleware.
 			r.Route("/admin", func(r chi.Router) {
+				r.Use(RequireAdmin(s.DB.Pool))
 				r.Get("/instance", adminH.HandleGetInstance)
 				r.Patch("/instance", adminH.HandleUpdateInstance)
 				r.Get("/federation/peers", adminH.HandleGetFederationPeers)
@@ -1149,29 +1175,26 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusForbidden, "token_required", "A registration token is required to create an account on this instance")
 			return
 		}
-		// Validate the token.
+		// Validate the token. Return the same generic error for all failure cases
+		// (nonexistent, exhausted, expired) to prevent token enumeration.
 		var uses, maxUses int
 		var expiresAt *time.Time
 		err := s.DB.Pool.QueryRow(r.Context(),
 			`SELECT uses, max_uses, expires_at FROM registration_tokens WHERE id = $1`, token).Scan(&uses, &maxUses, &expiresAt)
-		if err != nil {
-			WriteError(w, http.StatusForbidden, "invalid_token", "Invalid registration token")
-			return
+		tokenValid := err == nil
+		if tokenValid && uses >= maxUses {
+			tokenValid = false
 		}
-		if uses >= maxUses {
-			WriteError(w, http.StatusForbidden, "token_exhausted", "This registration token has been fully used")
-			return
+		if tokenValid && expiresAt != nil && expiresAt.Before(time.Now()) {
+			tokenValid = false
 		}
-		if expiresAt != nil && expiresAt.Before(time.Now()) {
-			WriteError(w, http.StatusForbidden, "token_expired", "This registration token has expired")
+		if !tokenValid {
+			WriteError(w, http.StatusForbidden, "invalid_token", "Invalid or expired registration token")
 			return
 		}
 	}
 
-	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = fwd
-	}
+	ip := clientIP(r)
 
 	user, session, err := s.AuthService.Register(r.Context(), req, ip, r.UserAgent())
 	if err != nil {
@@ -1204,10 +1227,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = fwd
-	}
+	ip := clientIP(r)
 
 	user, session, err := s.AuthService.Login(r.Context(), req, ip, r.UserAgent())
 	if err != nil {
@@ -1346,53 +1366,40 @@ func stubHandler(name string) http.HandlerFunc {
 }
 
 // ErrorResponse is the standard error envelope returned by the API.
-type ErrorResponse struct {
-	Error ErrorBody `json:"error"`
-}
+// Aliased from apiutil so callers that reference api.ErrorResponse continue to compile.
+type ErrorResponse = apiutil.ErrorResponse
 
 // ErrorBody contains the error code and human-readable message.
-type ErrorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
+type ErrorBody = apiutil.ErrorBody
 
 // SuccessResponse is the standard success envelope returned by the API.
-type SuccessResponse struct {
-	Data interface{} `json:"data"`
-}
+type SuccessResponse = apiutil.SuccessResponse
 
 // WriteJSON writes a JSON response with the given status code and data wrapped
 // in the standard success envelope {"data": ...}.
+// Delegates to apiutil.WriteJSON.
 func WriteJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(SuccessResponse{Data: data})
+	apiutil.WriteJSON(w, status, data)
 }
 
 // WriteJSONRaw writes a JSON response with the given status code without wrapping
 // in the success envelope. Useful for responses that define their own structure.
+// Delegates to apiutil.WriteJSONRaw.
 func WriteJSONRaw(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	apiutil.WriteJSONRaw(w, status, data)
 }
 
 // WriteError writes a JSON error response with the given status code, error code,
 // and message using the standard error envelope {"error": {"code": ..., "message": ...}}.
+// Delegates to apiutil.WriteError.
 func WriteError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(ErrorResponse{
-		Error: ErrorBody{
-			Code:    code,
-			Message: message,
-		},
-	})
+	apiutil.WriteError(w, status, code, message)
 }
 
 // WriteNoContent writes a 204 No Content response with no body.
+// Delegates to apiutil.WriteNoContent.
 func WriteNoContent(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusNoContent)
+	apiutil.WriteNoContent(w)
 }
 
 // slogMiddleware returns a chi middleware that logs HTTP requests using slog.

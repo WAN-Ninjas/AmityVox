@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -37,17 +38,17 @@ func (h *Handler) HandleCreateBanList(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
 	var req createBanListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name_required", "Ban list name is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "name_required", "Ban list name is required")
 		return
 	}
 
@@ -59,11 +60,11 @@ func (h *Handler) HandleCreateBanList(w http.ResponseWriter, r *http.Request) {
 		id, guildID, req.Name, req.Description, req.Public, userID, now)
 	if err != nil {
 		h.Logger.Error("failed to create ban list", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create ban list")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create ban list")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":          id,
 		"guild_id":    guildID,
 		"name":        req.Name,
@@ -81,7 +82,7 @@ func (h *Handler) HandleGetBanLists(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
@@ -93,7 +94,7 @@ func (h *Handler) HandleGetBanLists(w http.ResponseWriter, r *http.Request) {
 		 WHERE bl.guild_id = $1
 		 ORDER BY bl.created_at DESC`, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch ban lists")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch ban lists")
 		return
 	}
 	defer rows.Close()
@@ -124,7 +125,7 @@ func (h *Handler) HandleGetBanLists(w http.ResponseWriter, r *http.Request) {
 		lists = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, lists)
+	apiutil.WriteJSON(w, http.StatusOK, lists)
 }
 
 // HandleDeleteBanList deletes a ban list.
@@ -135,22 +136,22 @@ func (h *Handler) HandleDeleteBanList(w http.ResponseWriter, r *http.Request) {
 	listID := chi.URLParam(r, "listID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM ban_lists WHERE id = $1 AND guild_id = $2`, listID, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete ban list")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete ban list")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Ban list not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Ban list not found")
 		return
 	}
 
-	writeNoContent(w)
+	apiutil.WriteNoContent(w)
 }
 
 // HandleAddBanListEntry adds a user to a ban list.
@@ -161,17 +162,17 @@ func (h *Handler) HandleAddBanListEntry(w http.ResponseWriter, r *http.Request) 
 	listID := chi.URLParam(r, "listID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
 	var req addBanListEntryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.UserID == "" {
-		writeError(w, http.StatusBadRequest, "user_id_required", "user_id is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "user_id_required", "user_id is required")
 		return
 	}
 
@@ -180,7 +181,7 @@ func (h *Handler) HandleAddBanListEntry(w http.ResponseWriter, r *http.Request) 
 	h.Pool.QueryRow(r.Context(),
 		`SELECT EXISTS(SELECT 1 FROM ban_lists WHERE id = $1 AND guild_id = $2)`, listID, guildID).Scan(&exists)
 	if !exists {
-		writeError(w, http.StatusNotFound, "not_found", "Ban list not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Ban list not found")
 		return
 	}
 
@@ -192,11 +193,11 @@ func (h *Handler) HandleAddBanListEntry(w http.ResponseWriter, r *http.Request) 
 		id, listID, req.UserID, req.Username, req.Reason, userID)
 	if err != nil {
 		h.Logger.Error("failed to add ban list entry", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to add entry")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to add entry")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":       id,
 		"user_id":  req.UserID,
 		"username": req.Username,
@@ -213,7 +214,7 @@ func (h *Handler) HandleGetBanListEntries(w http.ResponseWriter, r *http.Request
 	listID := chi.URLParam(r, "listID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
@@ -224,7 +225,7 @@ func (h *Handler) HandleGetBanListEntries(w http.ResponseWriter, r *http.Request
 		 WHERE e.ban_list_id = $1 AND bl.guild_id = $2
 		 ORDER BY e.added_at DESC`, listID, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch entries")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch entries")
 		return
 	}
 	defer rows.Close()
@@ -250,7 +251,7 @@ func (h *Handler) HandleGetBanListEntries(w http.ResponseWriter, r *http.Request
 		entries = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // HandleRemoveBanListEntry removes a user from a ban list.
@@ -262,7 +263,7 @@ func (h *Handler) HandleRemoveBanListEntry(w http.ResponseWriter, r *http.Reques
 	entryID := chi.URLParam(r, "entryID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
@@ -272,15 +273,15 @@ func (h *Handler) HandleRemoveBanListEntry(w http.ResponseWriter, r *http.Reques
 		 WHERE e.id = $1 AND e.ban_list_id = $2 AND bl.id = e.ban_list_id AND bl.guild_id = $3`,
 		entryID, listID, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to remove entry")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to remove entry")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Entry not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Entry not found")
 		return
 	}
 
-	writeNoContent(w)
+	apiutil.WriteNoContent(w)
 }
 
 // HandleExportBanList exports a ban list as JSON.
@@ -291,7 +292,7 @@ func (h *Handler) HandleExportBanList(w http.ResponseWriter, r *http.Request) {
 	listID := chi.URLParam(r, "listID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
@@ -301,7 +302,7 @@ func (h *Handler) HandleExportBanList(w http.ResponseWriter, r *http.Request) {
 		`SELECT name, COALESCE(description, '') FROM ban_lists WHERE id = $1 AND guild_id = $2`,
 		listID, guildID).Scan(&name, &desc)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Ban list not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Ban list not found")
 		return
 	}
 
@@ -310,7 +311,7 @@ func (h *Handler) HandleExportBanList(w http.ResponseWriter, r *http.Request) {
 		`SELECT user_id, username, reason, added_at FROM ban_list_entries WHERE ban_list_id = $1 ORDER BY added_at`,
 		listID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to export")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export")
 		return
 	}
 	defer rows.Close()
@@ -359,7 +360,7 @@ func (h *Handler) HandleImportBanList(w http.ResponseWriter, r *http.Request) {
 	listID := chi.URLParam(r, "listID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
@@ -368,7 +369,7 @@ func (h *Handler) HandleImportBanList(w http.ResponseWriter, r *http.Request) {
 	h.Pool.QueryRow(r.Context(),
 		`SELECT EXISTS(SELECT 1 FROM ban_lists WHERE id = $1 AND guild_id = $2)`, listID, guildID).Scan(&exists)
 	if !exists {
-		writeError(w, http.StatusNotFound, "not_found", "Ban list not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Ban list not found")
 		return
 	}
 
@@ -380,7 +381,7 @@ func (h *Handler) HandleImportBanList(w http.ResponseWriter, r *http.Request) {
 		} `json:"entries"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&importData); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid import data")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid import data")
 		return
 	}
 
@@ -407,7 +408,7 @@ func (h *Handler) HandleImportBanList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"imported": imported,
 		"total":    len(importData.Entries),
 	})
@@ -420,13 +421,13 @@ func (h *Handler) HandleSubscribeBanList(w http.ResponseWriter, r *http.Request)
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
 	var req subscribeBanListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -436,11 +437,11 @@ func (h *Handler) HandleSubscribeBanList(w http.ResponseWriter, r *http.Request)
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id, public FROM ban_lists WHERE id = $1`, req.BanListID).Scan(&listGuildID, &isPublic)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Ban list not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Ban list not found")
 		return
 	}
 	if !isPublic && listGuildID != guildID {
-		writeError(w, http.StatusForbidden, "not_public", "This ban list is not public")
+		apiutil.WriteError(w, http.StatusForbidden, "not_public", "This ban list is not public")
 		return
 	}
 
@@ -451,11 +452,11 @@ func (h *Handler) HandleSubscribeBanList(w http.ResponseWriter, r *http.Request)
 		 ON CONFLICT (guild_id, ban_list_id) DO UPDATE SET auto_ban = EXCLUDED.auto_ban`,
 		id, guildID, req.BanListID, req.AutoBan, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to subscribe")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to subscribe")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":          id,
 		"guild_id":    guildID,
 		"ban_list_id": req.BanListID,
@@ -470,7 +471,7 @@ func (h *Handler) HandleGetBanListSubscriptions(w http.ResponseWriter, r *http.R
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
@@ -483,7 +484,7 @@ func (h *Handler) HandleGetBanListSubscriptions(w http.ResponseWriter, r *http.R
 		 WHERE s.guild_id = $1
 		 ORDER BY s.subscribed_at DESC`, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch subscriptions")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch subscriptions")
 		return
 	}
 	defer rows.Close()
@@ -511,7 +512,7 @@ func (h *Handler) HandleGetBanListSubscriptions(w http.ResponseWriter, r *http.R
 		subs = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, subs)
+	apiutil.WriteJSON(w, http.StatusOK, subs)
 }
 
 // HandleUnsubscribeBanList removes a ban list subscription.
@@ -522,22 +523,22 @@ func (h *Handler) HandleUnsubscribeBanList(w http.ResponseWriter, r *http.Reques
 	subID := chi.URLParam(r, "subID")
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, "ban_members") {
-		writeError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
+		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
 	}
 
 	tag, err := h.Pool.Exec(r.Context(),
 		`DELETE FROM ban_list_subscriptions WHERE id = $1 AND guild_id = $2`, subID, guildID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to unsubscribe")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unsubscribe")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Subscription not found")
 		return
 	}
 
-	writeNoContent(w)
+	apiutil.WriteNoContent(w)
 }
 
 // HandleGetPublicBanLists returns public ban lists that can be subscribed to.
@@ -554,7 +555,7 @@ func (h *Handler) HandleGetPublicBanLists(w http.ResponseWriter, r *http.Request
 		 ORDER BY subscriber_count DESC, bl.created_at DESC
 		 LIMIT 50`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch public ban lists")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch public ban lists")
 		return
 	}
 	defer rows.Close()
@@ -583,5 +584,5 @@ func (h *Handler) HandleGetPublicBanLists(w http.ResponseWriter, r *http.Request
 		lists = []map[string]interface{}{}
 	}
 
-	writeJSON(w, http.StatusOK, lists)
+	apiutil.WriteJSON(w, http.StatusOK, lists)
 }

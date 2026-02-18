@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/json"
@@ -388,13 +389,15 @@ func generateTOTP(secret string, timeStep int64) string {
 }
 
 // validateTOTP checks a TOTP code against the secret, allowing ±1 time step drift.
+// Uses constant-time comparison to prevent timing attacks.
 func validateTOTP(secret, code string) bool {
 	now := time.Now().Unix()
 	timeStep := now / 30
 
 	// Check current period and ±1 for clock drift tolerance.
 	for _, offset := range []int64{-1, 0, 1} {
-		if generateTOTP(secret, timeStep+offset) == code {
+		expected := generateTOTP(secret, timeStep+offset)
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
 			return true
 		}
 	}

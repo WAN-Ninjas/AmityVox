@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 )
@@ -29,22 +30,6 @@ type Handler struct {
 
 func newID() string {
 	return ulid.Make().String()
-}
-
-// --- JSON helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
 }
 
 // =============================================================================
@@ -81,7 +66,7 @@ func (h *Handler) HandleListActivities(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.Logger.Error("failed to query activities", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list activities")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list activities")
 		return
 	}
 	defer rows.Close()
@@ -126,7 +111,7 @@ func (h *Handler) HandleListActivities(w http.ResponseWriter, r *http.Request) {
 		activities = append(activities, a)
 	}
 
-	writeJSON(w, http.StatusOK, activities)
+	apiutil.WriteJSON(w, http.StatusOK, activities)
 }
 
 // HandleGetActivity returns a single activity by ID.
@@ -171,15 +156,15 @@ func (h *Handler) HandleGetActivity(w http.ResponseWriter, r *http.Request) {
 		&a.ConfigSchema, &a.PermissionsRequired, &a.InstallCount,
 		&a.RatingSum, &a.RatingCount, &a.CreatedAt, &a.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Activity not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Activity not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get activity")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get activity")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, a)
+	apiutil.WriteJSON(w, http.StatusOK, a)
 }
 
 // HandleCreateActivity registers a new custom activity (for the Activity SDK).
@@ -199,16 +184,16 @@ func (h *Handler) HandleCreateActivity(w http.ResponseWriter, r *http.Request) {
 		SupportedChannelTypes []string `json:"supported_channel_types"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_name", "Activity name is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_name", "Activity name is required")
 		return
 	}
 	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "missing_url", "Activity URL is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Activity URL is required")
 		return
 	}
 
@@ -244,11 +229,11 @@ func (h *Handler) HandleCreateActivity(w http.ResponseWriter, r *http.Request) {
 		userID, req.MaxParticipants, req.MinParticipants, req.Category, req.SupportedChannelTypes)
 	if err != nil {
 		h.Logger.Error("failed to create activity", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create activity")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create activity")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":            id,
 		"name":          req.Name,
 		"description":   req.Description,
@@ -270,11 +255,11 @@ func (h *Handler) HandleRateActivity(w http.ResponseWriter, r *http.Request) {
 		Review string `json:"review"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.Rating < 1 || req.Rating > 5 {
-		writeError(w, http.StatusBadRequest, "invalid_rating", "Rating must be between 1 and 5")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_rating", "Rating must be between 1 and 5")
 		return
 	}
 
@@ -284,7 +269,7 @@ func (h *Handler) HandleRateActivity(w http.ResponseWriter, r *http.Request) {
 		 ON CONFLICT (activity_id, user_id) DO UPDATE SET rating = $3, review = $4, created_at = NOW()`,
 		activityID, userID, req.Rating, req.Review)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to rate activity")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to rate activity")
 		return
 	}
 
@@ -296,7 +281,7 @@ func (h *Handler) HandleRateActivity(w http.ResponseWriter, r *http.Request) {
 		 updated_at = NOW()
 		 WHERE id = $1`, activityID)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"activity_id": activityID,
 		"rating":      req.Rating,
 		"review":      req.Review,
@@ -320,11 +305,11 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 
 	var req startSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.ActivityID == "" {
-		writeError(w, http.StatusBadRequest, "missing_activity_id", "Activity ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_activity_id", "Activity ID is required")
 		return
 	}
 
@@ -333,11 +318,11 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT name, url FROM activities WHERE id = $1`, req.ActivityID).Scan(&activityName, &activityURL)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "activity_not_found", "Activity not found")
+		apiutil.WriteError(w, http.StatusNotFound, "activity_not_found", "Activity not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify activity")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to verify activity")
 		return
 	}
 
@@ -348,7 +333,7 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 		 WHERE channel_id = $1 AND activity_id = $2 AND status = 'active'`,
 		channelID, req.ActivityID).Scan(&existingID)
 	if err == nil {
-		writeError(w, http.StatusConflict, "session_exists",
+		apiutil.WriteError(w, http.StatusConflict, "session_exists",
 			"An active session for this activity already exists in this channel")
 		return
 	}
@@ -366,7 +351,7 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 		sessionID, req.ActivityID, channelID, guildID, userID, configJSON)
 	if err != nil {
 		h.Logger.Error("failed to start activity session", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to start session")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start session")
 		return
 	}
 
@@ -393,10 +378,10 @@ func (h *Handler) HandleStartActivitySession(w http.ResponseWriter, r *http.Requ
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "ACTIVITY_SESSION_START", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "ACTIVITY_SESSION_START", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleJoinActivitySession joins an existing activity session.
@@ -415,11 +400,11 @@ func (h *Handler) HandleJoinActivitySession(w http.ResponseWriter, r *http.Reque
 		 WHERE a_s.id = $1 AND a_s.status = 'active'`,
 		sessionID).Scan(&activityID, &channelID, &maxParticipants)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "session_not_found", "Active session not found")
+		apiutil.WriteError(w, http.StatusNotFound, "session_not_found", "Active session not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get session")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get session")
 		return
 	}
 
@@ -429,7 +414,7 @@ func (h *Handler) HandleJoinActivitySession(w http.ResponseWriter, r *http.Reque
 		h.Pool.QueryRow(r.Context(),
 			`SELECT COUNT(*) FROM activity_participants WHERE session_id = $1`, sessionID).Scan(&count)
 		if count >= maxParticipants {
-			writeError(w, http.StatusConflict, "session_full", "Activity session is full")
+			apiutil.WriteError(w, http.StatusConflict, "session_full", "Activity session is full")
 			return
 		}
 	}
@@ -440,19 +425,19 @@ func (h *Handler) HandleJoinActivitySession(w http.ResponseWriter, r *http.Reque
 		 ON CONFLICT (session_id, user_id) DO NOTHING`,
 		sessionID, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to join session")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to join session")
 		return
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "ACTIVITY_PARTICIPANT_JOIN", map[string]string{
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "ACTIVITY_PARTICIPANT_JOIN", channelID, map[string]string{
 			"session_id": sessionID,
 			"user_id":    userID,
 			"channel_id": channelID,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "joined", "session_id": sessionID})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "joined", "session_id": sessionID})
 }
 
 // HandleLeaveActivitySession leaves an activity session.
@@ -466,7 +451,10 @@ func (h *Handler) HandleLeaveActivitySession(w http.ResponseWriter, r *http.Requ
 		sessionID, userID)
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "ACTIVITY_PARTICIPANT_LEAVE", map[string]string{
+		var channelID string
+		h.Pool.QueryRow(r.Context(),
+			`SELECT channel_id FROM activity_sessions WHERE id = $1`, sessionID).Scan(&channelID)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "ACTIVITY_PARTICIPANT_LEAVE", channelID, map[string]string{
 			"session_id": sessionID,
 			"user_id":    userID,
 		})
@@ -486,21 +474,24 @@ func (h *Handler) HandleEndActivitySession(w http.ResponseWriter, r *http.Reques
 		 WHERE id = $1 AND host_user_id = $2 AND status = 'active'`,
 		sessionID, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to end session")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to end session")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusForbidden, "not_host", "Only the host can end the session")
+		apiutil.WriteError(w, http.StatusForbidden, "not_host", "Only the host can end the session")
 		return
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "ACTIVITY_SESSION_END", map[string]string{
+		var channelID string
+		h.Pool.QueryRow(r.Context(),
+			`SELECT channel_id FROM activity_sessions WHERE id = $1`, sessionID).Scan(&channelID)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "ACTIVITY_SESSION_END", channelID, map[string]string{
 			"session_id": sessionID,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ended"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ended"})
 }
 
 // HandleGetActiveSession returns the active activity session for a channel.
@@ -537,11 +528,11 @@ func (h *Handler) HandleGetActiveSession(w http.ResponseWriter, r *http.Request)
 		&s.ChannelID, &s.GuildID, &s.HostUserID, &s.State, &s.Config,
 		&s.Status, &s.StartedAt)
 	if err == pgx.ErrNoRows {
-		writeJSON(w, http.StatusOK, nil)
+		apiutil.WriteJSON(w, http.StatusOK, nil)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get session")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get session")
 		return
 	}
 
@@ -575,7 +566,7 @@ func (h *Handler) HandleGetActiveSession(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"session":      s,
 		"participants": participants,
 	})
@@ -590,7 +581,7 @@ func (h *Handler) HandleUpdateActivityState(w http.ResponseWriter, r *http.Reque
 		State json.RawMessage `json:"state"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -598,22 +589,25 @@ func (h *Handler) HandleUpdateActivityState(w http.ResponseWriter, r *http.Reque
 		`UPDATE activity_sessions SET state = $1 WHERE id = $2 AND status = 'active'`,
 		req.State, sessionID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update state")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update state")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Active session not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Active session not found")
 		return
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "ACTIVITY_STATE_UPDATE", map[string]interface{}{
+		var channelID string
+		h.Pool.QueryRow(r.Context(),
+			`SELECT channel_id FROM activity_sessions WHERE id = $1`, sessionID).Scan(&channelID)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "ACTIVITY_STATE_UPDATE", channelID, map[string]interface{}{
 			"session_id": sessionID,
 			"state":      req.State,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // =============================================================================
@@ -637,7 +631,7 @@ func (h *Handler) HandleCreateGame(w http.ResponseWriter, r *http.Request) {
 
 	var req createGameRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -645,7 +639,7 @@ func (h *Handler) HandleCreateGame(w http.ResponseWriter, r *http.Request) {
 		"trivia": true, "tictactoe": true, "chess": true, "drawing": true,
 	}
 	if !validTypes[req.GameType] {
-		writeError(w, http.StatusBadRequest, "invalid_game_type",
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_game_type",
 			"Game type must be one of: trivia, tictactoe, chess, drawing")
 		return
 	}
@@ -662,7 +656,7 @@ func (h *Handler) HandleCreateGame(w http.ResponseWriter, r *http.Request) {
 		gameID, channelID, req.GameType, stateJSON, configJSON, userID)
 	if err != nil {
 		h.Logger.Error("failed to create game", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create game")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create game")
 		return
 	}
 
@@ -682,10 +676,10 @@ func (h *Handler) HandleCreateGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.game", "GAME_SESSION_CREATE", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.game", "GAME_SESSION_CREATE", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // initializeGameState returns the initial state for a game type.
@@ -807,19 +801,19 @@ func (h *Handler) HandleJoinGame(w http.ResponseWriter, r *http.Request) {
 	gameID := chi.URLParam(r, "gameID")
 
 	// Check game is in 'waiting' status.
-	var gameType, status string
+	var gameType, status, channelID string
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT game_type, status FROM game_sessions WHERE id = $1`, gameID).Scan(&gameType, &status)
+		`SELECT game_type, status, channel_id FROM game_sessions WHERE id = $1`, gameID).Scan(&gameType, &status, &channelID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Game not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Game not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get game")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get game")
 		return
 	}
 	if status != "waiting" {
-		writeError(w, http.StatusConflict, "game_in_progress", "Game is already in progress")
+		apiutil.WriteError(w, http.StatusConflict, "game_in_progress", "Game is already in progress")
 		return
 	}
 
@@ -833,7 +827,7 @@ func (h *Handler) HandleJoinGame(w http.ResponseWriter, r *http.Request) {
 		"tictactoe": 2, "chess": 2, "trivia": 10, "drawing": 10,
 	}
 	if max, ok := maxPlayers[gameType]; ok && playerCount >= max {
-		writeError(w, http.StatusConflict, "game_full", "Game is full")
+		apiutil.WriteError(w, http.StatusConflict, "game_full", "Game is full")
 		return
 	}
 
@@ -843,7 +837,7 @@ func (h *Handler) HandleJoinGame(w http.ResponseWriter, r *http.Request) {
 		 ON CONFLICT (session_id, user_id) DO NOTHING`,
 		gameID, userID, playerCount)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to join game")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to join game")
 		return
 	}
 
@@ -856,7 +850,7 @@ func (h *Handler) HandleJoinGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.game", "GAME_PLAYER_JOIN", map[string]interface{}{
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.game", "GAME_PLAYER_JOIN", channelID, map[string]interface{}{
 			"game_id":      gameID,
 			"user_id":      userID,
 			"player_index": playerCount,
@@ -864,7 +858,7 @@ func (h *Handler) HandleJoinGame(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"game_id":      gameID,
 		"player_index": playerCount,
 		"status":       "joined",
@@ -879,33 +873,33 @@ func (h *Handler) HandleGameMove(w http.ResponseWriter, r *http.Request) {
 
 	var req gameMoveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	// Get current game state.
-	var gameType, status string
+	var gameType, status, channelID string
 	var state json.RawMessage
 	var turnUserID *string
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT game_type, status, state, turn_user_id
-		 FROM game_sessions WHERE id = $1`, gameID).Scan(&gameType, &status, &state, &turnUserID)
+		`SELECT game_type, status, state, turn_user_id, channel_id
+		 FROM game_sessions WHERE id = $1`, gameID).Scan(&gameType, &status, &state, &turnUserID, &channelID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Game not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Game not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get game")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get game")
 		return
 	}
 	if status != "playing" {
-		writeError(w, http.StatusBadRequest, "game_not_active", "Game is not currently active")
+		apiutil.WriteError(w, http.StatusBadRequest, "game_not_active", "Game is not currently active")
 		return
 	}
 
 	// Verify it's the user's turn (for turn-based games).
 	if (gameType == "tictactoe" || gameType == "chess") && turnUserID != nil && *turnUserID != userID {
-		writeError(w, http.StatusForbidden, "not_your_turn", "It is not your turn")
+		apiutil.WriteError(w, http.StatusForbidden, "not_your_turn", "It is not your turn")
 		return
 	}
 
@@ -977,10 +971,10 @@ func (h *Handler) HandleGameMove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.game", "GAME_MOVE", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.game", "GAME_MOVE", channelID, result)
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	apiutil.WriteJSON(w, http.StatusOK, result)
 }
 
 // updateLeaderboard updates the game leaderboard after a game finishes.
@@ -1045,11 +1039,11 @@ func (h *Handler) HandleGetGame(w http.ResponseWriter, r *http.Request) {
 		&g.ID, &g.ChannelID, &g.GameType, &g.State, &g.Config,
 		&g.Status, &g.WinnerUserID, &g.TurnUserID, &g.StartedAt, &g.EndedAt)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Game not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Game not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get game")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get game")
 		return
 	}
 
@@ -1083,7 +1077,7 @@ func (h *Handler) HandleGetGame(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"game":    g,
 		"players": players,
 	})
@@ -1096,7 +1090,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 
 	validTypes := map[string]bool{"trivia": true, "tictactoe": true, "chess": true, "drawing": true}
 	if !validTypes[gameType] {
-		writeError(w, http.StatusBadRequest, "invalid_game_type", "Invalid game type")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_game_type", "Invalid game type")
 		return
 	}
 
@@ -1110,7 +1104,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY gl.wins DESC, gl.total_score DESC
 		 LIMIT 50`, gameType)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get leaderboard")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get leaderboard")
 		return
 	}
 	defer rows.Close()
@@ -1139,7 +1133,7 @@ func (h *Handler) HandleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, e)
 	}
 
-	writeJSON(w, http.StatusOK, entries)
+	apiutil.WriteJSON(w, http.StatusOK, entries)
 }
 
 // =============================================================================
@@ -1166,11 +1160,11 @@ func (h *Handler) HandleStartWatchTogether(w http.ResponseWriter, r *http.Reques
 
 	var req watchTogetherRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.VideoURL == "" {
-		writeError(w, http.StatusBadRequest, "missing_url", "Video URL is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Video URL is required")
 		return
 	}
 
@@ -1208,7 +1202,7 @@ func (h *Handler) HandleStartWatchTogether(w http.ResponseWriter, r *http.Reques
 		wtID, sessionID, req.VideoURL, req.VideoTitle, req.VideoThumbnail)
 	if err != nil {
 		h.Logger.Error("failed to create watch together session", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to start watch session")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start watch session")
 		return
 	}
 
@@ -1227,10 +1221,10 @@ func (h *Handler) HandleStartWatchTogether(w http.ResponseWriter, r *http.Reques
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "WATCH_TOGETHER_START", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "WATCH_TOGETHER_START", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleSyncWatchTogether synchronizes playback position for Watch Together.
@@ -1240,7 +1234,7 @@ func (h *Handler) HandleSyncWatchTogether(w http.ResponseWriter, r *http.Request
 
 	var req watchTogetherSyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -1258,16 +1252,19 @@ func (h *Handler) HandleSyncWatchTogether(w http.ResponseWriter, r *http.Request
 		 WHERE activity_session_id = $4`,
 		req.CurrentTimeMs, playing, req.PlaybackRate, sessionID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to sync")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to sync")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "not_found", "Watch Together session not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Watch Together session not found")
 		return
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "WATCH_TOGETHER_SYNC", map[string]interface{}{
+		var channelID string
+		h.Pool.QueryRow(r.Context(),
+			`SELECT channel_id FROM activity_sessions WHERE id = $1`, sessionID).Scan(&channelID)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "WATCH_TOGETHER_SYNC", channelID, map[string]interface{}{
 			"session_id":      sessionID,
 			"current_time_ms": req.CurrentTimeMs,
 			"playing":         playing,
@@ -1275,7 +1272,7 @@ func (h *Handler) HandleSyncWatchTogether(w http.ResponseWriter, r *http.Request
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "synced"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "synced"})
 }
 
 // =============================================================================
@@ -1297,11 +1294,11 @@ func (h *Handler) HandleStartMusicParty(w http.ResponseWriter, r *http.Request) 
 
 	var req musicPartyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.TrackURL == "" {
-		writeError(w, http.StatusBadRequest, "missing_url", "Track URL is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Track URL is required")
 		return
 	}
 
@@ -1337,7 +1334,7 @@ func (h *Handler) HandleStartMusicParty(w http.ResponseWriter, r *http.Request) 
 		mpID, sessionID, req.TrackURL, req.TrackTitle, req.TrackArtist, req.TrackArtwork)
 	if err != nil {
 		h.Logger.Error("failed to create music party", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to start music party")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to start music party")
 		return
 	}
 
@@ -1356,10 +1353,10 @@ func (h *Handler) HandleStartMusicParty(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "MUSIC_PARTY_START", result)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "MUSIC_PARTY_START", channelID, result)
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, result)
 }
 
 // HandleAddToMusicQueue adds a track to the music party queue.
@@ -1370,11 +1367,11 @@ func (h *Handler) HandleAddToMusicQueue(w http.ResponseWriter, r *http.Request) 
 
 	var req musicPartyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.TrackURL == "" {
-		writeError(w, http.StatusBadRequest, "missing_url", "Track URL is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_url", "Track URL is required")
 		return
 	}
 
@@ -1383,11 +1380,11 @@ func (h *Handler) HandleAddToMusicQueue(w http.ResponseWriter, r *http.Request) 
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT queue FROM music_party_sessions WHERE activity_session_id = $1`, sessionID).Scan(&queue)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "Music party not found")
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Music party not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get queue")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get queue")
 		return
 	}
 
@@ -1410,14 +1407,17 @@ func (h *Handler) HandleAddToMusicQueue(w http.ResponseWriter, r *http.Request) 
 		updatedQueue, sessionID)
 
 	if h.EventBus != nil {
-		h.EventBus.PublishJSON(r.Context(), "amityvox.channel.activity", "MUSIC_PARTY_QUEUE_ADD", map[string]interface{}{
+		var channelID string
+		h.Pool.QueryRow(r.Context(),
+			`SELECT channel_id FROM activity_sessions WHERE id = $1`, sessionID).Scan(&channelID)
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.activity", "MUSIC_PARTY_QUEUE_ADD", channelID, map[string]interface{}{
 			"session_id": sessionID,
 			"track":      newTrack,
 			"queue_size": len(queueList),
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"track":      newTrack,
 		"queue_size": len(queueList),
 	})

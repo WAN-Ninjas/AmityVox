@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
 )
@@ -22,22 +23,6 @@ import (
 type Handler struct {
 	Pool   *pgxpool.Pool
 	Logger *slog.Logger
-}
-
-// --- Helpers ---
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
 }
 
 // --- Request types ---
@@ -57,14 +42,14 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 	var req createBookmarkRequest
 	if r.Body != nil && r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 			return
 		}
 	}
 
 	// Validate note length if provided.
 	if req.Note != nil && len(*req.Note) > 1000 {
-		writeError(w, http.StatusBadRequest, "note_too_long", "Bookmark note must be at most 1000 characters")
+		apiutil.WriteError(w, http.StatusBadRequest, "note_too_long", "Bookmark note must be at most 1000 characters")
 		return
 	}
 
@@ -73,11 +58,11 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 	if req.ReminderAt != nil && *req.ReminderAt != "" {
 		t, err := time.Parse(time.RFC3339, *req.ReminderAt)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_reminder_at", "Invalid reminder_at format; use RFC3339")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_reminder_at", "Invalid reminder_at format; use RFC3339")
 			return
 		}
 		if t.Before(time.Now()) {
-			writeError(w, http.StatusBadRequest, "invalid_reminder_at", "Reminder time must be in the future")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_reminder_at", "Reminder time must be in the future")
 			return
 		}
 		reminderAt = &t
@@ -91,11 +76,11 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 	).Scan(&exists)
 	if err != nil {
 		h.Logger.Error("failed to check message existence", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to check message")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to check message")
 		return
 	}
 	if !exists {
-		writeError(w, http.StatusNotFound, "message_not_found", "Message not found")
+		apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found")
 		return
 	}
 
@@ -117,11 +102,11 @@ func (h *Handler) HandleCreateBookmark(w http.ResponseWriter, r *http.Request) {
 			slog.String("message_id", messageID),
 			slog.String("error", err.Error()),
 		)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create bookmark")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create bookmark")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, bookmark)
+	apiutil.WriteJSON(w, http.StatusOK, bookmark)
 }
 
 // HandleDeleteBookmark removes a bookmark from a message.
@@ -140,11 +125,11 @@ func (h *Handler) HandleDeleteBookmark(w http.ResponseWriter, r *http.Request) {
 			slog.String("message_id", messageID),
 			slog.String("error", err.Error()),
 		)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bookmark")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete bookmark")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "bookmark_not_found", "Bookmark not found")
+		apiutil.WriteError(w, http.StatusNotFound, "bookmark_not_found", "Bookmark not found")
 		return
 	}
 
@@ -206,7 +191,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 			slog.String("user_id", userID),
 			slog.String("error", err.Error()),
 		)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list bookmarks")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list bookmarks")
 		return
 	}
 	defer rows.Close()
@@ -224,7 +209,7 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 			&author.StatusText, &author.StatusEmoji, &author.StatusPresence, &author.Bio, &author.Flags, &author.CreatedAt,
 		); err != nil {
 			h.Logger.Error("failed to scan bookmark row", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read bookmarks")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read bookmarks")
 			return
 		}
 
@@ -233,5 +218,5 @@ func (h *Handler) HandleListBookmarks(w http.ResponseWriter, r *http.Request) {
 		bookmarks = append(bookmarks, b)
 	}
 
-	writeJSON(w, http.StatusOK, bookmarks)
+	apiutil.WriteJSON(w, http.StatusOK, bookmarks)
 }

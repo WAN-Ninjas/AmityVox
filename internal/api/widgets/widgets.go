@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -139,7 +140,7 @@ func (h *Handler) HandleGetGuildWidget(w http.ResponseWriter, r *http.Request) {
 
 	if err == pgx.ErrNoRows {
 		// Return default disabled widget.
-		writeJSON(w, http.StatusOK, GuildWidget{
+		apiutil.WriteJSON(w, http.StatusOK, GuildWidget{
 			GuildID: guildID,
 			Enabled: false,
 			Style:   "banner_1",
@@ -148,11 +149,11 @@ func (h *Handler) HandleGetGuildWidget(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.Logger.Error("failed to get guild widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild widget")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, gw)
+	apiutil.WriteJSON(w, http.StatusOK, gw)
 }
 
 // HandleUpdateGuildWidget updates the guild widget configuration.
@@ -163,18 +164,18 @@ func (h *Handler) HandleUpdateGuildWidget(w http.ResponseWriter, r *http.Request
 
 	// Only guild owner or admin can update widget settings.
 	if !h.isGuildAdmin(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only the guild owner or an admin can manage the widget")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only the guild owner or an admin can manage the widget")
 		return
 	}
 
 	var req updateGuildWidgetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Style != nil && !validStyles[*req.Style] {
-		writeError(w, http.StatusBadRequest, "invalid_style", "Valid styles are: banner_1, banner_2, shield")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_style", "Valid styles are: banner_1, banner_2, shield")
 		return
 	}
 
@@ -193,11 +194,11 @@ func (h *Handler) HandleUpdateGuildWidget(w http.ResponseWriter, r *http.Request
 
 	if err != nil {
 		h.Logger.Error("failed to update guild widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update guild widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update guild widget")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, gw)
+	apiutil.WriteJSON(w, http.StatusOK, gw)
 }
 
 // HandleGetGuildWidgetEmbed returns the public embeddable widget data (no auth required).
@@ -213,12 +214,12 @@ func (h *Handler) HandleGetGuildWidgetEmbed(w http.ResponseWriter, r *http.Reque
 	).Scan(&enabled, &inviteChannelID)
 
 	if err == pgx.ErrNoRows || !enabled {
-		writeError(w, http.StatusForbidden, "widget_disabled", "The widget is not enabled for this guild")
+		apiutil.WriteError(w, http.StatusForbidden, "widget_disabled", "The widget is not enabled for this guild")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to check widget status", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load widget")
 		return
 	}
 
@@ -231,7 +232,7 @@ func (h *Handler) HandleGetGuildWidgetEmbed(w http.ResponseWriter, r *http.Reque
 	).Scan(&embed.ID, &embed.Name, &embed.Description, &embed.IconID, &embed.MemberCount)
 	if err != nil {
 		h.Logger.Error("failed to fetch guild for widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
+		apiutil.WriteError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
 		return
 	}
 
@@ -292,7 +293,7 @@ func (h *Handler) HandleGetGuildWidgetEmbed(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	writeJSON(w, http.StatusOK, embed)
+	apiutil.WriteJSON(w, http.StatusOK, embed)
 }
 
 // ============================================================
@@ -313,7 +314,7 @@ func (h *Handler) HandleGetChannelWidgets(w http.ResponseWriter, r *http.Request
 	)
 	if err != nil {
 		h.Logger.Error("failed to get channel widgets", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get widgets")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get widgets")
 		return
 	}
 	defer rows.Close()
@@ -330,7 +331,7 @@ func (h *Handler) HandleGetChannelWidgets(w http.ResponseWriter, r *http.Request
 		widgets = append(widgets, cw)
 	}
 
-	writeJSON(w, http.StatusOK, widgets)
+	apiutil.WriteJSON(w, http.StatusOK, widgets)
 }
 
 // HandleCreateChannelWidget creates a new widget in a channel.
@@ -341,16 +342,16 @@ func (h *Handler) HandleCreateChannelWidget(w http.ResponseWriter, r *http.Reque
 
 	var req createChannelWidgetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if req.Title == "" {
-		writeError(w, http.StatusBadRequest, "missing_title", "Title is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_title", "Title is required")
 		return
 	}
 	if !validWidgetTypes[req.WidgetType] {
-		writeError(w, http.StatusBadRequest, "invalid_widget_type",
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_widget_type",
 			"Valid types: notes, youtube, countdown, custom_iframe")
 		return
 	}
@@ -364,17 +365,17 @@ func (h *Handler) HandleCreateChannelWidget(w http.ResponseWriter, r *http.Reque
 		`SELECT guild_id FROM channels WHERE id = $1`, channelID,
 	).Scan(&guildID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if guildID == nil {
-		writeError(w, http.StatusBadRequest, "not_guild_channel", "Widgets can only be added to guild channels")
+		apiutil.WriteError(w, http.StatusBadRequest, "not_guild_channel", "Widgets can only be added to guild channels")
 		return
 	}
 
 	// Check if user has permission to add widgets.
 	if !h.hasWidgetPermission(r, *guildID, userID, "add") {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to add widgets")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to add widgets")
 		return
 	}
 
@@ -398,13 +399,13 @@ func (h *Handler) HandleCreateChannelWidget(w http.ResponseWriter, r *http.Reque
 
 	if err != nil {
 		h.Logger.Error("failed to create channel widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create widget")
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_CREATE", cw)
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_CREATE", cw.GuildID, cw)
 
-	writeJSON(w, http.StatusCreated, cw)
+	apiutil.WriteJSON(w, http.StatusCreated, cw)
 }
 
 // HandleUpdateChannelWidget updates a channel widget.
@@ -415,7 +416,7 @@ func (h *Handler) HandleUpdateChannelWidget(w http.ResponseWriter, r *http.Reque
 
 	var req updateChannelWidgetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -425,18 +426,18 @@ func (h *Handler) HandleUpdateChannelWidget(w http.ResponseWriter, r *http.Reque
 		`SELECT guild_id, creator_id FROM channel_widgets WHERE id = $1`, widgetID,
 	).Scan(&guildID, &creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
+		apiutil.WriteError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get widget")
 		return
 	}
 
 	// Creator or guild admin/owner can update.
 	if creatorID != userID && !h.hasWidgetPermission(r, guildID, userID, "configure") {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to update this widget")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to update this widget")
 		return
 	}
 
@@ -456,13 +457,13 @@ func (h *Handler) HandleUpdateChannelWidget(w http.ResponseWriter, r *http.Reque
 
 	if err != nil {
 		h.Logger.Error("failed to update widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update widget")
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_UPDATE", cw)
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_UPDATE", cw.GuildID, cw)
 
-	writeJSON(w, http.StatusOK, cw)
+	apiutil.WriteJSON(w, http.StatusOK, cw)
 }
 
 // HandleDeleteChannelWidget removes a channel widget.
@@ -477,33 +478,33 @@ func (h *Handler) HandleDeleteChannelWidget(w http.ResponseWriter, r *http.Reque
 		`SELECT guild_id, creator_id FROM channel_widgets WHERE id = $1`, widgetID,
 	).Scan(&guildID, &creatorID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
+		apiutil.WriteError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get widget")
 		return
 	}
 
 	// Creator or guild admin/owner can delete.
 	if creatorID != userID && !h.hasWidgetPermission(r, guildID, userID, "remove") {
-		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to remove this widget")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "You do not have permission to remove this widget")
 		return
 	}
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channel_widgets WHERE id = $1`, widgetID)
 	if err != nil {
 		h.Logger.Error("failed to delete widget", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete widget")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete widget")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
+		apiutil.WriteError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
 		return
 	}
 
-	h.EventBus.PublishJSON(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_DELETE", map[string]string{
+	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_DELETE", guildID, map[string]string{
 		"widget_id": widgetID,
 		"guild_id":  guildID,
 	})
@@ -549,7 +550,7 @@ func (h *Handler) HandleListPlugins(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Pool.Query(r.Context(), query, args...)
 	if err != nil {
 		h.Logger.Error("failed to list plugins", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to list plugins")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list plugins")
 		return
 	}
 	defer rows.Close()
@@ -582,7 +583,7 @@ func (h *Handler) HandleListPlugins(w http.ResponseWriter, r *http.Request) {
 		plugins = append(plugins, p)
 	}
 
-	writeJSON(w, http.StatusOK, plugins)
+	apiutil.WriteJSON(w, http.StatusOK, plugins)
 }
 
 // HandleGetPlugin returns a single plugin's details.
@@ -617,16 +618,16 @@ func (h *Handler) HandleGetPlugin(w http.ResponseWriter, r *http.Request) {
 		&p.Public, &p.Verified, &p.InstallCount, &p.CreatedAt, &p.UpdatedAt)
 
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "plugin_not_found", "Plugin not found")
+		apiutil.WriteError(w, http.StatusNotFound, "plugin_not_found", "Plugin not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get plugin", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get plugin")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get plugin")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, p)
+	apiutil.WriteJSON(w, http.StatusOK, p)
 }
 
 // HandleInstallPlugin installs a plugin in a guild.
@@ -636,7 +637,7 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 
 	if !h.isGuildAdmin(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild owners or admins can install plugins")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild owners or admins can install plugins")
 		return
 	}
 
@@ -645,11 +646,11 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 		Config   json.RawMessage `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 	if req.PluginID == "" {
-		writeError(w, http.StatusBadRequest, "missing_plugin_id", "plugin_id is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_plugin_id", "plugin_id is required")
 		return
 	}
 	if req.Config == nil {
@@ -662,7 +663,7 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM plugins WHERE id = $1 AND public = true)`, req.PluginID,
 	).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusNotFound, "plugin_not_found", "Plugin not found")
+		apiutil.WriteError(w, http.StatusNotFound, "plugin_not_found", "Plugin not found")
 		return
 	}
 
@@ -690,7 +691,7 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		h.Logger.Error("failed to install plugin", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to install plugin")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to install plugin")
 		return
 	}
 
@@ -698,7 +699,7 @@ func (h *Handler) HandleInstallPlugin(w http.ResponseWriter, r *http.Request) {
 	h.Pool.Exec(r.Context(),
 		`UPDATE plugins SET install_count = install_count + 1 WHERE id = $1`, req.PluginID)
 
-	writeJSON(w, http.StatusCreated, ip)
+	apiutil.WriteJSON(w, http.StatusCreated, ip)
 }
 
 // HandleGetGuildPlugins returns installed plugins for a guild.
@@ -717,7 +718,7 @@ func (h *Handler) HandleGetGuildPlugins(w http.ResponseWriter, r *http.Request) 
 	)
 	if err != nil {
 		h.Logger.Error("failed to get guild plugins", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild plugins")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get guild plugins")
 		return
 	}
 	defer rows.Close()
@@ -751,7 +752,7 @@ func (h *Handler) HandleGetGuildPlugins(w http.ResponseWriter, r *http.Request) 
 		plugins = append(plugins, gp)
 	}
 
-	writeJSON(w, http.StatusOK, plugins)
+	apiutil.WriteJSON(w, http.StatusOK, plugins)
 }
 
 // HandleUpdateGuildPlugin updates a guild plugin's config or enabled state.
@@ -762,7 +763,7 @@ func (h *Handler) HandleUpdateGuildPlugin(w http.ResponseWriter, r *http.Request
 	installID := chi.URLParam(r, "installID")
 
 	if !h.isGuildAdmin(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild owners or admins can manage plugins")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild owners or admins can manage plugins")
 		return
 	}
 
@@ -771,7 +772,7 @@ func (h *Handler) HandleUpdateGuildPlugin(w http.ResponseWriter, r *http.Request
 		Config  *json.RawMessage `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -785,15 +786,15 @@ func (h *Handler) HandleUpdateGuildPlugin(w http.ResponseWriter, r *http.Request
 	)
 	if err != nil {
 		h.Logger.Error("failed to update guild plugin", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to update plugin")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update plugin")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "plugin_not_found", "Plugin installation not found")
+		apiutil.WriteError(w, http.StatusNotFound, "plugin_not_found", "Plugin installation not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // HandleUninstallPlugin removes a plugin from a guild.
@@ -804,7 +805,7 @@ func (h *Handler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Request) 
 	installID := chi.URLParam(r, "installID")
 
 	if !h.isGuildAdmin(r, guildID, userID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Only guild owners or admins can uninstall plugins")
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only guild owners or admins can uninstall plugins")
 		return
 	}
 
@@ -815,12 +816,12 @@ func (h *Handler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Request) 
 		installID, guildID,
 	).Scan(&pluginID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "plugin_not_found", "Plugin installation not found")
+		apiutil.WriteError(w, http.StatusNotFound, "plugin_not_found", "Plugin installation not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get guild plugin", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to uninstall plugin")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to uninstall plugin")
 		return
 	}
 
@@ -828,7 +829,7 @@ func (h *Handler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Request) 
 		`DELETE FROM guild_plugins WHERE id = $1 AND guild_id = $2`, installID, guildID)
 	if err != nil {
 		h.Logger.Error("failed to uninstall plugin", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to uninstall plugin")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to uninstall plugin")
 		return
 	}
 
@@ -855,20 +856,20 @@ func (h *Handler) HandleCreateKeyBackup(w http.ResponseWriter, r *http.Request) 
 		KeyCount      int    `json:"key_count"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
 	if len(req.EncryptedData) == 0 {
-		writeError(w, http.StatusBadRequest, "missing_data", "encrypted_data is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_data", "encrypted_data is required")
 		return
 	}
 	if len(req.Salt) < 16 {
-		writeError(w, http.StatusBadRequest, "invalid_salt", "Salt must be at least 16 bytes")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_salt", "Salt must be at least 16 bytes")
 		return
 	}
 	if len(req.Nonce) < 12 {
-		writeError(w, http.StatusBadRequest, "invalid_nonce", "Nonce must be at least 12 bytes")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_nonce", "Nonce must be at least 12 bytes")
 		return
 	}
 
@@ -889,11 +890,11 @@ func (h *Handler) HandleCreateKeyBackup(w http.ResponseWriter, r *http.Request) 
 	)
 	if err != nil {
 		h.Logger.Error("failed to create key backup", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create key backup")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create key backup")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":        backupID,
 		"key_count": req.KeyCount,
 		"version":   1,
@@ -920,16 +921,16 @@ func (h *Handler) HandleGetKeyBackup(w http.ResponseWriter, r *http.Request) {
 	).Scan(&meta.ID, &meta.KeyCount, &meta.Version, &meta.CreatedAt, &meta.UpdatedAt)
 
 	if err == pgx.ErrNoRows {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"exists": false})
+		apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"exists": false})
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to get key backup", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get key backup")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get key backup")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"exists": true,
 		"backup": meta,
 	})
@@ -958,16 +959,16 @@ func (h *Handler) HandleDownloadKeyBackup(w http.ResponseWriter, r *http.Request
 		&backup.KeyCount, &backup.Version, &backup.CreatedAt)
 
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "no_backup", "No key backup found")
+		apiutil.WriteError(w, http.StatusNotFound, "no_backup", "No key backup found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("failed to download key backup", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to download key backup")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to download key backup")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, backup)
+	apiutil.WriteJSON(w, http.StatusOK, backup)
 }
 
 // HandleDeleteKeyBackup deletes the key backup for the current user.
@@ -979,11 +980,11 @@ func (h *Handler) HandleDeleteKeyBackup(w http.ResponseWriter, r *http.Request) 
 		`DELETE FROM key_backups WHERE user_id = $1`, userID)
 	if err != nil {
 		h.Logger.Error("failed to delete key backup", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to delete key backup")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete key backup")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "no_backup", "No key backup found")
+		apiutil.WriteError(w, http.StatusNotFound, "no_backup", "No key backup found")
 		return
 	}
 
@@ -1005,7 +1006,7 @@ func (h *Handler) HandleGenerateRecoveryCodes(w http.ResponseWriter, r *http.Req
 		`SELECT EXISTS(SELECT 1 FROM key_backups WHERE user_id = $1)`, userID,
 	).Scan(&exists)
 	if err != nil || !exists {
-		writeError(w, http.StatusBadRequest, "no_backup", "Create a key backup first")
+		apiutil.WriteError(w, http.StatusBadRequest, "no_backup", "Create a key backup first")
 		return
 	}
 
@@ -1026,7 +1027,7 @@ func (h *Handler) HandleGenerateRecoveryCodes(w http.ResponseWriter, r *http.Req
 		)
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"codes": codes,
 	})
 }
@@ -1133,16 +1134,4 @@ func hashRecoveryCode(code string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
-}
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]string{"code": code, "message": message},
-	})
-}

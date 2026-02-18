@@ -25,7 +25,7 @@ func (m *Manager) cleanExpiredBans(ctx context.Context) error {
 			m.logger.Error("failed to scan expired ban row", slog.String("error", err.Error()))
 			continue
 		}
-		m.bus.PublishJSON(ctx, events.SubjectGuildBanRemove, "GUILD_BAN_REMOVE", map[string]string{
+		m.bus.PublishGuildEvent(ctx, events.SubjectGuildBanRemove, "GUILD_BAN_REMOVE", guildID, map[string]string{
 			"guild_id": guildID, "user_id": userID,
 		})
 		count++

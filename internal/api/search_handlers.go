@@ -124,6 +124,9 @@ func (s *Server) handleSearchMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// --- Access control: filter out messages from channels the user cannot see ---
+	messages = s.filterAuthorizedMessages(r.Context(), userID, messages)
+
 	// Enrich with authors, attachments, and embeds.
 	s.enrichSearchMessagesWithAuthors(r.Context(), messages)
 	s.enrichSearchMessagesWithAttachments(r.Context(), messages)
@@ -272,6 +275,117 @@ func (s *Server) handleSearchGuilds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, guilds)
+}
+
+// filterAuthorizedMessages removes messages from channels the requesting user
+// does not have access to. For guild channels, the user must be a member of the
+// guild. For DM channels (guild_id IS NULL), the user must be a channel recipient.
+func (s *Server) filterAuthorizedMessages(ctx context.Context, userID string, messages []models.Message) []models.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	// Collect unique channel IDs.
+	channelIDSet := make(map[string]struct{})
+	for _, m := range messages {
+		channelIDSet[m.ChannelID] = struct{}{}
+	}
+	channelIDs := make([]string, 0, len(channelIDSet))
+	for id := range channelIDSet {
+		channelIDs = append(channelIDs, id)
+	}
+
+	// Look up channel -> guild_id mapping.
+	type channelInfo struct {
+		guildID *string
+	}
+	channelMap := make(map[string]channelInfo, len(channelIDs))
+	rows, err := s.DB.Pool.Query(ctx,
+		`SELECT id, guild_id FROM channels WHERE id = ANY($1)`, channelIDs)
+	if err != nil {
+		s.Logger.Error("search access control: channel lookup failed", "error", err.Error())
+		return nil // fail closed
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cID string
+		var gID *string
+		if err := rows.Scan(&cID, &gID); err != nil {
+			continue
+		}
+		channelMap[cID] = channelInfo{guildID: gID}
+	}
+	rows.Close()
+
+	// Collect unique guild IDs for membership check.
+	guildIDSet := make(map[string]struct{})
+	dmChannelIDs := make([]string, 0)
+	for cID, info := range channelMap {
+		if info.guildID != nil && *info.guildID != "" {
+			guildIDSet[*info.guildID] = struct{}{}
+		} else {
+			dmChannelIDs = append(dmChannelIDs, cID)
+		}
+	}
+
+	// Batch-check guild membership.
+	allowedGuilds := make(map[string]bool)
+	if len(guildIDSet) > 0 {
+		guildIDs := make([]string, 0, len(guildIDSet))
+		for id := range guildIDSet {
+			guildIDs = append(guildIDs, id)
+		}
+		memberRows, err := s.DB.Pool.Query(ctx,
+			`SELECT guild_id FROM guild_members WHERE user_id = $1 AND guild_id = ANY($2)`,
+			userID, guildIDs)
+		if err == nil {
+			defer memberRows.Close()
+			for memberRows.Next() {
+				var gID string
+				if err := memberRows.Scan(&gID); err == nil {
+					allowedGuilds[gID] = true
+				}
+			}
+			memberRows.Close()
+		}
+	}
+
+	// Batch-check DM channel recipients.
+	allowedDMChannels := make(map[string]bool)
+	if len(dmChannelIDs) > 0 {
+		dmRows, err := s.DB.Pool.Query(ctx,
+			`SELECT channel_id FROM channel_recipients WHERE user_id = $1 AND channel_id = ANY($2)`,
+			userID, dmChannelIDs)
+		if err == nil {
+			defer dmRows.Close()
+			for dmRows.Next() {
+				var cID string
+				if err := dmRows.Scan(&cID); err == nil {
+					allowedDMChannels[cID] = true
+				}
+			}
+			dmRows.Close()
+		}
+	}
+
+	// Filter messages.
+	filtered := make([]models.Message, 0, len(messages))
+	for _, m := range messages {
+		info, ok := channelMap[m.ChannelID]
+		if !ok {
+			continue // channel not found — fail closed
+		}
+		if info.guildID != nil && *info.guildID != "" {
+			if allowedGuilds[*info.guildID] {
+				filtered = append(filtered, m)
+			}
+		} else {
+			if allowedDMChannels[m.ChannelID] {
+				filtered = append(filtered, m)
+			}
+		}
+	}
+	return filtered
 }
 
 // enrichSearchMessagesWithAuthors batch-loads author data for search results.

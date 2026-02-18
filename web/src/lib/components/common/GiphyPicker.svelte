@@ -202,7 +202,7 @@
 
 <svelte:document onclick={handleClickOutside} onkeydown={handleKeydown} />
 
-<div class="giphy-picker absolute bottom-full right-0 z-50 mb-2 w-80 rounded-lg bg-bg-floating shadow-xl">
+<div class="giphy-picker absolute bottom-full right-0 z-50 mb-2 w-80 rounded-lg bg-bg-floating shadow-xl" role="dialog" aria-label="GIF picker">
 	<!-- Search bar -->
 	<div class="flex items-center gap-1 border-b border-bg-modifier p-2">
 		{#if view === 'browse'}

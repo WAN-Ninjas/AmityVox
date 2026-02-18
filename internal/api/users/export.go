@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/permissions"
 )
@@ -105,7 +106,7 @@ type userExportRelation struct {
 func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		apiutil.WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
@@ -113,7 +114,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	if lastExport, ok := exportCooldowns[userID]; ok {
 		if time.Since(lastExport) < exportCooldownDuration {
 			remaining := exportCooldownDuration - time.Since(lastExport)
-			writeError(w, http.StatusTooManyRequests, "rate_limited",
+			apiutil.WriteError(w, http.StatusTooManyRequests, "rate_limited",
 				fmt.Sprintf("Data export is limited to once per 24 hours. Try again in %s.", remaining.Round(time.Minute).String()))
 			return
 		}
@@ -128,7 +129,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	profile, err := h.collectUserProfile(ctx, userID)
 	if err != nil {
 		h.Logger.Error("export: failed to collect user profile", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
 		return
 	}
 	export.User = profile
@@ -147,7 +148,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	guilds, err := h.collectGuildMemberships(ctx, userID)
 	if err != nil {
 		h.Logger.Error("export: failed to collect guild memberships", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
 		return
 	}
 	export.Guilds = guilds
@@ -156,7 +157,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	messages, err := h.collectMessages(ctx, userID)
 	if err != nil {
 		h.Logger.Error("export: failed to collect messages", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export user data")
 		return
 	}
 	export.Messages = messages
@@ -201,7 +202,7 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 	// Record cooldown.
 	exportCooldowns[userID] = time.Now()
 
-	writeJSON(w, http.StatusOK, export)
+	apiutil.WriteJSON(w, http.StatusOK, export)
 }
 
 // --- Channel Message Archive Export ---
@@ -245,13 +246,13 @@ type channelExportReaction struct {
 func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		apiutil.WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
 	channelID := chi.URLParam(r, "channelID")
 	if channelID == "" {
-		writeError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
+		apiutil.WriteError(w, http.StatusBadRequest, "missing_channel_id", "Channel ID is required")
 		return
 	}
 
@@ -261,19 +262,19 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 	var guildID *string
 	err := h.Pool.QueryRow(ctx, `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
 	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
 	if err != nil {
 		h.Logger.Error("export: failed to get channel", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get channel")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get channel")
 		return
 	}
 
 	// Check permissions: guild channels need MANAGE_CHANNELS, DM channels need to be a participant.
 	if guildID != nil {
 		if !h.hasChannelPermission(ctx, *guildID, channelID, userID, permissions.ManageChannels) {
-			writeError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission to export messages")
+			apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission to export messages")
 			return
 		}
 	} else {
@@ -284,7 +285,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 			channelID, userID,
 		).Scan(&isParticipant)
 		if !isParticipant {
-			writeError(w, http.StatusForbidden, "not_participant", "You are not a participant in this channel")
+			apiutil.WriteError(w, http.StatusForbidden, "not_participant", "You are not a participant in this channel")
 			return
 		}
 	}
@@ -307,7 +308,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 	)
 	if err != nil {
 		h.Logger.Error("export: failed to query messages", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to export messages")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export messages")
 		return
 	}
 	defer rows.Close()
@@ -321,7 +322,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 		if err := rows.Scan(&msg.ID, &msg.AuthorID, &msg.AuthorName, &msg.Content,
 			&msg.MessageType, &editedAt, &createdAt); err != nil {
 			h.Logger.Error("export: failed to scan message", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to read messages")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read messages")
 			return
 		}
 		msg.CreatedAt = createdAt.UTC().Format(time.RFC3339)
@@ -393,7 +394,7 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 	}
 
 	export.Messages = messages
-	writeJSON(w, http.StatusOK, export)
+	apiutil.WriteJSON(w, http.StatusOK, export)
 }
 
 // --- Account Migration Export/Import ---
@@ -424,7 +425,7 @@ type accountExportProfile struct {
 func (h *Handler) HandleExportAccount(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		apiutil.WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
@@ -441,7 +442,7 @@ func (h *Handler) HandleExportAccount(w http.ResponseWriter, r *http.Request) {
 		&pronouns, &accentColor)
 	if err != nil {
 		h.Logger.Error("export account: failed to get user", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to export account")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export account")
 		return
 	}
 	statusPresence = &presenceStr
@@ -471,7 +472,7 @@ func (h *Handler) HandleExportAccount(w http.ResponseWriter, r *http.Request) {
 		Settings: settings,
 	}
 
-	writeJSON(w, http.StatusOK, export)
+	apiutil.WriteJSON(w, http.StatusOK, export)
 }
 
 // importAccountRequest is the JSON body for POST /users/@me/import-account.
@@ -497,13 +498,13 @@ type importAccountProfile struct {
 func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		apiutil.WriteError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
 		return
 	}
 
 	var req importAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
 
@@ -515,30 +516,30 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 
 		// Validate field lengths.
 		if p.DisplayName != nil && len(*p.DisplayName) > 32 {
-			writeError(w, http.StatusBadRequest, "invalid_display_name", "Display name must be at most 32 characters")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_display_name", "Display name must be at most 32 characters")
 			return
 		}
 		if p.Bio != nil && len(*p.Bio) > 2000 {
-			writeError(w, http.StatusBadRequest, "invalid_bio", "Bio must be at most 2000 characters")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_bio", "Bio must be at most 2000 characters")
 			return
 		}
 		if p.StatusText != nil && len(*p.StatusText) > 128 {
-			writeError(w, http.StatusBadRequest, "invalid_status", "Status text must be at most 128 characters")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status text must be at most 128 characters")
 			return
 		}
 		if p.StatusPresence != nil {
 			valid := map[string]bool{"online": true, "idle": true, "focus": true, "busy": true, "dnd": true, "invisible": true, "offline": true}
 			if !valid[*p.StatusPresence] {
-				writeError(w, http.StatusBadRequest, "invalid_presence", "Invalid status presence value")
+				apiutil.WriteError(w, http.StatusBadRequest, "invalid_presence", "Invalid status presence value")
 				return
 			}
 		}
 		if p.Pronouns != nil && len(*p.Pronouns) > 40 {
-			writeError(w, http.StatusBadRequest, "invalid_pronouns", "Pronouns must be at most 40 characters")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_pronouns", "Pronouns must be at most 40 characters")
 			return
 		}
 		if p.AccentColor != nil && len(*p.AccentColor) > 7 {
-			writeError(w, http.StatusBadRequest, "invalid_accent_color", "Accent color must be a hex color (e.g. #FF5500)")
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_accent_color", "Accent color must be a hex color (e.g. #FF5500)")
 			return
 		}
 
@@ -557,7 +558,7 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 		)
 		if err != nil {
 			h.Logger.Error("import account: failed to update profile", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to import profile")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to import profile")
 			return
 		}
 	}
@@ -572,7 +573,7 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 		)
 		if err != nil {
 			h.Logger.Error("import account: failed to update settings", slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to import settings")
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to import settings")
 			return
 		}
 	}
@@ -581,11 +582,11 @@ func (h *Handler) HandleImportAccount(w http.ResponseWriter, r *http.Request) {
 	user, err := h.getUser(ctx, userID)
 	if err != nil {
 		h.Logger.Error("import account: failed to get updated user", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated profile")
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to get updated profile")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user.ToSelf())
+	apiutil.WriteJSON(w, http.StatusOK, user.ToSelf())
 }
 
 // --- Internal data collection helpers ---
