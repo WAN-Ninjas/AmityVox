@@ -16,7 +16,11 @@ Join guilds on other instances you are federated with.
 DM both 1:1 and 1:Many between people on your instance and instances you are federated with.
 Voice chat, video chat and screenshare between instances that are federated together. This includes guild voice/video chat. It will require all involved parties to have LiveKit setup correctly in their stack.
 
-Within a week or so of writing this(2/18/26), the front end will be locked in and set as stable. At that time, one of my friends will be getting Tauri going and handling getting Windows, MacOS, Linux, Android, and iPad/iPhone apps going and start figuring out the app registration stuff for Google and Apple. The apps will be instance agnostic, when you launch, you'll be asked what instance you want to connect to. You can choose one of our instances, or you can specify another.
+Within a week or so of writing this(2/18/26), the front end will be locked in and set as stable. At that time, one of my friends will be getting Tauri going and handling getting Windows, MacOS, Linux, Android, and iPad/iPhone apps going and start figuring out the app registration stuff for Google and Apple. The apps will be instance agnostic: when you launch, you'll be asked what instance you want to connect to. You can choose one of our instances, or you can specify another.
+
+One feature we have been on the fence on but are strongly considering, is hosting a dynamic DNS service for instance hosts to use. Ultimately, it's not needed, there are several free ones out there. But we've had a few requests as we flesh this project out to provide that, so it is under consideration.
+
+We welcome any and all feedback, our preferred method is under issues here in GitHub, or using the Report Issue button on our instance hosted at amityvox.chat. Or, you are welcome to come chat with us on amityvox.chat, my handle there is @Horatio.
 
 Everything below this is mostly written by AI. I'm keeping it in because it has good information. Not all of it is 100% accurate as of the update to this file, I will endeavor to update it before we 'launch'.
 
