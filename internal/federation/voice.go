@@ -160,7 +160,12 @@ func (ss *SyncService) HandleFederatedVoiceToken(w http.ResponseWriter, r *http.
 	if req.AvatarID != "" {
 		metaMap["avatarId"] = req.AvatarID
 	}
-	metaBytes, _ := json.Marshal(metaMap)
+	metaBytes, err := json.Marshal(metaMap)
+	if err != nil {
+		ss.logger.Error("failed to marshal voice metadata", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
 	canSubscribe := true
 
@@ -196,6 +201,7 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoin(w http.ResponseWriter, r *h
 		ChannelID      string `json:"channel_id"`
 		ScreenShare    bool   `json:"screen_share"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -262,7 +268,11 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoin(w http.ResponseWriter, r *h
 		}
 		ss.logger.Warn("remote instance rejected voice token request",
 			slog.Int("status", statusCode), slog.String("body", body))
-		http.Error(w, "Remote instance rejected voice request", statusCode)
+		clientStatus := http.StatusBadGateway
+		if statusCode == http.StatusForbidden {
+			clientStatus = http.StatusForbidden
+		}
+		http.Error(w, "Remote instance rejected voice request", clientStatus)
 		return
 	}
 
@@ -292,6 +302,7 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoinByGuild(w http.ResponseWrite
 		ChannelID   string `json:"channel_id"`
 		ScreenShare bool   `json:"screen_share"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -356,7 +367,17 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoinByGuild(w http.ResponseWrite
 		return
 	}
 	if statusCode < 200 || statusCode >= 300 {
-		http.Error(w, "Remote instance rejected voice request", statusCode)
+		body := string(respBody)
+		if len(body) > 512 {
+			body = body[:512] + "..."
+		}
+		ss.logger.Warn("remote guild instance rejected voice token request",
+			slog.Int("status", statusCode), slog.String("body", body))
+		clientStatus := http.StatusBadGateway
+		if statusCode == http.StatusForbidden {
+			clientStatus = http.StatusForbidden
+		}
+		http.Error(w, "Remote instance rejected voice request", clientStatus)
 		return
 	}
 
