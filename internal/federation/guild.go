@@ -258,6 +258,11 @@ func (ss *SyncService) HandleFederatedGuildLeave(w http.ResponseWriter, r *http.
 
 	ctx := r.Context()
 
+	// Verify the user belongs to the sender's instance.
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
 	tag, err := ss.fed.pool.Exec(ctx,
 		`DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`,
 		guildID, req.UserID)
@@ -410,7 +415,7 @@ func (ss *SyncService) HandleFederatedGuildInviteAccept(w http.ResponseWriter, r
 // HandleFederatedGuildMessages returns messages for a guild channel to a federated user.
 // POST /federation/v1/guilds/{guildID}/channels/{channelID}/messages
 func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *http.Request) {
-	signed, _, ok := ss.verifyFederationRequest(w, r)
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
 	if !ok {
 		return
 	}
@@ -433,6 +438,11 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 	}
 
 	ctx := r.Context()
+
+	// Verify the user belongs to the sender's instance.
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
 
 	// Verify channel belongs to guild and is not private.
 	var channelGuildID *string
@@ -531,7 +541,7 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 // HandleFederatedGuildPostMessage creates a message in a guild channel from a federated user.
 // POST /federation/v1/guilds/{guildID}/channels/{channelID}/messages/create
 func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r *http.Request) {
-	signed, _, ok := ss.verifyFederationRequest(w, r)
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
 	if !ok {
 		return
 	}
@@ -554,6 +564,11 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	}
 
 	ctx := r.Context()
+
+	// Verify the user belongs to the sender's instance.
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
 
 	// Verify channel belongs to guild, is not private, and is not locked.
 	var channelGuildID *string
@@ -640,6 +655,23 @@ func (ss *SyncService) validateSenderDomain(ctx context.Context, w http.Response
 	return senderID, true
 }
 
+// validateSenderUser verifies that the claimed user_id belongs to the signed
+// sender's instance, preventing cross-instance user_id spoofing.
+func (ss *SyncService) validateSenderUser(ctx context.Context, w http.ResponseWriter, senderID, userID string) bool {
+	var instanceID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT instance_id FROM users WHERE id = $1`, userID,
+	).Scan(&instanceID); err != nil {
+		http.Error(w, "Unknown user", http.StatusForbidden)
+		return false
+	}
+	if instanceID != senderID {
+		http.Error(w, "user_id does not match signed sender", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 // addInstanceToGuildChannelPeers registers a remote instance as a federation
 // peer for non-private channels in a guild.
 func (ss *SyncService) addInstanceToGuildChannelPeers(ctx context.Context, guildID, instanceID string) {
@@ -683,7 +715,8 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 		defer channelRows.Close()
 		channels := make([]map[string]interface{}, 0)
 		for channelRows.Next() {
-			var id, channelType string
+			var id string
+			var channelType *string
 			var name, topic *string
 			var position int
 			if channelRows.Scan(&id, &channelType, &name, &topic, &position) == nil {
