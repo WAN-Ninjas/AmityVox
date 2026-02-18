@@ -44,3 +44,4 @@ export const canTimeoutMembers = derived(currentGuildPermissions, ($p) => hasPer
 export const canAssignRoles = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.AssignRoles));
 export const canViewAuditLog = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.ViewAuditLog));
 export const isAdministrator = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.Administrator));
+export const canMentionHere = derived(currentGuildPermissions, ($p) => hasPermission($p, Permission.MentionHere));

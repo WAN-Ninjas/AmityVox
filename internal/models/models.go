@@ -325,7 +325,7 @@ type Message struct {
 	ReplyToIDs          []string   `json:"reply_to_ids,omitempty"`
 	MentionUserIDs      []string   `json:"mention_user_ids,omitempty"`
 	MentionRoleIDs      []string   `json:"mention_role_ids,omitempty"`
-	MentionEveryone     bool       `json:"mention_everyone"`
+	MentionHere         bool       `json:"mention_here"`
 	ThreadID            *string    `json:"thread_id,omitempty"`
 	MasqueradeName      *string    `json:"masquerade_name,omitempty"`
 	MasqueradeAvatar    *string    `json:"masquerade_avatar,omitempty"`

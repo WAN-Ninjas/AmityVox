@@ -13,6 +13,7 @@
 	import GiphyPicker from '$components/common/GiphyPicker.svelte';
 	import StickerPicker from '$components/common/StickerPicker.svelte';
 	import VoiceMessageRecorder from '$components/chat/VoiceMessageRecorder.svelte';
+	import MentionAutocomplete from '$components/chat/MentionAutocomplete.svelte';
 	import type { Sticker } from '$lib/types';
 
 	let content = $state('');
@@ -25,6 +26,12 @@
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
 	let showVoiceRecorder = $state(false);
+
+	// --- Mention autocomplete ---
+	let showMentionAutocomplete = $state(false);
+	let mentionQuery = $state('');
+	let mentionStartIndex = $state(0);
+	let mentionAutocomplete: { handleKeydown: (e: KeyboardEvent) => boolean } | undefined;
 
 	// --- E2EE passphrase prompt ---
 	let needsPassphrase = $state(false);
@@ -243,6 +250,11 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
+		// Let mention autocomplete handle keys when it's open.
+		if (showMentionAutocomplete && mentionAutocomplete?.handleKeydown(e)) {
+			return;
+		}
+
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
 			if (uploading) return;
@@ -315,6 +327,39 @@
 			inputEl.style.height = 'auto';
 			inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
 		}
+
+		// Detect @ mention trigger.
+		if (inputEl) {
+			const cursorPos = inputEl.selectionStart ?? 0;
+			const textBeforeCursor = content.slice(0, cursorPos);
+
+			// Find the last @ that's either at the start or preceded by a space/newline.
+			const atMatch = textBeforeCursor.match(/(?:^|[\s\n])@(\w*)$/);
+			if (atMatch) {
+				showMentionAutocomplete = true;
+				mentionQuery = atMatch[1];
+				mentionStartIndex = cursorPos - atMatch[1].length - 1; // position of @
+			} else {
+				showMentionAutocomplete = false;
+			}
+		}
+	}
+
+	function handleMentionSelect(syntax: string, _displayText: string) {
+		// Replace @query with the mention syntax + trailing space.
+		const before = content.slice(0, mentionStartIndex);
+		const after = content.slice(mentionStartIndex + 1 + mentionQuery.length); // +1 for @
+		content = before + syntax + ' ' + after;
+		showMentionAutocomplete = false;
+
+		// Refocus and position cursor after inserted mention.
+		requestAnimationFrame(() => {
+			if (inputEl) {
+				const newPos = before.length + syntax.length + 1;
+				inputEl.focus();
+				inputEl.setSelectionRange(newPos, newPos);
+			}
+		});
 	}
 
 	function handleFileSelect(e: Event) {
@@ -627,8 +672,18 @@
 			/>
 		{:else}
 			<div
-				class="flex items-end gap-2 rounded border border-bg-modifier px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
+				class="relative flex items-end gap-2 rounded border border-bg-modifier px-4 py-2 {isEditing ? 'bg-yellow-900/20 ring-1 ring-yellow-500/30' : 'bg-bg-modifier'}"
 			>
+				<!-- Mention autocomplete popup -->
+				{#if showMentionAutocomplete}
+					<MentionAutocomplete
+						bind:this={mentionAutocomplete}
+						query={mentionQuery}
+						onSelect={handleMentionSelect}
+						onClose={() => showMentionAutocomplete = false}
+					/>
+				{/if}
+
 				<!-- File upload -->
 				{#if !isEditing}
 					<label class="flex cursor-pointer items-center justify-center text-text-muted hover:text-text-primary">

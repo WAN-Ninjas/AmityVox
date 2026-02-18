@@ -10,7 +10,7 @@ vi.mock('$lib/api/client', () => ({
 		),
 		deleteChannelNotificationPreference: vi.fn().mockResolvedValue(undefined),
 		updateNotificationPreferences: vi.fn().mockImplementation((data: any) =>
-			Promise.resolve({ user_id: 'me', guild_id: data.guild_id, level: data.level, suppress_everyone: false, suppress_roles: false, muted_until: data.muted_until ?? null })
+			Promise.resolve({ user_id: 'me', guild_id: data.guild_id, level: data.level, suppress_here: false, suppress_roles: false, muted_until: data.muted_until ?? null })
 		)
 	}
 }));

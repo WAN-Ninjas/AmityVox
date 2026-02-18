@@ -90,7 +90,7 @@ func (s *Server) handleSearchMessages(w http.ResponseWriter, r *http.Request) {
 	// Hydrate from database with full message data.
 	rows, err := s.DB.Pool.Query(r.Context(),
 		`SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		        reply_to_ids, mention_user_ids, mention_role_ids, mention_everyone,
+		        reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		        thread_id, masquerade_name, masquerade_avatar, masquerade_color,
 		        encrypted, encryption_session_id, created_at
 		 FROM messages WHERE id = ANY($1)`, result.IDs)
@@ -107,7 +107,7 @@ func (s *Server) handleSearchMessages(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
-			&m.MentionEveryone, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
+			&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
 			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
 		); err != nil {
 			s.Logger.Error("scan search message", "error", err.Error())

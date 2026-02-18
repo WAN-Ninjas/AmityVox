@@ -43,7 +43,7 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 		Flags           int      `json:"flags"`
 		MentionUserIDs  []string `json:"mention_user_ids"`
 		MentionRoleIDs  []string `json:"mention_role_ids"`
-		MentionEveryone bool     `json:"mention_everyone"`
+		MentionHere bool     `json:"mention_here"`
 	}
 
 	if err := json.Unmarshal(event.Data, &msg); err != nil {
@@ -114,20 +114,50 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 		}
 	}
 
-	// @everyone — notify all guild members.
-	if msg.MentionEveryone && msg.GuildID != "" {
-		rows, err := m.pool.Query(ctx,
-			`SELECT user_id FROM guild_members WHERE guild_id = $1 AND user_id != $2`,
-			msg.GuildID, msg.AuthorID,
-		)
-		if err == nil {
-			for rows.Next() {
-				var uid string
-				if rows.Scan(&uid) == nil {
-					recipients[uid] = true
+	// @here — thread-aware: notify thread message authors and thread owner for threads, all guild members for channels.
+	if msg.MentionHere && msg.GuildID != "" {
+		var parentChannelID *string
+		var ownerID *string
+		if err := m.pool.QueryRow(ctx,
+			`SELECT parent_channel_id, owner_id FROM channels WHERE id = $1`,
+			msg.ChannelID,
+		).Scan(&parentChannelID, &ownerID); err != nil {
+			m.logger.Warn("@here expansion: failed to look up channel, skipping",
+				slog.String("channel_id", msg.ChannelID),
+				slog.String("error", err.Error()))
+		} else if parentChannelID != nil {
+			// Thread/forum post: notify distinct authors + thread owner.
+			rows, err := m.pool.Query(ctx,
+				`SELECT DISTINCT author_id FROM messages WHERE channel_id = $1 AND author_id != $2`,
+				msg.ChannelID, msg.AuthorID,
+			)
+			if err == nil {
+				for rows.Next() {
+					var uid string
+					if rows.Scan(&uid) == nil {
+						recipients[uid] = true
+					}
 				}
+				rows.Close()
 			}
-			rows.Close()
+			if ownerID != nil && *ownerID != msg.AuthorID {
+				recipients[*ownerID] = true
+			}
+		} else {
+			// Regular channel: notify all guild members.
+			rows, err := m.pool.Query(ctx,
+				`SELECT user_id FROM guild_members WHERE guild_id = $1 AND user_id != $2`,
+				msg.GuildID, msg.AuthorID,
+			)
+			if err == nil {
+				for rows.Next() {
+					var uid string
+					if rows.Scan(&uid) == nil {
+						recipients[uid] = true
+					}
+				}
+				rows.Close()
+			}
 		}
 	}
 
@@ -170,7 +200,7 @@ func (m *Manager) processNotification(ctx context.Context, event events.Event) {
 			}
 		}
 
-		if !m.notifications.ShouldNotify(ctx, uid, msg.GuildID, msg.ChannelID, isMention, isDM, msg.MentionEveryone) {
+		if !m.notifications.ShouldNotify(ctx, uid, msg.GuildID, msg.ChannelID, isMention, isDM, msg.MentionHere) {
 			continue
 		}
 

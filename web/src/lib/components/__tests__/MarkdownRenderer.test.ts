@@ -35,7 +35,23 @@ function renderMath(formula: string, displayMode: boolean): string {
 	}
 }
 
-function renderMarkdown(content: string): string {
+interface MemberLike {
+	user_id: string;
+	nickname?: string | null;
+	user?: { username?: string; display_name?: string | null } | null;
+}
+
+interface RoleLike {
+	id: string;
+	name: string;
+	color?: string | null;
+}
+
+function renderMarkdown(
+	content: string,
+	members?: Map<string, MemberLike>,
+	roles?: Map<string, RoleLike>
+): string {
 	if (!content) return '';
 
 	const placeholders: string[] = [];
@@ -74,6 +90,31 @@ function renderMarkdown(content: string): string {
 	// Inline math: $...$
 	text = text.replace(/(?<!\$)\$(?!\$)([^\n$]+?)\$(?!\$)/g, (_match, formula) => {
 		return addPlaceholder(renderMath(formula, false));
+	});
+
+	// Mentions: user <@ULID>, role <@&ULID>, @here
+	text = text.replace(/<@([0-9A-Z]{26})>/g, (_match, userId) => {
+		const member = members?.get(userId);
+		const name = member?.nickname ?? member?.user?.display_name ?? member?.user?.username ?? userId.slice(0, 8);
+		return addPlaceholder(
+			`<span class="inline-block rounded bg-brand-500/20 px-1 py-0.5 text-xs font-medium text-brand-300 cursor-pointer hover:bg-brand-500/30">@${escapeHtml(name)}</span>`
+		);
+	});
+
+	text = text.replace(/<@&([0-9A-Z]{26})>/g, (_match, roleId) => {
+		const role = roles?.get(roleId);
+		const name = role?.name ?? 'Unknown Role';
+		const rawColor = role?.color ?? '#99aab5';
+		const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : '#99aab5';
+		return addPlaceholder(
+			`<span class="inline-block rounded px-1 py-0.5 text-xs font-medium cursor-pointer" style="background-color: ${color}20; color: ${color}">@${escapeHtml(name)}</span>`
+		);
+	});
+
+	text = text.replace(/(^|[^\w@])@here(?!\w)/g, (_match, prefix) => {
+		return `${prefix}${addPlaceholder(
+			`<span class="inline-block rounded bg-yellow-500/20 px-1 py-0.5 text-xs font-medium text-yellow-300 cursor-pointer hover:bg-yellow-500/30">@here</span>`
+		)}`;
 	});
 
 	// Escape HTML
@@ -490,6 +531,97 @@ describe('MarkdownRenderer', () => {
 			expect(html).toContain('x_1 + x_2');
 			// Should not contain <em> generated from the underscores
 			expect(html).not.toContain('<em>1 + x</em>');
+		});
+	});
+
+	// --- Mention Rendering ---
+
+	describe('mention rendering', () => {
+		const testMembers = new Map<string, MemberLike>([
+			['01ARZ3NDEKTSV4RRFFQ69G5FAV', {
+				user_id: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+				nickname: 'CoolNick',
+				user: { username: 'testuser', display_name: 'Test User' }
+			}],
+			['01ARZ3NDEKTSV4RRFFQ69G5FAW', {
+				user_id: '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+				nickname: null,
+				user: { username: 'another', display_name: null }
+			}]
+		]);
+
+		const testRoles = new Map<string, RoleLike>([
+			['01ARZ3NDEKTSV4RRFFQ69G5FAX', { id: '01ARZ3NDEKTSV4RRFFQ69G5FAX', name: 'Moderator', color: '#e74c3c' }],
+			['01ARZ3NDEKTSV4RRFFQ69G5FAY', { id: '01ARZ3NDEKTSV4RRFFQ69G5FAY', name: 'Admin', color: null }]
+		]);
+
+		it('renders user mention as styled pill with nickname', () => {
+			const html = renderMarkdown('hello <@01ARZ3NDEKTSV4RRFFQ69G5FAV>!', testMembers, testRoles);
+			expect(html).toContain('@CoolNick');
+			expect(html).toContain('bg-brand-500/20');
+			expect(html).toContain('text-brand-300');
+		});
+
+		it('renders user mention with username fallback when no nickname', () => {
+			const html = renderMarkdown('<@01ARZ3NDEKTSV4RRFFQ69G5FAW>', testMembers, testRoles);
+			expect(html).toContain('@another');
+		});
+
+		it('renders unknown user mention with truncated ID', () => {
+			const html = renderMarkdown('<@01ARZ3NDEKTSV4RRFFQ69G5FBB>', testMembers, testRoles);
+			expect(html).toContain('@01ARZ3ND');
+		});
+
+		it('renders role mention with role name and color', () => {
+			const html = renderMarkdown('<@&01ARZ3NDEKTSV4RRFFQ69G5FAX>', testMembers, testRoles);
+			expect(html).toContain('@Moderator');
+			expect(html).toContain('#e74c3c');
+		});
+
+		it('renders role mention with default color when role has null color', () => {
+			const html = renderMarkdown('<@&01ARZ3NDEKTSV4RRFFQ69G5FAY>', testMembers, testRoles);
+			expect(html).toContain('@Admin');
+			expect(html).toContain('#99aab5');
+		});
+
+		it('renders unknown role mention', () => {
+			const html = renderMarkdown('<@&01ARZ3NDEKTSV4RRFFQ69G5FBC>', testMembers, testRoles);
+			expect(html).toContain('@Unknown Role');
+		});
+
+		it('renders @here as styled yellow pill', () => {
+			const html = renderMarkdown('attention @here');
+			expect(html).toContain('@here');
+			expect(html).toContain('bg-yellow-500/20');
+			expect(html).toContain('text-yellow-300');
+		});
+
+		it('does not render user mention inside code block', () => {
+			const html = renderMarkdown('```\n<@01ARZ3NDEKTSV4RRFFQ69G5FAV>\n```', testMembers, testRoles);
+			expect(html).not.toContain('@CoolNick');
+			expect(html).toContain('&lt;@01ARZ3NDEKTSV4RRFFQ69G5FAV&gt;');
+		});
+
+		it('does not render user mention inside inline code', () => {
+			const html = renderMarkdown('use `<@01ARZ3NDEKTSV4RRFFQ69G5FAV>` syntax', testMembers, testRoles);
+			expect(html).not.toContain('@CoolNick');
+		});
+
+		it('does not render @here inside code block', () => {
+			const html = renderMarkdown('```\n@here\n```');
+			expect(html).not.toContain('bg-yellow-500/20');
+		});
+
+		it('does not render @here inside email address', () => {
+			const html = renderMarkdown('contact user@here.com for help');
+			expect(html).not.toContain('bg-yellow-500/20');
+			expect(html).toContain('user@here.com');
+		});
+
+		it('renders mention alongside other markdown', () => {
+			const html = renderMarkdown('**hey** <@01ARZ3NDEKTSV4RRFFQ69G5FAV>!', testMembers, testRoles);
+			expect(html).toContain('<strong');
+			expect(html).toContain('@CoolNick');
 		});
 	});
 });
