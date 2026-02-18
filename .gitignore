@@ -12,6 +12,9 @@
 coverage.html
 coverage.txt
 
+# Audit reports (local only)
+_audit/
+
 CURRENT_SPRINT.md
 KICKOFF_PROMPT.md
 TODO.md
