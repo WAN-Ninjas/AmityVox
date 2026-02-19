@@ -1658,30 +1658,30 @@ class ApiClient {
 		return this.post(`/channels/${channelId}/gallery-posts/${postId}/close`);
 	}
 
-	// --- Channel Groups ---
+	// --- Channel Groups (guild-scoped) ---
 
-	getChannelGroups(): Promise<any[]> {
-		return this.get('/users/@me/channel-groups');
+	getChannelGroups(guildId: string): Promise<any[]> {
+		return this.get(`/guilds/${guildId}/channel-groups`);
 	}
 
-	createChannelGroup(data: { name: string; color?: string }): Promise<any> {
-		return this.post('/users/@me/channel-groups', data);
+	createChannelGroup(guildId: string, data: { name: string; color?: string }): Promise<any> {
+		return this.post(`/guilds/${guildId}/channel-groups`, data);
 	}
 
-	updateChannelGroup(groupId: string, data: { name?: string; color?: string; position?: number }): Promise<any> {
-		return this.patch(`/users/@me/channel-groups/${groupId}`, data);
+	updateChannelGroup(guildId: string, groupId: string, data: { name?: string; color?: string; position?: number }): Promise<any> {
+		return this.patch(`/guilds/${guildId}/channel-groups/${groupId}`, data);
 	}
 
-	deleteChannelGroup(groupId: string): Promise<void> {
-		return this.del(`/users/@me/channel-groups/${groupId}`);
+	deleteChannelGroup(guildId: string, groupId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/channel-groups/${groupId}`);
 	}
 
-	removeChannelFromGroup(groupId: string, channelId: string): Promise<void> {
-		return this.del(`/users/@me/channel-groups/${groupId}/channels/${channelId}`);
+	removeChannelFromGroup(guildId: string, groupId: string, channelId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/channel-groups/${groupId}/channels/${channelId}`);
 	}
 
-	setChannelGroupChannels(groupId: string, channelIds: string[]): Promise<void> {
-		return this.put(`/users/@me/channel-groups/${groupId}/channels`, { channel_ids: channelIds });
+	setChannelGroupChannels(guildId: string, groupId: string, channelIds: string[]): Promise<void> {
+		return this.put(`/guilds/${guildId}/channel-groups/${groupId}/channels`, { channel_ids: channelIds });
 	}
 
 	// --- Voice Extensions ---

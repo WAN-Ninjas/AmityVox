@@ -15,7 +15,7 @@
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 
 	interface Props {
 		onToggleNotifications?: () => void;
@@ -54,15 +54,18 @@
 	let guildDragController = $state<DragController | null>(null);
 
 	$effect(() => {
-		if (!guildListEl) return;
-		guildDragController?.destroy();
-		guildDragController = new DragController({
-			container: guildListEl,
-			items: () => $guildList.map(g => g.id),
-			getElement: (id) => guildListEl?.querySelector(`[data-guild-id="${id}"]`) as HTMLElement | null,
-			canDrag: true,
-			onDrop: handleGuildReorder,
-			dragHandleSelector: '.drag-handle',
+		const el = guildListEl;
+		if (!el) return;
+		untrack(() => {
+			guildDragController?.destroy();
+			guildDragController = new DragController({
+				container: el,
+				items: () => $guildList.map(g => g.id),
+				getElement: (id) => el.querySelector(`[data-guild-id="${id}"]`) as HTMLElement | null,
+				canDrag: true,
+				onDrop: handleGuildReorder,
+				dragHandleSelector: '.drag-handle',
+			});
 		});
 	});
 

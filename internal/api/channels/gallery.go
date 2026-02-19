@@ -609,10 +609,13 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 	}
 
 	// Publish CHANNEL_CREATE event for the thread.
-	h.EventBus.Publish(r.Context(), "amityvox.channel.create", events.Event{
-		Type:      "CHANNEL_CREATE",
-		ChannelID: channelID,
-		UserID:    userID,
+	galleryGuildID := ""
+	if guildID != nil {
+		galleryGuildID = *guildID
+	}
+	h.EventBus.Publish(r.Context(), events.SubjectChannelCreate, events.Event{
+		Type:    "CHANNEL_CREATE",
+		GuildID: galleryGuildID,
 		Data: mustMarshal(map[string]interface{}{
 			"id":                threadID,
 			"guild_id":          guildID,

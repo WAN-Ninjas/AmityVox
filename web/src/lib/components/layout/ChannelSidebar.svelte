@@ -15,10 +15,11 @@
 	import { pendingIncomingCount, relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 	import ChannelGroups from '$components/layout/ChannelGroups.svelte';
 	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
+	import { e2ee, unlockedChannels } from '$lib/encryption/e2eeManager';
 	import VoiceConnectionBar from '$components/layout/VoiceConnectionBar.svelte';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import { canManageChannels, canManageGuild, canManageThreads } from '$lib/stores/permissions';
@@ -111,6 +112,14 @@
 	const activeVoiceChannels = $derived($voiceChannels.filter(c => !c.archived));
 	const archivedChannels = $derived([...$textChannels, ...$voiceChannels].filter(c => c.archived));
 
+	// Channels that belong to a channel group (reported by ChannelGroups).
+	let groupedChannelIds = $state<Set<string>>(new Set());
+
+	const ungroupedTextChannels = $derived(activeTextChannels.filter(c => !groupedChannelIds.has(c.id)));
+	const ungroupedForumChannels = $derived($forumChannels.filter(c => !groupedChannelIds.has(c.id)));
+	const ungroupedGalleryChannels = $derived($galleryChannels.filter(c => !groupedChannelIds.has(c.id)));
+	const ungroupedVoiceChannels = $derived(activeVoiceChannels.filter(c => !groupedChannelIds.has(c.id)));
+
 	async function handleArchiveChannel(channelId: string, archive: boolean) {
 		try {
 			const updated = await api.updateChannel(channelId, { archived: archive });
@@ -128,6 +137,17 @@
 				.catch(() => { upcomingEvents = []; });
 		} else {
 			upcomingEvents = [];
+		}
+	});
+
+	// Refresh E2EE key status for all encrypted channels visible in sidebar.
+	$effect(() => {
+		const encIds = [
+			...$textChannels.filter(c => c.encrypted).map(c => c.id),
+			...$dmList.filter(c => c.encrypted).map(c => c.id),
+		];
+		if (encIds.length > 0) {
+			e2ee.refreshKeyStatus(encIds);
 		}
 	});
 
@@ -399,15 +419,18 @@
 	let isDraggingChannel = $state(false);
 
 	$effect(() => {
-		if (!channelListEl) return;
-		channelDragController?.destroy();
-		channelDragController = new DragController({
-			container: channelListEl,
-			items: () => activeTextChannels.map(c => c.id),
-			getElement: (id) => channelListEl?.querySelector(`[data-channel-id="${id}"]`) as HTMLElement | null,
-			canDrag: $canManageChannels,
-			onDrop: handleChannelReorder,
-			onDragStateChange: (dragging) => { isDraggingChannel = dragging; },
+		const el = channelListEl;
+		if (!el) return;
+		untrack(() => {
+			channelDragController?.destroy();
+			channelDragController = new DragController({
+				container: el,
+				items: () => ungroupedTextChannels.map(c => c.id),
+				getElement: (id) => el.querySelector(`[data-channel-id="${id}"]`) as HTMLElement | null,
+				canDrag: $canManageChannels,
+				onDrop: handleChannelReorder,
+				onDragStateChange: (dragging) => { isDraggingChannel = dragging; },
+			});
 		});
 	});
 
@@ -417,7 +440,7 @@
 		const guildId = $currentGuildId;
 		if (!guildId) return;
 
-		const reordered = [...activeTextChannels];
+		const reordered = [...ungroupedTextChannels];
 		const sourceIdx = reordered.findIndex(c => c.id === sourceId);
 		if (sourceIdx === -1) return;
 
@@ -498,35 +521,23 @@
 	<!-- Channel list -->
 	<div class="flex-1 overflow-y-auto px-2 py-2">
 		{#if $currentGuild}
+			<!-- Create Channel button -->
+			{#if $canManageChannels}
+				<button
+					class="mb-2 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+					onclick={() => { showCreateChannel = true; channelError = ''; }}
+					title="Create Channel"
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M12 5v14m-7-7h14" />
+					</svg>
+					Create Channel
+				</button>
+			{/if}
+
 			<!-- Text Channels -->
-			{#if activeTextChannels.length > 0 || $currentGuild}
-				<div class="mb-1 flex items-center justify-between px-1 pt-4 first:pt-0">
-					<button
-						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
-						onclick={() => toggleSection('text-channels')}
-						title={isSectionCollapsed('text-channels') ? 'Expand Text Channels' : 'Collapse Text Channels'}
-					>
-						<svg
-							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('text-channels') ? '-rotate-90' : ''}"
-							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-						>
-							<path d="M19 9l-7 7-7-7" />
-						</svg>
-						Text Channels
-					</button>
-					<button
-						class="text-text-muted hover:text-text-primary"
-						onclick={() => { newChannelType = 'text'; showCreateChannel = true; channelError = ''; }}
-						title="Create Text Channel"
-					>
-						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M12 5v14m-7-7h14" />
-						</svg>
-					</button>
-				</div>
-				{#if !isSectionCollapsed('text-channels')}
-					<div bind:this={channelListEl} class="relative">
-					{#each activeTextChannels as channel (channel.id)}
+			<div bind:this={channelListEl} class="relative">
+			{#each ungroupedTextChannels as channel (channel.id)}
 						{@const unread = $unreadCounts.get(channel.id) ?? 0}
 						{@const mentions = $mentionCounts.get(channel.id) ?? 0}
 						{@const chMuted = isChannelMuted(channel.id)}
@@ -541,7 +552,18 @@
 								onclick={() => handleChannelClick(channel.id)}
 								oncontextmenu={(e) => openContextMenu(e, channel)}
 							>
-								<span class="text-lg leading-none text-brand-500 font-mono">#</span>
+								{#if channel.encrypted}
+									{@const unlocked = $unlockedChannels.has(channel.id)}
+									<svg class="h-4 w-4 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title={unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}>
+										{#if unlocked}
+											<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+										{:else}
+											<path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+										{/if}
+									</svg>
+								{:else}
+									<span class="text-lg leading-none text-brand-500 font-mono">#</span>
+								{/if}
 								<span class="flex-1 truncate font-mono">{channel.name}</span>
 							{#if chMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
@@ -590,197 +612,110 @@
 							</div>
 						{/if}
 					{/each}
-					</div>
-				{/if}
-			{/if}
+			</div>
 
 			<!-- Forum Channels -->
-			{#if $forumChannels.length > 0 || $canManageChannels}
-				<div class="mb-1 flex items-center justify-between px-1 pt-4">
-					<button
-						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
-						onclick={() => toggleSection('forum-channels')}
-						title={isSectionCollapsed('forum-channels') ? 'Expand Forum Channels' : 'Collapse Forum Channels'}
-					>
-						<svg
-							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('forum-channels') ? '-rotate-90' : ''}"
-							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-						>
-							<path d="M19 9l-7 7-7-7" />
-						</svg>
-						Forum Channels
-					</button>
-					{#if $canManageChannels}
-						<button
-							class="text-text-muted hover:text-text-primary"
-							onclick={() => { newChannelType = 'forum'; showCreateChannel = true; channelError = ''; }}
-							title="Create Forum Channel"
-						>
-							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M12 5v14m-7-7h14" />
-							</svg>
-						</button>
+			{#each ungroupedForumChannels as ch (ch.id)}
+				{@const isActive = $currentChannelId === ch.id}
+				{@const unread = $unreadCounts.get(ch.id) ?? 0}
+				{@const mentions = $mentionCounts.get(ch.id) ?? 0}
+				<button
+					class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
+						{isActive
+							? 'bg-bg-modifier text-text-primary'
+							: unread > 0
+							? 'text-text-primary hover:bg-bg-modifier/50'
+							: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
+					onclick={() => handleChannelClick(ch.id)}
+				>
+					<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+					</svg>
+					<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'forum'}</span>
+					{#if mentions > 0}
+						<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
+					{:else if unread > 0}
+						<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
 					{/if}
-				</div>
-				{#if !isSectionCollapsed('forum-channels')}
-					{#each $forumChannels as ch (ch.id)}
-						{@const isActive = $currentChannelId === ch.id}
-						{@const unread = $unreadCounts.get(ch.id) ?? 0}
-						{@const mentions = $mentionCounts.get(ch.id) ?? 0}
-						<button
-							class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
-								{isActive
-									? 'bg-bg-modifier text-text-primary'
-									: unread > 0
-									? 'text-text-primary hover:bg-bg-modifier/50'
-									: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
-							onclick={() => handleChannelClick(ch.id)}
-						>
-							<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-							</svg>
-							<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'forum'}</span>
-							{#if mentions > 0}
-								<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
-							{:else if unread > 0}
-								<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
-							{/if}
-						</button>
-					{/each}
-				{/if}
-			{/if}
+				</button>
+			{/each}
 
 			<!-- Gallery Channels -->
-			{#if $galleryChannels.length > 0 || $currentGuild}
-				<div class="mb-1 flex items-center justify-between px-1 pt-4">
-					<button
-						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
-						onclick={() => toggleSection('gallery-channels')}
-						title={isSectionCollapsed('gallery-channels') ? 'Expand Gallery Channels' : 'Collapse Gallery Channels'}
-					>
-						<svg
-							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('gallery-channels') ? '-rotate-90' : ''}"
-							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-						>
-							<path d="M19 9l-7 7-7-7" />
-						</svg>
-						Gallery Channels
-					</button>
-					{#if $canManageChannels}
-						<button
-							class="text-text-muted hover:text-text-primary"
-							onclick={() => { newChannelType = 'gallery'; showCreateChannel = true; channelError = ''; }}
-							title="Create Gallery Channel"
-						>
-							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M12 5v14m-7-7h14" />
-							</svg>
-						</button>
+			{#each ungroupedGalleryChannels as ch (ch.id)}
+				{@const isActive = $currentChannelId === ch.id}
+				{@const unread = $unreadCounts.get(ch.id) ?? 0}
+				{@const mentions = $mentionCounts.get(ch.id) ?? 0}
+				<button
+					class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
+						{isActive
+							? 'bg-bg-modifier text-text-primary'
+							: unread > 0
+							? 'text-text-primary hover:bg-bg-modifier/50'
+							: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
+					onclick={() => handleChannelClick(ch.id)}
+				>
+					<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<rect x="3" y="3" width="7" height="7" rx="1" />
+						<rect x="14" y="3" width="7" height="7" rx="1" />
+						<rect x="3" y="14" width="7" height="7" rx="1" />
+						<rect x="14" y="14" width="7" height="7" rx="1" />
+					</svg>
+					<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'gallery'}</span>
+					{#if mentions > 0}
+						<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
+					{:else if unread > 0}
+						<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
 					{/if}
-				</div>
-				{#if !isSectionCollapsed('gallery-channels')}
-					{#each $galleryChannels as ch (ch.id)}
-						{@const isActive = $currentChannelId === ch.id}
-						{@const unread = $unreadCounts.get(ch.id) ?? 0}
-						{@const mentions = $mentionCounts.get(ch.id) ?? 0}
-						<button
-							class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
-								{isActive
-									? 'bg-bg-modifier text-text-primary'
-									: unread > 0
-									? 'text-text-primary hover:bg-bg-modifier/50'
-									: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
-							onclick={() => handleChannelClick(ch.id)}
-						>
-							<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<rect x="3" y="3" width="7" height="7" rx="1" />
-								<rect x="14" y="3" width="7" height="7" rx="1" />
-								<rect x="3" y="14" width="7" height="7" rx="1" />
-								<rect x="14" y="14" width="7" height="7" rx="1" />
-							</svg>
-							<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'gallery'}</span>
-							{#if mentions > 0}
-								<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
-							{:else if unread > 0}
-								<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
-							{/if}
-						</button>
-					{/each}
-				{/if}
-			{/if}
+				</button>
+			{/each}
 
 			<!-- Voice Channels -->
-			{#if activeVoiceChannels.length > 0 || $currentGuild}
-				<div class="mb-1 flex items-center justify-between px-1 pt-4">
-					<button
-						class="flex items-center gap-1 font-mono text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
-						onclick={() => toggleSection('voice-channels')}
-						title={isSectionCollapsed('voice-channels') ? 'Expand Voice Channels' : 'Collapse Voice Channels'}
-					>
-						<svg
-							class="h-3 w-3 shrink-0 transition-transform duration-200 {isSectionCollapsed('voice-channels') ? '-rotate-90' : ''}"
-							fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-						>
-							<path d="M19 9l-7 7-7-7" />
-						</svg>
-						Voice Channels
-					</button>
-					<button
-						class="text-text-muted hover:text-text-primary"
-						onclick={() => { newChannelType = 'voice'; showCreateChannel = true; channelError = ''; }}
-						title="Create Voice Channel"
-					>
-						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M12 5v14m-7-7h14" />
-						</svg>
-					</button>
-				</div>
-				{#if !isSectionCollapsed('voice-channels')}
-					{#each activeVoiceChannels as channel (channel.id)}
-						{@const voiceUsers = $channelVoiceUsers.get(channel.id)}
-						<button
-							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
-							onclick={() => handleChannelClick(channel.id)}
-							ondblclick={() => { const gid = $currentGuildId; if (gid) joinVoice(channel.id, gid, channel.name ?? ''); }}
-							oncontextmenu={(e) => openContextMenu(e, channel)}
-						>
-							<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-							</svg>
-							<span class="flex-1 truncate">{channel.name}</span>
-							{#if voiceUsers && voiceUsers.size > 0}
-								<span class="text-2xs text-green-400">{voiceUsers.size}</span>
-							{/if}
-						</button>
-						{#if voiceUsers && voiceUsers.size > 0}
-							<div class="mb-1 ml-3 space-y-0.5 border-l border-bg-floating pl-3">
-								{#each [...voiceUsers.values()] as participant (participant.userId)}
-									<div class="flex items-center gap-1.5 py-0.5">
-										<div class="relative">
-											<Avatar name={participant.displayName ?? participant.username} src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null} size="sm" />
-											{#if participant.speaking && $voiceChannelId === channel.id}
-												<div class="pointer-events-none absolute -inset-0.5 z-10 rounded-full border-2 border-green-500 shadow-[0_0_8px_rgba(34,197,94,0.35)]"></div>
-											{/if}
-										</div>
-										<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
-										{#if participant.muted}
-											<svg class="h-3 w-3 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-												<path d="M19 19L5 5m14 0v8a3 3 0 01-5.12 2.12M12 19v2m-4-4h8" />
-											</svg>
-										{/if}
-										{#if participant.deafened}
-											<svg class="h-3 w-3 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-												<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-												<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-											</svg>
-										{/if}
-									</div>
-								{/each}
+			{#each ungroupedVoiceChannels as channel (channel.id)}
+				{@const voiceUsers = $channelVoiceUsers.get(channel.id)}
+				<button
+					class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+					onclick={() => handleChannelClick(channel.id)}
+					ondblclick={() => { const gid = $currentGuildId; if (gid) joinVoice(channel.id, gid, channel.name ?? ''); }}
+					oncontextmenu={(e) => openContextMenu(e, channel)}
+				>
+					<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+						<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+					</svg>
+					<span class="flex-1 truncate">{channel.name}</span>
+					{#if voiceUsers && voiceUsers.size > 0}
+						<span class="text-2xs text-green-400">{voiceUsers.size}</span>
+					{/if}
+				</button>
+				{#if voiceUsers && voiceUsers.size > 0}
+					<div class="mb-1 ml-3 space-y-0.5 border-l border-bg-floating pl-3">
+						{#each [...voiceUsers.values()] as participant (participant.userId)}
+							<div class="flex items-center gap-1.5 py-0.5">
+								<div class="relative">
+									<Avatar name={participant.displayName ?? participant.username} src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null} size="sm" />
+									{#if participant.speaking && $voiceChannelId === channel.id}
+										<div class="pointer-events-none absolute -inset-0.5 z-10 rounded-full border-2 border-green-500 shadow-[0_0_8px_rgba(34,197,94,0.35)]"></div>
+									{/if}
+								</div>
+								<span class="flex-1 truncate text-xs text-text-muted">{participant.displayName ?? participant.username}</span>
+								{#if participant.muted}
+									<svg class="h-3 w-3 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M19 19L5 5m14 0v8a3 3 0 01-5.12 2.12M12 19v2m-4-4h8" />
+									</svg>
+								{/if}
+								{#if participant.deafened}
+									<svg class="h-3 w-3 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+										<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+									</svg>
+								{/if}
 							</div>
-						{/if}
-					{/each}
+						{/each}
+					</div>
 				{/if}
-			{/if}
+			{/each}
+
+			<!-- Channel Groups -->
+			<ChannelGroups onGroupsLoaded={(ids) => { groupedChannelIds = ids; }} />
 
 			<!-- Upcoming Events -->
 			{#if upcomingEvents.length > 0}
@@ -826,8 +761,6 @@
 				{/if}
 			{/if}
 
-			<!-- User Channel Groups -->
-			<ChannelGroups />
 		{:else}
 			<!-- DM List (when no guild is selected) -->
 			<div class="mb-1 flex items-center justify-between px-1">
@@ -896,6 +829,16 @@
 						>
 							<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 						</span>
+							{#if dm.encrypted}
+								{@const unlocked = $unlockedChannels.has(dm.id)}
+								<svg class="h-3.5 w-3.5 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title={unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}>
+									{#if unlocked}
+										<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+									{:else}
+										<path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+									{/if}
+								</svg>
+							{/if}
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">

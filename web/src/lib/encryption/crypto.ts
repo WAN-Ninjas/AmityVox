@@ -135,3 +135,29 @@ export async function decryptFromWire(key: CryptoKey, wireData: string): Promise
 	const ciphertext = combined.slice(12);
 	return decrypt(key, ciphertext.buffer, iv);
 }
+
+// --- Binary (file) Encrypt / Decrypt ---
+
+/**
+ * Encrypt binary data with AES-256-GCM.
+ * Returns iv_12_bytes || aes_gcm_ciphertext as a single ArrayBuffer.
+ */
+export async function encryptBinary(key: CryptoKey, data: ArrayBuffer): Promise<ArrayBuffer> {
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+	const combined = new Uint8Array(12 + ciphertext.byteLength);
+	combined.set(iv, 0);
+	combined.set(new Uint8Array(ciphertext), 12);
+	return combined.buffer;
+}
+
+/**
+ * Decrypt binary data encrypted with encryptBinary().
+ * Expects iv_12_bytes || aes_gcm_ciphertext.
+ */
+export async function decryptBinary(key: CryptoKey, encryptedData: ArrayBuffer): Promise<ArrayBuffer> {
+	const combined = new Uint8Array(encryptedData);
+	const iv = combined.slice(0, 12);
+	const ciphertext = combined.slice(12);
+	return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext.buffer);
+}
