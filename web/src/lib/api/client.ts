@@ -1238,6 +1238,10 @@ class ApiClient {
 		return this.patch(`/guilds/${guildId}/channels`, positions);
 	}
 
+	reorderGuilds(positions: { guild_id: string; position: number }[]): Promise<void> {
+		return this.put('/users/@me/guild-positions', positions);
+	}
+
 	// --- Onboarding ---
 
 	getOnboarding(guildId: string): Promise<OnboardingConfig> {

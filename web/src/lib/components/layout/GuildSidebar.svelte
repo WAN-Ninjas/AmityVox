@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { guildList, currentGuildId, setGuild } from '$lib/stores/guilds';
+	import { guildList, currentGuildId, setGuild, guilds } from '$lib/stores/guilds';
 	import { channels } from '$lib/stores/channels';
 	import { unreadCounts } from '$lib/stores/unreads';
 	import { unreadNotificationCount } from '$lib/stores/notifications';
@@ -10,8 +10,12 @@
 	import { incomingCallCount } from '$lib/stores/callRing';
 	import Avatar from '$components/common/Avatar.svelte';
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
+	import { DragController } from '$lib/utils/dragDrop';
+	import { addToast } from '$lib/stores/toast';
+	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { onDestroy } from 'svelte';
 
 	interface Props {
 		onToggleNotifications?: () => void;
@@ -45,6 +49,45 @@
 
 	let showCreateModal = $state(false);
 
+	// --- Guild drag-reorder ---
+	let guildListEl = $state<HTMLElement | null>(null);
+	let guildDragController = $state<DragController | null>(null);
+
+	$effect(() => {
+		if (!guildListEl) return;
+		guildDragController?.destroy();
+		guildDragController = new DragController({
+			container: guildListEl,
+			items: () => $guildList.map(g => g.id),
+			getElement: (id) => guildListEl?.querySelector(`[data-guild-id="${id}"]`) as HTMLElement | null,
+			canDrag: true,
+			onDrop: handleGuildReorder,
+			dragHandleSelector: '.drag-handle',
+		});
+	});
+
+	onDestroy(() => { guildDragController?.destroy(); });
+
+	async function handleGuildReorder(sourceId: string, targetIndex: number) {
+		const list = $guildList;
+		const sourceIdx = list.findIndex(g => g.id === sourceId);
+		if (sourceIdx === -1) return;
+
+		const reordered = [...list];
+		const [moved] = reordered.splice(sourceIdx, 1);
+		reordered.splice(targetIndex, 0, moved);
+
+		// Optimistic update — re-insert into Map in new order
+		guilds.setAll(reordered.map(g => [g.id, g]));
+
+		const positions = reordered.map((g, i) => ({ guild_id: g.id, position: i }));
+		try {
+			await api.reorderGuilds(positions);
+		} catch (err: any) {
+			addToast(err.message || 'Failed to reorder guilds', 'error');
+		}
+	}
+
 	function selectGuild(id: string) {
 		goto(`/app/guilds/${id}`);
 	}
@@ -71,33 +114,41 @@
 	<div class="mx-auto w-8 border-t border-bg-modifier"></div>
 
 	<!-- Guild list -->
-	{#each $guildList as guild (guild.id)}
-		<button
-			class="group relative flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary transition-colors hover:bg-brand-500"
-			class:!bg-brand-500={$currentGuildId === guild.id}
-			onclick={() => selectGuild(guild.id)}
-			title={guild.name}
-		>
-			{#if guild.icon_id}
-				<img
-					src="/api/v1/files/{guild.icon_id}"
-					alt={guild.name}
-					class="h-full w-full rounded-[inherit] object-cover"
-				/>
-			{:else}
-				<span class="text-sm font-semibold text-text-primary">
-					{guild.name.split(' ').map((w) => w[0]).join('').slice(0, 3)}
-				</span>
-			{/if}
+	<div bind:this={guildListEl} class="relative flex flex-col items-center gap-2">
+		{#each $guildList as guild (guild.id)}
+			<div
+				class="group/drag"
+				data-guild-id={guild.id}
+				onpointerdown={(e) => guildDragController?.handlePointerDown(e, guild.id)}
+			>
+				<button
+					class="group relative flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary transition-colors hover:bg-brand-500"
+					class:!bg-brand-500={$currentGuildId === guild.id}
+					onclick={() => selectGuild(guild.id)}
+					title={guild.name}
+				>
+					{#if guild.icon_id}
+						<img
+							src="/api/v1/files/{guild.icon_id}"
+							alt={guild.name}
+							class="h-full w-full rounded-[inherit] object-cover"
+						/>
+					{:else}
+						<span class="text-sm font-semibold text-text-primary">
+							{guild.name.split(' ').map((w) => w[0]).join('').slice(0, 3)}
+						</span>
+					{/if}
 
-			<!-- Active indicator -->
-			{#if $currentGuildId === guild.id}
-				<div class="absolute -left-1 h-5 w-0.5 bg-text-primary"></div>
-			{:else if guildHasUnreads(guild.id)}
-				<div class="absolute -left-1 h-2 w-0.5 bg-text-primary"></div>
-			{/if}
-		</button>
-	{/each}
+					<!-- Active indicator -->
+					{#if $currentGuildId === guild.id}
+						<div class="absolute -left-1 h-5 w-0.5 bg-text-primary"></div>
+					{:else if guildHasUnreads(guild.id)}
+						<div class="absolute -left-1 h-2 w-0.5 bg-text-primary"></div>
+					{/if}
+				</button>
+			</div>
+		{/each}
+	</div>
 
 	<!-- Add guild button -->
 	<button
@@ -208,5 +259,11 @@
 		</svg>
 	</button>
 </nav>
+
+<svelte:window
+	onpointermove={(e) => guildDragController?.handlePointerMove(e)}
+	onpointerup={(e) => guildDragController?.handlePointerUp(e)}
+	onkeydown={(e) => guildDragController?.handleKeyDown(e)}
+/>
 
 <CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />
