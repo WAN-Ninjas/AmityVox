@@ -441,6 +441,8 @@
 	});
 
 	async function handleChannelReorderInGroup(sourceId: string, targetIndex: number, groupId: string) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
 		const group = groups.find(g => g.id === groupId);
 		if (!group) return;
 
@@ -453,9 +455,8 @@
 
 		groups = groups.map(g => g.id === groupId ? { ...g, channels } : g);
 
-		const guildId = $currentGuildId;
 		try {
-			if (guildId) await api.setChannelGroupChannels(guildId, groupId, channels);
+			await api.setChannelGroupChannels(guildId, groupId, channels);
 		} catch (err: any) {
 			addToast(err.message || 'Failed to reorder channels', 'error');
 			await loadGroups();
@@ -463,6 +464,8 @@
 	}
 
 	async function handleChannelMoveToGroup(channelId: string, fromGroupId: string, toGroupId: string, insertIndex: number) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
 		const fromGroup = groups.find(g => g.id === fromGroupId);
 		const toGroup = groups.find(g => g.id === toGroupId);
 		if (!fromGroup || !toGroup) return;
@@ -474,21 +477,20 @@
 		toChannels.splice(insertIndex, 0, channelId);
 
 		// Optimistic update
+		const prevGroups = groups;
 		groups = groups.map(g => {
 			if (g.id === fromGroupId) return { ...g, channels: fromChannels };
 			if (g.id === toGroupId) return { ...g, channels: toChannels };
 			return g;
 		});
 
-		const guildId = $currentGuildId;
 		try {
-			if (guildId) {
-				await Promise.all([
-					api.setChannelGroupChannels(guildId, fromGroupId, fromChannels),
-					api.setChannelGroupChannels(guildId, toGroupId, toChannels),
-				]);
-			}
+			await Promise.all([
+				api.setChannelGroupChannels(guildId, fromGroupId, fromChannels),
+				api.setChannelGroupChannels(guildId, toGroupId, toChannels),
+			]);
 		} catch (err: any) {
+			groups = prevGroups;
 			addToast(err.message || 'Failed to move channel', 'error');
 			await loadGroups();
 		}
@@ -515,6 +517,8 @@
 	});
 
 	async function handleGroupReorder(sourceId: string, targetIndex: number) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
 		const reordered = [...groups];
 		const sourceIdx = reordered.findIndex(g => g.id === sourceId);
 		if (sourceIdx === -1) return;
@@ -522,14 +526,15 @@
 		const [moved] = reordered.splice(sourceIdx, 1);
 		reordered.splice(targetIndex, 0, moved);
 
+		const prevGroups = groups;
 		groups = reordered.map((g, i) => ({ ...g, position: i }));
 
-		const guildId = $currentGuildId;
 		try {
-			for (let i = 0; i < reordered.length; i++) {
-				if (guildId) await api.updateChannelGroup(guildId, reordered[i].id, { position: i });
-			}
+			await Promise.all(
+				reordered.map((g, i) => api.updateChannelGroup(guildId, g.id, { position: i }))
+			);
 		} catch (err: any) {
+			groups = prevGroups;
 			addToast(err.message || 'Failed to reorder groups', 'error');
 			await loadGroups();
 		}
@@ -555,14 +560,16 @@
 
 	// Svelte action to track group container elements for hit-testing
 	function registerGroupContainer(node: HTMLElement, groupId: string) {
-		groupContainerEls.set(groupId, node);
+		let currentId = groupId;
+		groupContainerEls.set(currentId, node);
 		return {
 			update(newGroupId: string) {
-				groupContainerEls.delete(groupId);
-				groupContainerEls.set(newGroupId, node);
+				groupContainerEls.delete(currentId);
+				currentId = newGroupId;
+				groupContainerEls.set(currentId, node);
 			},
 			destroy() {
-				groupContainerEls.delete(groupId);
+				groupContainerEls.delete(currentId);
 			},
 		};
 	}

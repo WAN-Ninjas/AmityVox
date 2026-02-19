@@ -70,25 +70,33 @@
 
 	onDestroy(() => { guildDragController?.destroy(); });
 
+	let reorderingGuilds = false;
+
 	async function handleGuildReorder(sourceId: string, targetIndex: number) {
-		const list = $guildList;
-		const sourceIdx = list.findIndex(g => g.id === sourceId);
-		if (sourceIdx === -1) return;
-
-		const prevOrder = [...list];
-		const reordered = [...list];
-		const [moved] = reordered.splice(sourceIdx, 1);
-		reordered.splice(targetIndex, 0, moved);
-
-		// Optimistic update — re-insert into Map in new order
-		guilds.setAll(reordered.map(g => [g.id, g]));
-
-		const positions = reordered.map((g, i) => ({ guild_id: g.id, position: i }));
+		if (reorderingGuilds) return;
+		reorderingGuilds = true;
 		try {
-			await api.reorderGuilds(positions);
-		} catch (err: any) {
-			guilds.setAll(prevOrder.map(g => [g.id, g]));
-			addToast(err.message || 'Failed to reorder guilds', 'error');
+			const list = $guildList;
+			const sourceIdx = list.findIndex(g => g.id === sourceId);
+			if (sourceIdx === -1) return;
+
+			const prevOrder = [...list];
+			const reordered = [...list];
+			const [moved] = reordered.splice(sourceIdx, 1);
+			reordered.splice(targetIndex, 0, moved);
+
+			// Optimistic update — re-insert into Map in new order
+			guilds.setAll(reordered.map(g => [g.id, g]));
+
+			const positions = reordered.map((g, i) => ({ guild_id: g.id, position: i }));
+			try {
+				await api.reorderGuilds(positions);
+			} catch (err: any) {
+				guilds.setAll(prevOrder.map(g => [g.id, g]));
+				addToast(err.message || 'Failed to reorder guilds', 'error');
+			}
+		} finally {
+			reorderingGuilds = false;
 		}
 	}
 

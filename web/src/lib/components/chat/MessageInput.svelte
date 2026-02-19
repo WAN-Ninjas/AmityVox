@@ -222,6 +222,7 @@
 		if ($currentChannel?.encrypted) {
 			addToast('Scheduling is not yet supported in encrypted channels', 'error');
 			showSchedulePicker = false;
+			customDatetime = '';
 			return;
 		}
 		const channelId = $currentChannelId;
