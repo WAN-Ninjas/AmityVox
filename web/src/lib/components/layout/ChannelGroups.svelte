@@ -160,21 +160,25 @@
 		}
 	}
 
-	function getChannel(channelId: string) {
-		const allChannels = [...$textChannels, ...$voiceChannels, ...$forumChannels, ...$galleryChannels];
-		return allChannels.find(c => c.id === channelId) ?? null;
-	}
+	const channelsMap = $derived.by(() => {
+		const map = new Map<string, { id: string; name: string; channel_type: string; encrypted?: boolean }>();
+		for (const ch of $textChannels) map.set(ch.id, ch);
+		for (const ch of $voiceChannels) map.set(ch.id, ch);
+		for (const ch of $forumChannels) map.set(ch.id, ch);
+		for (const ch of $galleryChannels) map.set(ch.id, ch);
+		return map;
+	});
 
 	function getChannelName(channelId: string): string {
-		return getChannel(channelId)?.name ?? 'Unknown Channel';
+		return channelsMap.get(channelId)?.name ?? 'Unknown Channel';
 	}
 
 	function getChannelType(channelId: string): string {
-		return getChannel(channelId)?.channel_type ?? 'text';
+		return channelsMap.get(channelId)?.channel_type ?? 'text';
 	}
 
 	function isChannelEncrypted(channelId: string): boolean {
-		return getChannel(channelId)?.encrypted ?? false;
+		return channelsMap.get(channelId)?.encrypted ?? false;
 	}
 
 	function startEdit(group: ChannelGroup) {
@@ -502,9 +506,14 @@
 
 	$effect(() => {
 		const el = groupListEl;
-		if (!el) return;
+		if (!el || groups.length === 0) {
+			untrack(() => {
+				groupListController?.destroy();
+				groupListController = null;
+			});
+			return;
+		}
 		untrack(() => {
-			if (groups.length === 0) return;
 			groupListController?.destroy();
 			groupListController = new DragController({
 				container: el,
@@ -514,6 +523,10 @@
 				onDrop: handleGroupReorder,
 			});
 		});
+		return () => {
+			groupListController?.destroy();
+			groupListController = null;
+		};
 	});
 
 	async function handleGroupReorder(sourceId: string, targetIndex: number) {

@@ -143,7 +143,13 @@
 			try {
 				let editContent = msg;
 				if ($currentChannel?.encrypted) {
-					editContent = await e2ee.encryptMessage(channelId, msg);
+					try {
+						editContent = await e2ee.encryptMessage(channelId, msg);
+					} catch {
+						content = msg;
+						addToast('Failed to encrypt message. Do you have the channel key?', 'error');
+						return;
+					}
 				}
 				await api.editMessage($editingMessage.channel_id, $editingMessage.id, editContent);
 				cancelEdit();
@@ -462,6 +468,12 @@
 		try {
 			let uploadFile: File = file;
 			const opts: Record<string, any> = {};
+			if (isReplying && $replyingTo) {
+				opts.reply_to_ids = [$replyingTo.id];
+			}
+			if (silentMode) {
+				opts.silent = true;
+			}
 			if ($currentChannel?.encrypted) {
 				opts.encrypted = true;
 				try {
@@ -474,6 +486,7 @@
 					return;
 				}
 			}
+			cancelReply();
 			const uploaded = await api.uploadFile(uploadFile);
 			opts.attachment_ids = [uploaded.id];
 			const sent = await api.sendMessage($currentChannelId, '', opts);
@@ -574,12 +587,14 @@
 			}
 			const uploaded = await api.uploadFile(file);
 			const opts: Record<string, any> = {
-				attachment_ids: [uploaded.id],
-				voice_duration_ms: durationMs,
-				voice_waveform: waveform
+				attachment_ids: [uploaded.id]
 			};
 			if ($currentChannel?.encrypted) {
 				opts.encrypted = true;
+				// Omit voice metadata in encrypted channels to avoid leaking duration/waveform
+			} else {
+				opts.voice_duration_ms = durationMs;
+				opts.voice_waveform = waveform;
 			}
 			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
