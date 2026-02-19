@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { calculateInsertionIndex, calculateScrollSpeed } from '$lib/utils/dragDrop';
+import { describe, it, expect, vi } from 'vitest';
+import { calculateInsertionIndex, calculateScrollSpeed, DragController } from '$lib/utils/dragDrop';
 
 describe('calculateInsertionIndex', () => {
 	it('returns 0 when cursor is above all items', () => {
@@ -72,5 +72,126 @@ describe('calculateScrollSpeed', () => {
 		// Cursor right at the edge
 		const speed = calculateScrollSpeed(101, 100, 500, 40);
 		expect(Math.abs(speed)).toBeLessThanOrEqual(15);
+	});
+});
+
+// Minimal mock for HTMLElement — happy-dom provides a real DOM
+function makeContainer(itemCount: number): { container: HTMLDivElement; items: HTMLDivElement[] } {
+	const container = document.createElement('div');
+	Object.defineProperty(container, 'getBoundingClientRect', {
+		value: () => ({ top: 0, bottom: 400, left: 0, right: 300, width: 300, height: 400 }),
+	});
+	container.style.position = 'relative';
+
+	const items: HTMLDivElement[] = [];
+	for (let i = 0; i < itemCount; i++) {
+		const item = document.createElement('div');
+		item.dataset.dragId = `item-${i}`;
+		Object.defineProperty(item, 'getBoundingClientRect', {
+			value: () => ({ top: i * 40, bottom: (i + 1) * 40, left: 0, right: 300, width: 300, height: 40 }),
+		});
+		container.appendChild(item);
+		items.push(item);
+	}
+	document.body.appendChild(container);
+	return { container, items };
+}
+
+describe('DragController', () => {
+	it('is not active before any interaction', () => {
+		const { container, items } = makeContainer(3);
+		const onDrop = vi.fn();
+		const ctrl = new DragController({
+			container,
+			items: () => ['item-0', 'item-1', 'item-2'],
+			getElement: (id) => items[parseInt(id.split('-')[1])] ?? null,
+			onDrop,
+		});
+		expect(ctrl.isDragging).toBe(false);
+		ctrl.destroy();
+		container.remove();
+	});
+
+	it('calls onDrop with correct source and target', () => {
+		const { container, items } = makeContainer(3);
+		const onDrop = vi.fn();
+		const ctrl = new DragController({
+			container,
+			items: () => ['item-0', 'item-1', 'item-2'],
+			getElement: (id) => items[parseInt(id.split('-')[1])] ?? null,
+			onDrop,
+		});
+
+		// Simulate drag: pointerdown on item-0, move 10px, release on item-2's zone
+		ctrl.handlePointerDown(new PointerEvent('pointerdown', { clientX: 50, clientY: 10 }), 'item-0');
+		// Move enough to activate (>5px)
+		ctrl.handlePointerMove(new PointerEvent('pointermove', { clientX: 50, clientY: 100 }));
+		ctrl.handlePointerUp(new PointerEvent('pointerup', { clientX: 50, clientY: 100 }));
+
+		expect(onDrop).toHaveBeenCalledTimes(1);
+		const [sourceId, targetIndex] = onDrop.mock.calls[0];
+		expect(sourceId).toBe('item-0');
+		expect(typeof targetIndex).toBe('number');
+		ctrl.destroy();
+		container.remove();
+	});
+
+	it('does not activate on small movements (click threshold)', () => {
+		const { container, items } = makeContainer(3);
+		const onDrop = vi.fn();
+		const ctrl = new DragController({
+			container,
+			items: () => ['item-0', 'item-1', 'item-2'],
+			getElement: (id) => items[parseInt(id.split('-')[1])] ?? null,
+			onDrop,
+		});
+
+		ctrl.handlePointerDown(new PointerEvent('pointerdown', { clientX: 50, clientY: 10 }), 'item-0');
+		ctrl.handlePointerMove(new PointerEvent('pointermove', { clientX: 52, clientY: 12 })); // <5px
+		ctrl.handlePointerUp(new PointerEvent('pointerup', { clientX: 52, clientY: 12 }));
+
+		expect(ctrl.isDragging).toBe(false);
+		expect(onDrop).not.toHaveBeenCalled();
+		ctrl.destroy();
+		container.remove();
+	});
+
+	it('cancels drag on Escape key', () => {
+		const { container, items } = makeContainer(3);
+		const onDrop = vi.fn();
+		const ctrl = new DragController({
+			container,
+			items: () => ['item-0', 'item-1', 'item-2'],
+			getElement: (id) => items[parseInt(id.split('-')[1])] ?? null,
+			onDrop,
+		});
+
+		ctrl.handlePointerDown(new PointerEvent('pointerdown', { clientX: 50, clientY: 10 }), 'item-0');
+		ctrl.handlePointerMove(new PointerEvent('pointermove', { clientX: 50, clientY: 100 })); // activate
+		expect(ctrl.isDragging).toBe(true);
+
+		ctrl.handleKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+		expect(ctrl.isDragging).toBe(false);
+		expect(onDrop).not.toHaveBeenCalled();
+		ctrl.destroy();
+		container.remove();
+	});
+
+	it('respects canDrag=false', () => {
+		const { container, items } = makeContainer(3);
+		const onDrop = vi.fn();
+		const ctrl = new DragController({
+			container,
+			items: () => ['item-0', 'item-1', 'item-2'],
+			getElement: (id) => items[parseInt(id.split('-')[1])] ?? null,
+			onDrop,
+			canDrag: false,
+		});
+
+		ctrl.handlePointerDown(new PointerEvent('pointerdown', { clientX: 50, clientY: 10 }), 'item-0');
+		ctrl.handlePointerMove(new PointerEvent('pointermove', { clientX: 50, clientY: 100 }));
+		expect(ctrl.isDragging).toBe(false);
+		ctrl.destroy();
+		container.remove();
 	});
 });
