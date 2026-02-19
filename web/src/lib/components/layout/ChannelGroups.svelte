@@ -9,6 +9,7 @@
 	import { goto } from '$app/navigation';
 	import { addToast } from '$lib/stores/toast';
 	import { unlockedChannels } from '$lib/encryption/e2eeManager';
+	import { canManageChannels } from '$lib/stores/permissions';
 
 	interface ChannelGroup {
 		id: string;
@@ -204,7 +205,7 @@
 	} | null>(null);
 
 	function handleChPointerDown(e: PointerEvent, channelId: string, groupId: string) {
-		if (e.button !== 0) return;
+		if (e.button !== 0 || !$canManageChannels) return;
 		e.stopPropagation();
 		chDrag = {
 			channelId,
@@ -507,7 +508,7 @@
 				container: el,
 				items: () => groups.map(g => g.id),
 				getElement: (id) => el.querySelector(`[data-group-id="${id}"]`) as HTMLElement | null,
-				canDrag: true,
+				canDrag: $canManageChannels,
 				onDrop: handleGroupReorder,
 			});
 		});
@@ -677,7 +678,7 @@
 							data-channel-id={channelId}
 							onpointerdown={(e) => handleChPointerDown(e, channelId, group.id)}
 						>
-							<DragHandle />
+							{#if $canManageChannels}<DragHandle />{/if}
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 								onclick={() => handleChannelClick(channelId)}

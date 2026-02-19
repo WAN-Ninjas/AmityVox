@@ -64,7 +64,6 @@
 				getElement: (id) => el.querySelector(`[data-guild-id="${id}"]`) as HTMLElement | null,
 				canDrag: true,
 				onDrop: handleGuildReorder,
-				dragHandleSelector: '.drag-handle',
 			});
 		});
 	});
@@ -76,6 +75,7 @@
 		const sourceIdx = list.findIndex(g => g.id === sourceId);
 		if (sourceIdx === -1) return;
 
+		const prevOrder = [...list];
 		const reordered = [...list];
 		const [moved] = reordered.splice(sourceIdx, 1);
 		reordered.splice(targetIndex, 0, moved);
@@ -87,6 +87,7 @@
 		try {
 			await api.reorderGuilds(positions);
 		} catch (err: any) {
+			guilds.setAll(prevOrder.map(g => [g.id, g]));
 			addToast(err.message || 'Failed to reorder guilds', 'error');
 		}
 	}

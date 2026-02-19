@@ -141,7 +141,11 @@
 		if (isEditing && $editingMessage) {
 			// Edit mode: update existing message.
 			try {
-				await api.editMessage($editingMessage.channel_id, $editingMessage.id, msg);
+				let editContent = msg;
+				if ($currentChannel?.encrypted) {
+					editContent = await e2ee.encryptMessage(channelId, msg);
+				}
+				await api.editMessage($editingMessage.channel_id, $editingMessage.id, editContent);
 				cancelEdit();
 			} catch (e) {
 				content = msg;
@@ -217,6 +221,7 @@
 	async function handleSchedule(scheduledFor: Date) {
 		if ($currentChannel?.encrypted) {
 			addToast('Scheduling is not yet supported in encrypted channels', 'error');
+			showSchedulePicker = false;
 			return;
 		}
 		const channelId = $currentChannelId;
