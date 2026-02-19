@@ -67,7 +67,10 @@
 
 	async function loadGroups() {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId) {
+			loading = false;
+			return;
+		}
 		loading = true;
 		try {
 			groups = await api.getChannelGroups(guildId);

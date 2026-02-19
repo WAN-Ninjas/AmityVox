@@ -406,7 +406,7 @@
 			const ids: string[] = [];
 			for (let i = 0; i < pendingFiles.length; i++) {
 				let file = pendingFiles[i];
-				const altText = pendingAltTexts[i]?.trim() || undefined;
+				const altText = isEncrypted ? undefined : (pendingAltTexts[i]?.trim() || undefined);
 				if (isEncrypted) {
 					try {
 						const buf = await file.arrayBuffer();
