@@ -440,9 +440,9 @@
 					}
 				}
 			}
-			cancelReply();
 			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
+			cancelReply();
 			content = '';
 			if (inputEl) inputEl.style.height = 'auto';
 			pendingFiles = [];

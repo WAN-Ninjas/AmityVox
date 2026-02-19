@@ -688,11 +688,11 @@
 
 			<!-- Group channels -->
 			{#if !collapsedGroups.has(group.id)}
+				<!-- svelte-ignore binding_property_non_reactive -->
+				<div class="relative" use:registerGroupContainer={group.id}>
 				{#if group.channels.length === 0}
 					<p class="px-3 py-1 text-2xs text-text-muted italic">No channels in this group</p>
 				{:else}
-					<!-- svelte-ignore binding_property_non_reactive -->
-					<div class="relative" use:registerGroupContainer={group.id}>
 					{#each uniqueChannels as channelId (channelId)}
 						{@const unread = $unreadCounts.get(channelId) ?? 0}
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
@@ -758,8 +758,8 @@
 							</button>
 						</div>
 					{/each}
-					</div>
 				{/if}
+				</div>
 			{/if}
 		</div>
 	{/each}
