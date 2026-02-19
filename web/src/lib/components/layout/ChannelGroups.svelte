@@ -460,11 +460,13 @@
 		channels.splice(sourceIdx, 1);
 		channels.splice(targetIndex, 0, sourceId);
 
+		const prevGroups = groups;
 		groups = groups.map(g => g.id === groupId ? { ...g, channels } : g);
 
 		try {
 			await api.setChannelGroupChannels(guildId, groupId, channels);
 		} catch (err: any) {
+			groups = prevGroups;
 			addToast(err.message || 'Failed to reorder channels', 'error');
 			await loadGroups();
 		}
@@ -783,6 +785,10 @@
 	<div
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
 		onclick={() => (showCreateModal = false)}
+		onkeydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
+		role="dialog"
+		aria-modal="true"
+		tabindex="-1"
 	>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div

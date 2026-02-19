@@ -486,11 +486,11 @@
 					return;
 				}
 			}
-			cancelReply();
 			const uploaded = await api.uploadFile(uploadFile);
 			opts.attachment_ids = [uploaded.id];
 			const sent = await api.sendMessage($currentChannelId, '', opts);
 			appendMessage(sent);
+			cancelReply();
 		} catch (err) {
 			addToast('Upload failed', 'error');
 		}
