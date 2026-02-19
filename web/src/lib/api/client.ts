@@ -1660,11 +1660,11 @@ class ApiClient {
 		return this.get('/users/@me/channel-groups');
 	}
 
-	createChannelGroup(data: { name: string }): Promise<any> {
+	createChannelGroup(data: { name: string; color?: string }): Promise<any> {
 		return this.post('/users/@me/channel-groups', data);
 	}
 
-	updateChannelGroup(groupId: string, data: { name?: string }): Promise<any> {
+	updateChannelGroup(groupId: string, data: { name?: string; color?: string; position?: number }): Promise<any> {
 		return this.patch(`/users/@me/channel-groups/${groupId}`, data);
 	}
 

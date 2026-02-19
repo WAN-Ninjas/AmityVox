@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import DragHandle from '$components/common/DragHandle.svelte';
+	import { DragController } from '$lib/utils/dragDrop';
 	import { currentGuildId } from '$lib/stores/guilds';
 	import { textChannels, voiceChannels, currentChannelId } from '$lib/stores/channels';
 	import { unreadCounts, mentionCounts } from '$lib/stores/unreads';
@@ -156,44 +158,135 @@
 		editingGroupId = null;
 	}
 
-	// Drag-and-drop support: allow channels to be dropped onto groups.
-	function handleDragOver(e: DragEvent) {
-		e.preventDefault();
-		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	// --- Channel reorder within groups (pointer-based) ---
+	let groupControllers = $state<Map<string, DragController>>(new Map());
+	let isDraggingInGroup = $state(false);
+
+	function setupGroupController(groupId: string, container: HTMLElement) {
+		const existing = groupControllers.get(groupId);
+		existing?.destroy();
+
+		const ctrl = new DragController({
+			container,
+			items: () => {
+				const group = groups.find(g => g.id === groupId);
+				return group ? [...new Set(group.channels)] : [];
+			},
+			getElement: (id) => container.querySelector(`[data-channel-id="${id}"]`) as HTMLElement | null,
+			canDrag: true,
+			onDrop: (sourceId, targetIndex) => handleChannelReorderInGroup(sourceId, targetIndex, groupId),
+			onDragStateChange: (d) => { isDraggingInGroup = d; },
+		});
+		groupControllers.set(groupId, ctrl);
 	}
 
-	async function handleDrop(e: DragEvent, groupId: string) {
-		e.preventDefault();
-		const channelId = e.dataTransfer?.getData('text/plain');
-		if (!channelId) return;
+	onDestroy(() => {
+		for (const ctrl of groupControllers.values()) ctrl.destroy();
+		groupListController?.destroy();
+	});
 
-		// Check if channel already in this group.
+	async function handleChannelReorderInGroup(sourceId: string, targetIndex: number, groupId: string) {
 		const group = groups.find(g => g.id === groupId);
-		if (group?.channels.includes(channelId)) return;
+		if (!group) return;
+
+		const channels = [...new Set(group.channels)];
+		const sourceIdx = channels.indexOf(sourceId);
+		if (sourceIdx === -1) return;
+
+		channels.splice(sourceIdx, 1);
+		channels.splice(targetIndex, 0, sourceId);
+
+		// Optimistic update
+		groups = groups.map(g => g.id === groupId ? { ...g, channels } : g);
 
 		try {
-			const updatedChannels = [...(group?.channels ?? []), channelId];
-			await api.setChannelGroupChannels(groupId, updatedChannels);
-			groups = groups.map(g => {
-				if (g.id === groupId) {
-					return { ...g, channels: updatedChannels };
-				}
-				return g;
-			});
-			addToast('Channel added to group', 'success');
+			await api.setChannelGroupChannels(groupId, channels);
 		} catch (err: any) {
-			addToast(err.message || 'Failed to add channel', 'error');
+			addToast(err.message || 'Failed to reorder channels', 'error');
+			await loadGroups();
 		}
+	}
+
+	// --- Group reorder (pointer-based) ---
+	let groupListEl = $state<HTMLElement | null>(null);
+	let groupListController = $state<DragController | null>(null);
+
+	$effect(() => {
+		if (!groupListEl || groups.length === 0) return;
+		groupListController?.destroy();
+		groupListController = new DragController({
+			container: groupListEl,
+			items: () => groups.map(g => g.id),
+			getElement: (id) => groupListEl?.querySelector(`[data-group-id="${id}"]`) as HTMLElement | null,
+			canDrag: true,
+			onDrop: handleGroupReorder,
+		});
+	});
+
+	async function handleGroupReorder(sourceId: string, targetIndex: number) {
+		const reordered = [...groups];
+		const sourceIdx = reordered.findIndex(g => g.id === sourceId);
+		if (sourceIdx === -1) return;
+
+		const [moved] = reordered.splice(sourceIdx, 1);
+		reordered.splice(targetIndex, 0, moved);
+
+		groups = reordered.map((g, i) => ({ ...g, position: i }));
+
+		try {
+			for (let i = 0; i < reordered.length; i++) {
+				await api.updateChannelGroup(reordered[i].id, { position: i });
+			}
+		} catch (err: any) {
+			addToast(err.message || 'Failed to reorder groups', 'error');
+			await loadGroups();
+		}
+	}
+
+	// Forwarding pointer events from window to active controllers
+	function handleWindowPointerMove(e: PointerEvent) {
+		for (const ctrl of groupControllers.values()) ctrl.handlePointerMove(e);
+		groupListController?.handlePointerMove(e);
+	}
+	function handleWindowPointerUp(e: PointerEvent) {
+		for (const ctrl of groupControllers.values()) ctrl.handlePointerUp(e);
+		groupListController?.handlePointerUp(e);
+	}
+	function handleWindowKeyDown(e: KeyboardEvent) {
+		for (const ctrl of groupControllers.values()) ctrl.handleKeyDown(e);
+		groupListController?.handleKeyDown(e);
+	}
+
+	// Svelte action to register per-group channel list containers
+	function registerGroupContainer(node: HTMLElement, groupId: string) {
+		setupGroupController(groupId, node);
+		return {
+			update(newGroupId: string) {
+				setupGroupController(newGroupId, node);
+			},
+			destroy() {
+				const ctrl = groupControllers.get(groupId);
+				ctrl?.destroy();
+				groupControllers.delete(groupId);
+			},
+		};
 	}
 </script>
 
+<svelte:window
+	onpointermove={handleWindowPointerMove}
+	onpointerup={handleWindowPointerUp}
+	onkeydown={handleWindowKeyDown}
+/>
+
 {#if !loading && groups.length > 0}
+	<div bind:this={groupListEl} class="relative">
 	{#each groups as group (group.id)}
 		{@const uniqueChannels = [...new Set(group.channels)]}
 		<div
-			class="mb-1"
-			ondragover={handleDragOver}
-			ondrop={(e) => handleDrop(e, group.id)}
+			class="group/drag mb-1"
+			data-group-id={group.id}
+			onpointerdown={(e) => groupListController?.handlePointerDown(e, group.id)}
 			role="group"
 		>
 			<!-- Group header -->
@@ -275,19 +368,24 @@
 			<!-- Group channels -->
 			{#if !collapsedGroups.has(group.id)}
 				{#if group.channels.length === 0}
-					<p class="px-3 py-1 text-2xs text-text-muted italic">Drag channels here</p>
+					<p class="px-3 py-1 text-2xs text-text-muted italic">No channels in this group</p>
 				{:else}
+					<!-- svelte-ignore binding_property_non_reactive -->
+					<div class="relative" use:registerGroupContainer={group.id}>
 					{#each uniqueChannels as channelId (channelId)}
 						{@const unread = $unreadCounts.get(channelId) ?? 0}
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
 						{@const channelType = getChannelType(channelId)}
 						{@const isVoice = channelType === 'voice' || channelType === 'stage'}
-						<div class="group/item flex items-center">
+						<div
+							class="group/item flex items-center"
+							data-channel-id={channelId}
+							onpointerdown={(e) => { const ctrl = groupControllers.get(group.id); ctrl?.handlePointerDown(e, channelId); }}
+						>
+							<DragHandle />
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 								onclick={() => handleChannelClick(channelId)}
-								draggable="true"
-								ondragstart={(e) => e.dataTransfer?.setData('text/plain', channelId)}
 							>
 								{#if isVoice}
 									<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -318,10 +416,12 @@
 							</button>
 						</div>
 					{/each}
+					</div>
 				{/if}
 			{/if}
 		</div>
 	{/each}
+	</div>
 {/if}
 
 <!-- Create group button (shown when there are existing groups or always at bottom) -->
