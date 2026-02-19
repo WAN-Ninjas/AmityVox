@@ -159,5 +159,5 @@ export async function decryptBinary(key: CryptoKey, encryptedData: ArrayBuffer):
 	const combined = new Uint8Array(encryptedData);
 	const iv = combined.slice(0, 12);
 	const ciphertext = combined.slice(12);
-	return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext.buffer);
+	return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
 }

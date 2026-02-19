@@ -311,6 +311,10 @@
 		cleanupChDrag();
 	}
 
+	function handleChPointerCancel(_e: PointerEvent) {
+		cleanupChDrag();
+	}
+
 	function handleChKeyDown(e: KeyboardEvent) {
 		if (e.key === 'Escape' && chDrag?.activated) {
 			cleanupChDrag();
@@ -539,6 +543,10 @@
 		handleChPointerUp(e);
 		groupListController?.handlePointerUp(e);
 	}
+	function handleWindowPointerCancel(e: PointerEvent) {
+		handleChPointerCancel(e);
+		groupListController?.handlePointerCancel(e);
+	}
 	function handleWindowKeyDown(e: KeyboardEvent) {
 		handleChKeyDown(e);
 		groupListController?.handleKeyDown(e);
@@ -562,6 +570,7 @@
 <svelte:window
 	onpointermove={handleWindowPointerMove}
 	onpointerup={handleWindowPointerUp}
+	onpointercancel={handleWindowPointerCancel}
 	onkeydown={handleWindowKeyDown}
 />
 

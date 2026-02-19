@@ -467,6 +467,7 @@
 	onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }}
 	onpointermove={(e) => channelDragController?.handlePointerMove(e)}
 	onpointerup={(e) => channelDragController?.handlePointerUp(e)}
+	onpointercancel={(e) => channelDragController?.handlePointerCancel(e)}
 	onkeydown={(e) => channelDragController?.handleKeyDown(e)}
 />
 

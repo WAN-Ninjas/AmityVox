@@ -170,6 +170,10 @@ export class DragController {
 		this.cleanup();
 	}
 
+	handlePointerCancel(_e: PointerEvent): void {
+		this.cleanup();
+	}
+
 	handleKeyDown(e: KeyboardEvent): void {
 		if (e.key === 'Escape' && this._isDragging) {
 			this.cleanup();

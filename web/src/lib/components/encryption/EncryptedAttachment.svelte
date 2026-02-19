@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { e2ee } from '$lib/encryption/e2eeManager';
-	import { addToast } from '$lib/stores/toast';
 	import AudioPlayer from '$components/chat/AudioPlayer.svelte';
 	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
 
@@ -60,24 +59,29 @@
 		decrypting = true;
 		failed = false;
 
-		fetchAndDecrypt(id, ch);
+		const controller = new AbortController();
+		fetchAndDecrypt(id, ch, controller.signal);
 
 		return () => {
+			controller.abort();
 			if (blobUrl) URL.revokeObjectURL(blobUrl);
 		};
 	});
 
-	async function fetchAndDecrypt(attachmentId: string, ch: string) {
+	async function fetchAndDecrypt(attachmentId: string, ch: string, signal: AbortSignal) {
 		try {
-			const res = await fetch(`/api/v1/files/${attachmentId}`);
+			const res = await fetch(`/api/v1/files/${attachmentId}`, { signal });
 			if (!res.ok) throw new Error('fetch failed');
 			const encrypted = await res.arrayBuffer();
+			if (signal.aborted) return;
 			const decrypted = await e2ee.decryptFile(ch, encrypted);
+			if (signal.aborted) return;
 			blobUrl = URL.createObjectURL(new Blob([decrypted], { type: originalMime }));
-		} catch {
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
 			failed = true;
 		} finally {
-			decrypting = false;
+			if (!signal.aborted) decrypting = false;
 		}
 	}
 

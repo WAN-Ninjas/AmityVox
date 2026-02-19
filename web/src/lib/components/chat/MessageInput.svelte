@@ -533,12 +533,13 @@
 		showStickerPicker = false;
 		const channelId = $currentChannelId;
 		if (!channelId) return;
+		if ($currentChannel?.encrypted) {
+			addToast('Stickers are not supported in encrypted channels', 'error');
+			return;
+		}
 		try {
 			// Send the sticker as a message with the sticker image file as an attachment.
 			const opts: Record<string, any> = { attachment_ids: [sticker.file_id] };
-			if ($currentChannel?.encrypted) {
-				opts.encrypted = true;
-			}
 			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
 		} catch (e) {
@@ -554,7 +555,17 @@
 
 		try {
 			const ext = audioBlob.type.includes('webm') ? 'webm' : audioBlob.type.includes('ogg') ? 'ogg' : 'mp4';
-			const file = new File([audioBlob], `voice-message.${ext}`, { type: audioBlob.type });
+			let file: File = new File([audioBlob], `voice-message.${ext}`, { type: audioBlob.type });
+			if ($currentChannel?.encrypted) {
+				try {
+					const buf = await audioBlob.arrayBuffer();
+					const encBuf = await e2ee.encryptFile(channelId, buf);
+					file = new File([encBuf], `voice-message.${ext}.enc`, { type: 'application/octet-stream' });
+				} catch {
+					addToast('Failed to encrypt voice message. Do you have the channel key?', 'error');
+					return;
+				}
+			}
 			const uploaded = await api.uploadFile(file);
 			const opts: Record<string, any> = {
 				attachment_ids: [uploaded.id],

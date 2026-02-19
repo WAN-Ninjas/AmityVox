@@ -266,6 +266,7 @@
 <svelte:window
 	onpointermove={(e) => guildDragController?.handlePointerMove(e)}
 	onpointerup={(e) => guildDragController?.handlePointerUp(e)}
+	onpointercancel={(e) => guildDragController?.handlePointerCancel(e)}
 	onkeydown={(e) => guildDragController?.handleKeyDown(e)}
 />
 

@@ -82,6 +82,10 @@ func (h *Handler) HandleGetChannelGroups(w http.ResponseWriter, r *http.Request)
 		}
 		groups = append(groups, g)
 	}
+	if err := rows.Err(); err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to iterate channel groups", err)
+		return
+	}
 
 	apiutil.WriteJSON(w, http.StatusOK, groups)
 }
@@ -116,9 +120,12 @@ func (h *Handler) HandleCreateChannelGroup(w http.ResponseWriter, r *http.Reques
 
 	// Limit to 25 groups per guild.
 	var count int
-	h.Pool.QueryRow(r.Context(),
+	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM guild_channel_groups WHERE guild_id = $1`, guildID,
-	).Scan(&count)
+	).Scan(&count); err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to count channel groups", err)
+		return
+	}
 	if count >= 25 {
 		apiutil.WriteError(w, http.StatusBadRequest, "group_limit", "A guild can have at most 25 channel groups")
 		return
@@ -203,13 +210,22 @@ func (h *Handler) HandleUpdateChannelGroup(w http.ResponseWriter, r *http.Reques
 
 	// Apply updates.
 	if req.Name != nil {
-		h.Pool.Exec(r.Context(), `UPDATE guild_channel_groups SET name = $2 WHERE id = $1`, groupID, *req.Name)
+		if _, err := h.Pool.Exec(r.Context(), `UPDATE guild_channel_groups SET name = $2 WHERE id = $1`, groupID, *req.Name); err != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to update channel group name", err)
+			return
+		}
 	}
 	if req.Color != nil {
-		h.Pool.Exec(r.Context(), `UPDATE guild_channel_groups SET color = $2 WHERE id = $1`, groupID, *req.Color)
+		if _, err := h.Pool.Exec(r.Context(), `UPDATE guild_channel_groups SET color = $2 WHERE id = $1`, groupID, *req.Color); err != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to update channel group color", err)
+			return
+		}
 	}
 	if req.Position != nil {
-		h.Pool.Exec(r.Context(), `UPDATE guild_channel_groups SET position = $2 WHERE id = $1`, groupID, *req.Position)
+		if _, err := h.Pool.Exec(r.Context(), `UPDATE guild_channel_groups SET position = $2 WHERE id = $1`, groupID, *req.Position); err != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to update channel group position", err)
+			return
+		}
 	}
 
 	// Fetch updated group with channels.
