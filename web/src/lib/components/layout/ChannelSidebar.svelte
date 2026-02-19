@@ -28,6 +28,9 @@
 	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import DragHandle from '$components/common/DragHandle.svelte';
+	import { DragController } from '$lib/utils/dragDrop';
+	import { onDestroy } from 'svelte';
 
 	let dmProfileUserId = $state<string | null>(null);
 
@@ -389,9 +392,60 @@
 		if (newChannelType === type) return `${base} border-brand-500 bg-brand-500/10 text-text-primary`;
 		return `${base} border-bg-modifier text-text-muted`;
 	}
+
+	// --- Channel Drag Reorder (pointer-based) ---
+	let channelListEl = $state<HTMLElement | null>(null);
+	let channelDragController = $state<DragController | null>(null);
+	let isDraggingChannel = $state(false);
+
+	$effect(() => {
+		if (!channelListEl) return;
+		channelDragController?.destroy();
+		channelDragController = new DragController({
+			container: channelListEl,
+			items: () => activeTextChannels.map(c => c.id),
+			getElement: (id) => channelListEl?.querySelector(`[data-channel-id="${id}"]`) as HTMLElement | null,
+			canDrag: $canManageChannels,
+			onDrop: handleChannelReorder,
+			onDragStateChange: (dragging) => { isDraggingChannel = dragging; },
+		});
+	});
+
+	onDestroy(() => { channelDragController?.destroy(); });
+
+	async function handleChannelReorder(sourceId: string, targetIndex: number) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+
+		const reordered = [...activeTextChannels];
+		const sourceIdx = reordered.findIndex(c => c.id === sourceId);
+		if (sourceIdx === -1) return;
+
+		const [moved] = reordered.splice(sourceIdx, 1);
+		reordered.splice(targetIndex, 0, moved);
+
+		const positions = reordered.map((c, i) => ({ id: c.id, position: i }));
+
+		// Optimistic update
+		for (const p of positions) {
+			const ch = [...$textChannels, ...$voiceChannels, ...$forumChannels, ...$galleryChannels].find(c => c.id === p.id);
+			if (ch) updateChannelStore({ ...ch, position: p.position });
+		}
+
+		try {
+			await api.reorderChannels(guildId, positions);
+		} catch (err: any) {
+			addToast(err.message || 'Failed to reorder channels', 'error');
+		}
+	}
 </script>
 
-<svelte:window onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }} />
+<svelte:window
+	onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }}
+	onpointermove={(e) => channelDragController?.handlePointerMove(e)}
+	onpointerup={(e) => channelDragController?.handlePointerUp(e)}
+	onkeydown={(e) => channelDragController?.handleKeyDown(e)}
+/>
 
 <aside class="flex h-full shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" style="width: {width}px;" aria-label="Channel list">
 	<!-- Guild header -->
@@ -471,17 +525,24 @@
 					</button>
 				</div>
 				{#if !isSectionCollapsed('text-channels')}
+					<div bind:this={channelListEl} class="relative">
 					{#each activeTextChannels as channel (channel.id)}
 						{@const unread = $unreadCounts.get(channel.id) ?? 0}
 						{@const mentions = $mentionCounts.get(channel.id) ?? 0}
 						{@const chMuted = isChannelMuted(channel.id)}
-						<button
-							class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {chMuted ? 'opacity-60' : ''} {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 && !chMuted ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
-							onclick={() => handleChannelClick(channel.id)}
-							oncontextmenu={(e) => openContextMenu(e, channel)}
+						<div
+							class="group/drag flex items-center"
+							data-channel-id={channel.id}
+							onpointerdown={(e) => channelDragController?.handlePointerDown(e, channel.id)}
 						>
-							<span class="text-lg leading-none text-brand-500 font-mono">#</span>
-							<span class="flex-1 truncate font-mono">{channel.name}</span>
+							<DragHandle visible={$canManageChannels} />
+							<button
+								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {chMuted ? 'opacity-60' : ''} {$currentChannelId === channel.id ? 'bg-bg-modifier text-text-primary' : unread > 0 && !chMuted ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+								onclick={() => handleChannelClick(channel.id)}
+								oncontextmenu={(e) => openContextMenu(e, channel)}
+							>
+								<span class="text-lg leading-none text-brand-500 font-mono">#</span>
+								<span class="flex-1 truncate font-mono">{channel.name}</span>
 							{#if chMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
 									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
@@ -497,7 +558,8 @@
 									{unread > 99 ? '99+' : unread}
 								</span>
 							{/if}
-						</button>
+							</button>
+						</div>
 						<!-- Nested threads under this channel -->
 						{@const filteredThreads = getFilteredThreads(channel.id)}
 						{#if filteredThreads.length > 0}
@@ -528,6 +590,7 @@
 							</div>
 						{/if}
 					{/each}
+					</div>
 				{/if}
 			{/if}
 

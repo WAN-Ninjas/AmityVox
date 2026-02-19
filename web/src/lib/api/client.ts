@@ -1234,6 +1234,10 @@ class ApiClient {
 		return this.patch(`/guilds/${guildId}/roles`, positions);
 	}
 
+	reorderChannels(guildId: string, positions: { id: string; position: number }[]): Promise<void> {
+		return this.patch(`/guilds/${guildId}/channels`, positions);
+	}
+
 	// --- Onboarding ---
 
 	getOnboarding(guildId: string): Promise<OnboardingConfig> {
