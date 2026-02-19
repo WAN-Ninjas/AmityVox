@@ -141,7 +141,17 @@
 		if (isEditing && $editingMessage) {
 			// Edit mode: update existing message.
 			try {
-				await api.editMessage($editingMessage.channel_id, $editingMessage.id, msg);
+				let editContent = msg;
+				if ($currentChannel?.encrypted) {
+					try {
+						editContent = await e2ee.encryptMessage(channelId, msg);
+					} catch {
+						content = msg;
+						addToast('Failed to encrypt message. Do you have the channel key?', 'error');
+						return;
+					}
+				}
+				await api.editMessage($editingMessage.channel_id, $editingMessage.id, editContent);
 				cancelEdit();
 			} catch (e) {
 				content = msg;
@@ -215,6 +225,12 @@
 	}
 
 	async function handleSchedule(scheduledFor: Date) {
+		if ($currentChannel?.encrypted) {
+			addToast('Scheduling is not yet supported in encrypted channels', 'error');
+			showSchedulePicker = false;
+			customDatetime = '';
+			return;
+		}
 		const channelId = $currentChannelId;
 		if (!channelId || !content.trim()) {
 			addToast('Enter a message to schedule', 'error');
@@ -386,16 +402,47 @@
 
 		uploading = true;
 		try {
+			const isEncrypted = !!$currentChannel?.encrypted;
 			const ids: string[] = [];
 			for (let i = 0; i < pendingFiles.length; i++) {
-				const file = pendingFiles[i];
-				const altText = pendingAltTexts[i]?.trim() || undefined;
+				let file = pendingFiles[i];
+				const altText = isEncrypted ? undefined : (pendingAltTexts[i]?.trim() || undefined);
+				if (isEncrypted) {
+					try {
+						const buf = await file.arrayBuffer();
+						const encBuf = await e2ee.encryptFile(channelId, buf);
+						file = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
+					} catch {
+						addToast('Failed to encrypt file. Do you have the channel key?', 'error');
+						return;
+					}
+				}
 				const uploaded = await api.uploadFile(file, altText);
 				ids.push(uploaded.id);
 			}
 			const msg = content.trim();
-			const sent = await api.sendMessage(channelId, msg, { attachment_ids: ids });
+			let sendContent = msg;
+			const opts: Record<string, any> = { attachment_ids: ids };
+			if (isReplying && $replyingTo) {
+				opts.reply_to_ids = [$replyingTo.id];
+			}
+			if (silentMode) {
+				opts.silent = true;
+			}
+			if (isEncrypted) {
+				opts.encrypted = true;
+				if (msg) {
+					try {
+						sendContent = await e2ee.encryptMessage(channelId, msg);
+					} catch {
+						addToast('Failed to encrypt message. Do you have the channel key?', 'error');
+						return;
+					}
+				}
+			}
+			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
+			cancelReply();
 			content = '';
 			if (inputEl) inputEl.style.height = 'auto';
 			pendingFiles = [];
@@ -419,9 +466,31 @@
 		}
 
 		try {
-			const uploaded = await api.uploadFile(file);
-			const sent = await api.sendMessage($currentChannelId, '', { attachment_ids: [uploaded.id] });
+			let uploadFile: File = file;
+			const opts: Record<string, any> = {};
+			if (isReplying && $replyingTo) {
+				opts.reply_to_ids = [$replyingTo.id];
+			}
+			if (silentMode) {
+				opts.silent = true;
+			}
+			if ($currentChannel?.encrypted) {
+				opts.encrypted = true;
+				try {
+					const buf = await file.arrayBuffer();
+					const encBuf = await e2ee.encryptFile($currentChannelId, buf);
+					uploadFile = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
+				} catch {
+					addToast('Failed to encrypt file. Do you have the channel key?', 'error');
+					target.value = '';
+					return;
+				}
+			}
+			const uploaded = await api.uploadFile(uploadFile);
+			opts.attachment_ids = [uploaded.id];
+			const sent = await api.sendMessage($currentChannelId, '', opts);
 			appendMessage(sent);
+			cancelReply();
 		} catch (err) {
 			addToast('Upload failed', 'error');
 		}
@@ -461,7 +530,18 @@
 		const channelId = $currentChannelId;
 		if (!channelId) return;
 		try {
-			const sent = await api.sendMessage(channelId, gifUrl);
+			let sendContent = gifUrl;
+			const opts: Record<string, any> = {};
+			if ($currentChannel?.encrypted) {
+				try {
+					sendContent = await e2ee.encryptMessage(channelId, gifUrl);
+					opts.encrypted = true;
+				} catch {
+					addToast('Failed to encrypt message. Do you have the channel key?', 'error');
+					return;
+				}
+			}
+			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
 		} catch (e) {
 			addToast('Failed to send GIF', 'error');
@@ -472,9 +552,14 @@
 		showStickerPicker = false;
 		const channelId = $currentChannelId;
 		if (!channelId) return;
+		if ($currentChannel?.encrypted) {
+			addToast('Stickers are not supported in encrypted channels', 'error');
+			return;
+		}
 		try {
 			// Send the sticker as a message with the sticker image file as an attachment.
-			const sent = await api.sendMessage(channelId, '', { attachment_ids: [sticker.file_id] });
+			const opts: Record<string, any> = { attachment_ids: [sticker.file_id] };
+			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
 		} catch (e) {
 			addToast('Failed to send sticker', 'error');
@@ -489,13 +574,29 @@
 
 		try {
 			const ext = audioBlob.type.includes('webm') ? 'webm' : audioBlob.type.includes('ogg') ? 'ogg' : 'mp4';
-			const file = new File([audioBlob], `voice-message.${ext}`, { type: audioBlob.type });
+			let file: File = new File([audioBlob], `voice-message.${ext}`, { type: audioBlob.type });
+			if ($currentChannel?.encrypted) {
+				try {
+					const buf = await audioBlob.arrayBuffer();
+					const encBuf = await e2ee.encryptFile(channelId, buf);
+					file = new File([encBuf], `voice-message.${ext}.enc`, { type: 'application/octet-stream' });
+				} catch {
+					addToast('Failed to encrypt voice message. Do you have the channel key?', 'error');
+					return;
+				}
+			}
 			const uploaded = await api.uploadFile(file);
-			const sent = await api.sendMessage(channelId, '', {
-				attachment_ids: [uploaded.id],
-				voice_duration_ms: durationMs,
-				voice_waveform: waveform
-			});
+			const opts: Record<string, any> = {
+				attachment_ids: [uploaded.id]
+			};
+			if ($currentChannel?.encrypted) {
+				opts.encrypted = true;
+				// Omit voice metadata in encrypted channels to avoid leaking duration/waveform
+			} else {
+				opts.voice_duration_ms = durationMs;
+				opts.voice_waveform = waveform;
+			}
+			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
 		} catch (err) {
 			addToast('Failed to send voice message', 'error');

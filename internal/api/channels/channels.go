@@ -755,7 +755,6 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	h.EventBus.Publish(r.Context(), events.SubjectMessageCreate, events.Event{
 		Type:      "MESSAGE_CREATE",
 		ChannelID: channelID,
-		UserID:    userID,
 		Data:      mustMarshal(msg),
 	})
 

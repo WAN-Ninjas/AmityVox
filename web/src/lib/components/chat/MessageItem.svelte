@@ -13,6 +13,7 @@
 	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
 	import TranslateButton from '$components/chat/TranslateButton.svelte';
 	import CrossChannelQuote from '$components/chat/CrossChannelQuote.svelte';
+	import EncryptedAttachment from '$components/encryption/EncryptedAttachment.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
@@ -71,6 +72,7 @@
 	let inlinePassphrase = $state('');
 	let inlineUnlocking = $state(false);
 	let decryptRetry = $state(0);
+	let hasEncryptionKey = $state<boolean | null>(null);
 
 	$effect(() => {
 		// Track retry counter to re-trigger decryption after passphrase entry
@@ -82,13 +84,20 @@
 			e2ee.decryptMessage(message.channel_id, message.content)
 				.then((plaintext) => {
 					decryptedContent = plaintext;
+					hasEncryptionKey = true;
 				})
 				.catch(() => {
 					decryptionFailed = true;
+					hasEncryptionKey = false;
 				})
 				.finally(() => {
 					decrypting = false;
 				});
+		} else if (message.encrypted) {
+			// File-only encrypted message — no content to decrypt, just check key.
+			e2ee.hasChannelKey(message.channel_id).then((has) => {
+				hasEncryptionKey = has;
+			});
 		}
 	});
 
@@ -520,7 +529,7 @@
 	{/if}
 
 	{#if isCompact}
-		<div class="w-14 shrink-0 pt-1 text-right">
+		<div class="w-10 shrink-0 pt-1 text-right">
 			<span class="hidden whitespace-nowrap text-2xs text-text-muted group-hover:inline" title={fullDateTime}>{timestamp}</span>
 		</div>
 	{:else}
@@ -637,6 +646,28 @@
 						</button>
 					</div>
 				</div>
+			{:else if message.encrypted && !message.content && hasEncryptionKey === false}
+				<div class="rounded bg-red-500/10 px-2 py-1.5">
+					<div class="flex items-center gap-2 text-sm text-red-400">
+						<svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+						</svg>
+						Encrypted message — enter passphrase to view
+					</div>
+					<div class="mt-1.5 flex gap-1.5">
+						<input type="password" class="min-w-0 flex-1 rounded border border-bg-modifier bg-bg-primary px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none" placeholder="Channel passphrase" bind:value={inlinePassphrase} onkeydown={(e) => e.key === 'Enter' && handleInlineUnlock()} />
+						<button class="shrink-0 rounded bg-brand-500 px-2 py-1 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50" onclick={handleInlineUnlock} disabled={inlineUnlocking || !inlinePassphrase.trim()}>
+							{inlineUnlocking ? '...' : 'Unlock'}
+						</button>
+					</div>
+				</div>
+			{:else if message.encrypted && !message.content && hasEncryptionKey === null}
+				<div class="flex items-center gap-2 text-sm text-text-muted">
+					<svg class="h-3.5 w-3.5 text-status-online" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+					</svg>
+					<span class="inline-block h-3 w-32 animate-pulse rounded bg-bg-modifier"></span>
+				</div>
 			{:else if imageOnlyUrl}
 				<!-- Message is a single image/GIF URL — render inline -->
 				<button class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl)}>
@@ -676,10 +707,18 @@
 			{/if}
 
 			<!-- Attachments -->
-			{#if message.attachments?.length > 0}
+			{#if message.attachments?.length > 0 && (!message.encrypted || hasEncryptionKey === true)}
 				<div class="mt-1 flex flex-wrap gap-2">
 					{#each message.attachments as attachment (attachment.id)}
-						{#if attachment.content_type?.startsWith('image/')}
+						{#if message.encrypted && attachment.filename?.endsWith('.enc')}
+							<!-- Encrypted attachment: decrypt client-side before rendering -->
+							<EncryptedAttachment
+								{attachment}
+								channelId={message.channel_id}
+								onlightbox={(src) => (lightboxSrc = src)}
+								oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
+							/>
+						{:else if attachment.content_type?.startsWith('image/')}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							{#if shouldBlurImage(attachment.id)}
 								<div

@@ -244,11 +244,7 @@ func (s *Server) registerRoutes() {
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
 	}
-	channelGroupH := &users.ChannelGroupHandler{
-		Pool:   s.DB.Pool,
-		Logger: s.Logger,
-	}
-	widgetH := &widgets.Handler{
+widgetH := &widgets.Handler{
 		Pool:     s.DB.Pool,
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
@@ -356,15 +352,8 @@ func (s *Server) registerRoutes() {
 				// Group DMs.
 				r.Post("/@me/group-dms", userH.HandleCreateGroupDM)
 
-				// User channel groups.
-				r.Route("/@me/channel-groups", func(r chi.Router) {
-					r.Get("/", channelGroupH.HandleGetChannelGroups)
-					r.Post("/", channelGroupH.HandleCreateChannelGroup)
-					r.Patch("/{groupID}", channelGroupH.HandleUpdateChannelGroup)
-					r.Delete("/{groupID}", channelGroupH.HandleDeleteChannelGroup)
-					r.Put("/{groupID}/channels/{channelID}", channelGroupH.HandleAddChannelToGroup)
-					r.Delete("/{groupID}/channels/{channelID}", channelGroupH.HandleRemoveChannelFromGroup)
-				})
+				// User guild positions (drag reordering).
+				r.Put("/@me/guild-positions", userH.HandleUpdateGuildPositions)
 
 				// Handle resolution must be before /{userID} to avoid conflicts.
 				r.Get("/resolve", userH.HandleResolveHandle)
@@ -541,6 +530,16 @@ func (s *Server) registerRoutes() {
 					r.Post("/", guildH.HandleCreateGuildRetentionPolicy)
 					r.Patch("/{policyID}", guildH.HandleUpdateGuildRetentionPolicy)
 					r.Delete("/{policyID}", guildH.HandleDeleteGuildRetentionPolicy)
+				})
+
+				// Guild channel group routes (admin-managed).
+				r.Route("/{guildID}/channel-groups", func(r chi.Router) {
+					r.Get("/", guildH.HandleGetChannelGroups)
+					r.Post("/", guildH.HandleCreateChannelGroup)
+					r.Patch("/{groupID}", guildH.HandleUpdateChannelGroup)
+					r.Delete("/{groupID}", guildH.HandleDeleteChannelGroup)
+					r.Put("/{groupID}/channels", guildH.HandleSetGroupChannels)
+					r.Delete("/{groupID}/channels/{channelID}", guildH.HandleRemoveChannelFromGroup)
 				})
 
 				// Media gallery and tag routes.

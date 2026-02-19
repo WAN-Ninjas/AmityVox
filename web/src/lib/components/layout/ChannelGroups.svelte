@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
+	import DragHandle from '$components/common/DragHandle.svelte';
+	import { DragController, calculateInsertionIndex } from '$lib/utils/dragDrop';
 	import { currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, currentChannelId } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId } from '$lib/stores/channels';
 	import { unreadCounts, mentionCounts } from '$lib/stores/unreads';
 	import { goto } from '$app/navigation';
 	import { addToast } from '$lib/stores/toast';
+	import { unlockedChannels } from '$lib/encryption/e2eeManager';
+	import { canManageChannels } from '$lib/stores/permissions';
 
 	interface ChannelGroup {
 		id: string;
@@ -16,6 +20,12 @@
 		channels: string[];
 		created_at: string;
 	}
+
+	interface Props {
+		onGroupsLoaded?: (channelIds: Set<string>) => void;
+	}
+
+	let { onGroupsLoaded }: Props = $props();
 
 	let groups = $state<ChannelGroup[]>([]);
 	let loading = $state(true);
@@ -32,6 +42,15 @@
 	// Collapsed state
 	let collapsedGroups = $state<Set<string>>(new Set());
 
+	// Report grouped channel IDs to parent whenever groups change.
+	$effect(() => {
+		const ids = new Set<string>();
+		for (const g of groups) {
+			for (const ch of g.channels) ids.add(ch);
+		}
+		onGroupsLoaded?.(ids);
+	});
+
 	onMount(async () => {
 		await loadGroups();
 		// Restore collapsed state from localStorage.
@@ -47,9 +66,14 @@
 	});
 
 	async function loadGroups() {
+		const guildId = $currentGuildId;
+		if (!guildId) {
+			loading = false;
+			return;
+		}
 		loading = true;
 		try {
-			groups = await api.getChannelGroups();
+			groups = await api.getChannelGroups(guildId);
 		} catch {
 			groups = [];
 		} finally {
@@ -69,10 +93,11 @@
 	}
 
 	async function createGroup() {
-		if (!newGroupName.trim()) return;
+		const guildId = $currentGuildId;
+		if (!newGroupName.trim() || !guildId) return;
 		creating = true;
 		try {
-			const group = await api.createChannelGroup({
+			const group = await api.createChannelGroup(guildId, {
 				name: newGroupName.trim(),
 				color: newGroupColor
 			});
@@ -89,9 +114,10 @@
 	}
 
 	async function updateGroup(groupId: string) {
-		if (!editGroupName.trim()) return;
+		const guildId = $currentGuildId;
+		if (!editGroupName.trim() || !guildId) return;
 		try {
-			const updated = await api.updateChannelGroup(groupId, {
+			const updated = await api.updateChannelGroup(guildId, groupId, {
 				name: editGroupName.trim(),
 				color: editGroupColor
 			});
@@ -103,9 +129,10 @@
 	}
 
 	async function deleteGroup(groupId: string) {
-		if (!confirm('Delete this channel group?')) return;
+		const guildId = $currentGuildId;
+		if (!confirm('Delete this channel group?') || !guildId) return;
 		try {
-			await api.deleteChannelGroup(groupId);
+			await api.deleteChannelGroup(guildId, groupId);
 			groups = groups.filter(g => g.id !== groupId);
 			addToast('Channel group deleted', 'info');
 		} catch (err: any) {
@@ -114,8 +141,10 @@
 	}
 
 	async function removeChannel(groupId: string, channelId: string) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
 		try {
-			await api.removeChannelFromGroup(groupId, channelId);
+			await api.removeChannelFromGroup(guildId, groupId, channelId);
 			groups = groups.map(g => {
 				if (g.id === groupId) {
 					return { ...g, channels: g.channels.filter(c => c !== channelId) };
@@ -134,16 +163,25 @@
 		}
 	}
 
+	const channelsMap = $derived.by(() => {
+		const map = new Map<string, { id: string; name: string; channel_type: string; encrypted?: boolean }>();
+		for (const ch of $textChannels) map.set(ch.id, ch);
+		for (const ch of $voiceChannels) map.set(ch.id, ch);
+		for (const ch of $forumChannels) map.set(ch.id, ch);
+		for (const ch of $galleryChannels) map.set(ch.id, ch);
+		return map;
+	});
+
 	function getChannelName(channelId: string): string {
-		const allChannels = [...$textChannels, ...$voiceChannels];
-		const channel = allChannels.find(c => c.id === channelId);
-		return channel?.name ?? 'Unknown Channel';
+		return channelsMap.get(channelId)?.name ?? 'Unknown Channel';
 	}
 
 	function getChannelType(channelId: string): string {
-		const allChannels = [...$textChannels, ...$voiceChannels];
-		const channel = allChannels.find(c => c.id === channelId);
-		return channel?.channel_type ?? 'text';
+		return channelsMap.get(channelId)?.channel_type ?? 'text';
+	}
+
+	function isChannelEncrypted(channelId: string): boolean {
+		return channelsMap.get(channelId)?.encrypted ?? false;
 	}
 
 	function startEdit(group: ChannelGroup) {
@@ -156,44 +194,420 @@
 		editingGroupId = null;
 	}
 
-	// Drag-and-drop support: allow channels to be dropped onto groups.
-	function handleDragOver(e: DragEvent) {
-		e.preventDefault();
-		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	// --- Cross-group channel drag (custom pointer-based) ---
+	let isDraggingInGroup = $state(false);
+	let groupContainerEls = new Map<string, HTMLElement>();
+
+	// Channel drag state
+	let chDrag = $state<{
+		channelId: string;
+		sourceGroupId: string;
+		startX: number;
+		startY: number;
+		activated: boolean;
+		preview: HTMLElement | null;
+		indicator: HTMLElement | null;
+		targetGroupId: string;
+		insertIndex: number;
+	} | null>(null);
+
+	function handleChPointerDown(e: PointerEvent, channelId: string, groupId: string) {
+		if (e.button !== 0 || !$canManageChannels) return;
+		e.stopPropagation();
+		chDrag = {
+			channelId,
+			sourceGroupId: groupId,
+			startX: e.clientX,
+			startY: e.clientY,
+			activated: false,
+			preview: null,
+			indicator: null,
+			targetGroupId: groupId,
+			insertIndex: -1,
+		};
 	}
 
-	async function handleDrop(e: DragEvent, groupId: string) {
-		e.preventDefault();
-		const channelId = e.dataTransfer?.getData('text/plain');
-		if (!channelId) return;
+	function handleChPointerMove(e: PointerEvent) {
+		if (!chDrag) return;
 
-		// Check if channel already in this group.
+		if (!chDrag.activated) {
+			const dx = e.clientX - chDrag.startX;
+			const dy = e.clientY - chDrag.startY;
+			if (Math.sqrt(dx * dx + dy * dy) < 5) return;
+			chDrag.activated = true;
+			isDraggingInGroup = true;
+			createChPreview(e);
+			createChIndicator();
+			dimSourceChannel();
+		}
+
+		// Update preview position
+		if (chDrag.preview) {
+			chDrag.preview.style.left = `${e.clientX + 8}px`;
+			chDrag.preview.style.top = `${e.clientY - 16}px`;
+		}
+
+		// Hit-test: which group container is the cursor over?
+		let foundGroup: string | null = null;
+		for (const [gid, container] of groupContainerEls) {
+			const rect = container.getBoundingClientRect();
+			if (e.clientY >= rect.top - 20 && e.clientY <= rect.bottom + 20) {
+				foundGroup = gid;
+				break;
+			}
+		}
+		chDrag.targetGroupId = foundGroup ?? chDrag.sourceGroupId;
+
+		// Highlight target group
+		for (const [gid, container] of groupContainerEls) {
+			if (gid === chDrag.targetGroupId && gid !== chDrag.sourceGroupId) {
+				container.style.outline = '1px solid var(--brand-500, #5c6bc0)';
+				container.style.outlineOffset = '2px';
+				container.style.borderRadius = '4px';
+			} else {
+				container.style.outline = '';
+				container.style.outlineOffset = '';
+				container.style.borderRadius = '';
+			}
+		}
+
+		// Calculate insertion index within target group
+		const targetGroup = groups.find(g => g.id === chDrag!.targetGroupId);
+		const container = groupContainerEls.get(chDrag.targetGroupId);
+		if (targetGroup && container) {
+			const channels = [...new Set(targetGroup.channels)];
+			const rects = channels.map(cid => {
+				const el = container.querySelector(`[data-channel-id="${cid}"]`) as HTMLElement | null;
+				if (!el) return { top: 0, bottom: 0, height: 0 };
+				const r = el.getBoundingClientRect();
+				return { top: r.top, bottom: r.bottom, height: r.height };
+			});
+
+			const sourceIdx = chDrag.targetGroupId === chDrag.sourceGroupId
+				? channels.indexOf(chDrag.channelId) : -1;
+
+			chDrag.insertIndex = calculateInsertionIndex(e.clientY, rects, sourceIdx);
+			updateChIndicator(container, rects);
+		}
+	}
+
+	function handleChPointerUp(_e: PointerEvent) {
+		if (!chDrag) return;
+
+		if (chDrag.activated && chDrag.insertIndex >= 0) {
+			if (chDrag.targetGroupId === chDrag.sourceGroupId) {
+				// Same-group reorder
+				let adjustedIndex = chDrag.insertIndex;
+				const group = groups.find(g => g.id === chDrag!.sourceGroupId);
+				if (group) {
+					const channels = [...new Set(group.channels)];
+					const srcIdx = channels.indexOf(chDrag.channelId);
+					if (srcIdx >= 0 && chDrag.insertIndex > srcIdx) adjustedIndex--;
+				}
+				handleChannelReorderInGroup(chDrag.channelId, adjustedIndex, chDrag.sourceGroupId);
+			} else {
+				// Cross-group move
+				handleChannelMoveToGroup(
+					chDrag.channelId,
+					chDrag.sourceGroupId,
+					chDrag.targetGroupId,
+					chDrag.insertIndex
+				);
+			}
+		}
+
+		cleanupChDrag();
+	}
+
+	function handleChPointerCancel(_e: PointerEvent) {
+		cleanupChDrag();
+	}
+
+	function handleChKeyDown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && chDrag?.activated) {
+			cleanupChDrag();
+		}
+	}
+
+	function createChPreview(e: PointerEvent) {
+		if (!chDrag) return;
+		const container = groupContainerEls.get(chDrag.sourceGroupId);
+		if (!container) return;
+		const sourceEl = container.querySelector(`[data-channel-id="${chDrag.channelId}"]`) as HTMLElement | null;
+		if (!sourceEl) return;
+
+		const clone = sourceEl.cloneNode(true) as HTMLElement;
+		const rect = sourceEl.getBoundingClientRect();
+		clone.style.cssText = `
+			position: fixed;
+			width: ${rect.width}px;
+			height: ${rect.height}px;
+			opacity: 0.9;
+			transform: scale(1.02);
+			box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3), 0 4px 6px -2px rgba(0,0,0,0.2);
+			border: 1px solid var(--brand-500, #5c6bc0);
+			border-radius: 6px;
+			pointer-events: none;
+			z-index: 9999;
+			transition: none;
+			cursor: grabbing;
+		`;
+		document.body.appendChild(clone);
+		chDrag.preview = clone;
+	}
+
+	function createChIndicator() {
+		const indicator = document.createElement('div');
+		indicator.style.cssText = `
+			position: absolute; left: 0; right: 0; height: 2px;
+			background: var(--brand-500, #5c6bc0); border-radius: 1px;
+			pointer-events: none; z-index: 50; display: none;
+		`;
+		const dot = (side: string) => {
+			const d = document.createElement('div');
+			d.style.cssText = `
+				position: absolute; ${side}: -3px; top: -2px;
+				width: 6px; height: 6px; border-radius: 50%;
+				background: var(--brand-500, #5c6bc0);
+			`;
+			return d;
+		};
+		indicator.appendChild(dot('left'));
+		indicator.appendChild(dot('right'));
+		if (chDrag) chDrag.indicator = indicator;
+	}
+
+	function updateChIndicator(container: HTMLElement, rects: { top: number; bottom: number; height: number }[]) {
+		if (!chDrag?.indicator) return;
+
+		// Move indicator to current target container
+		if (chDrag.indicator.parentElement !== container) {
+			chDrag.indicator.remove();
+			const style = getComputedStyle(container);
+			if (style.position === 'static') container.style.position = 'relative';
+			container.appendChild(chDrag.indicator);
+		}
+
+		if (rects.length === 0) {
+			chDrag.indicator.style.display = 'none';
+			return;
+		}
+
+		const containerRect = container.getBoundingClientRect();
+		let y: number;
+		if (chDrag.insertIndex <= 0) {
+			y = rects[0].top - containerRect.top + container.scrollTop - 1;
+		} else if (chDrag.insertIndex >= rects.length) {
+			y = rects[rects.length - 1].bottom - containerRect.top + container.scrollTop - 1;
+		} else {
+			const above = rects[chDrag.insertIndex - 1];
+			const below = rects[chDrag.insertIndex];
+			y = (above.bottom + below.top) / 2 - containerRect.top + container.scrollTop - 1;
+		}
+
+		chDrag.indicator.style.top = `${y}px`;
+		chDrag.indicator.style.display = 'block';
+	}
+
+	function dimSourceChannel() {
+		if (!chDrag) return;
+		const container = groupContainerEls.get(chDrag.sourceGroupId);
+		if (!container) return;
+		const el = container.querySelector(`[data-channel-id="${chDrag.channelId}"]`) as HTMLElement | null;
+		if (el) {
+			el.style.opacity = '0.3';
+			el.style.transition = 'opacity 150ms ease';
+		}
+	}
+
+	function cleanupChDrag() {
+		if (chDrag) {
+			// Restore source element
+			const container = groupContainerEls.get(chDrag.sourceGroupId);
+			if (container) {
+				const el = container.querySelector(`[data-channel-id="${chDrag.channelId}"]`) as HTMLElement | null;
+				if (el) { el.style.opacity = ''; el.style.transition = ''; }
+			}
+			// Remove preview and indicator
+			chDrag.preview?.remove();
+			chDrag.indicator?.remove();
+			// Clear group highlights
+			for (const c of groupContainerEls.values()) {
+				c.style.outline = '';
+				c.style.outlineOffset = '';
+				c.style.borderRadius = '';
+			}
+		}
+		chDrag = null;
+		isDraggingInGroup = false;
+	}
+
+	onDestroy(() => {
+		cleanupChDrag();
+		groupListController?.destroy();
+	});
+
+	async function handleChannelReorderInGroup(sourceId: string, targetIndex: number, groupId: string) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
 		const group = groups.find(g => g.id === groupId);
-		if (group?.channels.includes(channelId)) return;
+		if (!group) return;
+
+		const channels = [...new Set(group.channels)];
+		const sourceIdx = channels.indexOf(sourceId);
+		if (sourceIdx === -1) return;
+
+		channels.splice(sourceIdx, 1);
+		channels.splice(targetIndex, 0, sourceId);
+
+		const prevGroups = groups;
+		groups = groups.map(g => g.id === groupId ? { ...g, channels } : g);
 
 		try {
-			const updatedChannels = [...(group?.channels ?? []), channelId];
-			await api.setChannelGroupChannels(groupId, updatedChannels);
-			groups = groups.map(g => {
-				if (g.id === groupId) {
-					return { ...g, channels: updatedChannels };
-				}
-				return g;
-			});
-			addToast('Channel added to group', 'success');
+			await api.setChannelGroupChannels(guildId, groupId, channels);
 		} catch (err: any) {
-			addToast(err.message || 'Failed to add channel', 'error');
+			groups = prevGroups;
+			addToast(err.message || 'Failed to reorder channels', 'error');
+			await loadGroups();
 		}
+	}
+
+	async function handleChannelMoveToGroup(channelId: string, fromGroupId: string, toGroupId: string, insertIndex: number) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		const fromGroup = groups.find(g => g.id === fromGroupId);
+		const toGroup = groups.find(g => g.id === toGroupId);
+		if (!fromGroup || !toGroup) return;
+
+		// Remove from source
+		const fromChannels = [...new Set(fromGroup.channels)].filter(c => c !== channelId);
+		// Insert into target
+		const toChannels = [...new Set(toGroup.channels)];
+		toChannels.splice(insertIndex, 0, channelId);
+
+		// Optimistic update
+		const prevGroups = groups;
+		groups = groups.map(g => {
+			if (g.id === fromGroupId) return { ...g, channels: fromChannels };
+			if (g.id === toGroupId) return { ...g, channels: toChannels };
+			return g;
+		});
+
+		try {
+			await Promise.all([
+				api.setChannelGroupChannels(guildId, fromGroupId, fromChannels),
+				api.setChannelGroupChannels(guildId, toGroupId, toChannels),
+			]);
+		} catch (err: any) {
+			groups = prevGroups;
+			addToast(err.message || 'Failed to move channel', 'error');
+			await loadGroups();
+		}
+	}
+
+	// --- Group reorder (pointer-based) ---
+	let groupListEl = $state<HTMLElement | null>(null);
+	let groupListController = $state<DragController | null>(null);
+
+	$effect(() => {
+		const el = groupListEl;
+		if (!el || groups.length === 0) {
+			untrack(() => {
+				groupListController?.destroy();
+				groupListController = null;
+			});
+			return;
+		}
+		untrack(() => {
+			groupListController?.destroy();
+			groupListController = new DragController({
+				container: el,
+				items: () => groups.map(g => g.id),
+				getElement: (id) => el.querySelector(`[data-group-id="${id}"]`) as HTMLElement | null,
+				canDrag: $canManageChannels,
+				onDrop: handleGroupReorder,
+			});
+		});
+		return () => {
+			groupListController?.destroy();
+			groupListController = null;
+		};
+	});
+
+	async function handleGroupReorder(sourceId: string, targetIndex: number) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		const reordered = [...groups];
+		const sourceIdx = reordered.findIndex(g => g.id === sourceId);
+		if (sourceIdx === -1) return;
+
+		const [moved] = reordered.splice(sourceIdx, 1);
+		reordered.splice(targetIndex, 0, moved);
+
+		const prevGroups = groups;
+		groups = reordered.map((g, i) => ({ ...g, position: i }));
+
+		try {
+			await Promise.all(
+				reordered.map((g, i) => api.updateChannelGroup(guildId, g.id, { position: i }))
+			);
+		} catch (err: any) {
+			groups = prevGroups;
+			addToast(err.message || 'Failed to reorder groups', 'error');
+			await loadGroups();
+		}
+	}
+
+	// Forwarding pointer events from window
+	function handleWindowPointerMove(e: PointerEvent) {
+		handleChPointerMove(e);
+		groupListController?.handlePointerMove(e);
+	}
+	function handleWindowPointerUp(e: PointerEvent) {
+		handleChPointerUp(e);
+		groupListController?.handlePointerUp(e);
+	}
+	function handleWindowPointerCancel(e: PointerEvent) {
+		handleChPointerCancel(e);
+		groupListController?.handlePointerCancel(e);
+	}
+	function handleWindowKeyDown(e: KeyboardEvent) {
+		handleChKeyDown(e);
+		groupListController?.handleKeyDown(e);
+	}
+
+	// Svelte action to track group container elements for hit-testing
+	function registerGroupContainer(node: HTMLElement, groupId: string) {
+		let currentId = groupId;
+		groupContainerEls.set(currentId, node);
+		return {
+			update(newGroupId: string) {
+				groupContainerEls.delete(currentId);
+				currentId = newGroupId;
+				groupContainerEls.set(currentId, node);
+			},
+			destroy() {
+				groupContainerEls.delete(currentId);
+			},
+		};
 	}
 </script>
 
+<svelte:window
+	onpointermove={handleWindowPointerMove}
+	onpointerup={handleWindowPointerUp}
+	onpointercancel={handleWindowPointerCancel}
+	onkeydown={handleWindowKeyDown}
+/>
+
 {#if !loading && groups.length > 0}
+	<div bind:this={groupListEl} class="relative">
 	{#each groups as group (group.id)}
 		{@const uniqueChannels = [...new Set(group.channels)]}
 		<div
-			class="mb-1"
-			ondragover={handleDragOver}
-			ondrop={(e) => handleDrop(e, group.id)}
+			class="group/drag mb-1"
+			data-group-id={group.id}
+			onpointerdown={(e) => groupListController?.handlePointerDown(e, group.id)}
 			role="group"
 		>
 			<!-- Group header -->
@@ -274,27 +688,53 @@
 
 			<!-- Group channels -->
 			{#if !collapsedGroups.has(group.id)}
+				<!-- svelte-ignore binding_property_non_reactive -->
+				<div class="relative" use:registerGroupContainer={group.id}>
 				{#if group.channels.length === 0}
-					<p class="px-3 py-1 text-2xs text-text-muted italic">Drag channels here</p>
+					<p class="px-3 py-1 text-2xs text-text-muted italic">No channels in this group</p>
 				{:else}
 					{#each uniqueChannels as channelId (channelId)}
 						{@const unread = $unreadCounts.get(channelId) ?? 0}
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
 						{@const channelType = getChannelType(channelId)}
-						{@const isVoice = channelType === 'voice' || channelType === 'stage'}
-						<div class="group/item flex items-center">
+						{@const encrypted = isChannelEncrypted(channelId)}
+						<div
+							class="group/item flex items-center"
+							data-channel-id={channelId}
+							onpointerdown={(e) => handleChPointerDown(e, channelId, group.id)}
+						>
+							{#if $canManageChannels}<DragHandle />{/if}
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 								onclick={() => handleChannelClick(channelId)}
-								draggable="true"
-								ondragstart={(e) => e.dataTransfer?.setData('text/plain', channelId)}
 							>
-								{#if isVoice}
+								{#if channelType === 'voice' || channelType === 'stage'}
 									<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
 										<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 									</svg>
+								{:else if channelType === 'forum'}
+									<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+									</svg>
+								{:else if channelType === 'gallery'}
+									<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<rect x="3" y="3" width="7" height="7" rx="1" />
+										<rect x="14" y="3" width="7" height="7" rx="1" />
+										<rect x="3" y="14" width="7" height="7" rx="1" />
+										<rect x="14" y="14" width="7" height="7" rx="1" />
+									</svg>
 								{:else}
-									<span class="text-lg leading-none">#</span>
+									<span class="text-lg leading-none text-brand-500 font-mono">#</span>
+								{/if}
+								{#if encrypted}
+									{@const unlocked = $unlockedChannels.has(channelId)}
+									<svg class="h-3 w-3 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title={unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}>
+										{#if unlocked}
+											<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+										{:else}
+											<path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+										{/if}
+									</svg>
 								{/if}
 								<span class="flex-1 truncate">{getChannelName(channelId)}</span>
 								{#if mentions > 0 && $currentChannelId !== channelId}
@@ -319,9 +759,11 @@
 						</div>
 					{/each}
 				{/if}
+				</div>
 			{/if}
 		</div>
 	{/each}
+	</div>
 {/if}
 
 <!-- Create group button (shown when there are existing groups or always at bottom) -->
@@ -343,6 +785,10 @@
 	<div
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
 		onclick={() => (showCreateModal = false)}
+		onkeydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
+		role="dialog"
+		aria-modal="true"
+		tabindex="-1"
 	>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div

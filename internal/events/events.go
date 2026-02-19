@@ -48,6 +48,12 @@ const (
 	SubjectGuildBanRemove    = "amityvox.guild.ban_remove"
 	SubjectGuildEmojiUpdate  = "amityvox.guild.emoji_update"
 
+	// Guild channel group events.
+	SubjectChannelGroupCreate      = "amityvox.guild.channel_group_create"
+	SubjectChannelGroupUpdate      = "amityvox.guild.channel_group_update"
+	SubjectChannelGroupDelete      = "amityvox.guild.channel_group_delete"
+	SubjectChannelGroupItemsUpdate = "amityvox.guild.channel_group_items_update"
+
 	// User/presence events.
 	SubjectPresenceUpdate      = "amityvox.presence.update"
 	SubjectUserUpdate          = "amityvox.user.update"
