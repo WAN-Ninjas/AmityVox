@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { setChannel, currentChannelId } from '$lib/stores/channels';
+	import { setChannel, currentChannelId, currentChannel } from '$lib/stores/channels';
 	import { currentGuildId, setGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
@@ -12,6 +12,7 @@
 	import { presenceMap } from '$lib/stores/presence';
 	import { voiceChannelId, voiceState, joinVoice, leaveVoice, toggleCamera } from '$lib/stores/voice';
 	import { dismissIncomingCall } from '$lib/stores/callRing';
+	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import Avatar from '$components/common/Avatar.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
@@ -20,8 +21,11 @@
 	import TypingIndicator from '$components/chat/TypingIndicator.svelte';
 	import GroupDMSettingsPanel from '$components/common/GroupDMSettingsPanel.svelte';
 	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
+	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
+	import Modal from '$components/common/Modal.svelte';
 
 	let showGroupSettings = $state(false);
+	let showEncryption = $state(false);
 	let profileUserId = $state<string | null>(null);
 	let callLoading = $state(false);
 
@@ -101,9 +105,22 @@
 
 		isUploading = true;
 		try {
-			for (const file of files) {
+			const isEncrypted = !!$currentChannel?.encrypted;
+			const opts: { attachment_ids?: string[]; encrypted?: boolean } = {};
+			if (isEncrypted) opts.encrypted = true;
+			for (let file of files) {
+				if (isEncrypted) {
+					try {
+						const buf = await file.arrayBuffer();
+						const encBuf = await e2ee.encryptFile(channelId, buf);
+						file = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
+					} catch {
+						addToast('Failed to encrypt file. Do you have the channel key?', 'error');
+						return;
+					}
+				}
 				const uploaded = await api.uploadFile(file);
-				const sent = await api.sendMessage(channelId, '', { attachment_ids: [uploaded.id] });
+				const sent = await api.sendMessage(channelId, '', { ...opts, attachment_ids: [uploaded.id] });
 				appendMessage(sent);
 			}
 			addToast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, 'success');
@@ -198,6 +215,19 @@
 					</svg>
 				</button>
 			{/if}
+			<button
+				class="rounded p-1.5 transition-colors hover:bg-bg-modifier {dmChannel?.encrypted ? 'text-green-400 hover:text-green-300' : 'text-text-muted hover:text-text-secondary'}"
+				onclick={() => (showEncryption = true)}
+				title={dmChannel?.encrypted ? 'Encryption enabled' : 'Set up encryption'}
+			>
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					{#if dmChannel?.encrypted}
+						<path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+					{:else}
+						<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+					{/if}
+				</svg>
+			</button>
 		{:else if isGroupDM}
 			<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-bold text-white">
 				<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
@@ -271,3 +301,13 @@
 {/if}
 
 <ProfileModal userId={profileUserId} open={!!profileUserId} onclose={() => (profileUserId = null)} />
+
+{#if dmChannel}
+	<Modal bind:open={showEncryption} title="Encryption" onclose={() => (showEncryption = false)}>
+		<EncryptionPanel
+			channelId={dmChannel.id}
+			encrypted={dmChannel.encrypted ?? false}
+			onchange={() => { showEncryption = false; }}
+		/>
+	</Modal>
+{/if}

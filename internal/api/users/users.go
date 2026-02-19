@@ -1714,4 +1714,46 @@ func (h *Handler) notifyRemoteInstancesAsync(ctx context.Context, channelID, cha
 	}
 }
 
+// HandleUpdateGuildPositions replaces the user's guild ordering.
+// PUT /api/v1/users/@me/guild-positions
+func (h *Handler) HandleUpdateGuildPositions(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
 
+	var positions []struct {
+		GuildID  string `json:"guild_id"`
+		Position int    `json:"position"`
+	}
+	if !apiutil.DecodeJSON(w, r, &positions) {
+		return
+	}
+
+	if len(positions) > 200 {
+		apiutil.WriteError(w, http.StatusBadRequest, "too_many", "Too many guild positions")
+		return
+	}
+
+	if err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM user_guild_positions WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
+		for _, p := range positions {
+			if p.GuildID == "" {
+				continue
+			}
+			if _, err := tx.Exec(r.Context(),
+				`INSERT INTO user_guild_positions (user_id, guild_id, position)
+				 VALUES ($1, $2, $3)
+				 ON CONFLICT (user_id, guild_id) DO UPDATE SET position = $3`,
+				userID, p.GuildID, p.Position); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to update guild positions", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

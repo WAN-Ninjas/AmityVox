@@ -1002,20 +1002,10 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		return event.UserID == client.userID
 	}
 
-	// 5. User-specific events: only dispatch to the targeted user.
-	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
-		return event.UserID == client.userID
-	}
-
-	// 6. Guild-scoped events: only dispatch to guild members.
-	if event.GuildID != "" {
-		client.mu.Lock()
-		isMember := client.guildIDs[event.GuildID]
-		client.mu.Unlock()
-		return isMember
-	}
-
-	// 7. Call ring events: dispatch to channel recipients EXCEPT the caller.
+	// 5. Call ring events: dispatch to channel recipients EXCEPT the caller.
+	// Must be checked BEFORE the generic user-specific filter (step 6) because
+	// CALL_RING has UserID set to the caller, so the generic filter would only
+	// route it to the caller instead of the callee.
 	if subject == events.SubjectCallRing && event.ChannelID != "" && s.pool != nil {
 		if event.UserID == client.userID {
 			return false
@@ -1025,6 +1015,19 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 			`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
 			event.ChannelID, client.userID).Scan(&isRecipient)
 		return isRecipient
+	}
+
+	// 6. User-specific events: only dispatch to the targeted user.
+	if event.UserID != "" && !strings.HasPrefix(subject, "amityvox.guild.") {
+		return event.UserID == client.userID
+	}
+
+	// 7. Guild-scoped events: only dispatch to guild members.
+	if event.GuildID != "" {
+		client.mu.Lock()
+		isMember := client.guildIDs[event.GuildID]
+		client.mu.Unlock()
+		return isMember
 	}
 
 	// 8. Channel-scoped events: look up which guild the channel belongs to.

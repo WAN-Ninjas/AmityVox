@@ -2,10 +2,13 @@
 // Derives AES-256-GCM keys from user passphrases via PBKDF2, stores them in IndexedDB,
 // and provides encrypt/decrypt for channel messages.
 
+import { writable } from 'svelte/store';
 import {
 	deriveKeyFromPassphrase,
 	encryptForWire,
-	decryptFromWire
+	decryptFromWire,
+	encryptBinary,
+	decryptBinary
 } from './crypto';
 import {
 	saveChannelSessionKey,
@@ -13,6 +16,9 @@ import {
 	removeChannelSessionKey,
 	clearAll
 } from './keyStore';
+
+/** Reactive store tracking which channel IDs have a decryption key loaded. */
+export const unlockedChannels = writable<Set<string>>(new Set());
 
 class E2EEManager {
 	private sessionKeyCache: Map<string, CryptoKey> = new Map();
@@ -30,6 +36,9 @@ class E2EEManager {
 
 		// Cache in memory
 		this.sessionKeyCache.set(channelId, key);
+
+		// Update reactive store
+		unlockedChannels.update(s => { s.add(channelId); return new Set(s); });
 	}
 
 	/** Check if we have a key for a channel (in cache or IndexedDB). */
@@ -53,16 +62,45 @@ class E2EEManager {
 		return decryptFromWire(key, ciphertext);
 	}
 
+	/** Encrypt file binary data for a channel. Returns encrypted ArrayBuffer. */
+	async encryptFile(channelId: string, data: ArrayBuffer): Promise<ArrayBuffer> {
+		const key = await this.getSessionKey(channelId);
+		if (!key) throw new Error('No encryption key for this channel');
+		return encryptBinary(key, data);
+	}
+
+	/** Decrypt file binary data for a channel. Returns original ArrayBuffer. */
+	async decryptFile(channelId: string, encryptedData: ArrayBuffer): Promise<ArrayBuffer> {
+		const key = await this.getSessionKey(channelId);
+		if (!key) throw new Error('No decryption key for this channel');
+		return decryptBinary(key, encryptedData);
+	}
+
 	/** Remove the key for a channel. */
 	async clearChannelKey(channelId: string): Promise<void> {
 		this.sessionKeyCache.delete(channelId);
 		await removeChannelSessionKey(channelId);
+		unlockedChannels.update(s => { s.delete(channelId); return new Set(s); });
 	}
 
 	/** Clear all E2EE data from this device. */
 	async reset(): Promise<void> {
 		this.sessionKeyCache.clear();
 		await clearAll();
+		unlockedChannels.set(new Set());
+	}
+
+	/** Check key status for a list of channel IDs and update the reactive store. */
+	async refreshKeyStatus(channelIds: string[]): Promise<void> {
+		const results = await Promise.all(
+			channelIds.map(async (id) => ({ id, has: await this.hasChannelKey(id) }))
+		);
+		unlockedChannels.update(s => {
+			for (const { id, has } of results) {
+				if (has) s.add(id); else s.delete(id);
+			}
+			return new Set(s);
+		});
 	}
 
 	/** Get the session key for a channel (from cache or IndexedDB). */

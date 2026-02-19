@@ -21,6 +21,7 @@
 	import ForumChannelView from '$components/channels/ForumChannelView.svelte';
 	import GalleryChannelView from '$components/channels/GalleryChannelView.svelte';
 	import GalleryPanel from '$lib/components/gallery/GalleryPanel.svelte';
+	import { e2ee } from '$lib/encryption/e2eeManager';
 
 	let showMembers = $state(true);
 	let showPins = $state(false);
@@ -110,9 +111,22 @@
 
 		isUploading = true;
 		try {
-			for (const file of files) {
+			const isEncrypted = !!$currentChannel?.encrypted;
+			const opts: Record<string, any> = {};
+			if (isEncrypted) opts.encrypted = true;
+			for (let file of files) {
+				if (isEncrypted) {
+					try {
+						const buf = await file.arrayBuffer();
+						const encBuf = await e2ee.encryptFile(channelId, buf);
+						file = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
+					} catch {
+						addToast('Failed to encrypt file. Do you have the channel key?', 'error');
+						return;
+					}
+				}
 				const uploaded = await api.uploadFile(file);
-				const sent = await api.sendMessage(channelId, '', { attachment_ids: [uploaded.id] });
+				const sent = await api.sendMessage(channelId, '', { ...opts, attachment_ids: [uploaded.id] });
 				appendMessage(sent);
 			}
 			addToast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, 'success');

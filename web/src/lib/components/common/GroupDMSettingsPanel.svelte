@@ -7,6 +7,7 @@
 	import { goto } from '$app/navigation';
 	import Avatar from './Avatar.svelte';
 	import Modal from './Modal.svelte';
+	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
 
 	interface Props {
 		channel: Channel;
@@ -82,6 +83,18 @@
 				{/each}
 			</div>
 		</div>
+
+		<!-- Encryption (owner only) -->
+		{#if isOwner}
+			<div>
+				<h4 class="mb-2 text-xs font-medium text-text-muted">Encryption</h4>
+				<EncryptionPanel
+					channelId={channel.id}
+					encrypted={channel.encrypted ?? false}
+					onchange={() => { onclose(); }}
+				/>
+			</div>
+		{/if}
 
 		<!-- Actions -->
 		<div class="flex justify-between">
