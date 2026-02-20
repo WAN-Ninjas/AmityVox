@@ -259,8 +259,8 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 				software = EXCLUDED.software,
 				software_version = EXCLUDED.software_version,
 				federation_mode = EXCLUDED.federation_mode,
-				key_fingerprint = EXCLUDED.key_fingerprint,
-				resolved_ips = EXCLUDED.resolved_ips,
+				key_fingerprint = COALESCE(NULLIF(EXCLUDED.key_fingerprint, ''), instances.key_fingerprint),
+				resolved_ips = COALESCE(EXCLUDED.resolved_ips, instances.resolved_ips),
 				last_seen_at = EXCLUDED.last_seen_at
 			 RETURNING id`,
 			disc.InstanceID, disc.Domain, disc.PublicKey, disc.Name,
@@ -273,9 +273,11 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Insert peer with pending status.
+	// Insert peer with pending status, returning actual status (preserves active/blocked).
 	now := time.Now().UTC()
-	_, err = h.Pool.Exec(ctx,
+	var peerStatus string
+	var establishedAt time.Time
+	err = h.Pool.QueryRow(ctx,
 		`INSERT INTO federation_peers (instance_id, peer_id, status, established_at, initiated_by)
 		 VALUES ($1, $2, $3, $4, 'local')
 		 ON CONFLICT (instance_id, peer_id) DO UPDATE SET
@@ -283,17 +285,18 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 				WHEN federation_peers.status IN ('active', 'blocked') THEN federation_peers.status
 				ELSE EXCLUDED.status
 			END,
-			initiated_by = 'local'`,
-		h.InstanceID, peerID, models.FederationPeerPending, now)
+			initiated_by = 'local'
+		 RETURNING status, established_at`,
+		h.InstanceID, peerID, models.FederationPeerPending, now,
+	).Scan(&peerStatus, &establishedAt)
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to add federation peer", err)
 		return
 	}
 
-	// Send handshake to remote instance.
-	peerStatus := models.FederationPeerPending
+	// Send handshake to remote instance (only for pending peers).
 	hsInfo := ""
-	if h.FedSvc != nil {
+	if h.FedSvc != nil && peerStatus == models.FederationPeerPending {
 		hsResp, hsErr := h.FedSvc.SendHandshake(ctx, req.Domain)
 		if hsErr != nil {
 			h.Logger.Warn("handshake failed, peer left as pending",
@@ -303,8 +306,8 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		} else if hsResp.Accepted {
 			if _, updErr := h.Pool.Exec(ctx,
 				`UPDATE federation_peers SET status = $1, handshake_completed_at = now()
-				 WHERE instance_id = $2 AND peer_id = $3`,
-				models.FederationPeerActive, h.InstanceID, peerID); updErr != nil {
+				 WHERE instance_id = $2 AND peer_id = $3 AND status = $4`,
+				models.FederationPeerActive, h.InstanceID, peerID, models.FederationPeerPending); updErr != nil {
 				apiutil.InternalError(w, h.Logger, "Failed to mark peer active", updErr)
 				return
 			}
@@ -318,7 +321,7 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		"id":         peerID,
 		"domain":     req.Domain,
 		"status":     peerStatus,
-		"created_at": now,
+		"created_at": establishedAt,
 	}
 	if hsInfo != "" {
 		resp["handshake_info"] = hsInfo
