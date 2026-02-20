@@ -111,7 +111,16 @@ class ApiClient {
 			return undefined as T;
 		}
 
-		const json = await res.json();
+		let json: unknown;
+		try {
+			json = await res.json();
+		} catch {
+			// Non-JSON response (e.g. 405 from unregistered route).
+			if (!res.ok) {
+				throw new ApiRequestError(res.statusText, 'unknown', res.status);
+			}
+			return undefined as T;
+		}
 
 		if (!res.ok) {
 			const err = json as ApiError;

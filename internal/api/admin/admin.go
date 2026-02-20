@@ -21,6 +21,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/presence"
 )
@@ -177,6 +178,8 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 }
 
 // HandleAddFederationPeer handles POST /api/v1/admin/federation/peers.
+// It discovers the remote instance via .well-known/amityvox, registers it in
+// the instances table, and creates a federation peer relationship.
 func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
 		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
@@ -191,18 +194,45 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Look up the peer instance by domain.
+	// Check if the instance is already known.
 	var peerID string
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT id FROM instances WHERE domain = $1`, req.Domain).Scan(&peerID)
-	if err == pgx.ErrNoRows {
-		apiutil.WriteError(w, http.StatusNotFound, "peer_not_found",
-			"No known instance with that domain. The instance must be discovered first.")
-		return
-	}
-	if err != nil {
+	if err != nil && err != pgx.ErrNoRows {
 		apiutil.InternalError(w, h.Logger, "Failed to look up peer", err)
 		return
+	}
+
+	// If not known, discover the remote instance via .well-known/amityvox.
+	if err == pgx.ErrNoRows {
+		disc, discErr := federation.DiscoverInstance(r.Context(), req.Domain)
+		if discErr != nil {
+			apiutil.WriteError(w, http.StatusBadGateway, "discovery_failed",
+				fmt.Sprintf("Failed to discover instance %s: %s", req.Domain, discErr))
+			return
+		}
+
+		// Register the remote instance in the instances table.
+		now := time.Now().UTC()
+		_, regErr := h.Pool.Exec(r.Context(),
+			`INSERT INTO instances (id, domain, public_key, name, software, software_version,
+			                        federation_mode, created_at, last_seen_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 ON CONFLICT (domain) DO UPDATE SET
+				public_key = EXCLUDED.public_key,
+				name = EXCLUDED.name,
+				software = EXCLUDED.software,
+				software_version = EXCLUDED.software_version,
+				federation_mode = EXCLUDED.federation_mode,
+				last_seen_at = EXCLUDED.last_seen_at`,
+			disc.InstanceID, disc.Domain, disc.PublicKey, disc.Name,
+			disc.Software, disc.SoftwareVersion, disc.FederationMode, now, now,
+		)
+		if regErr != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to register remote instance", regErr)
+			return
+		}
+		peerID = disc.InstanceID
 	}
 
 	now := time.Now().UTC()
