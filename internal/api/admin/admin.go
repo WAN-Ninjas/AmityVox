@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime"
@@ -36,9 +37,10 @@ type Handler struct {
 	Pool       *pgxpool.Pool
 	InstanceID string
 	Logger     *slog.Logger
-	Media      MediaDeleter   // optional — enables S3 cleanup on admin media delete
-	EventBus   *events.Bus    // optional — enables real-time announcement events
-	Cache      *presence.Cache // optional — enables accurate online user count
+	Media      MediaDeleter         // optional — enables S3 cleanup on admin media delete
+	EventBus   *events.Bus          // optional — enables real-time announcement events
+	Cache      *presence.Cache      // optional — enables accurate online user count
+	FedSvc     *federation.Service  // optional — enables federation handshake from admin
 }
 
 type updateInstanceRequest struct {
@@ -182,8 +184,9 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 }
 
 // HandleAddFederationPeer handles POST /api/v1/admin/federation/peers.
-// It discovers the remote instance via .well-known/amityvox, registers it in
-// the instances table, and creates a federation peer relationship.
+// It discovers the remote instance via .well-known/amityvox, registers it,
+// resolves domain IPs, computes key fingerprint, creates a pending peer,
+// and sends a handshake request to the remote instance.
 func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
 		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
@@ -198,9 +201,11 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	ctx := r.Context()
+
 	// Check if the instance is already known.
 	var peerID string
-	err := h.Pool.QueryRow(r.Context(),
+	err := h.Pool.QueryRow(ctx,
 		`SELECT id FROM instances WHERE domain = $1`, req.Domain).Scan(&peerID)
 	if err != nil && err != pgx.ErrNoRows {
 		apiutil.InternalError(w, h.Logger, "Failed to look up peer", err)
@@ -208,30 +213,41 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 	}
 
 	// If not known, discover the remote instance via .well-known/amityvox.
+	var disc *federation.DiscoveryResponse
 	if err == pgx.ErrNoRows {
-		disc, discErr := federation.DiscoverInstance(r.Context(), req.Domain)
+		var discErr error
+		disc, discErr = federation.DiscoverInstance(ctx, req.Domain)
 		if discErr != nil {
 			apiutil.WriteError(w, http.StatusBadGateway, "discovery_failed",
 				fmt.Sprintf("Failed to discover instance %s: %s", req.Domain, discErr))
 			return
 		}
 
-		// Register the remote instance and capture the canonical ID via RETURNING.
+		// Compute key fingerprint.
+		fingerprint, _ := federation.ComputeKeyFingerprint(disc.PublicKey)
+
+		// Resolve domain IPs.
+		resolvedIPs, _ := net.LookupHost(req.Domain)
+
+		// Register the remote instance with fingerprint and resolved IPs.
 		now := time.Now().UTC()
-		regErr := h.Pool.QueryRow(r.Context(),
+		regErr := h.Pool.QueryRow(ctx,
 			`INSERT INTO instances (id, domain, public_key, name, software, software_version,
-			                        federation_mode, created_at, last_seen_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			                        federation_mode, key_fingerprint, resolved_ips, created_at, last_seen_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			 ON CONFLICT (domain) DO UPDATE SET
 				public_key = EXCLUDED.public_key,
 				name = EXCLUDED.name,
 				software = EXCLUDED.software,
 				software_version = EXCLUDED.software_version,
 				federation_mode = EXCLUDED.federation_mode,
+				key_fingerprint = EXCLUDED.key_fingerprint,
+				resolved_ips = EXCLUDED.resolved_ips,
 				last_seen_at = EXCLUDED.last_seen_at
 			 RETURNING id`,
 			disc.InstanceID, disc.Domain, disc.PublicKey, disc.Name,
-			disc.Software, disc.SoftwareVersion, disc.FederationMode, now, now,
+			disc.Software, disc.SoftwareVersion, disc.FederationMode,
+			fingerprint, resolvedIPs, now, now,
 		).Scan(&peerID)
 		if regErr != nil {
 			apiutil.InternalError(w, h.Logger, "Failed to register remote instance", regErr)
@@ -239,23 +255,50 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Insert peer with pending status.
 	now := time.Now().UTC()
-	_, err = h.Pool.Exec(r.Context(),
-		`INSERT INTO federation_peers (instance_id, peer_id, status, established_at)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (instance_id, peer_id) DO UPDATE SET status = $3`,
-		h.InstanceID, peerID, models.FederationPeerActive, now)
+	_, err = h.Pool.Exec(ctx,
+		`INSERT INTO federation_peers (instance_id, peer_id, status, established_at, initiated_by)
+		 VALUES ($1, $2, $3, $4, 'local')
+		 ON CONFLICT (instance_id, peer_id) DO UPDATE SET status = $3, initiated_by = 'local'`,
+		h.InstanceID, peerID, models.FederationPeerPending, now)
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to add federation peer", err)
 		return
 	}
 
-	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+	// Send handshake to remote instance.
+	peerStatus := models.FederationPeerPending
+	hsInfo := ""
+	if h.FedSvc != nil {
+		hsResp, hsErr := h.FedSvc.SendHandshake(ctx, req.Domain)
+		if hsErr != nil {
+			h.Logger.Warn("handshake failed, peer left as pending",
+				slog.String("domain", req.Domain),
+				slog.String("error", hsErr.Error()))
+			hsInfo = fmt.Sprintf("Handshake failed: %s", hsErr)
+		} else if hsResp.Accepted {
+			peerStatus = models.FederationPeerActive
+			h.Pool.Exec(ctx,
+				`UPDATE federation_peers SET status = $1, handshake_completed_at = now()
+				 WHERE instance_id = $2 AND peer_id = $3`,
+				models.FederationPeerActive, h.InstanceID, peerID)
+		} else {
+			hsInfo = fmt.Sprintf("Remote rejected: %s", hsResp.Reason)
+		}
+	}
+
+	resp := map[string]interface{}{
 		"id":         peerID,
 		"domain":     req.Domain,
-		"status":     models.FederationPeerActive,
+		"status":     peerStatus,
 		"created_at": now,
-	})
+	}
+	if hsInfo != "" {
+		resp["handshake_info"] = hsInfo
+	}
+
+	apiutil.WriteJSON(w, http.StatusCreated, resp)
 }
 
 // HandleRemoveFederationPeer handles DELETE /api/v1/admin/federation/peers/{peerID}.
