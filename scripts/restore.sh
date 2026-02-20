@@ -56,7 +56,7 @@ BACKUP_DIR=$(ls "$TEMP_DIR")
 if [ -f "$TEMP_DIR/$BACKUP_DIR/postgres.sql" ]; then
     log "Restoring PostgreSQL..."
     cd "$COMPOSE_DIR"
-    $COMPOSE_CMD exec -T postgres psql -U amityvox < "../../$TEMP_DIR/$BACKUP_DIR/postgres.sql"
+    $COMPOSE_CMD exec -T postgresql psql -U amityvox < "../../$TEMP_DIR/$BACKUP_DIR/postgres.sql"
     cd ../..
     log "PostgreSQL restored."
 else
