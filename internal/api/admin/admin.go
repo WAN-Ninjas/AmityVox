@@ -304,14 +304,22 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 				slog.String("error", hsErr.Error()))
 			hsInfo = fmt.Sprintf("Handshake failed: %s", hsErr)
 		} else if hsResp.Accepted {
-			if _, updErr := h.Pool.Exec(ctx,
+			result, updErr := h.Pool.Exec(ctx,
 				`UPDATE federation_peers SET status = $1, handshake_completed_at = now()
 				 WHERE instance_id = $2 AND peer_id = $3 AND status = $4`,
-				models.FederationPeerActive, h.InstanceID, peerID, models.FederationPeerPending); updErr != nil {
+				models.FederationPeerActive, h.InstanceID, peerID, models.FederationPeerPending)
+			if updErr != nil {
 				apiutil.InternalError(w, h.Logger, "Failed to mark peer active", updErr)
 				return
 			}
-			peerStatus = models.FederationPeerActive
+			if result.RowsAffected() > 0 {
+				peerStatus = models.FederationPeerActive
+			} else {
+				// Status changed concurrently; re-fetch actual status.
+				_ = h.Pool.QueryRow(ctx,
+					`SELECT status FROM federation_peers WHERE instance_id = $1 AND peer_id = $2`,
+					h.InstanceID, peerID).Scan(&peerStatus)
+			}
 		} else {
 			hsInfo = fmt.Sprintf("Remote rejected: %s", hsResp.Reason)
 		}
