@@ -255,6 +255,7 @@ func runServe() error {
 		VAPIDPublicKey:    cfg.Push.VAPIDPublicKey,
 		VAPIDPrivateKey:   cfg.Push.VAPIDPrivateKey,
 		VAPIDContactEmail: cfg.Push.VAPIDContactEmail,
+		Bus:               bus,
 	})
 	if cfg.Push.VAPIDPublicKey != "" && cfg.Push.VAPIDPrivateKey != "" {
 		logger.Info("push notifications enabled")

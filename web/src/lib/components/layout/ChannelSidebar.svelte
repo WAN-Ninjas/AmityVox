@@ -651,7 +651,7 @@
 		const guildId = $currentGuildId;
 		if (!guildId) return;
 
-		const reordered = [...ungroupedTextChannels];
+		const reordered = [...ungroupedTextChannels, ...ungroupedForumChannels, ...ungroupedGalleryChannels];
 		const sourceIdx = reordered.findIndex(c => c.id === sourceId);
 		if (sourceIdx === -1) return;
 

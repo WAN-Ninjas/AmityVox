@@ -20,7 +20,7 @@
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { isGuildMuted, muteGuild, unmuteGuild } from '$lib/stores/muting';
-	import { markAllRead } from '$lib/stores/unreads';
+	import { channelGuildMap } from '$lib/stores/unreads';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 
 	let showNotificationPopover = $state(false);
@@ -118,6 +118,23 @@
 	function closeGuildContextMenu() {
 		guildCtxMenu = null;
 		showGuildMuteSubmenu = false;
+	}
+
+	async function markGuildAsRead(guildId: string) {
+		const guildChannelIds: string[] = [];
+		for (const [channelId, gId] of $channelGuildMap) {
+			if (gId === guildId && ($unreadCounts.get(channelId) ?? 0) > 0) {
+				guildChannelIds.push(channelId);
+			}
+		}
+		// Clear locally first
+		for (const cid of guildChannelIds) {
+			unreadCounts.removeEntry(cid);
+		}
+		// Ack on server (best-effort)
+		for (const cid of guildChannelIds) {
+			try { await api.ackChannel(cid); } catch {}
+		}
 	}
 
 	async function handleLeaveGuild(guildId: string) {
@@ -326,7 +343,7 @@
 	<ContextMenu x={guildCtxMenu.x} y={guildCtxMenu.y} onclose={closeGuildContextMenu}>
 		<!-- Mark as Read -->
 		{#if $guildUnreadSet.has(guildCtxMenu.guildId)}
-			<ContextMenuItem label="Mark as Read" onclick={() => { markAllRead(); closeGuildContextMenu(); }} />
+			<ContextMenuItem label="Mark as Read" onclick={() => { markGuildAsRead(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
 		{/if}
 		<!-- Mute / Unmute -->
 		{#if isGuildMuted(guildCtxMenu.guildId)}

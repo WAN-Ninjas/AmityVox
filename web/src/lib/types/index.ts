@@ -698,6 +698,7 @@ export interface ServerNotification {
 }
 
 export interface NotificationTypePreference {
+	user_id?: string;
 	type: ServerNotificationType;
 	in_app: boolean;
 	push: boolean;

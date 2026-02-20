@@ -292,6 +292,9 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
 	event.notification.close();
 
+	// If the user clicked "Dismiss", just close the notification.
+	if (event.action === 'dismiss') return;
+
 	const url = event.notification.data?.url || '/app';
 
 	event.waitUntil(

@@ -168,8 +168,8 @@ describe('formatNotificationTimestamp', () => {
 
 	it('returns date for > 7 days', () => {
 		const result = formatNotificationTimestamp('2026-02-01T12:00:00Z');
-		expect(result).toContain('Feb');
-		expect(result).toContain('1');
+		// formatNotificationTimestamp uses 'en-US' locale explicitly
+		expect(result).toMatch(/Feb.*1|1.*Feb/);
 	});
 });
 

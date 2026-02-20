@@ -118,7 +118,7 @@ func (m *Manager) handleMessageNotification(ctx context.Context, event events.Ev
 	}
 
 	// Skip empty or silent messages.
-	if msg.Content == "" || msg.Flags&models.MessageFlagSilent != 0 {
+	if msg.Flags&models.MessageFlagSilent != 0 {
 		return
 	}
 
@@ -200,6 +200,9 @@ func (m *Manager) handleMessageNotification(ctx context.Context, event events.Ev
 
 	// Build context.
 	content := msg.Content
+	if content == "" {
+		content = "[Attachment]"
+	}
 	if len(content) > 200 {
 		content = content[:200]
 	}
@@ -286,6 +289,10 @@ func (m *Manager) handleReactionNotification(ctx context.Context, event events.E
 		return // skip if reactor is the author
 	}
 
+	if !m.notifications.ShouldNotify(ctx, authorID, data.GuildID, data.ChannelID, false, false, false) {
+		return
+	}
+
 	actorName, actorAvatar := m.lookupUser(ctx, data.UserID)
 	var guildIDPtr *string
 	var guildName string
@@ -350,6 +357,10 @@ func (m *Manager) handlePinNotification(ctx context.Context, event events.Event)
 	}
 
 	if msgAuthorID == "" || msgAuthorID == data.PinnedBy {
+		return
+	}
+
+	if !m.notifications.ShouldNotify(ctx, msgAuthorID, data.GuildID, data.ChannelID, false, false, false) {
 		return
 	}
 

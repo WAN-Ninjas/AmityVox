@@ -71,6 +71,7 @@ type Service struct {
 	vapidPub   string
 	vapidPriv  string
 	vapidEmail string
+	bus        *events.Bus
 }
 
 // Config holds configuration for the notification service.
@@ -80,6 +81,7 @@ type Config struct {
 	VAPIDPublicKey   string
 	VAPIDPrivateKey  string
 	VAPIDContactEmail string
+	Bus              *events.Bus
 }
 
 // NewService creates a new notification service.
@@ -90,6 +92,7 @@ func NewService(cfg Config) *Service {
 		vapidPub:   cfg.VAPIDPublicKey,
 		vapidPriv:  cfg.VAPIDPrivateKey,
 		vapidEmail: cfg.VAPIDContactEmail,
+		bus:        cfg.Bus,
 	}
 }
 
@@ -732,6 +735,10 @@ func (s *Service) HandleUpdateNotification(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if s.bus != nil {
+		_ = s.bus.PublishUserEvent(r.Context(), events.SubjectNotificationUpdate, "NOTIFICATION_UPDATE", userID, n)
+	}
+
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -753,6 +760,10 @@ func (s *Service) HandleDeleteNotification(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if s.bus != nil {
+		_ = s.bus.PublishUserEvent(r.Context(), events.SubjectNotificationDelete, "NOTIFICATION_DELETE", userID, map[string]string{"id": notifID})
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -770,6 +781,10 @@ func (s *Service) HandleMarkAllRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.bus != nil {
+		_ = s.bus.PublishUserEvent(r.Context(), events.SubjectNotificationUpdate, "NOTIFICATION_MARK_ALL_READ", userID, map[string]int64{"updated": tag.RowsAffected()})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]int64{"updated": tag.RowsAffected()})
 }
 
@@ -784,6 +799,10 @@ func (s *Service) HandleClearAll(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to clear notifications")
 		return
+	}
+
+	if s.bus != nil {
+		_ = s.bus.PublishUserEvent(r.Context(), events.SubjectNotificationDelete, "NOTIFICATION_CLEAR_ALL", userID, nil)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -961,6 +980,11 @@ func (s *Service) CreateNotification(ctx context.Context, bus *events.Bus, n *mo
 		n.Category = models.NotificationCategoryForType(n.Type)
 	}
 
+	n.Read = false
+	if n.CreatedAt.IsZero() {
+		n.CreatedAt = time.Now().UTC()
+	}
+
 	// Insert notification if in-app delivery is enabled.
 	if inApp {
 		_, err = s.pool.Exec(ctx,
@@ -974,12 +998,6 @@ func (s *Service) CreateNotification(ctx context.Context, bus *events.Bus, n *mo
 		)
 		if err != nil {
 			return fmt.Errorf("inserting notification: %w", err)
-		}
-
-		// Set read=false and created_at for the event.
-		n.Read = false
-		if n.CreatedAt.IsZero() {
-			n.CreatedAt = time.Now().UTC()
 		}
 
 		// Publish NOTIFICATION_CREATE via NATS for real-time delivery.

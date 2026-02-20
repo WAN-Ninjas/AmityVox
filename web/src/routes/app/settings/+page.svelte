@@ -49,7 +49,7 @@
 	import { SOUND_PRESETS, playNotificationSound } from '$lib/utils/sounds';
 	import { ALL_NOTIFICATION_TYPES, NOTIFICATION_TYPE_LABELS, NOTIFICATION_CATEGORIES } from '$lib/utils/notificationHelpers';
 
-	import type { User, BotToken, SlashCommand, VoicePreferences, NotificationTypePreference } from '$lib/types';
+	import type { User, BotToken, SlashCommand, VoicePreferences, NotificationTypePreference, ServerNotificationType } from '$lib/types';
 
 	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'voice' | 'encryption' | 'bots' | 'data';
 	let currentTab = $state<Tab>('account');
@@ -102,6 +102,7 @@
 	let soundVolume = $state(80);
 	let notifLoading = $state(false);
 	let notifSuccess = $state('');
+	let notifError = $state('');
 
 	// --- DND Schedule state ---
 	let dndEnabled = $state(false);
@@ -120,7 +121,7 @@
 	let typePrefsSuccess = $state('');
 
 	function getTypePref(type: string): NotificationTypePreference {
-		return typePrefs.get(type) ?? { type: type as any, in_app: true, push: true, sound: true };
+		return typePrefs.get(type) ?? { type: type as ServerNotificationType, in_app: true, push: true, sound: true };
 	}
 
 	function setTypePref(type: string, field: 'in_app' | 'push' | 'sound', value: boolean) {
@@ -138,8 +139,8 @@
 			for (const p of prefs) map.set(p.type, p);
 			typePrefs = map;
 			typePrefsLoaded = true;
-		} catch {
-			// Use defaults on failure.
+		} catch (err) {
+			console.warn('Failed to load notification type preferences:', err);
 		} finally {
 			typePrefsLoading = false;
 		}
@@ -148,13 +149,14 @@
 	async function saveTypePrefs() {
 		typePrefsSaving = true;
 		typePrefsSuccess = '';
+		notifError = '';
 		try {
 			const prefs = ALL_NOTIFICATION_TYPES.map(type => getTypePref(type));
 			await api.updateNotificationTypePreferences(prefs);
 			typePrefsSuccess = 'Notification type preferences saved!';
 			setTimeout(() => (typePrefsSuccess = ''), 3000);
 		} catch (err: any) {
-			error = err.message || 'Failed to save type preferences';
+			notifError = err.message || 'Failed to save type preferences';
 		} finally {
 			typePrefsSaving = false;
 		}
@@ -1652,6 +1654,9 @@
 			{:else if currentTab === 'notifications'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Notifications</h1>
 
+				{#if notifError}
+					<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{notifError}</div>
+				{/if}
 				{#if notifSuccess}
 					<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{notifSuccess}</div>
 				{/if}

@@ -41,6 +41,8 @@
 		return all.filter(n => getCategoryForType(n.type) === activeTab);
 	});
 
+	let searchVersion = 0;
+
 	function handleSearch() {
 		clearTimeout(searchTimeout);
 		const q = searchQuery.trim();
@@ -50,13 +52,21 @@
 			return;
 		}
 		isSearching = true;
+		const version = ++searchVersion;
 		searchTimeout = setTimeout(async () => {
 			try {
-				searchResults = await searchNotifications(q, { limit: 50 });
+				const results = await searchNotifications(q, { limit: 50 });
+				if (version === searchVersion) {
+					searchResults = results;
+				}
 			} catch {
-				searchResults = [];
+				if (version === searchVersion) {
+					searchResults = [];
+				}
 			} finally {
-				isSearching = false;
+				if (version === searchVersion) {
+					isSearching = false;
+				}
 			}
 		}, 300);
 	}
@@ -79,7 +89,7 @@
 
 		const observer = new IntersectionObserver(
 			(entries) => {
-				if (entries[0].isIntersecting && !searchQuery.trim()) {
+				if (entries[0].isIntersecting && !searchQuery.trim() && !$loadingMore) {
 					loadMoreNotifications();
 				}
 			},

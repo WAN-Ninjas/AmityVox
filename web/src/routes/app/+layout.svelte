@@ -98,7 +98,7 @@
 		</div>
 	</div>
 {:else if $currentUser}
-	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => e.preventDefault()}>
+	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => { if (e.button === 2) e.preventDefault(); }}>
 		<div class="accent-stripe"></div>
 		<!-- Reconnecting banner -->
 		{#if !$gatewayConnected}

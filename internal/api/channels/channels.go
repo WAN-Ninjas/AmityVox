@@ -211,7 +211,10 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 
 	// Threads can be updated with ManageThreads or ManageChannels.
 	var parentChID *string
-	h.Pool.QueryRow(r.Context(), `SELECT parent_channel_id FROM channels WHERE id = $1`, channelID).Scan(&parentChID)
+	if err := h.Pool.QueryRow(r.Context(), `SELECT parent_channel_id FROM channels WHERE id = $1`, channelID).Scan(&parentChID); err != nil && err != pgx.ErrNoRows {
+		apiutil.InternalError(w, h.Logger, "Failed to query channel", err)
+		return
+	}
 	if parentChID != nil {
 		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageThreads) &&
 			!h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
@@ -336,7 +339,10 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	// Threads (channels with parent_channel_id) can be deleted with ManageThreads or ManageChannels.
 	// Regular channels require ManageChannels.
 	var parentChannelID *string
-	h.Pool.QueryRow(r.Context(), `SELECT parent_channel_id FROM channels WHERE id = $1`, channelID).Scan(&parentChannelID)
+	if err := h.Pool.QueryRow(r.Context(), `SELECT parent_channel_id FROM channels WHERE id = $1`, channelID).Scan(&parentChannelID); err != nil && err != pgx.ErrNoRows {
+		apiutil.InternalError(w, h.Logger, "Failed to query channel", err)
+		return
+	}
 	if parentChannelID != nil {
 		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageThreads) &&
 			!h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
