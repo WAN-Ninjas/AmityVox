@@ -197,7 +197,7 @@
 			}
 
 			const sent = federatedGuildId
-				? await api.sendFederatedGuildMessage(federatedGuildId, channelId, sendContent)
+				? await api.sendFederatedGuildMessage(federatedGuildId, channelId, sendContent, { reply_to_ids: opts.reply_to_ids })
 				: await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
 		} catch (e) {

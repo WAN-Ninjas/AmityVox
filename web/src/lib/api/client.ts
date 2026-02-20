@@ -595,8 +595,8 @@ class ApiClient {
 		return this.get(`/federation/guilds/${guildId}/channels/${channelId}/messages${qs ? `?${qs}` : ''}`);
 	}
 
-	sendFederatedGuildMessage(guildId: string, channelId: string, content: string, nonce?: string): Promise<Message> {
-		return this.post(`/federation/guilds/${guildId}/channels/${channelId}/messages`, { content, nonce });
+	sendFederatedGuildMessage(guildId: string, channelId: string, content: string, opts?: { nonce?: string; reply_to_ids?: string[] }): Promise<Message> {
+		return this.post(`/federation/guilds/${guildId}/channels/${channelId}/messages`, { content, nonce: opts?.nonce, reply_to_ids: opts?.reply_to_ids });
 	}
 
 	getFederatedGuildMembers(guildId: string): Promise<GuildMember[]> {
@@ -608,7 +608,7 @@ class ApiClient {
 	}
 
 	removeFederatedReaction(guildId: string, channelId: string, messageId: string, emoji: string): Promise<void> {
-		return this.delete(`/federation/guilds/${guildId}/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
+		return this.del(`/federation/guilds/${guildId}/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
 	}
 
 	sendFederatedTyping(guildId: string, channelId: string): Promise<void> {

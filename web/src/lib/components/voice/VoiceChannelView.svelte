@@ -181,8 +181,8 @@
 			</button>
 			{#if !textCollapsed}
 				<div class="flex min-h-0 flex-1 flex-col">
-					<MessageList />
-					<MessageInput />
+					<MessageList {federatedGuildId} />
+					<MessageInput {federatedGuildId} />
 				</div>
 			{/if}
 		</div>
@@ -445,8 +445,8 @@
 						Text Chat
 					</div>
 					<div class="flex min-h-0 flex-1 flex-col">
-						<MessageList />
-						<MessageInput />
+						<MessageList {federatedGuildId} />
+						<MessageInput {federatedGuildId} />
 					</div>
 				</div>
 			{/if}

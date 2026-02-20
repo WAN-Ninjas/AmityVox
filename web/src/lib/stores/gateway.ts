@@ -4,7 +4,7 @@ import { writable, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
-import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, guilds as guildsStore, currentGuildId, isFederatedGuild } from './guilds';
+import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, currentGuildId, isFederatedGuild } from './guilds';
 import { updateChannel, removeChannel, loadChannels, channels as channelsStore, currentChannelId } from './channels';
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';

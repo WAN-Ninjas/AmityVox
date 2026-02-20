@@ -350,6 +350,7 @@ func runServe() error {
 	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/members", syncSvc.HandleFederatedGuildMembers)
 	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
 	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/typing", syncSvc.HandleFederatedGuildTyping)
 
 	// Federation guild proxy endpoints (authenticated, for local users accessing remote guilds).
 	srv.Router.Route("/api/v1/federation/guilds", func(r chi.Router) {
@@ -362,6 +363,7 @@ func runServe() error {
 		r.Get("/{guildID}/members", syncSvc.HandleProxyGetFederatedGuildMembers)
 		r.Put("/{guildID}/channels/{channelID}/messages/{messageID}/reactions/{emoji}", syncSvc.HandleProxyAddFederatedReaction)
 		r.Delete("/{guildID}/channels/{channelID}/messages/{messageID}/reactions/{emoji}", syncSvc.HandleProxyRemoveFederatedReaction)
+		r.Post("/{guildID}/channels/{channelID}/typing", syncSvc.HandleProxyFederatedTyping)
 	})
 
 	// Federation peers and discovery proxy endpoints (authenticated, for local users).

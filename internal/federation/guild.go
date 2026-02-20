@@ -67,6 +67,10 @@ type federatedGuildReactionRequest struct {
 	Emoji  string `json:"emoji"`
 }
 
+type federatedGuildTypingRequest struct {
+	UserID string `json:"user_id"`
+}
+
 type guildPreviewResponse struct {
 	ID           string  `json:"id"`
 	Name         string  `json:"name"`
@@ -617,10 +621,22 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	msgID := models.NewULID().String()
 	now := time.Now()
 
+	// Validate reply_to_ids if provided — all must exist in this channel.
+	var replyToIDs []string
+	if len(req.ReplyToIDs) > 0 {
+		var validCount int
+		if err := ss.fed.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM messages WHERE id = ANY($1) AND channel_id = $2`,
+			req.ReplyToIDs, channelID,
+		).Scan(&validCount); err == nil && validCount == len(req.ReplyToIDs) {
+			replyToIDs = req.ReplyToIDs
+		}
+	}
+
 	_, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO messages (id, channel_id, author_id, content, created_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		msgID, channelID, req.UserID, req.Content, now)
+		`INSERT INTO messages (id, channel_id, author_id, content, reply_to_ids, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		msgID, channelID, req.UserID, req.Content, replyToIDs, now)
 	if err != nil {
 		ss.logger.Error("failed to create federated guild message", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -765,6 +781,20 @@ func (ss *SyncService) HandleFederatedGuildReactionAdd(w http.ResponseWriter, r 
 		return
 	}
 
+	// Verify channel belongs to guild and is not private.
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
 	// Verify membership.
 	var isMember bool
 	if err := ss.fed.pool.QueryRow(ctx,
@@ -834,6 +864,39 @@ func (ss *SyncService) HandleFederatedGuildReactionRemove(w http.ResponseWriter,
 		return
 	}
 
+	// Verify channel belongs to guild and is not private.
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	// Verify membership.
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil || !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	// Verify message exists in the channel.
+	var msgChannelID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT channel_id FROM messages WHERE id = $1`, messageID,
+	).Scan(&msgChannelID); err != nil || msgChannelID != channelID {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+
 	if _, err := ss.fed.pool.Exec(ctx,
 		`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
 		messageID, req.UserID, req.Emoji); err != nil {
@@ -849,6 +912,112 @@ func (ss *SyncService) HandleFederatedGuildReactionRemove(w http.ResponseWriter,
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionDel, "REACTION_REMOVE", channelID, evt)
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleFederatedGuildTyping handles a typing indicator from a federated user.
+// POST /federation/v1/guilds/{guildID}/channels/{channelID}/typing
+func (ss *SyncService) HandleFederatedGuildTyping(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	if guildID == "" || channelID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildTypingRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" {
+		http.Error(w, "Missing user_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	// Verify channel belongs to guild and is not private.
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	// Verify membership.
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil || !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	// Publish typing event to NATS — no persistence needed.
+	evt := map[string]interface{}{
+		"channel_id": channelID,
+		"guild_id":   guildID,
+		"user_id":    req.UserID,
+	}
+	ss.bus.PublishChannelEvent(ctx, events.SubjectTypingStart, "TYPING_START", channelID, evt)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleProxyFederatedTyping proxies a typing indicator to a remote guild.
+// POST /api/v1/federation/guilds/{guildID}/channels/{channelID}/typing
+func (ss *SyncService) HandleProxyFederatedTyping(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	if guildID == "" || channelID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT i.domain FROM federation_guild_cache fgc
+		 JOIN instances i ON i.id = fgc.instance_id
+		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
+		guildID, userID,
+	).Scan(&instanceDomain); err != nil {
+		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		return
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/typing",
+		instanceDomain, guildID, channelID)
+	_, statusCode, err := ss.signAndPost(ctx, remoteURL, federatedGuildTypingRequest{UserID: userID})
+	if err != nil {
+		http.Error(w, "Failed to contact remote instance", http.StatusBadGateway)
+		return
+	}
+
+	w.WriteHeader(statusCode)
 }
 
 // ============================================================
@@ -1262,8 +1431,9 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 	}
 
 	var localReq struct {
-		Content string `json:"content"`
-		Nonce   string `json:"nonce"`
+		Content    string   `json:"content"`
+		Nonce      string   `json:"nonce"`
+		ReplyToIDs []string `json:"reply_to_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&localReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1289,6 +1459,7 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 
 	payload := federatedGuildPostMessageRequest{
 		UserID: userID, Content: localReq.Content, Nonce: localReq.Nonce,
+		ReplyToIDs: localReq.ReplyToIDs,
 	}
 
 	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/create",

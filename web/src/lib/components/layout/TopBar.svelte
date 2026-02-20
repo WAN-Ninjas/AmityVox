@@ -181,7 +181,7 @@
 		</button>
 
 		<!-- Mobile overflow menu -->
-		{#if $currentChannel}
+		{#if $currentChannel && !federatedGuildId}
 			<div class="relative md:hidden">
 				<button
 					class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
