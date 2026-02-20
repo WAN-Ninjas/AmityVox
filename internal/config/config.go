@@ -458,6 +458,11 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Logging.Format = v
 	}
 
+	// Federation
+	if v := os.Getenv("AMITYVOX_FEDERATION_ENFORCE_IP_CHECK"); v != "" {
+		cfg.Federation.EnforceIPCheck = v == "true" || v == "1"
+	}
+
 	// Giphy
 	if v := os.Getenv("AMITYVOX_GIPHY_ENABLED"); v != "" {
 		cfg.Giphy.Enabled = v == "true" || v == "1"

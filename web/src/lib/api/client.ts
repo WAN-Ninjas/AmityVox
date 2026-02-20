@@ -67,7 +67,8 @@ import type {
 	GalleryTag,
 	GalleryPost,
 	ServerNotification,
-	NotificationTypePreference
+	NotificationTypePreference,
+	KeyAuditEntry
 } from '$lib/types';
 
 const API_BASE = '/api/v1';

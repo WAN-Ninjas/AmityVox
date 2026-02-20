@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strings"
 	"runtime"
 	"time"
 
@@ -223,6 +224,13 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 			return
 		}
 
+		// Validate that discovery response domain matches the requested domain.
+		if !strings.EqualFold(disc.Domain, req.Domain) {
+			apiutil.WriteError(w, http.StatusBadRequest, "domain_mismatch",
+				"Discovery response domain does not match requested domain")
+			return
+		}
+
 		// Compute key fingerprint.
 		fingerprint, _ := federation.ComputeKeyFingerprint(disc.PublicKey)
 
@@ -260,7 +268,12 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 	_, err = h.Pool.Exec(ctx,
 		`INSERT INTO federation_peers (instance_id, peer_id, status, established_at, initiated_by)
 		 VALUES ($1, $2, $3, $4, 'local')
-		 ON CONFLICT (instance_id, peer_id) DO UPDATE SET status = $3, initiated_by = 'local'`,
+		 ON CONFLICT (instance_id, peer_id) DO UPDATE SET
+			status = CASE
+				WHEN federation_peers.status IN ('active', 'blocked') THEN federation_peers.status
+				ELSE EXCLUDED.status
+			END,
+			initiated_by = 'local'`,
 		h.InstanceID, peerID, models.FederationPeerPending, now)
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to add federation peer", err)
@@ -278,11 +291,14 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 				slog.String("error", hsErr.Error()))
 			hsInfo = fmt.Sprintf("Handshake failed: %s", hsErr)
 		} else if hsResp.Accepted {
-			peerStatus = models.FederationPeerActive
-			h.Pool.Exec(ctx,
+			if _, updErr := h.Pool.Exec(ctx,
 				`UPDATE federation_peers SET status = $1, handshake_completed_at = now()
 				 WHERE instance_id = $2 AND peer_id = $3`,
-				models.FederationPeerActive, h.InstanceID, peerID)
+				models.FederationPeerActive, h.InstanceID, peerID); updErr != nil {
+				apiutil.InternalError(w, h.Logger, "Failed to mark peer active", updErr)
+				return
+			}
+			peerStatus = models.FederationPeerActive
 		} else {
 			hsInfo = fmt.Sprintf("Remote rejected: %s", hsResp.Reason)
 		}
