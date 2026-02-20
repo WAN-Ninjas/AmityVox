@@ -889,8 +889,22 @@ func (s *Service) SendHandshake(ctx context.Context, remoteDomain string) (*Hand
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(httpReq)
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return errors.New("stopped after 3 redirects")
+			}
+			if r.URL.Scheme != "https" {
+				return errors.New("redirects must use https")
+			}
+			if err := ValidateFederationDomain(r.URL.Hostname()); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(httpReq) // SSRF validated: domain checked by ValidateFederationDomain above
 	if err != nil {
 		return nil, fmt.Errorf("sending handshake to %s: %w", remoteDomain, err)
 	}
