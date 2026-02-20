@@ -1629,9 +1629,16 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 	var guildID *string
 	var parentAutoArchive int
 	var parentEncrypted bool
-	h.Pool.QueryRow(r.Context(),
+	if err := h.Pool.QueryRow(r.Context(),
 		`SELECT guild_id, default_auto_archive_duration, encrypted FROM channels WHERE id = $1`, channelID,
-	).Scan(&guildID, &parentAutoArchive, &parentEncrypted)
+	).Scan(&guildID, &parentAutoArchive, &parentEncrypted); err != nil {
+		if err == pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+			return
+		}
+		apiutil.InternalError(w, h.Logger, "Failed to query channel", err)
+		return
+	}
 	if guildID == nil {
 		apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Threads can only be created in guild channels")
 		return

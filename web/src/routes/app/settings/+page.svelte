@@ -133,6 +133,7 @@
 	async function loadTypePrefs() {
 		if (typePrefsLoaded) return;
 		typePrefsLoading = true;
+		notifError = '';
 		try {
 			const prefs = await api.getNotificationTypePreferences();
 			const map = new Map<string, NotificationTypePreference>();
@@ -141,12 +142,17 @@
 			typePrefsLoaded = true;
 		} catch (err) {
 			console.warn('Failed to load notification type preferences:', err);
+			notifError = 'Failed to load notification type preferences. Please try again.';
 		} finally {
 			typePrefsLoading = false;
 		}
 	}
 
 	async function saveTypePrefs() {
+		if (!typePrefsLoaded) {
+			notifError = 'Type preferences have not loaded yet.';
+			return;
+		}
 		typePrefsSaving = true;
 		typePrefsSuccess = '';
 		notifError = '';

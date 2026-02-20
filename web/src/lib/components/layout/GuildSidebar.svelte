@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { guildList, currentGuildId, setGuild, guilds } from '$lib/stores/guilds';
-	import { unreadCounts, guildUnreadSet, guildMentionCounts } from '$lib/stores/unreads';
+	import { unreadCounts, unreadState, guildUnreadSet, guildMentionCounts } from '$lib/stores/unreads';
 	import { unreadNotificationCount } from '$lib/stores/notifications';
 	import { pendingIncomingCount } from '$lib/stores/relationships';
 	import { dmChannels } from '$lib/stores/dms';
@@ -127,9 +127,10 @@
 				guildChannelIds.push(channelId);
 			}
 		}
-		// Clear locally first
+		// Clear unread counts and mention counts locally first
 		for (const cid of guildChannelIds) {
 			unreadCounts.removeEntry(cid);
+			unreadState.updateEntry(cid, (entry) => ({ ...entry, mentionCount: 0 }));
 		}
 		// Ack on server (best-effort)
 		for (const cid of guildChannelIds) {
