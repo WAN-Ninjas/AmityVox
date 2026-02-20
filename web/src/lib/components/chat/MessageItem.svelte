@@ -925,6 +925,7 @@
 			<ContextMenuItem label="View Thread" onclick={handleViewThread} />
 		{/if}
 		<ContextMenuItem label="Copy Message Link" onclick={handleCopyLink} />
+		<ContextMenuItem label="Copy User ID" onclick={() => { navigator.clipboard.writeText(message.author_id); contextMenu = null; }} />
 		<ContextMenuItem label="Bookmark" onclick={handleBookmark} />
 		<ContextMenuItem label="Forward" onclick={handleForward} />
 		{#if message.content}

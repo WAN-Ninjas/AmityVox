@@ -6,10 +6,11 @@
 
 	interface Props {
 		open?: boolean;
+		guildId?: string | null;
 		onclose?: () => void;
 	}
 
-	let { open = $bindable(false), onclose }: Props = $props();
+	let { open = $bindable(false), guildId = null, onclose }: Props = $props();
 
 	let invite = $state<Invite | null>(null);
 	let loading = $state(false);
@@ -20,14 +21,14 @@
 	let maxAge = $state(86400); // 24 hours default
 
 	async function generateInvite() {
-		const guildId = $currentGuildId;
-		if (!guildId) return;
+		const resolvedGuildId = guildId || $currentGuildId;
+		if (!resolvedGuildId) return;
 		loading = true;
 		error = '';
 		invite = null;
 
 		try {
-			invite = await api.createInvite(guildId, {
+			invite = await api.createInvite(resolvedGuildId, {
 				max_uses: maxUses || undefined,
 				max_age_seconds: maxAge
 			});

@@ -378,6 +378,7 @@
 {#if contextMenu}
 	<ContextMenu x={contextMenu.x} y={contextMenu.y} onclose={closeContextMenu}>
 		<ContextMenuItem label="View Profile" onclick={() => openProfile(contextMenu!.member)} />
+		<ContextMenuItem label="Copy ID" onclick={() => { navigator.clipboard.writeText(contextMenu!.member.user_id); closeContextMenu(); }} />
 		{#if !isContextSelf}
 			<ContextMenuItem label="Message" onclick={() => startDM(contextMenu!.member)} />
 			{#if !contextMemberRel || contextMemberRel.type === 'pending_incoming'}

@@ -946,7 +946,20 @@ widgetH := &widgets.Handler{
 			// Notification routes (preferences always available; push requires VAPID).
 			if s.Notifications != nil {
 				r.Route("/notifications", func(r chi.Router) {
-					// Preference management (always available).
+					// Persistent notification CRUD.
+					r.Get("/", s.Notifications.HandleListNotifications)
+					r.Patch("/{id}", s.Notifications.HandleUpdateNotification)
+					r.Delete("/{id}", s.Notifications.HandleDeleteNotification)
+					r.Post("/mark-all-read", s.Notifications.HandleMarkAllRead)
+					r.Delete("/", s.Notifications.HandleClearAll)
+					r.Get("/search", s.Notifications.HandleSearchNotifications)
+					r.Get("/unread-count", s.Notifications.HandleGetUnreadCount)
+
+					// Per-type delivery preferences.
+					r.Get("/type-preferences", s.Notifications.HandleGetTypePreferences)
+					r.Put("/type-preferences", s.Notifications.HandleUpdateTypePreferences)
+
+					// Guild/global preference management (always available).
 					r.Get("/preferences", s.Notifications.HandleGetPreferences)
 					r.Patch("/preferences", s.Notifications.HandleUpdatePreferences)
 					r.Get("/preferences/channels", s.Notifications.HandleGetChannelPreferences)

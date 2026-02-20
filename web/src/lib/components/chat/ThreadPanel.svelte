@@ -3,11 +3,12 @@
 	import { api } from '$lib/api/client';
 	import { messagesByChannel, loadMessages, appendMessage } from '$lib/stores/messages';
 	import { channels } from '$lib/stores/channels';
+	import { e2ee } from '$lib/encryption/e2eeManager';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { tick } from 'svelte';
 
 	interface Props {
-		threadChannel: { id: string; name: string | null; guild_id: string | null; parent_channel_id?: string | null; locked?: boolean; pinned?: boolean };
+		threadChannel: { id: string; name: string | null; guild_id: string | null; parent_channel_id?: string | null; locked?: boolean; pinned?: boolean; encrypted?: boolean };
 		parentMessage?: Message | null;
 		onclose: () => void;
 	}
@@ -18,6 +19,37 @@
 	let messagesContainer: HTMLDivElement;
 	let loading = $state(true);
 	let forumTags = $state<ForumTag[]>([]);
+	let channelPassphrase = $state('');
+	let hasKey = $state(false);
+	let checkingKey = $state(true);
+
+	// Encrypted threads use the parent channel's key (same passphrase + parent ID as salt)
+	const encryptionChannelId = $derived(threadChannel.parent_channel_id ?? threadChannel.id);
+
+	// Check if we already have the decryption key for this encrypted thread
+	$effect(() => {
+		if (threadChannel.encrypted) {
+			checkingKey = true;
+			e2ee.hasChannelKey(encryptionChannelId).then((has) => {
+				hasKey = has;
+				checkingKey = false;
+			});
+		} else {
+			hasKey = true;
+			checkingKey = false;
+		}
+	});
+
+	async function unlockThread() {
+		if (!channelPassphrase.trim()) return;
+		try {
+			await e2ee.setPassphrase(encryptionChannelId, channelPassphrase);
+			hasKey = true;
+			channelPassphrase = '';
+		} catch {
+			// Invalid passphrase
+		}
+	}
 
 	// Detect if this thread belongs to a forum channel
 	let isForumPost = $derived.by(() => {
@@ -42,9 +74,38 @@
 		}
 	});
 
-	const threadMessages = $derived.by(() => {
+	const rawThreadMessages = $derived.by(() => {
 		return $messagesByChannel.get(threadChannel.id) ?? [];
 	});
+
+	// Decrypt encrypted messages
+	let decryptedContents = $state<Map<string, string>>(new Map());
+
+	$effect(() => {
+		if (!threadChannel.encrypted || !hasKey) return;
+		const msgs = rawThreadMessages;
+		for (const msg of msgs) {
+			if (msg.encrypted && !decryptedContents.has(msg.id)) {
+				e2ee.decryptMessage(encryptionChannelId, msg.content).then((plain) => {
+					decryptedContents.set(msg.id, plain);
+					decryptedContents = new Map(decryptedContents);
+				}).catch(() => {
+					decryptedContents.set(msg.id, '[Decryption failed]');
+					decryptedContents = new Map(decryptedContents);
+				});
+			}
+		}
+	});
+
+	function getDisplayContent(msg: Message): string {
+		if (msg.encrypted && decryptedContents.has(msg.id)) {
+			return decryptedContents.get(msg.id)!;
+		}
+		if (msg.encrypted) return '[Encrypted message]';
+		return msg.content;
+	}
+
+	const threadMessages = $derived(rawThreadMessages);
 
 	$effect(() => {
 		loading = true;
@@ -75,7 +136,13 @@
 		content = '';
 
 		try {
-			const sent = await api.sendMessage(threadChannel.id, msg);
+			let sendContent = msg;
+			const opts: { encrypted?: boolean } = {};
+			if (threadChannel.encrypted) {
+				sendContent = await e2ee.encryptMessage(encryptionChannelId, msg);
+				opts.encrypted = true;
+			}
+			const sent = await api.sendMessage(threadChannel.id, sendContent, opts);
 			appendMessage(sent);
 		} catch (err) {
 			content = msg;
@@ -155,6 +222,24 @@
 		</div>
 	{/if}
 
+	<!-- Passphrase prompt for encrypted threads -->
+	{#if threadChannel.encrypted && !hasKey && !checkingKey}
+		<div class="flex flex-1 flex-col items-center justify-center gap-3 p-4">
+			<svg class="h-8 w-8 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+			</svg>
+			<p class="text-center text-sm text-text-muted">This thread is encrypted. Enter the channel passphrase to view and send messages.</p>
+			<form onsubmit={(e) => { e.preventDefault(); unlockThread(); }} class="flex w-full gap-2">
+				<input
+					type="password"
+					bind:value={channelPassphrase}
+					placeholder="Passphrase"
+					class="flex-1 rounded-md bg-bg-modifier px-3 py-1.5 text-sm text-text-primary outline-none placeholder:text-text-muted"
+				/>
+				<button type="submit" class="rounded-md bg-brand-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-600">Unlock</button>
+			</form>
+		</div>
+	{:else}
 	<!-- Thread messages -->
 	<div bind:this={messagesContainer} class="flex-1 overflow-y-auto p-2">
 		{#if loading}
@@ -180,7 +265,7 @@
 							</span>
 							<time class="text-2xs text-text-muted">{formatTime(msg.created_at)}</time>
 						</div>
-						<p class="text-sm text-text-secondary break-words whitespace-pre-wrap">{msg.content}</p>
+						<p class="text-sm text-text-secondary break-words whitespace-pre-wrap">{getDisplayContent(msg)}</p>
 					</div>
 				</div>
 			{/each}
@@ -199,4 +284,5 @@
 			></textarea>
 		</div>
 	</div>
+	{/if}
 </div>

@@ -65,7 +65,9 @@ import type {
 	ForumTag,
 	ForumPost,
 	GalleryTag,
-	GalleryPost
+	GalleryPost,
+	ServerNotification,
+	NotificationTypePreference
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -897,6 +899,57 @@ class ApiClient {
 		return this.del(`/notifications/preferences/channels/${channelId}`);
 	}
 
+	// --- Server Notifications (persistent) ---
+
+	getNotifications(params?: { before?: string; limit?: number; type?: string; unread_only?: boolean }): Promise<ServerNotification[]> {
+		const qs = new URLSearchParams();
+		if (params?.before) qs.set('before', params.before);
+		if (params?.limit) qs.set('limit', String(params.limit));
+		if (params?.type) qs.set('type', params.type);
+		if (params?.unread_only) qs.set('unread_only', 'true');
+		const query = qs.toString();
+		return this.get(`/notifications${query ? '?' + query : ''}`);
+	}
+
+	markNotificationRead(id: string): Promise<ServerNotification> {
+		return this.patch(`/notifications/${id}`, { read: true });
+	}
+
+	markNotificationUnread(id: string): Promise<ServerNotification> {
+		return this.patch(`/notifications/${id}`, { read: false });
+	}
+
+	markAllNotificationsRead(): Promise<{ updated: number }> {
+		return this.post('/notifications/mark-all-read', {});
+	}
+
+	deleteNotification(id: string): Promise<void> {
+		return this.del(`/notifications/${id}`);
+	}
+
+	clearAllNotifications(): Promise<void> {
+		return this.del('/notifications');
+	}
+
+	searchNotifications(query: string, params?: { limit?: number; before?: string }): Promise<ServerNotification[]> {
+		const qs = new URLSearchParams({ q: query });
+		if (params?.limit) qs.set('limit', String(params.limit));
+		if (params?.before) qs.set('before', params.before);
+		return this.get(`/notifications/search?${qs.toString()}`);
+	}
+
+	getUnreadNotificationCount(): Promise<{ count: number }> {
+		return this.get('/notifications/unread-count');
+	}
+
+	getNotificationTypePreferences(): Promise<NotificationTypePreference[]> {
+		return this.get('/notifications/type-preferences');
+	}
+
+	updateNotificationTypePreferences(prefs: NotificationTypePreference[]): Promise<NotificationTypePreference[]> {
+		return this.put('/notifications/type-preferences', { preferences: prefs });
+	}
+
 	// --- User Settings (privacy/prefs) ---
 
 	getUserSettings(): Promise<UserSettings> {
@@ -1018,7 +1071,7 @@ class ApiClient {
 
 	// --- Push Notifications ---
 
-	getVapidKey(): Promise<{ public_key: string }> {
+	getVapidKey(): Promise<{ vapid_public_key: string }> {
 		return this.get('/notifications/vapid-key');
 	}
 

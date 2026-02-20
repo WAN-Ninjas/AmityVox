@@ -32,6 +32,8 @@
 	let mentionQuery = $state('');
 	let mentionStartIndex = $state(0);
 	let mentionAutocomplete: { handleKeydown: (e: KeyboardEvent) => boolean } | undefined;
+	/** Maps display text (e.g. "@Horatio") → wire syntax (e.g. "<@01KH...>") for mentions inserted via autocomplete. */
+	let mentionMap = new Map<string, string>();
 
 	// --- E2EE passphrase prompt ---
 	let needsPassphrase = $state(false);
@@ -134,8 +136,9 @@
 		const channelId = $currentChannelId;
 		if (!channelId || !content.trim()) return;
 
-		const msg = content.trim();
+		const msg = resolveMentions(content.trim());
 		content = '';
+		mentionMap.clear();
 		if (inputEl) inputEl.style.height = 'auto';
 
 		if (isEditing && $editingMessage) {
@@ -361,21 +364,33 @@
 		}
 	}
 
-	function handleMentionSelect(syntax: string, _displayText: string) {
-		// Replace @query with the mention syntax + trailing space.
+	function handleMentionSelect(syntax: string, displayText: string) {
+		// Replace @query with the friendly display text; track the mapping for send-time replacement.
 		const before = content.slice(0, mentionStartIndex);
 		const after = content.slice(mentionStartIndex + 1 + mentionQuery.length); // +1 for @
-		content = before + syntax + ' ' + after;
+		mentionMap.set(displayText, syntax);
+		content = before + displayText + ' ' + after;
 		showMentionAutocomplete = false;
 
 		// Refocus and position cursor after inserted mention.
 		requestAnimationFrame(() => {
 			if (inputEl) {
-				const newPos = before.length + syntax.length + 1;
+				const newPos = before.length + displayText.length + 1;
 				inputEl.focus();
 				inputEl.setSelectionRange(newPos, newPos);
 			}
 		});
+	}
+
+	/** Replace display-text mentions with wire syntax before sending. */
+	function resolveMentions(text: string): string {
+		let resolved = text;
+		for (const [display, syntax] of mentionMap) {
+			// Replace all occurrences of the display text with the wire syntax.
+			// Use split+join for literal replacement (no regex escaping needed).
+			resolved = resolved.split(display).join(syntax);
+		}
+		return resolved;
 	}
 
 	function handleFileSelect(e: Event) {
