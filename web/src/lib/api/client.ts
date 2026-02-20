@@ -558,6 +558,21 @@ class ApiClient {
 		return this.post('/federation/voice/guild-join', { guild_id: guildId, channel_id: channelId, screen_share: screenShare });
 	}
 
+	// --- Federation Discovery ---
+
+	getPublicFederationPeers(): Promise<FederationPeer[]> {
+		return this.get('/federation/peers/public');
+	}
+
+	discoverRemoteGuilds(peerId: string, params?: { q?: string; tag?: string; limit?: number }): Promise<Guild[]> {
+		const query = new URLSearchParams();
+		if (params?.q) query.set('q', params.q);
+		if (params?.tag) query.set('tag', params.tag);
+		if (params?.limit) query.set('limit', String(params.limit));
+		const qs = query.toString();
+		return this.get(`/federation/peers/${peerId}/guilds${qs ? `?${qs}` : ''}`);
+	}
+
 	// --- Federation Guilds ---
 
 	joinFederatedGuild(instanceDomain: string, guildId?: string, inviteCode?: string): Promise<unknown> {

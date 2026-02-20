@@ -9,6 +9,7 @@
 	import { goto } from '$app/navigation';
 	import Avatar from './Avatar.svelte';
 	import ProfileModal from './ProfileModal.svelte';
+	import FederationBadge from './FederationBadge.svelte';
 	import { guildMembers, guildRolesMap } from '$lib/stores/members';
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import { clientNicknames, setClientNickname } from '$lib/stores/nicknames';
@@ -254,6 +255,9 @@
 				{/if}
 				{#if user.flags & UserFlagBot}
 					<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-2xs font-bold text-brand-400">BOT</span>
+				{/if}
+				{#if user.instance_domain || (user.instance_id && $currentUser && user.instance_id !== $currentUser.instance_id)}
+					<FederationBadge domain={user.instance_domain ?? user.instance_id} />
 				{/if}
 			</div>
 			{#if currentNickname}

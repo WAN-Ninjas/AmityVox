@@ -10,6 +10,7 @@
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import UserPopover from '$components/common/UserPopover.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
+	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import { presenceMap } from '$lib/stores/presence';
 	import { addDMChannel } from '$lib/stores/dms';
 	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
@@ -358,6 +359,9 @@
 						/>
 						<span class="flex items-center gap-1 truncate text-sm text-text-secondary {hasClientNickname(member) ? 'italic' : ''}" style={memberColor ? `color: ${memberColor}` : ''} title={hasClientNickname(member) ? `Nickname for ${member.user?.display_name ?? member.user?.username ?? member.user_id}` : ''}>
 							{getMemberName(member)}
+							{#if member.user?.instance_domain || (member.user?.instance_id && $currentUser && member.user.instance_id !== $currentUser.instance_id)}
+								<FederationBadge domain={member.user.instance_domain ?? member.user.instance_id} compact />
+							{/if}
 							{#if isMemberTimedOut(member)}
 								<svg class="h-3.5 w-3.5 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 									<title>Timed out</title>
