@@ -27,8 +27,14 @@ export async function initPushNotifications(): Promise<boolean> {
 		const existing = await registration.pushManager.getSubscription();
 		if (existing) return true;
 
-		// Get VAPID key from server.
-		const { vapid_public_key } = await api.getVapidKey();
+		// Get VAPID key from server — may not be configured.
+		let vapid_public_key: string;
+		try {
+			({ vapid_public_key } = await api.getVapidKey());
+		} catch {
+			// VAPID not configured on the server — push unavailable.
+			return false;
+		}
 		if (!vapid_public_key) return false;
 
 		const applicationServerKey = urlBase64ToUint8Array(vapid_public_key);
