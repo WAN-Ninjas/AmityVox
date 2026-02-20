@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { goto, afterNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
 	import type { Snippet } from 'svelte';
 	import { api } from '$lib/api/client';
@@ -49,6 +49,12 @@
 	$effect(() => {
 		$page.url.pathname;
 		mobileSidebarOpen = false;
+	});
+
+	afterNavigate(() => {
+		if (typeof window !== 'undefined' && window.location.pathname !== '/app') {
+			window.history.replaceState(history.state, '', '/app');
+		}
 	});
 
 	onMount(() => {
