@@ -285,11 +285,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.readLoop(readCtx, client)
 	readCancel()
 
+	// Capture guild IDs before cleanup so the offline event can route correctly.
+	client.mu.Lock()
+	guildIDs := make([]string, 0, len(client.guildIDs))
+	for gid := range client.guildIDs {
+		guildIDs = append(guildIDs, gid)
+	}
+	client.mu.Unlock()
+
 	// Cleanup on disconnect.
 	s.unregisterClient(client)
 
 	s.cache.RemovePresence(context.Background(), client.userID)
-	s.broadcastPresence(context.Background(), client.userID, "offline")
+	s.broadcastPresenceWithGuilds(context.Background(), client.userID, "offline", guildIDs)
 
 	// Stamp last_online when the user's last connection drops.
 	s.userClientsMu.RLock()
@@ -975,6 +983,17 @@ func (s *Server) shouldDispatchTo(client *Client, subject string, event events.E
 		}
 		s.userClientsMu.RUnlock()
 
+		// For offline events, the user is already unregistered so userClients
+		// is empty. Fall back to guild IDs embedded in the event data.
+		if len(eventUserGuildIDs) == 0 && event.Type == "PRESENCE_UPDATE" {
+			var payload struct {
+				GuildIDs []string `json:"guild_ids"`
+			}
+			if json.Unmarshal(event.Data, &payload) == nil {
+				eventUserGuildIDs = payload.GuildIDs
+			}
+		}
+
 		client.mu.Lock()
 		isFriend := client.friendIDs[event.UserID]
 		client.mu.Unlock()
@@ -1277,10 +1296,21 @@ func (s *Server) sendMessage(client *Client, msg GatewayMessage) {
 // broadcastPresence publishes a PRESENCE_UPDATE event via NATS so that all
 // connected guild members are notified of the status change.
 func (s *Server) broadcastPresence(ctx context.Context, userID, status string) {
-	data, _ := json.Marshal(map[string]string{
+	s.broadcastPresenceWithGuilds(ctx, userID, status, nil)
+}
+
+// broadcastPresenceWithGuilds publishes a PRESENCE_UPDATE event with embedded guild IDs.
+// This is used during disconnect cleanup to include the user's guild memberships in the
+// event data, since the user's client entry will be removed before the event is routed.
+func (s *Server) broadcastPresenceWithGuilds(ctx context.Context, userID, status string, guildIDs []string) {
+	payload := map[string]interface{}{
 		"user_id": userID,
 		"status":  status,
-	})
+	}
+	if len(guildIDs) > 0 {
+		payload["guild_ids"] = guildIDs
+	}
+	data, _ := json.Marshal(payload)
 	_ = s.eventBus.Publish(ctx, events.SubjectPresenceUpdate, events.Event{
 		Type:   "PRESENCE_UPDATE",
 		UserID: userID,

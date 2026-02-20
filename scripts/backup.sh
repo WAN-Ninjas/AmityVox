@@ -37,9 +37,7 @@ log "Starting backup to $BACKUP_PATH..."
 
 # 1. Backup PostgreSQL.
 log "Dumping PostgreSQL..."
-cd "$COMPOSE_DIR"
-$COMPOSE_CMD exec -T postgres pg_dumpall -U amityvox > "../../$BACKUP_PATH/postgres.sql"
-cd ../..
+$COMPOSE_CMD -f "$COMPOSE_DIR/docker-compose.yml" exec -T postgresql pg_dumpall -U amityvox > "$BACKUP_PATH/postgres.sql"
 log "PostgreSQL dump: $BACKUP_PATH/postgres.sql ($(du -h "$BACKUP_PATH/postgres.sql" | cut -f1))"
 
 # 2. Backup configuration.
