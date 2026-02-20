@@ -25,6 +25,9 @@
 			e.preventDefault();
 			showSearch = !showSearch;
 		}
+		if (e.key === 'Escape' && showMobileMenu) {
+			showMobileMenu = false;
+		}
 	}
 </script>
 
