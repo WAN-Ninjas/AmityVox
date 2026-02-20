@@ -240,7 +240,7 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		}
 
 		// Resolve domain IPs.
-		resolvedIPs, dnsErr := net.LookupHost(req.Domain)
+		resolvedIPs, dnsErr := net.DefaultResolver.LookupHost(ctx, req.Domain)
 		if dnsErr != nil {
 			h.Logger.Warn("failed to resolve domain IPs",
 				slog.String("domain", req.Domain),
@@ -316,9 +316,13 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 				peerStatus = models.FederationPeerActive
 			} else {
 				// Status changed concurrently; re-fetch actual status.
-				_ = h.Pool.QueryRow(ctx,
+				if refetchErr := h.Pool.QueryRow(ctx,
 					`SELECT status FROM federation_peers WHERE instance_id = $1 AND peer_id = $2`,
-					h.InstanceID, peerID).Scan(&peerStatus)
+					h.InstanceID, peerID).Scan(&peerStatus); refetchErr != nil {
+					h.Logger.Warn("failed to re-fetch peer status after concurrent change",
+						slog.String("peer_id", peerID),
+						slog.String("error", refetchErr.Error()))
+				}
 			}
 		} else {
 			hsInfo = fmt.Sprintf("Remote rejected: %s", hsResp.Reason)
