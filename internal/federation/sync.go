@@ -193,7 +193,7 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event := events.Event{
-		Type:      msg.Type,
+		Type:      federationToGatewayType(msg.Type),
 		GuildID:   msg.GuildID,
 		ChannelID: msg.ChannelID,
 		Data:      eventData,
@@ -309,6 +309,50 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 				slog.String("message_id", msgData.ID),
 				slog.String("error", err.Error()))
 		}
+
+	case "TYPING_START":
+		// No DB persistence needed — just let the event flow through NATS to the gateway.
+
+	case "REACTION_ADD":
+		var rxData struct {
+			MessageID string `json:"message_id"`
+			UserID    string `json:"user_id"`
+			Emoji     string `json:"emoji"`
+		}
+		if err := json.Unmarshal(data, &rxData); err != nil {
+			ss.logger.Warn("failed to unmarshal inbound reaction add", slog.String("error", err.Error()))
+			return
+		}
+		if _, err := ss.fed.pool.Exec(ctx,
+			`INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+			 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+			rxData.MessageID, rxData.UserID, rxData.Emoji); err != nil {
+			ss.logger.Warn("failed to persist inbound reaction add",
+				slog.String("message_id", rxData.MessageID),
+				slog.String("error", err.Error()))
+		}
+
+	case "REACTION_REMOVE":
+		var rxData struct {
+			MessageID string `json:"message_id"`
+			UserID    string `json:"user_id"`
+			Emoji     string `json:"emoji"`
+		}
+		if err := json.Unmarshal(data, &rxData); err != nil {
+			ss.logger.Warn("failed to unmarshal inbound reaction remove", slog.String("error", err.Error()))
+			return
+		}
+		if _, err := ss.fed.pool.Exec(ctx,
+			`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+			rxData.MessageID, rxData.UserID, rxData.Emoji); err != nil {
+			ss.logger.Warn("failed to persist inbound reaction remove",
+				slog.String("message_id", rxData.MessageID),
+				slog.String("error", err.Error()))
+		}
+
+	case "CHANNEL_PINS_UPDATE":
+		// Pins update — let the event flow through to clients via NATS.
+		// No local persistence needed since pin state is managed by the remote instance.
 	}
 }
 
@@ -495,6 +539,8 @@ func (ss *SyncService) StartRouter(ctx context.Context) {
 		events.SubjectMessageCreate,
 		events.SubjectMessageUpdate,
 		events.SubjectMessageDelete,
+		events.SubjectMessageReactionAdd,
+		events.SubjectMessageReactionDel,
 		events.SubjectGuildCreate,
 		events.SubjectGuildUpdate,
 		events.SubjectGuildMemberAdd,
@@ -502,6 +548,8 @@ func (ss *SyncService) StartRouter(ctx context.Context) {
 		events.SubjectChannelCreate,
 		events.SubjectChannelUpdate,
 		events.SubjectChannelDelete,
+		events.SubjectChannelPinsUpdate,
+		events.SubjectTypingStart,
 		events.SubjectVoiceStateUpdate,
 		events.SubjectCallRing,
 	}
@@ -712,6 +760,20 @@ func (ss *SyncService) ProcessRetryQueue(_ context.Context) error {
 	return nil
 }
 
+// federationToGatewayType translates federation wire protocol event type names
+// to the gateway event type names that clients expect. Only types that differ
+// between the federation protocol and the gateway are mapped; all others pass through.
+func federationToGatewayType(fedType string) string {
+	switch fedType {
+	case "REACTION_ADD":
+		return "MESSAGE_REACTION_ADD"
+	case "REACTION_REMOVE":
+		return "MESSAGE_REACTION_REMOVE"
+	default:
+		return fedType
+	}
+}
+
 // eventTypeToSubject maps event type strings to NATS subjects for dispatching
 // received federated events into the local event bus.
 func eventTypeToSubject(eventType string) string {
@@ -719,6 +781,8 @@ func eventTypeToSubject(eventType string) string {
 		"MESSAGE_CREATE":       events.SubjectMessageCreate,
 		"MESSAGE_UPDATE":       events.SubjectMessageUpdate,
 		"MESSAGE_DELETE":       events.SubjectMessageDelete,
+		"REACTION_ADD":         events.SubjectMessageReactionAdd,
+		"REACTION_REMOVE":      events.SubjectMessageReactionDel,
 		"GUILD_CREATE":         events.SubjectGuildCreate,
 		"GUILD_UPDATE":         events.SubjectGuildUpdate,
 		"GUILD_MEMBER_ADD":     events.SubjectGuildMemberAdd,
@@ -726,6 +790,8 @@ func eventTypeToSubject(eventType string) string {
 		"CHANNEL_CREATE":       events.SubjectChannelCreate,
 		"CHANNEL_UPDATE":       events.SubjectChannelUpdate,
 		"CHANNEL_DELETE":       events.SubjectChannelDelete,
+		"CHANNEL_PINS_UPDATE":  events.SubjectChannelPinsUpdate,
+		"TYPING_START":         events.SubjectTypingStart,
 		"VOICE_STATE_UPDATE":   events.SubjectVoiceStateUpdate,
 		"CALL_RING":            events.SubjectCallRing,
 	}

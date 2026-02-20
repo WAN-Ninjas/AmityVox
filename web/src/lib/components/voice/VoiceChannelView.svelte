@@ -30,9 +30,10 @@
 	interface Props {
 		channelId: string;
 		guildId: string;
+		federatedGuildId?: string | null;
 	}
 
-	let { channelId, guildId }: Props = $props();
+	let { channelId, guildId, federatedGuildId = null }: Props = $props();
 
 	let joinOp = $state(createAsyncOp());
 	let cameraOp = $state(createAsyncOp());
@@ -180,8 +181,8 @@
 			</button>
 			{#if !textCollapsed}
 				<div class="flex min-h-0 flex-1 flex-col">
-					<MessageList />
-					<MessageInput />
+					<MessageList {federatedGuildId} />
+					<MessageInput {federatedGuildId} />
 				</div>
 			{/if}
 		</div>
@@ -444,8 +445,8 @@
 						Text Chat
 					</div>
 					<div class="flex min-h-0 flex-1 flex-col">
-						<MessageList />
-						<MessageInput />
+						<MessageList {federatedGuildId} />
+						<MessageInput {federatedGuildId} />
 					</div>
 				</div>
 			{/if}
