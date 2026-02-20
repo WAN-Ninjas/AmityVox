@@ -98,7 +98,7 @@
 			class:text-text-muted={searchScope !== 'guild'}
 			onclick={() => (searchScope = 'guild')}
 		>
-			This Guild
+			This Server
 		</button>
 		<button
 			class="rounded px-2 py-1 transition-colors"

@@ -65,7 +65,7 @@
 		{
 			id: 'action-create-guild',
 			category: 'action',
-			label: 'Create Guild',
+			label: 'Create Server',
 			description: 'Create a new server',
 			icon: 'plus',
 			action: () => goto('/app')
@@ -201,7 +201,7 @@
 	// Category labels for display.
 	const categoryLabels: Record<string, string> = {
 		channel: 'Channels',
-		guild: 'Guilds',
+		guild: 'Servers',
 		dm: 'Direct Messages',
 		action: 'Actions'
 	};
@@ -349,7 +349,7 @@
 					bind:value={query}
 					type="text"
 					class="flex-1 bg-transparent text-base text-text-primary outline-none placeholder:text-text-muted"
-					placeholder="Search channels, guilds, or actions..."
+					placeholder="Search channels, servers, or actions..."
 					spellcheck="false"
 					autocomplete="off"
 				/>

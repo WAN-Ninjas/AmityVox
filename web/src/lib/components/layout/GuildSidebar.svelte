@@ -85,7 +85,7 @@
 				await api.reorderGuilds(positions);
 			} catch (err: any) {
 				guilds.setAll(prevOrder.map(g => [g.id, g]));
-				addToast(err.message || 'Failed to reorder guilds', 'error');
+				addToast(err.message || 'Failed to reorder servers', 'error');
 			}
 		} finally {
 			reorderingGuilds = false;
@@ -143,16 +143,16 @@
 	}
 
 	async function handleLeaveGuild(guildId: string) {
-		if (!confirm('Are you sure you want to leave this guild?')) return;
+		if (!confirm('Are you sure you want to leave this server?')) return;
 		try {
 			await api.leaveGuild(guildId);
 			guilds.removeEntry(guildId);
 			if ($currentGuildId === guildId) {
 				goto('/app');
 			}
-			addToast('Left guild', 'info');
+			addToast('Left server', 'info');
 		} catch (err: any) {
-			addToast(err.message || 'Failed to leave guild', 'error');
+			addToast(err.message || 'Failed to leave server', 'error');
 		}
 		closeGuildContextMenu();
 	}
@@ -227,7 +227,7 @@
 	<button
 		class="flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-green-500 transition-colors hover:bg-green-500 hover:text-white"
 		onclick={() => (showCreateModal = true)}
-		title="Create or Join a Guild"
+		title="Create or Join a Server"
 	>
 		<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 			<path d="M12 5v14m-7-7h14" />
@@ -352,7 +352,7 @@
 		{/if}
 		<!-- Mute / Unmute -->
 		{#if isGuildMuted(guildCtxMenu.guildId)}
-			<ContextMenuItem label="Unmute Guild" onclick={() => { unmuteGuild(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
+			<ContextMenuItem label="Unmute Server" onclick={() => { unmuteGuild(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
 		{:else}
 			{#each muteDurations as dur}
 				<ContextMenuItem label={dur.label} onclick={() => { muteGuild(guildCtxMenu!.guildId, dur.ms || undefined); closeGuildContextMenu(); }} />
@@ -363,12 +363,12 @@
 		<ContextMenuItem label="Invite People" onclick={() => { const gid = guildCtxMenu!.guildId; closeGuildContextMenu(); selectGuild(gid); showInviteForGuild = gid; }} />
 		<!-- Guild Settings (owner only from sidebar context) -->
 		{#if guildCtxMenu.ownerId === $currentUser?.id}
-			<ContextMenuItem label="Guild Settings" onclick={() => { goto(`/app/guilds/${guildCtxMenu!.guildId}/settings`); closeGuildContextMenu(); }} />
+			<ContextMenuItem label="Server Settings" onclick={() => { goto(`/app/guilds/${guildCtxMenu!.guildId}/settings`); closeGuildContextMenu(); }} />
 		{/if}
 		<ContextMenuDivider />
 		<!-- Leave Guild -->
 		{#if guildCtxMenu.ownerId !== $currentUser?.id}
-			<ContextMenuItem label="Leave Guild" danger onclick={() => handleLeaveGuild(guildCtxMenu!.guildId)} />
+			<ContextMenuItem label="Leave Server" danger onclick={() => handleLeaveGuild(guildCtxMenu!.guildId)} />
 		{/if}
 	</ContextMenu>
 {/if}
