@@ -827,7 +827,7 @@ func (ss *SyncService) HandleFederatedGuildReactionAdd(w http.ResponseWriter, r 
 		"message_id": messageID, "channel_id": channelID, "guild_id": guildID,
 		"user_id": req.UserID, "emoji": req.Emoji,
 	}
-	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionAdd, "REACTION_ADD", channelID, evt)
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionAdd, "MESSAGE_REACTION_ADD", channelID, evt)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -909,7 +909,7 @@ func (ss *SyncService) HandleFederatedGuildReactionRemove(w http.ResponseWriter,
 		"message_id": messageID, "channel_id": channelID, "guild_id": guildID,
 		"user_id": req.UserID, "emoji": req.Emoji,
 	}
-	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionDel, "REACTION_REMOVE", channelID, evt)
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionDel, "MESSAGE_REACTION_REMOVE", channelID, evt)
 
 	w.WriteHeader(http.StatusNoContent)
 }

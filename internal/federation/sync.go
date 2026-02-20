@@ -193,7 +193,7 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event := events.Event{
-		Type:      msg.Type,
+		Type:      federationToGatewayType(msg.Type),
 		GuildID:   msg.GuildID,
 		ChannelID: msg.ChannelID,
 		Data:      eventData,
@@ -758,6 +758,20 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 // consumer started in StartRouter.
 func (ss *SyncService) ProcessRetryQueue(_ context.Context) error {
 	return nil
+}
+
+// federationToGatewayType translates federation wire protocol event type names
+// to the gateway event type names that clients expect. Only types that differ
+// between the federation protocol and the gateway are mapped; all others pass through.
+func federationToGatewayType(fedType string) string {
+	switch fedType {
+	case "REACTION_ADD":
+		return "MESSAGE_REACTION_ADD"
+	case "REACTION_REMOVE":
+		return "MESSAGE_REACTION_REMOVE"
+	default:
+		return fedType
+	}
 }
 
 // eventTypeToSubject maps event type strings to NATS subjects for dispatching
