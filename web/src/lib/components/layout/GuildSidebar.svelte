@@ -101,11 +101,11 @@
 	let showGuildMuteSubmenu = $state(false);
 
 	const muteDurations = [
-		{ label: '15 Minutes', ms: 15 * 60 * 1000 },
-		{ label: '1 Hour', ms: 60 * 60 * 1000 },
-		{ label: '8 Hours', ms: 8 * 60 * 60 * 1000 },
-		{ label: '24 Hours', ms: 24 * 60 * 60 * 1000 },
-		{ label: 'Until I turn it back on', ms: 0 }
+		{ label: 'Mute for 15 Minutes', ms: 15 * 60 * 1000 },
+		{ label: 'Mute for 1 Hour', ms: 60 * 60 * 1000 },
+		{ label: 'Mute for 8 Hours', ms: 8 * 60 * 60 * 1000 },
+		{ label: 'Mute for 24 Hours', ms: 24 * 60 * 60 * 1000 },
+		{ label: 'Mute Until I Turn It Back On', ms: 0 }
 	];
 
 	function openGuildContextMenu(e: MouseEvent, guild: { id: string; name: string; owner_id: string }) {
@@ -347,18 +347,16 @@
 {#if guildCtxMenu}
 	<ContextMenu x={guildCtxMenu.x} y={guildCtxMenu.y} onclose={closeGuildContextMenu}>
 		<!-- Mark as Read -->
-		{#if $guildUnreadSet.has(guildCtxMenu.guildId)}
+		{#if $guildUnreadSet.has(guildCtxMenu.guildId) || ($guildMentionCounts.get(guildCtxMenu.guildId) ?? 0) > 0}
 			<ContextMenuItem label="Mark as Read" onclick={() => { markGuildAsRead(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
 		{/if}
 		<!-- Mute / Unmute -->
 		{#if isGuildMuted(guildCtxMenu.guildId)}
 			<ContextMenuItem label="Unmute Guild" onclick={() => { unmuteGuild(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
 		{:else}
-			<ContextMenuItem label="Mute for 15 Minutes" onclick={() => { muteGuild(guildCtxMenu!.guildId, 15 * 60 * 1000); closeGuildContextMenu(); }} />
-			<ContextMenuItem label="Mute for 1 Hour" onclick={() => { muteGuild(guildCtxMenu!.guildId, 60 * 60 * 1000); closeGuildContextMenu(); }} />
-			<ContextMenuItem label="Mute for 8 Hours" onclick={() => { muteGuild(guildCtxMenu!.guildId, 8 * 60 * 60 * 1000); closeGuildContextMenu(); }} />
-			<ContextMenuItem label="Mute for 24 Hours" onclick={() => { muteGuild(guildCtxMenu!.guildId, 24 * 60 * 60 * 1000); closeGuildContextMenu(); }} />
-			<ContextMenuItem label="Mute Until I Turn It Back On" onclick={() => { muteGuild(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
+			{#each muteDurations as dur}
+				<ContextMenuItem label={dur.label} onclick={() => { muteGuild(guildCtxMenu!.guildId, dur.ms || undefined); closeGuildContextMenu(); }} />
+			{/each}
 		{/if}
 		<ContextMenuDivider />
 		<!-- Invite People (navigate to guild first so InviteModal has the right context) -->

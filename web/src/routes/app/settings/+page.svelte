@@ -1750,6 +1750,13 @@
 							<div class="flex items-center justify-center py-8">
 								<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 							</div>
+						{:else if !typePrefsLoaded}
+							<div class="rounded-lg bg-bg-secondary p-4 text-sm text-text-muted">
+								Failed to load notification type preferences.
+								<button class="ml-2 text-brand-400 hover:text-brand-300" onclick={loadTypePrefs}>
+									Retry
+								</button>
+							</div>
 						{:else}
 							{#each NOTIFICATION_CATEGORIES as category}
 								<div class="mb-4 rounded-lg bg-bg-secondary p-4">
