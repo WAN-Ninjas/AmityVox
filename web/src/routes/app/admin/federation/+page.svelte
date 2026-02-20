@@ -380,7 +380,7 @@
 				</div>
 			{:else}
 				<div class="space-y-3">
-					{#each dashboard.peers as peer}
+					{#each dashboard.peers as peer (peer.peer_id)}
 						<div class="bg-bg-secondary p-4 rounded-lg">
 							<div class="flex items-center justify-between mb-2">
 								<div class="flex items-center gap-3">
@@ -464,7 +464,7 @@
 				</div>
 			{:else}
 				<div class="space-y-2">
-					{#each controls as ctrl}
+					{#each controls as ctrl (ctrl.id)}
 						<div class="bg-bg-secondary p-4 rounded-lg flex items-center justify-between">
 							<div>
 								<span class="font-medium text-text-primary">{ctrl.peer_domain}</span>
@@ -527,7 +527,7 @@
 				</div>
 			{:else}
 				<div class="space-y-2">
-					{#each deliveryReceipts as receipt}
+					{#each deliveryReceipts as receipt (receipt.id)}
 						<div class="bg-bg-secondary p-3 rounded-lg">
 							<div class="flex items-center justify-between">
 								<div class="flex items-center gap-3">
@@ -676,7 +676,7 @@
 						</div>
 					{:else}
 						<div class="space-y-2">
-							{#each blockedPeers as peer}
+							{#each blockedPeers as peer (peer.peer_id)}
 								<div class="bg-bg-secondary p-3 rounded-lg flex items-center justify-between">
 									<div>
 										<span class="text-text-primary font-medium">{peer.peer_domain}</span>
@@ -704,7 +704,7 @@
 						</div>
 					{:else}
 						<div class="space-y-2">
-							{#each allowedPeers as peer}
+							{#each allowedPeers as peer (peer.peer_id)}
 								<div class="bg-bg-secondary p-3 rounded-lg flex items-center justify-between">
 									<div>
 										<span class="text-text-primary font-medium">{peer.peer_domain}</span>
