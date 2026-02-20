@@ -25,8 +25,7 @@ AmityVox takes the best parts of Discord, Matrix, and other platforms and combin
 
 The architecture and spec behind it is a 31-page document written by the team, no AI involvement beyond making the spec more presentable. The implementation uses Claude Code and Codex. If AI-written code offends you, move along. If a project with rough edges offends you, come back later.
 
-We maintain it as long as we use it. The code is well-documented, and full spec documents are available in `docs/architecture.md`.
-
+We maintain it as long as we use it. The code, when initial development is completed, weill be well-documented, and full spec documents will be made available.
 ## Features
 
 AmityVox ships with everything you need for a full-featured communication platform:
