@@ -10,8 +10,9 @@ import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessag
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs } from './dms';
-import { incrementUnread, loadReadState } from './unreads';
-import { addNotification } from './notifications';
+import { incrementUnread, loadReadState, loadChannelGuildMap, registerChannelGuild } from './unreads';
+import { handleNotificationCreate, handleNotificationUpdate, handleNotificationDelete, loadNotifications } from './notifications';
+import { initPushNotifications } from '$lib/utils/pushNotifications';
 import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
 import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
 import { loadPermissions, invalidatePermissions } from './permissions';
@@ -23,7 +24,7 @@ import { clearChannelMessages } from './messages';
 import { addAnnouncement, updateAnnouncement, removeAnnouncement } from './announcements';
 import { addIncomingCall, dismissIncomingCall, clearIncomingCalls } from './callRing';
 import { clearChannelUnreads } from './unreads';
-import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship } from '$lib/types';
+import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship, ServerNotification } from '$lib/types';
 
 export const gatewayConnected = writable(false);
 
@@ -47,8 +48,11 @@ export function connectGateway(token: string) {
 				}
 				loadDMs();
 				loadReadState();
+				loadChannelGuildMap();
 				loadRelationships();
 				loadChannelMutePrefs();
+				loadNotifications();
+				initPushNotifications();
 				// Preserve the user's chosen status. The DB defaults status_presence
 				// to 'offline', which just means "never explicitly set" — treat as online.
 				const raw = ready.user.status_presence;
@@ -135,6 +139,8 @@ export function connectGateway(token: string) {
 			case 'THREAD_CREATE': {
 				const ch = data as Channel;
 				updateChannel(ch);
+				// Track channel→guild mapping for unread indicators.
+				if (ch.guild_id) registerChannelGuild(ch.id, ch.guild_id);
 				// Also track DM channels.
 				if (ch.channel_type === 'dm' || ch.channel_type === 'group') {
 					addDMChannel(ch);
@@ -177,35 +183,7 @@ export function connectGateway(token: string) {
 					}
 				}
 					incrementUnread(msg.channel_id, isMention);
-
-					// Build notification for mentions, replies, and DMs.
-					// Skip notification if channel or guild is muted (unreads still tracked above).
-					const channel = get(channelsStore).get(msg.channel_id);
-					const channelMuted = isChannelMuted(msg.channel_id);
-					const guildMuted = channel?.guild_id ? isGuildMuted(channel.guild_id) : false;
-
-					if (!channelMuted && !guildMuted) {
-						const isDM = channel?.channel_type === 'dm' || channel?.channel_type === 'group';
-						const isReply = msg.message_type === 'reply' || (msg.reply_to_ids && msg.reply_to_ids.length > 0);
-						const senderName = msg.author?.display_name ?? msg.author?.username ?? 'Unknown';
-
-						if (isMention || isDM || isReply) {
-							const guildId = channel?.guild_id ?? null;
-							const guild = guildId ? get(guildsStore).get(guildId) ?? null : null;
-
-							addNotification({
-								type: isDM ? 'dm' : isReply ? 'reply' : 'mention',
-								guild_id: guildId,
-								guild_name: guild?.name ?? null,
-								channel_id: msg.channel_id,
-								channel_name: channel?.name ?? null,
-								message_id: msg.id,
-								sender_id: msg.author_id,
-								sender_name: senderName,
-								content: msg.content ? msg.content.slice(0, 200) : null
-							});
-						}
-					}
+					// Notifications are now server-generated via NOTIFICATION_CREATE events.
 				}
 				break;
 			}
@@ -328,20 +306,7 @@ export function connectGateway(token: string) {
 			case 'RELATIONSHIP_ADD': {
 				const rel = data as Relationship;
 				addOrUpdateRelationship(rel);
-				if (rel.type === 'pending_incoming') {
-					const senderName = rel.user?.display_name ?? rel.user?.username ?? 'Someone';
-					addNotification({
-						type: 'friend_request',
-						guild_id: null,
-						guild_name: null,
-						channel_id: null,
-						channel_name: null,
-						message_id: null,
-						sender_id: rel.target_id,
-						sender_name: senderName,
-						content: `${senderName} sent you a friend request`
-					});
-				}
+				// Friend request notifications are now server-generated via NOTIFICATION_CREATE.
 				break;
 			}
 			case 'RELATIONSHIP_UPDATE': {
@@ -483,6 +448,17 @@ export function connectGateway(token: string) {
 			// --- Automod action ---
 			case 'AUTOMOD_ACTION':
 				// Automod notification — could show a toast for guild moderators.
+				break;
+
+			// --- Server notifications (persistent, server-backed) ---
+			case 'NOTIFICATION_CREATE':
+				handleNotificationCreate(data as ServerNotification);
+				break;
+			case 'NOTIFICATION_UPDATE':
+				handleNotificationUpdate(data as { id: string; read: boolean });
+				break;
+			case 'NOTIFICATION_DELETE':
+				handleNotificationDelete(data as { id: string });
 				break;
 
 			// --- Activity/game events ---

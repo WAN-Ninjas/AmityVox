@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { guildList, currentGuildId, setGuild, guilds } from '$lib/stores/guilds';
-	import { channels } from '$lib/stores/channels';
-	import { unreadCounts } from '$lib/stores/unreads';
+	import { unreadCounts, unreadState, guildUnreadSet, guildMentionCounts } from '$lib/stores/unreads';
 	import { unreadNotificationCount } from '$lib/stores/notifications';
 	import { pendingIncomingCount } from '$lib/stores/relationships';
 	import { dmChannels } from '$lib/stores/dms';
@@ -10,32 +9,25 @@
 	import { incomingCallCount } from '$lib/stores/callRing';
 	import Avatar from '$components/common/Avatar.svelte';
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
+	import NotificationPopover from '$components/common/NotificationPopover.svelte';
 	import { DragController } from '$lib/utils/dragDrop';
 	import { addToast } from '$lib/stores/toast';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onDestroy, untrack } from 'svelte';
+	import ContextMenu from '$components/common/ContextMenu.svelte';
+	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
+	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
+	import { isGuildMuted, muteGuild, unmuteGuild } from '$lib/stores/muting';
+	import { channelGuildMap } from '$lib/stores/unreads';
+	import InviteModal from '$components/guild/InviteModal.svelte';
 
-	interface Props {
-		onToggleNotifications?: () => void;
-	}
-
-	let { onToggleNotifications }: Props = $props();
+	let showNotificationPopover = $state(false);
+	let showInviteForGuild = $state<string | null>(null);
 
 	const isAdmin = $derived(($currentUser?.flags ?? 0) & 4);
 	const isGlobalMod = $derived(($currentUser?.flags ?? 0) & 32);
-
-	// Check if any channel in a guild has unreads.
-	function guildHasUnreads(guildId: string): boolean {
-		for (const [channelId, count] of $unreadCounts) {
-			if (count > 0) {
-				const ch = $channels.get(channelId);
-				if (ch && ch.guild_id === guildId) return true;
-			}
-		}
-		return false;
-	}
 
 	// Badge count for the Home button: pending friend requests + unread DMs + incoming calls.
 	const homeBadgeCount = $derived.by(() => {
@@ -103,6 +95,67 @@
 	function selectGuild(id: string) {
 		goto(`/app/guilds/${id}`);
 	}
+
+	// --- Guild icon context menu ---
+	let guildCtxMenu = $state<{ x: number; y: number; guildId: string; guildName: string; ownerId: string } | null>(null);
+	let showGuildMuteSubmenu = $state(false);
+
+	const muteDurations = [
+		{ label: 'Mute for 15 Minutes', ms: 15 * 60 * 1000 },
+		{ label: 'Mute for 1 Hour', ms: 60 * 60 * 1000 },
+		{ label: 'Mute for 8 Hours', ms: 8 * 60 * 60 * 1000 },
+		{ label: 'Mute for 24 Hours', ms: 24 * 60 * 60 * 1000 },
+		{ label: 'Mute Until I Turn It Back On', ms: 0 }
+	];
+
+	function openGuildContextMenu(e: MouseEvent, guild: { id: string; name: string; owner_id: string }) {
+		e.preventDefault();
+		e.stopPropagation();
+		guildCtxMenu = { x: e.clientX, y: e.clientY, guildId: guild.id, guildName: guild.name, ownerId: guild.owner_id };
+		showGuildMuteSubmenu = false;
+	}
+
+	function closeGuildContextMenu() {
+		guildCtxMenu = null;
+		showGuildMuteSubmenu = false;
+	}
+
+	async function markGuildAsRead(guildId: string) {
+		const guildChannelIds: string[] = [];
+		for (const [channelId, gId] of $channelGuildMap) {
+			if (gId === guildId) {
+				const unread = $unreadCounts.get(channelId) ?? 0;
+				const mentions = $unreadState.get(channelId)?.mentionCount ?? 0;
+				if (unread > 0 || mentions > 0) {
+					guildChannelIds.push(channelId);
+				}
+			}
+		}
+		// Clear unread counts and mention counts locally first
+		for (const cid of guildChannelIds) {
+			unreadCounts.removeEntry(cid);
+			unreadState.updateEntry(cid, (entry) => ({ ...entry, mentionCount: 0 }));
+		}
+		// Ack on server (best-effort)
+		for (const cid of guildChannelIds) {
+			try { await api.ackChannel(cid); } catch {}
+		}
+	}
+
+	async function handleLeaveGuild(guildId: string) {
+		if (!confirm('Are you sure you want to leave this guild?')) return;
+		try {
+			await api.leaveGuild(guildId);
+			guilds.removeEntry(guildId);
+			if ($currentGuildId === guildId) {
+				goto('/app');
+			}
+			addToast('Left guild', 'info');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to leave guild', 'error');
+		}
+		closeGuildContextMenu();
+	}
 </script>
 
 <nav class="flex h-full w-14 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-[--border-primary] bg-bg-floating py-3" aria-label="Server list">
@@ -137,6 +190,7 @@
 					class="group relative flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary transition-colors hover:bg-brand-500"
 					class:!bg-brand-500={$currentGuildId === guild.id}
 					onclick={() => selectGuild(guild.id)}
+					oncontextmenu={(e) => openGuildContextMenu(e, guild)}
 					title={guild.name}
 				>
 					{#if guild.icon_id}
@@ -151,11 +205,18 @@
 						</span>
 					{/if}
 
-					<!-- Active indicator -->
+					<!-- Unread pill indicator (Discord-like) -->
 					{#if $currentGuildId === guild.id}
-						<div class="absolute -left-1 h-5 w-0.5 bg-text-primary"></div>
-					{:else if guildHasUnreads(guild.id)}
-						<div class="absolute -left-1 h-2 w-0.5 bg-text-primary"></div>
+						<div class="absolute -left-[3px] top-1/2 h-10 w-1 -translate-y-1/2 rounded-r-full bg-text-primary transition-all"></div>
+					{:else if $guildUnreadSet.has(guild.id)}
+						<div class="absolute -left-[3px] top-1/2 h-2 w-1 -translate-y-1/2 rounded-r-full bg-text-primary transition-all"></div>
+					{/if}
+					<!-- Mention count badge (red) -->
+					{#if ($guildMentionCounts.get(guild.id) ?? 0) > 0}
+						{@const mc = $guildMentionCounts.get(guild.id) ?? 0}
+						<span class="absolute -bottom-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+							{mc > 99 ? '99+' : mc}
+						</span>
 					{/if}
 				</button>
 			</div>
@@ -202,7 +263,7 @@
 	<!-- Notifications bell button -->
 	<button
 		class="relative flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-primary"
-		onclick={() => onToggleNotifications?.()}
+		onclick={() => (showNotificationPopover = !showNotificationPopover)}
 		title={$isDndActive ? 'Notifications (Do Not Disturb active)' : 'Notifications'}
 	>
 		{#if $isDndActive}
@@ -226,6 +287,8 @@
 			{/if}
 		{/if}
 	</button>
+
+	<NotificationPopover bind:open={showNotificationPopover} />
 
 	<!-- Admin button (only visible to admins) -->
 	{#if isAdmin}
@@ -273,10 +336,46 @@
 </nav>
 
 <svelte:window
+	onclick={() => closeGuildContextMenu()}
 	onpointermove={(e) => guildDragController?.handlePointerMove(e)}
 	onpointerup={(e) => guildDragController?.handlePointerUp(e)}
 	onpointercancel={(e) => guildDragController?.handlePointerCancel(e)}
 	onkeydown={(e) => guildDragController?.handleKeyDown(e)}
 />
+
+<!-- Guild icon context menu -->
+{#if guildCtxMenu}
+	<ContextMenu x={guildCtxMenu.x} y={guildCtxMenu.y} onclose={closeGuildContextMenu}>
+		<!-- Mark as Read -->
+		{#if $guildUnreadSet.has(guildCtxMenu.guildId) || ($guildMentionCounts.get(guildCtxMenu.guildId) ?? 0) > 0}
+			<ContextMenuItem label="Mark as Read" onclick={() => { markGuildAsRead(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
+		{/if}
+		<!-- Mute / Unmute -->
+		{#if isGuildMuted(guildCtxMenu.guildId)}
+			<ContextMenuItem label="Unmute Guild" onclick={() => { unmuteGuild(guildCtxMenu!.guildId); closeGuildContextMenu(); }} />
+		{:else}
+			{#each muteDurations as dur}
+				<ContextMenuItem label={dur.label} onclick={() => { muteGuild(guildCtxMenu!.guildId, dur.ms || undefined); closeGuildContextMenu(); }} />
+			{/each}
+		{/if}
+		<ContextMenuDivider />
+		<!-- Invite People (navigate to guild first so InviteModal has the right context) -->
+		<ContextMenuItem label="Invite People" onclick={() => { const gid = guildCtxMenu!.guildId; closeGuildContextMenu(); selectGuild(gid); showInviteForGuild = gid; }} />
+		<!-- Guild Settings (owner only from sidebar context) -->
+		{#if guildCtxMenu.ownerId === $currentUser?.id}
+			<ContextMenuItem label="Guild Settings" onclick={() => { goto(`/app/guilds/${guildCtxMenu!.guildId}/settings`); closeGuildContextMenu(); }} />
+		{/if}
+		<ContextMenuDivider />
+		<!-- Leave Guild -->
+		{#if guildCtxMenu.ownerId !== $currentUser?.id}
+			<ContextMenuItem label="Leave Guild" danger onclick={() => handleLeaveGuild(guildCtxMenu!.guildId)} />
+		{/if}
+	</ContextMenu>
+{/if}
+
+<!-- Invite Modal (triggered from guild context menu) -->
+{#if showInviteForGuild}
+	<InviteModal open={true} guildId={showInviteForGuild} onclose={() => (showInviteForGuild = null)} />
+{/if}
 
 <CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />

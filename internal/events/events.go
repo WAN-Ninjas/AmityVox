@@ -90,6 +90,11 @@ const (
 	SubjectAnnouncementUpdate = "amityvox.announcement.update"
 	SubjectAnnouncementDelete = "amityvox.announcement.delete"
 
+	// Notification events (server-generated, dispatched to specific users).
+	SubjectNotificationCreate = "amityvox.notification.create"
+	SubjectNotificationUpdate = "amityvox.notification.update"
+	SubjectNotificationDelete = "amityvox.notification.delete"
+
 	// Federation events.
 	SubjectFederationRetry = "amityvox.federation.retry"
 )
@@ -166,6 +171,7 @@ func (b *Bus) EnsureStreams() error {
 				"amityvox.automod.>",
 				"amityvox.poll.>",
 				"amityvox.announcement.>",
+				"amityvox.notification.>",
 			},
 			Retention: nats.LimitsPolicy,
 			MaxAge:    24 * time.Hour,

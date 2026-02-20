@@ -203,23 +203,75 @@ async function networkFirstNavigation(request) {
 }
 
 // ============================================================
-// Push Notifications
+// Push Notifications — Enhanced with per-type deep links
 // ============================================================
+
+/**
+ * Build the deep-link URL for a push notification based on its type and context.
+ */
+function buildNotificationUrl(data) {
+	if (data.url) return data.url;
+
+	if (data.guild_id && data.channel_id) {
+		const base = `/app/guilds/${data.guild_id}/channels/${data.channel_id}`;
+		return data.message_id ? `${base}?message=${data.message_id}` : base;
+	}
+	if (data.channel_id) return `/app/dms/${data.channel_id}`;
+	if (data.type === 'friend_request' || data.type === 'friend_accepted') return '/app/friends';
+
+	return '/app/notifications';
+}
+
+/**
+ * Build a notification tag for grouping. Same channel = same tag, collapses old notifications.
+ */
+function buildNotificationTag(data) {
+	if (data.tag) return data.tag;
+	if (data.channel_id) return `amityvox-ch-${data.channel_id}`;
+	if (data.guild_id) return `amityvox-guild-${data.guild_id}`;
+	return `amityvox-${data.type || 'notification'}`;
+}
+
+/**
+ * Build action buttons for actionable notification types.
+ */
+function buildNotificationActions(data) {
+	if (data.actions && data.actions.length > 0) return data.actions;
+
+	switch (data.type) {
+		case 'friend_request':
+			return [
+				{ action: 'view', title: 'View' },
+				{ action: 'dismiss', title: 'Dismiss' }
+			];
+		case 'guild_invite':
+			return [
+				{ action: 'view', title: 'View' },
+				{ action: 'dismiss', title: 'Dismiss' }
+			];
+		default:
+			return [];
+	}
+}
+
 self.addEventListener('push', (event) => {
 	if (!event.data) return;
 
 	try {
 		const data = event.data.json();
+		const url = buildNotificationUrl(data);
+		const tag = buildNotificationTag(data);
+		const actions = buildNotificationActions(data);
+
 		const options = {
 			body: data.body || '',
 			icon: '/favicon.png',
 			badge: '/favicon.png',
-			tag: data.tag || 'amityvox-notification',
-			data: {
-				url: data.url || '/app'
-			},
-			actions: data.actions || [],
-			requireInteraction: data.requireInteraction || false
+			tag,
+			renotify: true,
+			data: { url, type: data.type, notification_id: data.notification_id },
+			actions,
+			requireInteraction: data.type === 'friend_request' || data.type === 'guild_invite'
 		};
 
 		event.waitUntil(
@@ -239,6 +291,9 @@ self.addEventListener('push', (event) => {
 // Handle notification clicks — navigate to the relevant page.
 self.addEventListener('notificationclick', (event) => {
 	event.notification.close();
+
+	// If the user clicked "Dismiss", just close the notification.
+	if (event.action === 'dismiss') return;
 
 	const url = event.notification.data?.url || '/app';
 
