@@ -455,6 +455,9 @@ func (ss *SyncService) verifyFederationRequest(w http.ResponseWriter, r *http.Re
 	).Scan(&publicKeyPEM)
 	if err != nil {
 		if err == pgx.ErrNoRows {
+			ss.logger.Warn("federation: unknown sender instance",
+				slog.String("sender_id", signed.SenderID),
+				slog.String("remote", r.RemoteAddr))
 			http.Error(w, "Unknown sender instance", http.StatusForbidden)
 		} else {
 			ss.logger.Error("failed to look up sender", slog.String("error", err.Error()))
@@ -466,6 +469,10 @@ func (ss *SyncService) verifyFederationRequest(w http.ResponseWriter, r *http.Re
 	// Verify signature.
 	valid, err := VerifySignature(publicKeyPEM, signed.Payload, signed.Signature)
 	if err != nil || !valid {
+		ss.logger.Warn("federation: invalid signature",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("remote", r.RemoteAddr),
+			slog.String("path", r.URL.Path))
 		http.Error(w, "Invalid signature", http.StatusForbidden)
 		return nil, "", false
 	}
@@ -493,6 +500,10 @@ func (ss *SyncService) verifyFederationRequest(w http.ResponseWriter, r *http.Re
 	// Check federation is allowed.
 	allowed, err := ss.fed.IsFederationAllowed(r.Context(), signed.SenderID)
 	if err != nil || !allowed {
+		ss.logger.Warn("federation: not allowed",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("remote", r.RemoteAddr),
+			slog.String("path", r.URL.Path))
 		http.Error(w, "Federation not allowed", http.StatusForbidden)
 		return nil, "", false
 	}

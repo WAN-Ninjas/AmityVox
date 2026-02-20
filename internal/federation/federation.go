@@ -385,6 +385,51 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 	return nil
 }
 
+// RefreshPeerKeys re-discovers all active federation peers and updates their
+// public keys. This handles the case where peers regenerated their keys (e.g.,
+// after a migration that stores private keys in the DB for the first time).
+func (s *Service) RefreshPeerKeys(ctx context.Context) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT i.domain FROM federation_peers fp
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fp.instance_id = $1 AND fp.status = 'active'`,
+		s.instanceID)
+	if err != nil {
+		s.logger.Warn("failed to query federation peers for key refresh", slog.String("error", err.Error()))
+		return
+	}
+	defer rows.Close()
+
+	var domains []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			s.logger.Warn("failed to scan federation peer domain", slog.String("error", err.Error()))
+			continue
+		}
+		domains = append(domains, domain)
+	}
+	if err := rows.Err(); err != nil {
+		s.logger.Warn("error iterating federation peers", slog.String("error", err.Error()))
+		return
+	}
+
+	for _, domain := range domains {
+		disc, err := DiscoverInstance(ctx, domain)
+		if err != nil {
+			s.logger.Warn("failed to refresh peer key",
+				slog.String("peer", domain), slog.String("error", err.Error()))
+			continue
+		}
+		if err := s.RegisterRemoteInstance(ctx, disc); err != nil {
+			s.logger.Warn("failed to update peer key",
+				slog.String("peer", domain), slog.String("error", err.Error()))
+			continue
+		}
+		s.logger.Info("refreshed federation peer key", slog.String("peer", domain))
+	}
+}
+
 // IsFederationAllowed checks whether a remote instance is allowed to federate
 // with this instance based on the configured federation mode and per-peer
 // controls (blocklist/allowlist).
