@@ -351,7 +351,7 @@ make docker-logs            # Follow all service logs
 
 ## Community
 
-- **[Live Instance](https://amityvox.chat/)** — Try AmityVox without installing. Come chat with us — I'm @Horatio.
+- **[Live Instance](https://app.amityvox.chat/)** — Try AmityVox without installing. Come chat with us — I'm @Horatio.
 - **[Discord](https://discord.gg/VvxgUpF3uQ)** — Support, feedback, and announcements
 - **[GitHub Issues](https://github.com/WAN-Ninjas/AmityVox/issues)** — Bug reports and feature requests
 - **In-App** — Use the Report Issue button on [amityvox.chat](https://amityvox.chat/) to file bugs directly
