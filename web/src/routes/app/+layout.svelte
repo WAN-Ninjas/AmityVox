@@ -51,8 +51,9 @@
 		mobileSidebarOpen = false;
 	});
 
-	afterNavigate(() => {
-		if (typeof window !== 'undefined' && window.location.pathname !== '/app') {
+	afterNavigate(({ to }) => {
+		if (!to) return;
+		if (to.url.pathname.startsWith('/app') && to.url.pathname !== '/app') {
 			window.history.replaceState(history.state, '', '/app');
 		}
 	});
