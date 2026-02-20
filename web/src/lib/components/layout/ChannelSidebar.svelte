@@ -50,12 +50,16 @@
 	// Federated guild: categories and grouped channels.
 	const fedCategories = $derived(
 		currentFederatedGuild
-			? $channelList.filter(c => c.channel_type === 'category').sort((a, b) => a.position - b.position)
+			? $channelList
+					.filter(c => c.guild_id === currentFederatedGuild.guild_id && c.channel_type === 'category')
+					.sort((a, b) => a.position - b.position)
 			: []
 	);
 	const fedChannels = $derived(
 		currentFederatedGuild
-			? $channelList.filter(c => c.channel_type !== 'category').sort((a, b) => a.position - b.position)
+			? $channelList
+					.filter(c => c.guild_id === currentFederatedGuild.guild_id && c.channel_type !== 'category')
+					.sort((a, b) => a.position - b.position)
 			: []
 	);
 
