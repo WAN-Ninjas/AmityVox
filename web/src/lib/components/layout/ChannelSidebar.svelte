@@ -758,7 +758,8 @@
 	<div class="flex-1 overflow-y-auto px-2 py-2">
 		{#if currentFederatedGuild}
 			<!-- Federated guild channels with category grouping and proper type icons -->
-			{@const uncategorized = fedChannels.filter(c => !c.category_id)}
+			{@const categoryIds = new Set(fedCategories.map(c => c.id))}
+			{@const uncategorized = fedChannels.filter(c => !c.category_id || !categoryIds.has(c.category_id))}
 			{@const guildPath = `/app/guilds/${currentFederatedGuild.guild_id}`}
 
 			{#snippet fedChannelButton(channel: Channel)}
