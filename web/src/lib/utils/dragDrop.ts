@@ -98,6 +98,10 @@ export class DragController {
 		return this._isDragging;
 	}
 
+	get draggingId(): string | null {
+		return this._isDragging ? this.sourceId : null;
+	}
+
 	constructor(opts: DragOptions) {
 		this.opts = {
 			canDrag: true,

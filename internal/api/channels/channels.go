@@ -209,9 +209,20 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
-	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
-		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
-		return
+	// Threads can be updated with ManageThreads or ManageChannels.
+	var parentChID *string
+	h.Pool.QueryRow(r.Context(), `SELECT parent_channel_id FROM channels WHERE id = $1`, channelID).Scan(&parentChID)
+	if parentChID != nil {
+		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageThreads) &&
+			!h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+			apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_THREADS permission")
+			return
+		}
+	} else {
+		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+			apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+			return
+		}
 	}
 
 	var req updateChannelRequest
@@ -322,9 +333,21 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
-	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
-		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
-		return
+	// Threads (channels with parent_channel_id) can be deleted with ManageThreads or ManageChannels.
+	// Regular channels require ManageChannels.
+	var parentChannelID *string
+	h.Pool.QueryRow(r.Context(), `SELECT parent_channel_id FROM channels WHERE id = $1`, channelID).Scan(&parentChannelID)
+	if parentChannelID != nil {
+		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageThreads) &&
+			!h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+			apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_THREADS permission")
+			return
+		}
+	} else {
+		if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageChannels) {
+			apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
+			return
+		}
 	}
 
 	// Fetch guild_id BEFORE deleting so we can route the event to guild members.
@@ -333,12 +356,30 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		h.Logger.Warn("failed to fetch guild_id before channel delete", slog.String("channel_id", channelID), slog.String("error", err.Error()))
 	}
 
-	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM channels WHERE id = $1`, channelID)
-	if err != nil {
+	// Clear thread_id references in parent channel messages before deleting,
+	// and delete within a transaction to ensure consistency.
+	var rowsAffected int64
+	if err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Nullify thread_id on messages that reference this channel as a thread
+		if _, err := tx.Exec(r.Context(), `UPDATE messages SET thread_id = NULL WHERE thread_id = $1`, channelID); err != nil {
+			return fmt.Errorf("clearing thread references: %w", err)
+		}
+		// Also nullify thread_id references in user_reports
+		if _, err := tx.Exec(r.Context(), `UPDATE user_reports SET context_channel_id = NULL WHERE context_channel_id = $1`, channelID); err != nil {
+			return fmt.Errorf("clearing user_reports references: %w", err)
+		}
+		tag, err := tx.Exec(r.Context(), `DELETE FROM channels WHERE id = $1`, channelID)
+		if err != nil {
+			return fmt.Errorf("deleting channel: %w", err)
+		}
+		rowsAffected = tag.RowsAffected()
+		return nil
+	}); err != nil {
+		h.Logger.Error("failed to delete channel", slog.String("channel_id", channelID), slog.String("error", err.Error()))
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to delete channel")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if rowsAffected == 0 {
 		apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 		return
 	}
@@ -1578,12 +1619,13 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check the parent channel is in a guild and fetch its auto-archive duration.
+	// Check the parent channel is in a guild and fetch its auto-archive duration + encryption flag.
 	var guildID *string
 	var parentAutoArchive int
+	var parentEncrypted bool
 	h.Pool.QueryRow(r.Context(),
-		`SELECT guild_id, default_auto_archive_duration FROM channels WHERE id = $1`, channelID,
-	).Scan(&guildID, &parentAutoArchive)
+		`SELECT guild_id, default_auto_archive_duration, encrypted FROM channels WHERE id = $1`, channelID,
+	).Scan(&guildID, &parentAutoArchive, &parentEncrypted)
 	if guildID == nil {
 		apiutil.WriteError(w, http.StatusBadRequest, "invalid_channel", "Threads can only be created in guild channels")
 		return
@@ -1595,14 +1637,14 @@ func (h *Handler) HandleCreateThread(w http.ResponseWriter, r *http.Request) {
 	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
 		// Create the thread as a new channel linked to the guild, inheriting the parent's auto-archive duration.
 		if err := tx.QueryRow(r.Context(),
-			`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, parent_channel_id, last_activity_at, created_at)
-			 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, $6, now(), now())
+			`INSERT INTO channels (id, guild_id, category_id, channel_type, name, owner_id, position, default_auto_archive_duration, encrypted, parent_channel_id, last_activity_at, created_at)
+			 VALUES ($1, $2, NULL, 'text', $3, $4, 0, $5, $6, $7, now(), now())
 			 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
 			           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
 			           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
 			           archived, read_only, read_only_role_ids, default_auto_archive_duration,
 			           parent_channel_id, last_activity_at, created_at`,
-			threadID, guildID, req.Name, userID, parentAutoArchive, channelID,
+			threadID, guildID, req.Name, userID, parentAutoArchive, parentEncrypted, channelID,
 		).Scan(
 			&thread.ID, &thread.GuildID, &thread.CategoryID, &thread.ChannelType, &thread.Name,
 			&thread.Topic, &thread.Position, &thread.SlowmodeSeconds, &thread.NSFW, &thread.Encrypted,

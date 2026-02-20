@@ -667,6 +667,43 @@ export interface ChannelNotificationPreference {
 	muted_until: string | null;
 }
 
+// --- Server Notifications (persistent, server-backed) ---
+
+export type ServerNotificationType =
+	| 'mention' | 'reply' | 'dm' | 'thread_reply' | 'message_pinned' | 'reaction_added'
+	| 'friend_request' | 'friend_accepted' | 'guild_invite' | 'member_joined'
+	| 'warned' | 'muted' | 'kicked' | 'banned' | 'report_resolved'
+	| 'event_starting' | 'announcement';
+
+export type NotificationCategory = 'messages' | 'social' | 'moderation' | 'content';
+
+export interface ServerNotification {
+	id: string;
+	user_id: string;
+	type: ServerNotificationType;
+	category: NotificationCategory;
+	guild_id: string | null;
+	guild_name: string | null;
+	guild_icon_id: string | null;
+	channel_id: string | null;
+	channel_name: string | null;
+	message_id: string | null;
+	actor_id: string;
+	actor_name: string;
+	actor_avatar_id: string | null;
+	content: string | null;
+	metadata: Record<string, unknown> | null;
+	read: boolean;
+	created_at: string;
+}
+
+export interface NotificationTypePreference {
+	type: ServerNotificationType;
+	in_app: boolean;
+	push: boolean;
+	sound: boolean;
+}
+
 // --- Webhook ---
 
 export interface Webhook {

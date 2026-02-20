@@ -15,7 +15,6 @@
 	import KeyboardShortcuts from '$components/common/KeyboardShortcuts.svelte';
 	import CommandPalette from '$components/common/CommandPalette.svelte';
 	import QuickSwitcher from '$components/common/QuickSwitcher.svelte';
-	import NotificationCenter from '$components/common/NotificationCenter.svelte';
 	import AnnouncementBanner from '$components/common/AnnouncementBanner.svelte';
 	import ModerationModals from '$components/common/ModerationModals.svelte';
 	import IncomingCallModal from '$components/common/IncomingCallModal.svelte';
@@ -30,7 +29,6 @@
 	let mobileSidebarOpen = $state(false);
 	let commandPaletteOpen = $state(false);
 	let quickSwitcherOpen = $state(false);
-	let notificationCenterOpen = $state(false);
 
 	// Track route changes for navigation history.
 	$effect(() => {
@@ -83,9 +81,6 @@
 		quickSwitcherOpen = !quickSwitcherOpen;
 	}
 
-	function toggleNotificationCenter() {
-		notificationCenterOpen = !notificationCenterOpen;
-	}
 </script>
 
 <KeyboardShortcuts onToggleSearch={toggleCommandPalette} onToggleQuickSwitcher={toggleQuickSwitcher} />
@@ -94,7 +89,6 @@
 <IncomingCallModal />
 <CommandPalette bind:open={commandPaletteOpen} />
 <QuickSwitcher bind:open={quickSwitcherOpen} />
-<NotificationCenter bind:open={notificationCenterOpen} />
 
 {#if $isLoading}
 	<div class="flex h-screen items-center justify-center bg-bg-primary">
@@ -104,7 +98,7 @@
 		</div>
 	</div>
 {:else if $currentUser}
-	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary">
+	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => e.preventDefault()}>
 		<div class="accent-stripe"></div>
 		<!-- Reconnecting banner -->
 		{#if !$gatewayConnected}
@@ -144,7 +138,7 @@
 			<!-- Sidebars: hidden on mobile unless open -->
 			<div class="hidden md:contents" class:!contents={mobileSidebarOpen}>
 				<div class="{mobileSidebarOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'contents'}">
-					<GuildSidebar onToggleNotifications={toggleNotificationCenter} />
+					<GuildSidebar />
 					{#if !$page.url.pathname.startsWith('/app/admin')}
 						<ChannelSidebar width={$channelSidebarWidth} />
 					{/if}

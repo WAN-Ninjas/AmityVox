@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId, editChannelSignal } from '$lib/stores/channels';
 	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -30,7 +30,7 @@
 	import type { Channel, GuildEvent } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import DragHandle from '$components/common/DragHandle.svelte';
-	import { DragController } from '$lib/utils/dragDrop';
+	import { DragController, calculateInsertionIndex } from '$lib/utils/dragDrop';
 	import { onDestroy } from 'svelte';
 
 	let dmProfileUserId = $state<string | null>(null);
@@ -115,6 +115,58 @@
 	// Channels that belong to a channel group (reported by ChannelGroups).
 	let groupedChannelIds = $state<Set<string>>(new Set());
 
+	// Full groups data for "Move to Group" context menu.
+	let channelGroupsData = $state<{ id: string; name: string; color: string; channels: string[] }[]>([]);
+
+	// Reload function exposed by ChannelGroups via onReady.
+	let reloadChannelGroups: (() => Promise<void>) | null = null;
+
+	// Find which group a channel belongs to (if any).
+	function findChannelGroup(channelId: string): { id: string; name: string } | null {
+		for (const g of channelGroupsData) {
+			if (g.channels.includes(channelId)) return { id: g.id, name: g.name };
+		}
+		return null;
+	}
+
+	// Move to Group submenu state
+	let showMoveToGroupSubmenu = $state(false);
+
+	async function addChannelToGroup(groupId: string, channelId: string, insertIndex?: number) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		const group = channelGroupsData.find(g => g.id === groupId);
+		if (!group) return;
+		// Build new channel list with insertion at the specified index.
+		const existing = [...new Set(group.channels)].filter(c => c !== channelId);
+		const idx = insertIndex != null ? Math.min(insertIndex, existing.length) : existing.length;
+		existing.splice(idx, 0, channelId);
+		try {
+			await api.setChannelGroupChannels(guildId, groupId, existing);
+			addToast('Channel moved to group', 'success');
+			await reloadChannelGroups?.();
+		} catch (err: any) {
+			addToast(err.message || 'Failed to move channel', 'error');
+		}
+		closeContextMenu();
+	}
+
+	async function removeChannelFromGroupCtx(channelId: string) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		const group = findChannelGroup(channelId);
+		if (!group) return;
+		try {
+			await api.removeChannelFromGroup(guildId, group.id, channelId);
+			addToast('Channel removed from group', 'success');
+			// Reload ChannelGroups so its internal state is in sync.
+			await reloadChannelGroups?.();
+		} catch (err: any) {
+			addToast(err.message || 'Failed to remove channel from group', 'error');
+		}
+		closeContextMenu();
+	}
+
 	const ungroupedTextChannels = $derived(activeTextChannels.filter(c => !groupedChannelIds.has(c.id)));
 	const ungroupedForumChannels = $derived($forumChannels.filter(c => !groupedChannelIds.has(c.id)));
 	const ungroupedGalleryChannels = $derived($galleryChannels.filter(c => !groupedChannelIds.has(c.id)));
@@ -148,6 +200,19 @@
 		];
 		if (encIds.length > 0) {
 			e2ee.refreshKeyStatus(encIds);
+		}
+	});
+
+	// Watch editChannelSignal from TopBar gear icon.
+	$effect(() => {
+		const channelId = $editChannelSignal;
+		if (channelId) {
+			const allChannels = [...$textChannels, ...$voiceChannels, ...$forumChannels, ...$galleryChannels];
+			const ch = allChannels.find(c => c.id === channelId);
+			if (ch) {
+				openEditModal(channelId, ch.name ?? '');
+			}
+			editChannelSignal.set(null);
 		}
 	});
 
@@ -220,6 +285,9 @@
 	function getFilteredThreads(channelId: string): Channel[] {
 		// Access threadFilterVersion to trigger reactivity.
 		void threadFilterVersion;
+		// Hide threads if the parent channel is encrypted and not unlocked.
+		const parentChannel = $textChannels.find(c => c.id === channelId);
+		if (parentChannel?.encrypted && !$unlockedChannels.has(channelId)) return [];
 		const threads = $threadsByParent.get(channelId) ?? [];
 		const filterMinutes = getThreadActivityFilter(channelId);
 
@@ -262,6 +330,18 @@
 			updateChannelStore(updated);
 		} catch (err: any) {
 			addToast(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} thread`, 'error');
+		}
+		threadContextMenu = null;
+	}
+
+	async function handleDeleteThread(thread: Channel) {
+		if (!confirm(`Delete thread "${thread.name}"? This will permanently remove the thread and all its messages.`)) return;
+		try {
+			await api.deleteChannel(thread.id);
+			removeChannelStore(thread.id);
+			addToast('Thread deleted', 'info');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to delete thread', 'error');
 		}
 		threadContextMenu = null;
 	}
@@ -358,6 +438,7 @@
 		guildContextMenu = null;
 		showThreadFilterSubmenu = false;
 		showMuteSubmenu = null;
+		showMoveToGroupSubmenu = false;
 	}
 
 	function markDMRead(channelId: string) {
@@ -425,7 +506,7 @@
 			channelDragController?.destroy();
 			channelDragController = new DragController({
 				container: el,
-				items: () => ungroupedTextChannels.map(c => c.id),
+				items: () => [...ungroupedTextChannels, ...ungroupedForumChannels, ...ungroupedGalleryChannels].map(c => c.id),
 				getElement: (id) => el.querySelector(`[data-channel-id="${id}"]`) as HTMLElement | null,
 				canDrag: $canManageChannels,
 				onDrop: handleChannelReorder,
@@ -435,6 +516,136 @@
 	});
 
 	onDestroy(() => { channelDragController?.destroy(); });
+
+	// --- External drag into group: highlight + insertion indicator ---
+	let highlightedGroupEl: HTMLElement | null = null;
+	let externalDropIndicator: HTMLElement | null = null;
+	let externalDropInsertIndex = -1;
+
+	function clearGroupHighlight() {
+		if (highlightedGroupEl) {
+			highlightedGroupEl.style.outline = '';
+			highlightedGroupEl.style.outlineOffset = '';
+			highlightedGroupEl.style.borderRadius = '';
+			highlightedGroupEl = null;
+		}
+		if (externalDropIndicator) {
+			externalDropIndicator.remove();
+			externalDropIndicator = null;
+		}
+		externalDropInsertIndex = -1;
+	}
+
+	function findGroupAtPoint(x: number, y: number): HTMLElement | null {
+		const els = document.elementsFromPoint(x, y);
+		for (const el of els) {
+			const groupEl = (el as HTMLElement).closest?.('[data-channel-group-id]');
+			if (groupEl) return groupEl as HTMLElement;
+		}
+		return null;
+	}
+
+	function ensureDropIndicator(container: HTMLElement): HTMLElement {
+		if (externalDropIndicator && externalDropIndicator.parentElement === container) {
+			return externalDropIndicator;
+		}
+		externalDropIndicator?.remove();
+		const indicator = document.createElement('div');
+		indicator.style.cssText = `
+			position: absolute; left: 0; right: 0; height: 2px;
+			background: var(--brand-500, #5c6bc0); border-radius: 1px;
+			pointer-events: none; z-index: 50; display: none;
+		`;
+		const makeDot = (side: string) => {
+			const d = document.createElement('div');
+			d.style.cssText = `
+				position: absolute; ${side}: -3px; top: -2px;
+				width: 6px; height: 6px; border-radius: 50%;
+				background: var(--brand-500, #5c6bc0);
+			`;
+			return d;
+		};
+		indicator.appendChild(makeDot('left'));
+		indicator.appendChild(makeDot('right'));
+		const style = getComputedStyle(container);
+		if (style.position === 'static') container.style.position = 'relative';
+		container.appendChild(indicator);
+		externalDropIndicator = indicator;
+		return indicator;
+	}
+
+	function updateDropIndicatorPosition(container: HTMLElement, cursorY: number) {
+		const channelEls = container.querySelectorAll<HTMLElement>('[data-channel-id]');
+		const rects = Array.from(channelEls).map(el => {
+			const r = el.getBoundingClientRect();
+			return { top: r.top, bottom: r.bottom, height: r.height };
+		});
+
+		externalDropInsertIndex = calculateInsertionIndex(cursorY, rects, -1);
+		const indicator = ensureDropIndicator(container);
+
+		if (rects.length === 0) {
+			// Empty group — show line at the top.
+			indicator.style.top = '4px';
+			indicator.style.display = 'block';
+			externalDropInsertIndex = 0;
+			return;
+		}
+
+		const containerRect = container.getBoundingClientRect();
+		let y: number;
+		if (externalDropInsertIndex <= 0) {
+			y = rects[0].top - containerRect.top + container.scrollTop - 1;
+		} else if (externalDropInsertIndex >= rects.length) {
+			y = rects[rects.length - 1].bottom - containerRect.top + container.scrollTop - 1;
+		} else {
+			const above = rects[externalDropInsertIndex - 1];
+			const below = rects[externalDropInsertIndex];
+			y = (above.bottom + below.top) / 2 - containerRect.top + container.scrollTop - 1;
+		}
+		indicator.style.top = `${y}px`;
+		indicator.style.display = 'block';
+	}
+
+	function handlePointerMoveWithGroupHighlight(e: PointerEvent) {
+		channelDragController?.handlePointerMove(e);
+		if (!channelDragController?.draggingId) {
+			clearGroupHighlight();
+			return;
+		}
+		const groupEl = findGroupAtPoint(e.clientX, e.clientY);
+		if (groupEl !== highlightedGroupEl) {
+			clearGroupHighlight();
+		}
+		if (groupEl) {
+			if (!highlightedGroupEl) {
+				groupEl.style.outline = '2px solid var(--brand-500, #5c6bc0)';
+				groupEl.style.outlineOffset = '2px';
+				groupEl.style.borderRadius = '6px';
+				highlightedGroupEl = groupEl;
+			}
+			updateDropIndicatorPosition(groupEl, e.clientY);
+		}
+	}
+
+	function handlePointerUpWithGroupDetection(e: PointerEvent) {
+		const draggingId = channelDragController?.draggingId;
+		if (draggingId) {
+			const groupEl = findGroupAtPoint(e.clientX, e.clientY);
+			if (groupEl) {
+				const groupId = groupEl.getAttribute('data-channel-group-id');
+				if (groupId) {
+					const insertIdx = externalDropInsertIndex >= 0 ? externalDropInsertIndex : undefined;
+					clearGroupHighlight();
+					channelDragController?.handlePointerCancel(e);
+					addChannelToGroup(groupId, draggingId, insertIdx);
+					return;
+				}
+			}
+		}
+		clearGroupHighlight();
+		channelDragController?.handlePointerUp(e);
+	}
 
 	async function handleChannelReorder(sourceId: string, targetIndex: number) {
 		const guildId = $currentGuildId;
@@ -465,9 +676,9 @@
 
 <svelte:window
 	onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }}
-	onpointermove={(e) => channelDragController?.handlePointerMove(e)}
-	onpointerup={(e) => channelDragController?.handlePointerUp(e)}
-	onpointercancel={(e) => channelDragController?.handlePointerCancel(e)}
+	onpointermove={(e) => handlePointerMoveWithGroupHighlight(e)}
+	onpointerup={(e) => handlePointerUpWithGroupDetection(e)}
+	onpointercancel={(e) => { clearGroupHighlight(); channelDragController?.handlePointerCancel(e); }}
 	onkeydown={(e) => channelDragController?.handleKeyDown(e)}
 />
 
@@ -613,32 +824,39 @@
 							</div>
 						{/if}
 					{/each}
-			</div>
 
 			<!-- Forum Channels -->
 			{#each ungroupedForumChannels as ch (ch.id)}
 				{@const isActive = $currentChannelId === ch.id}
 				{@const unread = $unreadCounts.get(ch.id) ?? 0}
 				{@const mentions = $mentionCounts.get(ch.id) ?? 0}
-				<button
-					class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
-						{isActive
-							? 'bg-bg-modifier text-text-primary'
-							: unread > 0
-							? 'text-text-primary hover:bg-bg-modifier/50'
-							: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
-					onclick={() => handleChannelClick(ch.id)}
+				<div
+					class="group/drag flex items-center"
+					data-channel-id={ch.id}
+					onpointerdown={(e) => channelDragController?.handlePointerDown(e, ch.id)}
 				>
-					<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-					</svg>
-					<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'forum'}</span>
-					{#if mentions > 0}
-						<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
-					{:else if unread > 0}
-						<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
-					{/if}
-				</button>
+					<DragHandle visible={$canManageChannels} />
+					<button
+						class="flex flex-1 items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
+							{isActive
+								? 'bg-bg-modifier text-text-primary'
+								: unread > 0
+								? 'text-text-primary hover:bg-bg-modifier/50'
+								: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
+						onclick={() => handleChannelClick(ch.id)}
+						oncontextmenu={(e) => openContextMenu(e, ch)}
+					>
+						<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+						</svg>
+						<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'forum'}</span>
+						{#if mentions > 0}
+							<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
+						{:else if unread > 0}
+							<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
+						{/if}
+					</button>
+				</div>
 			{/each}
 
 			<!-- Gallery Channels -->
@@ -646,29 +864,38 @@
 				{@const isActive = $currentChannelId === ch.id}
 				{@const unread = $unreadCounts.get(ch.id) ?? 0}
 				{@const mentions = $mentionCounts.get(ch.id) ?? 0}
-				<button
-					class="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
-						{isActive
-							? 'bg-bg-modifier text-text-primary'
-							: unread > 0
-							? 'text-text-primary hover:bg-bg-modifier/50'
-							: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
-					onclick={() => handleChannelClick(ch.id)}
+				<div
+					class="group/drag flex items-center"
+					data-channel-id={ch.id}
+					onpointerdown={(e) => channelDragController?.handlePointerDown(e, ch.id)}
 				>
-					<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<rect x="3" y="3" width="7" height="7" rx="1" />
-						<rect x="14" y="3" width="7" height="7" rx="1" />
-						<rect x="3" y="14" width="7" height="7" rx="1" />
-						<rect x="14" y="14" width="7" height="7" rx="1" />
-					</svg>
-					<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'gallery'}</span>
-					{#if mentions > 0}
-						<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
-					{:else if unread > 0}
-						<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
-					{/if}
-				</button>
+					<DragHandle visible={$canManageChannels} />
+					<button
+						class="flex flex-1 items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm transition-colors
+							{isActive
+								? 'bg-bg-modifier text-text-primary'
+								: unread > 0
+								? 'text-text-primary hover:bg-bg-modifier/50'
+								: 'text-text-muted hover:bg-bg-modifier/50 hover:text-text-secondary'}"
+						onclick={() => handleChannelClick(ch.id)}
+						oncontextmenu={(e) => openContextMenu(e, ch)}
+					>
+						<svg class="h-5 w-5 shrink-0 {isActive ? 'text-text-primary' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<rect x="3" y="3" width="7" height="7" rx="1" />
+							<rect x="14" y="3" width="7" height="7" rx="1" />
+							<rect x="3" y="14" width="7" height="7" rx="1" />
+							<rect x="14" y="14" width="7" height="7" rx="1" />
+						</svg>
+						<span class="truncate {unread > 0 ? 'font-semibold' : ''}">{ch.name ?? 'gallery'}</span>
+						{#if mentions > 0}
+							<span class="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">{mentions}</span>
+						{:else if unread > 0}
+							<span class="ml-auto h-2 w-2 rounded-full bg-text-primary"></span>
+						{/if}
+					</button>
+				</div>
 			{/each}
+			</div>
 
 			<!-- Voice Channels -->
 			{#each ungroupedVoiceChannels as channel (channel.id)}
@@ -716,7 +943,13 @@
 			{/each}
 
 			<!-- Channel Groups -->
-			<ChannelGroups onGroupsLoaded={(ids) => { groupedChannelIds = ids; }} />
+			<ChannelGroups
+			onGroupsLoaded={(ids) => { groupedChannelIds = ids; }}
+			onChannelContextMenu={(e, channel) => openContextMenu(e, channel as any)}
+			onThreadContextMenu={(e, thread) => openThreadContextMenu(e, thread)}
+			onGroupsChanged={(g) => { channelGroupsData = g; }}
+			onReady={(api) => { reloadChannelGroups = api.reload; }}
+		/>
 
 			<!-- Upcoming Events -->
 			{#if upcomingEvents.length > 0}
@@ -1008,6 +1241,50 @@
 				{/if}
 			</div>
 		{/if}
+		<!-- Move to Group / Remove from Group -->
+		{#if channelGroupsData.length > 0}
+			{@const inGroup = findChannelGroup(channelContextMenu.channelId)}
+			{#if inGroup}
+				<button
+					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+					onclick={() => removeChannelFromGroupCtx(channelContextMenu!.channelId)}
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+					</svg>
+					Remove from Group
+				</button>
+			{:else}
+				<div class="relative">
+					<button
+						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+						onclick={() => (showMoveToGroupSubmenu = !showMoveToGroupSubmenu)}
+					>
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+						</svg>
+						Move to Group
+						<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M9 5l7 7-7 7" />
+						</svg>
+					</button>
+					{#if showMoveToGroupSubmenu}
+						{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
+						<div class="absolute top-0 min-w-[140px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}">
+							{#each channelGroupsData as group}
+								<button
+									class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+									onclick={() => addChannelToGroup(group.id, channelContextMenu!.channelId)}
+								>
+									<span class="h-2 w-2 rounded-full shrink-0" style="background-color: {group.color}"></span>
+									{group.name}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+		{/if}
 		{#if $canManageChannels}
 		<button
 			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
@@ -1069,6 +1346,16 @@
 				Archive Thread
 			</button>
 		{/if}
+		<div class="my-1 border-t border-bg-modifier"></div>
+		<button
+			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
+			onclick={() => handleDeleteThread(threadContextMenu!.thread)}
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+			</svg>
+			Delete Thread
+		</button>
 		{/if}
 	</div>
 {/if}

@@ -86,6 +86,7 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startEventReminderWorker(ctx)
 		m.startBookmarkReminderWorker(ctx)
 		m.startPeriodic(ctx, "push-sub-cleanup", 24*time.Hour, m.cleanStalePushSubscriptions)
+		m.startPeriodic(ctx, "notification-cleanup", 24*time.Hour, m.cleanOldNotifications)
 	}
 
 	// Periodic data retention cleanup (every 15 minutes).
@@ -170,6 +171,10 @@ func (m *Manager) startEventWorker(ctx context.Context) {
 
 func (m *Manager) cleanStalePushSubscriptions(ctx context.Context) error {
 	return m.notifications.CleanupStaleSubscriptions(ctx, 90*24*time.Hour) // 90 days
+}
+
+func (m *Manager) cleanOldNotifications(ctx context.Context) error {
+	return m.notifications.CleanupOldNotifications(ctx)
 }
 
 func (m *Manager) cleanExpiredSessions(ctx context.Context) error {

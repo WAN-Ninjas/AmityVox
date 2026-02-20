@@ -47,8 +47,9 @@
 		type CustomTheme
 	} from '$lib/stores/settings';
 	import { SOUND_PRESETS, playNotificationSound } from '$lib/utils/sounds';
+	import { ALL_NOTIFICATION_TYPES, NOTIFICATION_TYPE_LABELS, NOTIFICATION_CATEGORIES } from '$lib/utils/notificationHelpers';
 
-	import type { User, BotToken, SlashCommand, VoicePreferences } from '$lib/types';
+	import type { User, BotToken, SlashCommand, VoicePreferences, NotificationTypePreference } from '$lib/types';
 
 	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'voice' | 'encryption' | 'bots' | 'data';
 	let currentTab = $state<Tab>('account');
@@ -110,6 +111,54 @@
 	let dndEndMinute = $state(0);
 	let dndSaving = $state(false);
 	let dndSuccess = $state('');
+
+	// --- Per-type notification preferences ---
+	let typePrefs = $state<Map<string, NotificationTypePreference>>(new Map());
+	let typePrefsLoading = $state(false);
+	let typePrefsLoaded = $state(false);
+	let typePrefsSaving = $state(false);
+	let typePrefsSuccess = $state('');
+
+	function getTypePref(type: string): NotificationTypePreference {
+		return typePrefs.get(type) ?? { type: type as any, in_app: true, push: true, sound: true };
+	}
+
+	function setTypePref(type: string, field: 'in_app' | 'push' | 'sound', value: boolean) {
+		const current = getTypePref(type);
+		typePrefs.set(type, { ...current, [field]: value });
+		typePrefs = new Map(typePrefs);
+	}
+
+	async function loadTypePrefs() {
+		if (typePrefsLoaded) return;
+		typePrefsLoading = true;
+		try {
+			const prefs = await api.getNotificationTypePreferences();
+			const map = new Map<string, NotificationTypePreference>();
+			for (const p of prefs) map.set(p.type, p);
+			typePrefs = map;
+			typePrefsLoaded = true;
+		} catch {
+			// Use defaults on failure.
+		} finally {
+			typePrefsLoading = false;
+		}
+	}
+
+	async function saveTypePrefs() {
+		typePrefsSaving = true;
+		typePrefsSuccess = '';
+		try {
+			const prefs = ALL_NOTIFICATION_TYPES.map(type => getTypePref(type));
+			await api.updateNotificationTypePreferences(prefs);
+			typePrefsSuccess = 'Notification type preferences saved!';
+			setTimeout(() => (typePrefsSuccess = ''), 3000);
+		} catch (err: any) {
+			error = err.message || 'Failed to save type preferences';
+		} finally {
+			typePrefsSaving = false;
+		}
+	}
 
 	// --- Privacy tab state ---
 	let dmPrivacy = $state<'everyone' | 'friends' | 'nobody'>('everyone');
@@ -441,6 +490,9 @@
 	$effect(() => {
 		if (currentTab === 'notifications' || currentTab === 'privacy') {
 			loadUserSettings();
+		}
+		if (currentTab === 'notifications') {
+			loadTypePrefs();
 		}
 		if (currentTab === 'privacy') {
 			loadBlockedList();
@@ -1669,6 +1721,75 @@
 					<button class="btn-primary" onclick={saveNotifications} disabled={notifLoading}>
 						{notifLoading ? 'Saving...' : 'Save Notification Preferences'}
 					</button>
+
+					<!-- ==================== PER-TYPE PREFERENCES ==================== -->
+					<div class="border-t border-bg-modifier pt-6">
+						<div class="flex items-center gap-3 mb-4">
+							<h2 class="text-lg font-bold text-text-primary">Notification Types</h2>
+						</div>
+						<p class="mb-4 text-xs text-text-muted">
+							Choose which notification types you want to receive in-app, as push notifications, or with sound.
+						</p>
+
+						{#if typePrefsSuccess}
+							<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{typePrefsSuccess}</div>
+						{/if}
+
+						{#if typePrefsLoading}
+							<div class="flex items-center justify-center py-8">
+								<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+							</div>
+						{:else}
+							{#each NOTIFICATION_CATEGORIES as category}
+								<div class="mb-4 rounded-lg bg-bg-secondary p-4">
+									<h3 class="mb-3 text-sm font-semibold text-text-primary">{category.label}</h3>
+									<div class="space-y-2">
+										<!-- Header row -->
+										<div class="grid grid-cols-[1fr_60px_60px_60px] items-center gap-2 pb-1 text-2xs font-medium uppercase tracking-wide text-text-muted">
+											<span>Type</span>
+											<span class="text-center">In-App</span>
+											<span class="text-center">Push</span>
+											<span class="text-center">Sound</span>
+										</div>
+										{#each category.types as type}
+											{@const pref = getTypePref(type)}
+											<div class="grid grid-cols-[1fr_60px_60px_60px] items-center gap-2 rounded py-1.5 hover:bg-bg-modifier/50">
+												<span class="text-sm text-text-secondary">{NOTIFICATION_TYPE_LABELS[type]}</span>
+												<label class="flex justify-center">
+													<input
+														type="checkbox"
+														checked={pref.in_app}
+														onchange={() => setTypePref(type, 'in_app', !pref.in_app)}
+														class="accent-brand-500"
+													/>
+												</label>
+												<label class="flex justify-center">
+													<input
+														type="checkbox"
+														checked={pref.push}
+														onchange={() => setTypePref(type, 'push', !pref.push)}
+														class="accent-brand-500"
+													/>
+												</label>
+												<label class="flex justify-center">
+													<input
+														type="checkbox"
+														checked={pref.sound}
+														onchange={() => setTypePref(type, 'sound', !pref.sound)}
+														class="accent-brand-500"
+													/>
+												</label>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/each}
+
+							<button class="btn-primary" onclick={saveTypePrefs} disabled={typePrefsSaving}>
+								{typePrefsSaving ? 'Saving...' : 'Save Type Preferences'}
+							</button>
+						{/if}
+					</div>
 
 					<!-- ==================== DO NOT DISTURB ==================== -->
 					<div class="border-t border-bg-modifier pt-6">

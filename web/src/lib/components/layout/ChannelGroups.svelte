@@ -4,8 +4,9 @@
 	import DragHandle from '$components/common/DragHandle.svelte';
 	import { DragController, calculateInsertionIndex } from '$lib/utils/dragDrop';
 	import { currentGuildId } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId } from '$lib/stores/channels';
+	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, threadsByParent, activeThreadId, pendingThreadOpen } from '$lib/stores/channels';
 	import { unreadCounts, mentionCounts } from '$lib/stores/unreads';
+	import type { Channel } from '$lib/types';
 	import { goto } from '$app/navigation';
 	import { addToast } from '$lib/stores/toast';
 	import { unlockedChannels } from '$lib/encryption/e2eeManager';
@@ -23,9 +24,13 @@
 
 	interface Props {
 		onGroupsLoaded?: (channelIds: Set<string>) => void;
+		onChannelContextMenu?: (e: MouseEvent, channel: { id: string; name: string; archived: boolean }) => void;
+		onThreadContextMenu?: (e: MouseEvent, thread: Channel) => void;
+		onGroupsChanged?: (groups: ChannelGroup[]) => void;
+		onReady?: (api: { reload: () => Promise<void> }) => void;
 	}
 
-	let { onGroupsLoaded }: Props = $props();
+	let { onGroupsLoaded, onChannelContextMenu, onThreadContextMenu, onGroupsChanged, onReady }: Props = $props();
 
 	let groups = $state<ChannelGroup[]>([]);
 	let loading = $state(true);
@@ -49,10 +54,13 @@
 			for (const ch of g.channels) ids.add(ch);
 		}
 		onGroupsLoaded?.(ids);
+		onGroupsChanged?.(groups);
 	});
 
 	onMount(async () => {
 		await loadGroups();
+		// Expose reload function to parent.
+		onReady?.({ reload: loadGroups });
 		// Restore collapsed state from localStorage.
 		try {
 			const stored = localStorage.getItem('amityvox_collapsed_channel_groups');
@@ -161,6 +169,22 @@
 		if (guildId) {
 			goto(`/app/guilds/${guildId}/channels/${channelId}`);
 		}
+	}
+
+	function handleThreadClick(thread: Channel) {
+		const guildId = $currentGuildId;
+		if (!guildId || !thread.parent_channel_id) return;
+		pendingThreadOpen.set(thread.id);
+		if ($currentChannelId !== thread.parent_channel_id) {
+			goto(`/app/guilds/${guildId}/channels/${thread.parent_channel_id}`);
+		}
+	}
+
+	function getFilteredThreads(channelId: string): Channel[] {
+		// Hide threads if parent channel is encrypted and not unlocked.
+		if (isChannelEncrypted(channelId) && !$unlockedChannels.has(channelId)) return [];
+		const threads = $threadsByParent.get(channelId) ?? [];
+		return threads.filter((t) => !t.archived);
 	}
 
 	const channelsMap = $derived.by(() => {
@@ -689,7 +713,7 @@
 			<!-- Group channels -->
 			{#if !collapsedGroups.has(group.id)}
 				<!-- svelte-ignore binding_property_non_reactive -->
-				<div class="relative" use:registerGroupContainer={group.id}>
+				<div class="relative" data-channel-group-id={group.id} use:registerGroupContainer={group.id}>
 				{#if group.channels.length === 0}
 					<p class="px-3 py-1 text-2xs text-text-muted italic">No channels in this group</p>
 				{:else}
@@ -707,6 +731,10 @@
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 								onclick={() => handleChannelClick(channelId)}
+								oncontextmenu={(e) => {
+									const ch = channelsMap.get(channelId);
+									if (ch) onChannelContextMenu?.(e, { id: ch.id, name: ch.name, archived: false });
+								}}
 							>
 								{#if channelType === 'voice' || channelType === 'stage'}
 									<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -757,6 +785,34 @@
 								</svg>
 							</button>
 						</div>
+						{@const threads = (channelType === 'text' || channelType === 'announcement') ? getFilteredThreads(channelId) : []}
+						{#if threads.length > 0}
+							<div class="ml-3 border-l border-bg-floating/50 pl-1">
+								{#each threads as thread (thread.id)}
+									{@const threadUnread = $unreadCounts.get(thread.id) ?? 0}
+									{@const threadMentions = $mentionCounts.get(thread.id) ?? 0}
+									<button
+										class="mb-0.5 flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs transition-colors {$activeThreadId === thread.id ? 'bg-bg-modifier text-text-primary' : threadUnread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+										onclick={() => handleThreadClick(thread)}
+										oncontextmenu={(e) => { e.preventDefault(); onThreadContextMenu?.(e, thread); }}
+									>
+										<svg class="h-3.5 w-3.5 shrink-0 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+										</svg>
+										<span class="flex-1 truncate">{thread.name}</span>
+										{#if threadMentions > 0 && $activeThreadId !== thread.id}
+											<span class="ml-auto flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-2xs font-bold text-white">
+												@{threadMentions > 99 ? '99+' : threadMentions}
+											</span>
+										{:else if threadUnread > 0 && $activeThreadId !== thread.id}
+											<span class="ml-auto flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-text-muted px-0.5 text-2xs font-bold text-white">
+												{threadUnread > 99 ? '99+' : threadUnread}
+											</span>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						{/if}
 					{/each}
 				{/if}
 				</div>
