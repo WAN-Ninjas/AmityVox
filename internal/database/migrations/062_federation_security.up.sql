@@ -8,12 +8,12 @@ ALTER TABLE federation_peers ADD COLUMN IF NOT EXISTS initiated_by TEXT;
 
 CREATE TABLE IF NOT EXISTS federation_key_audit (
     id              TEXT PRIMARY KEY,
-    instance_id     TEXT NOT NULL REFERENCES instances(id),
+    instance_id     TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
     old_fingerprint TEXT NOT NULL,
     new_fingerprint TEXT NOT NULL,
     old_public_key  TEXT NOT NULL,
     detected_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    acknowledged_by TEXT REFERENCES users(id),
+    acknowledged_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     acknowledged_at TIMESTAMPTZ
 );
 

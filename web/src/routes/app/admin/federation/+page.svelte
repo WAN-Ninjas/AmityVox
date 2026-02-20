@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import type { KeyAuditEntry } from '$lib/types';
 
 	// Typed fetch helpers using the existing api client's token.
 	async function adminGet<T>(path: string): Promise<T> {
@@ -131,18 +132,6 @@
 		default_capabilities: string[];
 	}
 
-	interface KeyAuditEntry {
-		id: string;
-		instance_id: string;
-		instance_domain: string;
-		instance_name: string | null;
-		old_fingerprint: string;
-		new_fingerprint: string;
-		detected_at: string;
-		acknowledged_by: string | null;
-		acknowledged_at: string | null;
-	}
-
 	interface PendingPeer {
 		peer_id: string;
 		peer_domain: string;
@@ -234,7 +223,7 @@
 	async function loadKeyAudit() {
 		loadingSecurity = true;
 		try {
-			keyAuditEntries = await adminGet<KeyAuditEntry[]>('/admin/federation/key-audit');
+			keyAuditEntries = await api.getKeyAudit();
 		} catch (e: any) {
 			addToast('Failed to load key audit: ' + e.message, 'error');
 		} finally {
@@ -244,7 +233,7 @@
 
 	async function approvePeer(peerId: string) {
 		try {
-			await adminPost(`/admin/federation/peers/${peerId}/approve`);
+			await api.approveFederationPeer(peerId);
 			addToast('Peer approved', 'success');
 			await loadDashboard();
 		} catch (e: any) {
@@ -254,7 +243,7 @@
 
 	async function rejectPeer(peerId: string) {
 		try {
-			await adminPost(`/admin/federation/peers/${peerId}/reject`);
+			await api.rejectFederationPeer(peerId);
 			addToast('Peer rejected', 'success');
 			await loadDashboard();
 		} catch (e: any) {
@@ -264,7 +253,7 @@
 
 	async function acknowledgeKeyChange(auditId: string) {
 		try {
-			await adminPost(`/admin/federation/key-audit/${auditId}/acknowledge`);
+			await api.acknowledgeKeyChange(auditId);
 			addToast('Key change acknowledged', 'success');
 			await loadKeyAudit();
 		} catch (e: any) {
