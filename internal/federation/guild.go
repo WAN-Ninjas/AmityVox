@@ -654,6 +654,7 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	msg := map[string]interface{}{
 		"id": msgID, "channel_id": channelID, "guild_id": guildID,
 		"author_id": req.UserID, "content": req.Content, "created_at": now,
+		"reply_to_ids": replyToIDs,
 	}
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", channelID, msg)
 
