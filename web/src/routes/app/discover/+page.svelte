@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
-	import { loadGuilds as reloadGuilds } from '$lib/stores/guilds';
+	import { loadGuilds as reloadGuilds, addFederatedGuild } from '$lib/stores/guilds';
 	import { addToast } from '$lib/stores/toast';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
 	import type { Guild, FederationPeer } from '$lib/types';
@@ -80,8 +80,17 @@
 		if (!guild.instance_domain) return;
 		joining = guild.id;
 		try {
-			await api.joinFederatedGuild(guild.instance_domain, guild.id);
-			await reloadGuilds();
+			const resp = await api.joinFederatedGuild(guild.instance_domain, guild.id);
+			addFederatedGuild({
+				guild_id: resp.guild_id,
+				name: resp.name,
+				icon_id: resp.icon_id,
+				description: resp.description,
+				member_count: resp.member_count,
+				channels_json: resp.channels ?? [],
+				roles_json: resp.roles ?? [],
+				instance_domain: guild.instance_domain
+			});
 			addToast(`Joined ${guild.name} on ${guild.instance_domain}!`, 'success');
 		} catch (err: any) {
 			remoteError = err.message || 'Failed to join federated server';
@@ -359,15 +368,15 @@
 						{#each remoteGuilds as guild (guild.id)}
 							<div class="group flex flex-col overflow-hidden rounded-lg bg-bg-secondary transition-shadow hover:shadow-lg">
 								<div class="h-28 w-full bg-gradient-to-br from-blue-600/30 via-blue-500/15 to-bg-tertiary">
-									{#if guild.banner_id}
-										<img src="/api/v1/files/{guild.banner_id}" alt="" class="h-full w-full object-cover" />
+									{#if guild.banner_id && guild.instance_domain}
+										<img src="https://{guild.instance_domain}/api/v1/files/{guild.banner_id}" alt="" class="h-full w-full object-cover" />
 									{/if}
 								</div>
 								<div class="flex flex-1 flex-col p-4">
 									<div class="-mt-10 mb-3 flex items-end gap-3">
 										<div class="shrink-0 rounded-xl bg-bg-secondary p-1 shadow-md">
-											{#if guild.icon_id}
-												<img src="/api/v1/files/{guild.icon_id}" alt={guild.name} class="h-12 w-12 rounded-lg object-cover" />
+											{#if guild.icon_id && guild.instance_domain}
+												<img src="https://{guild.instance_domain}/api/v1/files/{guild.icon_id}" alt={guild.name} class="h-12 w-12 rounded-lg object-cover" />
 											{:else}
 												<div class="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-600 text-sm font-bold text-white">
 													{getInitials(guild.name)}

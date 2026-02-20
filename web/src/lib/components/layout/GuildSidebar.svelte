@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { guildList, currentGuildId, setGuild, guilds } from '$lib/stores/guilds';
+	import { guildList, currentGuildId, setGuild, guilds, federatedGuilds, removeFederatedGuild } from '$lib/stores/guilds';
 	import { unreadCounts, unreadState, guildUnreadSet, guildMentionCounts } from '$lib/stores/unreads';
 	import { unreadNotificationCount } from '$lib/stores/notifications';
 	import { pendingIncomingCount } from '$lib/stores/relationships';
@@ -20,6 +20,9 @@
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { isGuildMuted, muteGuild, unmuteGuild } from '$lib/stores/muting';
+	import type { FederatedGuild } from '$lib/types';
+
+	const federatedGuildList = $derived(Array.from($federatedGuilds.values()));
 	import { channelGuildMap } from '$lib/stores/unreads';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 
@@ -156,6 +159,33 @@
 		}
 		closeGuildContextMenu();
 	}
+
+	async function handleLeaveFederatedGuild(guildId: string) {
+		if (!confirm('Are you sure you want to leave this federated server?')) return;
+		try {
+			await api.leaveFederatedGuild(guildId);
+			removeFederatedGuild(guildId);
+			if ($currentGuildId === guildId) {
+				goto('/app');
+			}
+			addToast('Left federated server', 'info');
+		} catch (err: any) {
+			addToast(err.message || 'Failed to leave server', 'error');
+		}
+	}
+
+	// Context menu for federated guilds
+	let fedCtxMenu = $state<{ x: number; y: number; guildId: string; guildName: string; domain: string } | null>(null);
+
+	function openFedContextMenu(e: MouseEvent, fg: FederatedGuild) {
+		e.preventDefault();
+		e.stopPropagation();
+		fedCtxMenu = { x: e.clientX, y: e.clientY, guildId: fg.guild_id, guildName: fg.name, domain: fg.instance_domain };
+	}
+
+	function closeFedContextMenu() {
+		fedCtxMenu = null;
+	}
 </script>
 
 <nav class="flex h-full w-14 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-[--border-primary] bg-bg-floating py-3" aria-label="Server list">
@@ -222,6 +252,40 @@
 			</div>
 		{/each}
 	</div>
+
+	<!-- Federated guilds -->
+	{#if federatedGuildList.length > 0}
+		<div class="mx-auto w-8 border-t border-bg-modifier"></div>
+		<div class="flex flex-col items-center gap-2">
+			{#each federatedGuildList as fg (fg.guild_id)}
+				<button
+					class="group relative flex h-9 w-9 items-center justify-center rounded-md border border-blue-500/30 bg-bg-tertiary transition-colors hover:bg-blue-500"
+					class:!bg-blue-500={$currentGuildId === fg.guild_id}
+					onclick={() => selectGuild(fg.guild_id)}
+					oncontextmenu={(e) => openFedContextMenu(e, fg)}
+					title="{fg.name} ({fg.instance_domain})"
+				>
+					{#if fg.icon_id}
+						<img
+							src="https://{fg.instance_domain}/api/v1/files/{fg.icon_id}"
+							alt={fg.name}
+							class="h-full w-full rounded-[inherit] object-cover"
+						/>
+					{:else}
+						<span class="text-sm font-semibold text-text-primary">
+							{fg.name.split(' ').map((w) => w[0]).join('').slice(0, 3)}
+						</span>
+					{/if}
+					<!-- Federation indicator dot -->
+					<span class="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-bg-floating">
+						<svg class="h-2 w-2 text-blue-400" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M8 0a8 8 0 100 16A8 8 0 008 0z"/>
+						</svg>
+					</span>
+				</button>
+			{/each}
+		</div>
+	{/if}
 
 	<!-- Add guild button -->
 	<button
@@ -336,7 +400,7 @@
 </nav>
 
 <svelte:window
-	onclick={() => closeGuildContextMenu()}
+	onclick={() => { closeGuildContextMenu(); closeFedContextMenu(); }}
 	onpointermove={(e) => guildDragController?.handlePointerMove(e)}
 	onpointerup={(e) => guildDragController?.handlePointerUp(e)}
 	onpointercancel={(e) => guildDragController?.handlePointerCancel(e)}
@@ -376,6 +440,15 @@
 <!-- Invite Modal (triggered from guild context menu) -->
 {#if showInviteForGuild}
 	<InviteModal open={true} guildId={showInviteForGuild} onclose={() => (showInviteForGuild = null)} />
+{/if}
+
+<!-- Federated guild context menu -->
+{#if fedCtxMenu}
+	<ContextMenu x={fedCtxMenu.x} y={fedCtxMenu.y} onclose={closeFedContextMenu}>
+		<ContextMenuItem label="{fedCtxMenu.domain}" disabled />
+		<ContextMenuDivider />
+		<ContextMenuItem label="Leave Server" danger onclick={() => { handleLeaveFederatedGuild(fedCtxMenu!.guildId); closeFedContextMenu(); }} />
+	</ContextMenu>
 {/if}
 
 <CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />
