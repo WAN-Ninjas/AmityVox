@@ -9,6 +9,7 @@
 	import { guildMembers, guildRolesMap } from '$lib/stores/members';
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import Avatar from './Avatar.svelte';
+	import FederationBadge from './FederationBadge.svelte';
 	import { goto } from '$app/navigation';
 	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
 
@@ -221,6 +222,9 @@
 						{/if}
 						{#if user.flags & UserFlagBot}
 							<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-xs font-bold text-brand-400">BOT</span>
+						{/if}
+						{#if user.instance_domain || (user.instance_id && $currentUser && user.instance_id !== $currentUser.instance_id)}
+							<FederationBadge domain={user.instance_domain ?? user.instance_id} />
 						{/if}
 					</div>
 					<p class="text-sm text-text-muted">{user.handle ?? '@' + user.username}</p>

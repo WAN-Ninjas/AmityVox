@@ -137,12 +137,13 @@ func runServe() error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Bootstrap local instance record.
-	instanceID, err := ensureLocalInstance(ctx, db, cfg)
+	// Bootstrap local instance record (generates/loads Ed25519 keypair for federation).
+	instanceID, federationKey, err := ensureLocalInstance(ctx, db, cfg)
 	if err != nil {
 		return fmt.Errorf("bootstrapping local instance: %w", err)
 	}
-	logger.Info("local instance ready", slog.String("instance_id", instanceID))
+	logger.Info("local instance ready", slog.String("instance_id", instanceID),
+		slog.Bool("federation_key_loaded", len(federationKey) > 0))
 
 	// Connect to NATS event bus.
 	bus, err := events.New(cfg.NATS.URL, logger)
@@ -238,6 +239,7 @@ func runServe() error {
 		Pool:           db.Pool,
 		InstanceID:     instanceID,
 		Domain:         cfg.Instance.Domain,
+		PrivateKey:     federationKey,
 		EnforceIPCheck: cfg.Federation.EnforceIPCheck,
 		Logger:         logger,
 	})
@@ -353,6 +355,17 @@ func runServe() error {
 		r.Post("/{guildID}/channels/{channelID}/messages", syncSvc.HandleProxyPostFederatedGuildMessage)
 	})
 
+	// Federation peers and discovery proxy endpoints (authenticated, for local users).
+	srv.Router.Route("/api/v1/federation/peers", func(r chi.Router) {
+		r.Use(auth.RequireAuth(authSvc))
+		r.Use(srv.RateLimitGlobal())
+		r.Get("/public", syncSvc.HandleGetPublicFederationPeers)
+		r.Get("/{peerID}/guilds", syncSvc.HandleProxyDiscoverRemoteGuilds)
+	})
+
+	// Federation guild discovery (remote-facing, requires federation signature verification).
+	srv.Router.With(fedRL).Post("/federation/v1/guilds/discover", syncSvc.HandleFederatedGuildDiscover)
+
 	// Federation voice endpoint (remote-facing, for generating voice tokens for federated users).
 	srv.Router.With(fedRL).Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
 
@@ -445,43 +458,81 @@ func runServe() error {
 
 // ensureLocalInstance checks if the local instance record exists in the database
 // (matched by domain). If not, it creates one with a generated Ed25519 key pair
-// for federation signing. Returns the instance ID.
-func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Config) (string, error) {
+// for federation signing. Returns the instance ID and the Ed25519 private key.
+// If the instance exists but has no private key (legacy bootstrap), a new keypair
+// is generated and both keys are updated.
+func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Config) (string, ed25519.PrivateKey, error) {
 	var id string
+	var privKeyPEM *string
 	err := db.Pool.QueryRow(ctx,
-		`SELECT id FROM instances WHERE domain = $1`,
+		`SELECT id, private_key_pem FROM instances WHERE domain = $1`,
 		cfg.Instance.Domain,
-	).Scan(&id)
+	).Scan(&id, &privKeyPEM)
 
-	if err == nil {
-		return id, nil
+	if err == nil && privKeyPEM != nil && *privKeyPEM != "" {
+		// Instance exists and has a stored private key — parse and return it.
+		block, _ := pem.Decode([]byte(*privKeyPEM))
+		if block == nil {
+			return "", nil, fmt.Errorf("invalid private key PEM for instance %s", id)
+		}
+		privKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return "", nil, fmt.Errorf("parsing stored private key: %w", err)
+		}
+		edKey, ok := privKey.(ed25519.PrivateKey)
+		if !ok {
+			return "", nil, fmt.Errorf("stored private key is not Ed25519")
+		}
+		return id, edKey, nil
 	}
 
-	// Instance doesn't exist yet — generate an Ed25519 key pair and create it.
-	pubKey, _, err := ed25519.GenerateKey(nil)
+	// Either instance doesn't exist or it exists without a private key.
+	// Generate a new Ed25519 keypair.
+	pubKey, privKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
-		return "", fmt.Errorf("generating Ed25519 key pair: %w", err)
+		return "", nil, fmt.Errorf("generating Ed25519 key pair: %w", err)
 	}
 
 	pubKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
-		return "", fmt.Errorf("marshaling public key: %w", err)
+		return "", nil, fmt.Errorf("marshaling public key: %w", err)
 	}
-
-	pubKeyPEM := pem.EncodeToMemory(&pem.Block{
+	pubKeyPEMStr := string(pem.EncodeToMemory(&pem.Block{
 		Type:  "PUBLIC KEY",
 		Bytes: pubKeyBytes,
-	})
+	}))
 
+	privKeyBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshaling private key: %w", err)
+	}
+	privKeyPEMStr := string(pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privKeyBytes,
+	}))
+
+	if id != "" {
+		// Instance exists but had no private key (legacy bootstrap) — update both keys.
+		_, err = db.Pool.Exec(ctx,
+			`UPDATE instances SET public_key = $1, private_key_pem = $2 WHERE id = $3`,
+			pubKeyPEMStr, privKeyPEMStr, id,
+		)
+		if err != nil {
+			return "", nil, fmt.Errorf("updating instance keypair: %w", err)
+		}
+		return id, privKey, nil
+	}
+
+	// Instance doesn't exist — create it.
 	id = models.NewULID().String()
 	_, err = db.Pool.Exec(ctx,
-		`INSERT INTO instances (id, domain, public_key, name, description, software_version, federation_mode, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		`INSERT INTO instances (id, domain, public_key, private_key_pem, name, description, software_version, federation_mode, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 		 ON CONFLICT (domain) DO NOTHING`,
-		id, cfg.Instance.Domain, string(pubKeyPEM), cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
+		id, cfg.Instance.Domain, pubKeyPEMStr, privKeyPEMStr, cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
 	)
 	if err != nil {
-		return "", fmt.Errorf("creating local instance record: %w", err)
+		return "", nil, fmt.Errorf("creating local instance record: %w", err)
 	}
 
 	// Re-read in case of race (ON CONFLICT DO NOTHING).
@@ -490,10 +541,10 @@ func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Confi
 		cfg.Instance.Domain,
 	).Scan(&id)
 	if err != nil {
-		return "", fmt.Errorf("reading instance ID after insert: %w", err)
+		return "", nil, fmt.Errorf("reading instance ID after insert: %w", err)
 	}
 
-	return id, nil
+	return id, privKey, nil
 }
 
 // runMigrate handles the migrate subcommand with up/down/status operations.

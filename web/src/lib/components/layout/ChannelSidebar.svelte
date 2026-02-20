@@ -27,6 +27,7 @@
 	import StatusPicker from '$components/common/StatusPicker.svelte';
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
+	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import DragHandle from '$components/common/DragHandle.svelte';
@@ -1074,6 +1075,9 @@
 								</svg>
 							{/if}
 							<span class="flex-1 truncate">{dmName}</span>
+							{#if dmRecipient?.instance_domain || (dmRecipient?.instance_id && $currentUser && dmRecipient.instance_id !== $currentUser.instance_id)}
+								<FederationBadge domain={dmRecipient.instance_domain ?? dmRecipient.instance_id} compact />
+							{/if}
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
 									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />

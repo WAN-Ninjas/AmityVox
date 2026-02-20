@@ -15,6 +15,7 @@
 	import CrossChannelQuote from '$components/chat/CrossChannelQuote.svelte';
 	import EncryptedAttachment from '$components/encryption/EncryptedAttachment.svelte';
 	import Modal from '$components/common/Modal.svelte';
+	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
@@ -560,6 +561,9 @@
 			{#if !isCompact}
 				<div class="flex items-baseline gap-2">
 					<button class="font-medium text-text-primary hover:underline {isClientNickname ? 'italic' : ''}" style={authorRoleColor ? `color: ${authorRoleColor}` : ''} onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }} title={isClientNickname ? `Nickname for ${message.author?.display_name ?? message.author?.username ?? message.author_id}` : ''}>{displayName}</button>
+					{#if message.author?.instance_domain || (message.author?.instance_id && $currentUser && message.author.instance_id !== $currentUser.instance_id)}
+						<FederationBadge domain={message.author.instance_domain ?? message.author.instance_id} compact />
+					{/if}
 					{#if isAuthorBlocked}
 						<span class="text-2xs text-red-400">{blockLevel === "ignore" ? "(ignored)" : "(blocked)"}</span>
 					{/if}
