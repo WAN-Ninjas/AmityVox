@@ -96,7 +96,7 @@
 	async function handleApplyTemplate() {
 		if (!applyingTemplateId) return;
 		if (applyMode === 'new' && !applyNewGuildName.trim()) {
-			error = 'Please enter a guild name.';
+			error = 'Please enter a server name.';
 			return;
 		}
 		error = '';
@@ -115,9 +115,9 @@
 			showApplyDialog = false;
 			applyingTemplateId = null;
 			if (applyMode === 'new') {
-				success = 'New guild created from template!';
+				success = 'New server created from template!';
 			} else {
-				success = 'Template applied to this guild!';
+				success = 'Template applied to this server!';
 			}
 			setTimeout(() => (success = ''), 5000);
 		}
@@ -155,7 +155,7 @@
 		<div class="rounded-lg bg-bg-secondary p-4">
 			<h4 class="mb-3 text-sm font-semibold text-text-primary">Create Template</h4>
 			<p class="mb-3 text-xs text-text-muted">
-				Save the current guild structure (roles, channels, categories, settings) as a reusable template.
+				Save the current server structure (roles, channels, categories, settings) as a reusable template.
 			</p>
 			<div class="mb-3">
 				<label for="templateName" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
@@ -205,7 +205,7 @@
 	{:else if templates.length === 0}
 		<div class="rounded-lg bg-bg-secondary p-6 text-center">
 			<p class="text-sm text-text-muted">No templates yet.</p>
-			<p class="text-xs text-text-muted">Create one above to save this guild's structure as a reusable template.</p>
+			<p class="text-xs text-text-muted">Create one above to save this server's structure as a reusable template.</p>
 		</div>
 	{:else}
 		<div class="space-y-3">
@@ -264,18 +264,18 @@
 				<div class="mb-4 space-y-3">
 					<label class="flex items-center gap-2">
 						<input type="radio" name="applyMode" value="new" bind:group={applyMode} class="accent-brand-500" />
-						<span class="text-sm text-text-secondary">Create a new guild from this template</span>
+						<span class="text-sm text-text-secondary">Create a new server from this template</span>
 					</label>
 					<label class="flex items-center gap-2">
 						<input type="radio" name="applyMode" value="existing" bind:group={applyMode} class="accent-brand-500" />
-						<span class="text-sm text-text-secondary">Apply to this guild (adds missing roles/channels)</span>
+						<span class="text-sm text-text-secondary">Apply to this server (adds missing roles/channels)</span>
 					</label>
 				</div>
 
 				{#if applyMode === 'new'}
 					<div class="mb-4">
 						<label for="newGuildName" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-							New Guild Name
+							New Server Name
 						</label>
 						<input
 							id="newGuildName"
@@ -288,7 +288,7 @@
 					</div>
 				{:else}
 					<div class="mb-4 rounded bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
-						This will add roles and channels from the template that don't already exist in this guild.
+						This will add roles and channels from the template that don't already exist in this server.
 						Existing roles and channels will not be modified or removed.
 					</div>
 				{/if}
@@ -300,7 +300,7 @@
 						onclick={handleApplyTemplate}
 						disabled={applyOp.loading || (applyMode === 'new' && !applyNewGuildName.trim())}
 					>
-						{applyOp.loading ? 'Applying...' : applyMode === 'new' ? 'Create Guild' : 'Apply Template'}
+						{applyOp.loading ? 'Applying...' : applyMode === 'new' ? 'Create Server' : 'Apply Template'}
 					</button>
 				</div>
 			</div>

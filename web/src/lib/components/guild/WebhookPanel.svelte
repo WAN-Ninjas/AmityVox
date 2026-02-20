@@ -120,7 +120,7 @@
 		channel_create: 'Channel Created',
 		channel_update: 'Channel Updated',
 		channel_delete: 'Channel Deleted',
-		guild_update: 'Guild Updated',
+		guild_update: 'Server Updated',
 		role_create: 'Role Created',
 		role_update: 'Role Updated',
 		role_delete: 'Role Deleted',
