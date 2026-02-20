@@ -55,9 +55,7 @@ BACKUP_DIR=$(ls "$TEMP_DIR")
 # Restore PostgreSQL.
 if [ -f "$TEMP_DIR/$BACKUP_DIR/postgres.sql" ]; then
     log "Restoring PostgreSQL..."
-    cd "$COMPOSE_DIR"
-    $COMPOSE_CMD exec -T postgresql psql -U amityvox < "../../$TEMP_DIR/$BACKUP_DIR/postgres.sql"
-    cd ../..
+    $COMPOSE_CMD -f "$COMPOSE_DIR/docker-compose.yml" exec -T postgresql psql -U amityvox < "$TEMP_DIR/$BACKUP_DIR/postgres.sql"
     log "PostgreSQL restored."
 else
     warn "No PostgreSQL dump found in backup."

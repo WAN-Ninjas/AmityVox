@@ -121,7 +121,12 @@ ask_pass() {
     fi
 
     if [ "$NONINTERACTIVE" = "1" ]; then
-        REPLY="$(gen_alnum 16)"
+        if [ -n "$varname" ] && [ -n "${!varname:-}" ]; then
+            REPLY="${!varname}"
+        else
+            REPLY="$(gen_alnum 16)"
+            warn "Generated random password (no $varname set): $REPLY"
+        fi
         return
     fi
 

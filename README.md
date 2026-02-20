@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <p align="center">
   <img src="web/static/icon-512.png" alt="AmityVox" width="128" height="128" />
 </p>
@@ -20,7 +21,7 @@
 
 ## About
 
-AmityVox takes the best parts of Discord, Matrix, and other platforms and combines them into one cohesive, self-hostable, AGPL-3.0 licensed project. It's built by a small team of IT veterans who share the same vision: give communities a powerful turnkey alternative to Discord that will never be monetized.
+AmityVox takes the best parts of Discord, Matrix, and other platforms and combines them into one cohesive, self-hostable, AGPL-3.0-licensed project. It's built by a small team of IT veterans who share the same vision: give communities a powerful turnkey alternative to Discord that will never be monetized.
 
 The architecture and spec behind it is a 31-page document written by the team, no AI involvement beyond making the spec more presentable. The implementation uses Claude Code and Codex. If AI-written code offends you, move along. If a project with rough edges offends you, come back later.
 
