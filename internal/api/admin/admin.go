@@ -232,10 +232,20 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 		}
 
 		// Compute key fingerprint.
-		fingerprint, _ := federation.ComputeKeyFingerprint(disc.PublicKey)
+		fingerprint, fpErr := federation.ComputeKeyFingerprint(disc.PublicKey)
+		if fpErr != nil {
+			h.Logger.Warn("failed to compute key fingerprint",
+				slog.String("domain", req.Domain),
+				slog.String("error", fpErr.Error()))
+		}
 
 		// Resolve domain IPs.
-		resolvedIPs, _ := net.LookupHost(req.Domain)
+		resolvedIPs, dnsErr := net.LookupHost(req.Domain)
+		if dnsErr != nil {
+			h.Logger.Warn("failed to resolve domain IPs",
+				slog.String("domain", req.Domain),
+				slog.String("error", dnsErr.Error()))
+		}
 
 		// Register the remote instance with fingerprint and resolved IPs.
 		now := time.Now().UTC()
