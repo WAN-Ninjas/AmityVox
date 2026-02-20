@@ -824,6 +824,22 @@ class ApiClient {
 		return this.del(`/admin/federation/peers/${peerId}`);
 	}
 
+	approveFederationPeer(peerId: string): Promise<{ status: string }> {
+		return this.post(`/admin/federation/peers/${peerId}/approve`);
+	}
+
+	rejectFederationPeer(peerId: string): Promise<{ status: string }> {
+		return this.post(`/admin/federation/peers/${peerId}/reject`);
+	}
+
+	getKeyAudit(): Promise<KeyAuditEntry[]> {
+		return this.get('/admin/federation/key-audit');
+	}
+
+	acknowledgeKeyChange(auditId: string): Promise<{ status: string }> {
+		return this.post(`/admin/federation/key-audit/${auditId}/acknowledge`);
+	}
+
 	// --- Admin Instance Bans ---
 
 	instanceBanUser(userId: string, reason: string): Promise<void> {

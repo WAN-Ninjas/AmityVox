@@ -1094,3 +1094,137 @@ func (h *Handler) HandleUpdateProtocolConfig(w http.ResponseWriter, r *http.Requ
 
 	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
+
+// =============================================================================
+// Federation Peer Approval / Key Audit
+// =============================================================================
+
+// HandleApproveFederationPeer approves a pending federation peer.
+// POST /api/v1/admin/federation/peers/{peerID}/approve
+func (h *Handler) HandleApproveFederationPeer(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	peerID := chi.URLParam(r, "peerID")
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE federation_peers
+		 SET status = 'active', handshake_completed_at = now()
+		 WHERE instance_id = $1 AND peer_id = $2 AND status = 'pending'`,
+		h.InstanceID, peerID)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to approve peer", err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "No pending peer found with that ID")
+		return
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "approved"})
+}
+
+// HandleRejectFederationPeer rejects a pending federation peer.
+// POST /api/v1/admin/federation/peers/{peerID}/reject
+func (h *Handler) HandleRejectFederationPeer(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	peerID := chi.URLParam(r, "peerID")
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE federation_peers
+		 SET status = 'blocked'
+		 WHERE instance_id = $1 AND peer_id = $2 AND status = 'pending'`,
+		h.InstanceID, peerID)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to reject peer", err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "No pending peer found with that ID")
+		return
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
+}
+
+// HandleGetKeyAudit returns unacknowledged key change audit entries.
+// GET /api/v1/admin/federation/key-audit
+func (h *Handler) HandleGetKeyAudit(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT fka.id, fka.instance_id, fka.old_fingerprint, fka.new_fingerprint,
+		        fka.detected_at, fka.acknowledged_by, fka.acknowledged_at,
+		        i.domain, i.name
+		 FROM federation_key_audit fka
+		 JOIN instances i ON i.id = fka.instance_id
+		 WHERE fka.acknowledged_at IS NULL
+		 ORDER BY fka.detected_at DESC`)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to get key audit entries", err)
+		return
+	}
+	defer rows.Close()
+
+	type auditEntry struct {
+		ID             string     `json:"id"`
+		InstanceID     string     `json:"instance_id"`
+		InstanceDomain string     `json:"instance_domain"`
+		InstanceName   *string    `json:"instance_name,omitempty"`
+		OldFingerprint string     `json:"old_fingerprint"`
+		NewFingerprint string     `json:"new_fingerprint"`
+		DetectedAt     time.Time  `json:"detected_at"`
+		AcknowledgedBy *string    `json:"acknowledged_by,omitempty"`
+		AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	}
+
+	entries := make([]auditEntry, 0)
+	for rows.Next() {
+		var e auditEntry
+		if err := rows.Scan(&e.ID, &e.InstanceID, &e.OldFingerprint, &e.NewFingerprint,
+			&e.DetectedAt, &e.AcknowledgedBy, &e.AcknowledgedAt,
+			&e.InstanceDomain, &e.InstanceName); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, entries)
+}
+
+// HandleAcknowledgeKeyChange acknowledges a key change audit entry.
+// POST /api/v1/admin/federation/key-audit/{auditID}/acknowledge
+func (h *Handler) HandleAcknowledgeKeyChange(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	auditID := chi.URLParam(r, "auditID")
+	adminID := auth.UserIDFromContext(r.Context())
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE federation_key_audit
+		 SET acknowledged_by = $1, acknowledged_at = now()
+		 WHERE id = $2 AND acknowledged_at IS NULL`,
+		adminID, auditID)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to acknowledge key change", err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Key audit entry not found or already acknowledged")
+		return
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "acknowledged"})
+}

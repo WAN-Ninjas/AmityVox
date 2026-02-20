@@ -124,6 +124,26 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check timestamp freshness.
+	if msg := validateTimestamp(signed.Timestamp); msg != "" {
+		ss.logger.Warn("inbox rejected: stale timestamp",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("detail", msg))
+		http.Error(w, "Stale or future timestamp", http.StatusBadRequest)
+		return
+	}
+
+	// Verify source IP.
+	if ipMsg := ss.fed.verifySourceIP(r, signed.SenderID); ipMsg != "" {
+		ss.logger.Warn("inbox source IP mismatch",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("detail", ipMsg))
+		if ss.fed.enforceIPCheck {
+			http.Error(w, "Source IP mismatch", http.StatusForbidden)
+			return
+		}
+	}
+
 	// Check federation is allowed from this sender.
 	allowed, err := ss.fed.IsFederationAllowed(r.Context(), signed.SenderID)
 	if err != nil || !allowed {
