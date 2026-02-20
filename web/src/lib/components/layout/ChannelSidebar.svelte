@@ -754,7 +754,7 @@
 					class:text-text-muted={$currentChannelId !== channel.id}
 					class:hover:bg-bg-modifier={true}
 					class:hover:text-text-secondary={$currentChannelId !== channel.id}
-					onclick={() => { setChannel(channel.id); goto(`/app/guilds/${currentFederatedGuild.guild_id}/channels/${channel.id}`); }}
+					onclick={() => { pendingThreadOpen.set('__close__'); setChannel(channel.id); goto(`/app/guilds/${currentFederatedGuild.guild_id}/channels/${channel.id}`); }}
 				>
 					<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 						<path d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />

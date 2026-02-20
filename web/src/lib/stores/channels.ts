@@ -171,18 +171,26 @@ export function loadFederatedChannels(channelsJson: unknown[]) {
 	const list = (channelsJson as Array<{ id: string; name: string; topic?: string | null; position?: number; channel_type?: string }>)
 		.map(c => ({
 			id: c.id,
-			guild_id: '',
+			guild_id: null,
+			category_id: null,
 			name: c.name,
 			topic: c.topic ?? null,
 			position: c.position ?? 0,
-			channel_type: c.channel_type ?? 'text',
+			channel_type: (c.channel_type ?? 'text') as Channel['channel_type'],
 			parent_channel_id: null,
+			slowmode_seconds: 0,
+			nsfw: false,
+			encrypted: false,
+			archived: false,
 			locked: false,
 			locked_by: null,
 			locked_at: null,
-			slowmode_seconds: 0,
-			nsfw: false,
-			created_at: '',
+			last_message_id: null,
+			owner_id: null,
+			user_limit: 0,
+			bitrate: 0,
+			last_activity_at: null,
+			created_at: new Date(0).toISOString(),
 		} as Channel));
 	channels.setAll(list.map(c => [c.id, c]));
 }
