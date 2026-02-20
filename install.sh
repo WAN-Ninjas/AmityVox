@@ -401,8 +401,8 @@ generate_config() {
 # Instance
 # ============================================================
 AMITYVOX_INSTANCE_DOMAIN=$DOMAIN
-AMITYVOX_INSTANCE_NAME=$INSTANCE_NAME
-AMITYVOX_INSTANCE_DESCRIPTION=$INSTANCE_DESCRIPTION
+AMITYVOX_INSTANCE_NAME="$INSTANCE_NAME"
+AMITYVOX_INSTANCE_DESCRIPTION="$INSTANCE_DESCRIPTION"
 AMITYVOX_INSTANCE_FEDERATION_MODE=$FEDERATION_MODE
 
 # ============================================================
@@ -480,10 +480,13 @@ build_and_start() {
     echo
 
     $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache 2>&1 | while IFS= read -r line; do
-        # Show progress without flooding the terminal.
+        # Show progress and errors without flooding the terminal.
         case "$line" in
             *"DONE"*|*"exporting"*|*"FINISHED"*|*"Successfully"*)
                 echo -e "  ${GREEN}$line${NC}"
+                ;;
+            *"ERROR"*|*"error"*|*"FAILED"*|*"failed"*|*"CANCELED"*)
+                echo -e "  ${RED}$line${NC}"
                 ;;
         esac
     done
