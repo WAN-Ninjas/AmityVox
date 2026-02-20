@@ -192,7 +192,7 @@
 			<div class="mt-3">
 				<p class="mb-2 text-xs font-medium text-text-muted">Roles that can still post:</p>
 				{#if roles.length === 0}
-					<p class="text-xs text-text-muted">No roles available. Guild owner and admins can always post.</p>
+					<p class="text-xs text-text-muted">No roles available. Server owner and admins can always post.</p>
 				{:else}
 					<div class="flex flex-wrap gap-2">
 						{#each roles as role (role.id)}

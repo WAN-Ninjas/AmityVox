@@ -130,7 +130,7 @@
 
 	function scopeLabel(policy: RetentionPolicy): string {
 		if (policy.channel_name) return `Channel: ${policy.channel_name}`;
-		if (policy.guild_name) return `Guild: ${policy.guild_name}`;
+		if (policy.guild_name) return `Server: ${policy.guild_name}`;
 		return 'Instance-wide';
 	}
 
@@ -177,7 +177,7 @@
 					<div class="flex gap-4" role="radiogroup" aria-labelledby="retention-scope-label">
 						<label class="flex items-center gap-2 text-sm text-text-primary">
 							<input type="radio" bind:group={newScope} value="guild" />
-							Guild
+							Server
 						</label>
 						<label class="flex items-center gap-2 text-sm text-text-primary">
 							<input type="radio" bind:group={newScope} value="channel" />
@@ -188,8 +188,8 @@
 
 				{#if newScope === 'guild'}
 					<div>
-						<label for="ret-guild-id" class="block text-sm font-medium text-text-secondary mb-1">Guild ID</label>
-						<input id="ret-guild-id" type="text" class="input w-full" placeholder="Paste guild ULID" bind:value={newGuildId} />
+						<label for="ret-guild-id" class="block text-sm font-medium text-text-secondary mb-1">Server ID</label>
+						<input id="ret-guild-id" type="text" class="input w-full" placeholder="Paste server ULID" bind:value={newGuildId} />
 					</div>
 				{:else}
 					<div>

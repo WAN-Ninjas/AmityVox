@@ -1976,10 +1976,10 @@
 
 					<!-- ==================== MUTED ITEMS ==================== -->
 					<div class="border-t border-bg-modifier pt-6">
-						<h2 class="mb-4 text-lg font-bold text-text-primary">Muted Channels & Guilds</h2>
+						<h2 class="mb-4 text-lg font-bold text-text-primary">Muted Channels & Servers</h2>
 
 						{#if getMutedChannels().length === 0 && getMutedGuilds().length === 0}
-							<p class="text-sm text-text-muted">No muted channels or guilds.</p>
+							<p class="text-sm text-text-muted">No muted channels or servers.</p>
 						{:else}
 							<div class="space-y-2">
 								{#each getMutedGuilds() as guildPref}
@@ -1987,10 +1987,10 @@
 									<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
 										<div class="min-w-0 flex-1">
 											<p class="truncate text-sm font-medium text-text-primary">
-												{guild?.name ?? guildPref.guild_id ?? 'Unknown Guild'}
+												{guild?.name ?? guildPref.guild_id ?? 'Unknown Server'}
 											</p>
 											<p class="text-xs text-text-muted">
-												Guild
+												Server
 												{#if guildPref.muted_until}
 													&mdash; until {new Date(guildPref.muted_until).toLocaleString()}
 												{:else}
@@ -2081,7 +2081,7 @@
 							</label>
 							<label class="flex items-center gap-2">
 								<input type="radio" name="friendPrivacy" value="mutual_guilds" bind:group={friendRequestPrivacy} class="accent-brand-500" />
-								<span class="text-sm text-text-secondary">People in mutual guilds</span>
+								<span class="text-sm text-text-secondary">People in mutual servers</span>
 							</label>
 							<label class="flex items-center gap-2">
 								<input type="radio" name="friendPrivacy" value="nobody" bind:group={friendRequestPrivacy} class="accent-brand-500" />
@@ -2961,7 +2961,7 @@
 																<span class="text-sm font-medium text-text-primary">/{cmd.name}</span>
 																<span class="ml-2 text-xs text-text-muted">{cmd.description}</span>
 																{#if cmd.guild_id}
-																	<span class="ml-1 rounded bg-bg-modifier px-1 py-0.5 text-2xs text-text-muted">Guild-scoped</span>
+																	<span class="ml-1 rounded bg-bg-modifier px-1 py-0.5 text-2xs text-text-muted">Server-scoped</span>
 																{:else}
 																	<span class="ml-1 rounded bg-brand-500/10 px-1 py-0.5 text-2xs text-brand-400">Global</span>
 																{/if}
@@ -3247,7 +3247,7 @@
 				<div class="mb-6 rounded-lg bg-bg-secondary p-4">
 					<h3 class="mb-1 text-sm font-semibold text-text-primary">Export My Data</h3>
 					<p class="mb-3 text-xs text-text-muted">
-						Download a copy of all your data including your profile, messages, guild memberships,
+						Download a copy of all your data including your profile, messages, server memberships,
 						bookmarks, reactions, read states, and relationships. This complies with GDPR data
 						portability requirements. Limited to one export per 24 hours.
 					</p>
@@ -3335,7 +3335,7 @@
 					<div class="space-y-2 text-xs text-text-muted">
 						<p>
 							<span class="font-semibold text-text-secondary">Full data export</span> includes
-							everything: your profile, messages (up to 10,000 most recent), guild memberships with
+							everything: your profile, messages (up to 10,000 most recent), server memberships with
 							roles, bookmarks, reactions, read states, and friend/block relationships.
 						</p>
 						<p>

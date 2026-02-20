@@ -715,7 +715,7 @@
 				<button
 					class="rounded p-1 text-text-muted hover:bg-bg-modifier hover:text-text-primary"
 					onclick={() => goto(`/app/guilds/${$currentGuild?.id}/settings`)}
-					title="Guild Settings"
+					title="Server Settings"
 				>
 					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 						<path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -1409,7 +1409,7 @@
 				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 					<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
 				</svg>
-				Unmute Guild
+				Unmute Server
 			</button>
 		{:else}
 			<div class="relative">
@@ -1421,7 +1421,7 @@
 						<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
 						<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
 					</svg>
-					Mute Guild
+					Mute Server
 					<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 						<path d="M9 5l7 7-7 7" />
 					</svg>
@@ -1458,7 +1458,7 @@
 				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 					<path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
 				</svg>
-				Guild Settings
+				Server Settings
 			</button>
 		{/if}
 	</div>
