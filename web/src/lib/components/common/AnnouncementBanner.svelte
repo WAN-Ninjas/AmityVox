@@ -4,6 +4,7 @@
 	import { activeAnnouncements, setAnnouncements, type AnnouncementData } from '$lib/stores/announcements';
 
 	let dismissed = $state<Set<string>>(new Set());
+	let expanded = $state<Set<string>>(new Set());
 	let loading = $state(true);
 
 	onMount(async () => {
@@ -22,6 +23,16 @@
 
 	function dismiss(id: string) {
 		dismissed = new Set([...dismissed, id]);
+	}
+
+	function toggleExpand(id: string) {
+		const next = new Set(expanded);
+		if (next.has(id)) {
+			next.delete(id);
+		} else {
+			next.add(id);
+		}
+		expanded = next;
 	}
 
 	function severityBg(severity: string): string {
@@ -59,15 +70,21 @@
 {#if !loading && visibleAnnouncements.length > 0}
 	<div class="flex flex-col">
 		{#each visibleAnnouncements as announcement (announcement.id)}
+			{@const isExpanded = expanded.has(announcement.id)}
 			<div class="{severityBg(announcement.severity)} {severityText(announcement.severity)} relative px-4 py-2">
 				<div class="mx-auto flex max-w-5xl items-center justify-between gap-3">
-					<div class="flex items-center gap-2 min-w-0">
+					<button
+						type="button"
+						class="flex items-center gap-2 min-w-0 cursor-pointer text-left bg-transparent border-0 p-0 text-inherit"
+						aria-expanded={isExpanded}
+						onclick={() => toggleExpand(announcement.id)}
+					>
 						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" d={severityIcon(announcement.severity)} />
 						</svg>
 						<span class="text-sm font-semibold shrink-0">{announcement.title}</span>
-						<span class="text-sm opacity-90 truncate">{announcement.content}</span>
-					</div>
+						<span class="text-sm opacity-90 {isExpanded ? 'whitespace-normal' : 'truncate'}">{announcement.content}</span>
+					</button>
 					<button
 						class="shrink-0 rounded p-1 opacity-70 hover:opacity-100 transition-opacity"
 						onclick={() => dismiss(announcement.id)}

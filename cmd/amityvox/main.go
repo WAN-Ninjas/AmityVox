@@ -244,6 +244,9 @@ func runServe() error {
 		Logger:         logger,
 	})
 
+	// Refresh federation peer public keys on startup to handle key rotations.
+	fedSvc.RefreshPeerKeys(ctx)
+
 	// Create AutoMod service.
 	automodSvc := automod.NewService(automod.Config{
 		Pool:   db.Pool,
@@ -464,10 +467,20 @@ func runServe() error {
 func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Config) (string, ed25519.PrivateKey, error) {
 	var id string
 	var privKeyPEM *string
+
+	// Try loading with private_key_pem (requires migration 061).
+	// Fall back to id-only query if the column doesn't exist yet.
 	err := db.Pool.QueryRow(ctx,
 		`SELECT id, private_key_pem FROM instances WHERE domain = $1`,
 		cfg.Instance.Domain,
 	).Scan(&id, &privKeyPEM)
+	if err != nil && strings.Contains(err.Error(), "private_key_pem") {
+		// Column doesn't exist — migration 061 not yet applied. Fall back.
+		err = db.Pool.QueryRow(ctx,
+			`SELECT id FROM instances WHERE domain = $1`,
+			cfg.Instance.Domain,
+		).Scan(&id)
+	}
 
 	if err == nil && privKeyPEM != nil && *privKeyPEM != "" {
 		// Instance exists and has a stored private key — parse and return it.
@@ -513,10 +526,17 @@ func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Confi
 
 	if id != "" {
 		// Instance exists but had no private key (legacy bootstrap) — update both keys.
+		// Try with private_key_pem first; fall back if column doesn't exist.
 		_, err = db.Pool.Exec(ctx,
 			`UPDATE instances SET public_key = $1, private_key_pem = $2 WHERE id = $3`,
 			pubKeyPEMStr, privKeyPEMStr, id,
 		)
+		if err != nil && strings.Contains(err.Error(), "private_key_pem") {
+			_, err = db.Pool.Exec(ctx,
+				`UPDATE instances SET public_key = $1 WHERE id = $2`,
+				pubKeyPEMStr, id,
+			)
+		}
 		if err != nil {
 			return "", nil, fmt.Errorf("updating instance keypair: %w", err)
 		}
@@ -531,6 +551,14 @@ func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Confi
 		 ON CONFLICT (domain) DO NOTHING`,
 		id, cfg.Instance.Domain, pubKeyPEMStr, privKeyPEMStr, cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
 	)
+	if err != nil && strings.Contains(err.Error(), "private_key_pem") {
+		_, err = db.Pool.Exec(ctx,
+			`INSERT INTO instances (id, domain, public_key, name, description, software_version, federation_mode, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+			 ON CONFLICT (domain) DO NOTHING`,
+			id, cfg.Instance.Domain, pubKeyPEMStr, cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
+		)
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("creating local instance record: %w", err)
 	}
