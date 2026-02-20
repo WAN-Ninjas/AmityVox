@@ -5,7 +5,7 @@ import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
 import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, guilds as guildsStore, currentGuildId } from './guilds';
-import { updateChannel, removeChannel, channels as channelsStore, currentChannelId } from './channels';
+import { updateChannel, removeChannel, loadChannels, channels as channelsStore, currentChannelId } from './channels';
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
@@ -119,7 +119,13 @@ export function connectGateway(token: string) {
 				break;
 
 			// --- Guild events ---
-			case 'GUILD_CREATE':
+			case 'GUILD_CREATE': {
+				const guild = data as Guild;
+				updateGuild(guild);
+				loadPermissions(guild.id);
+				loadChannels(guild.id);
+				break;
+			}
 			case 'GUILD_UPDATE': {
 				const guild = data as Guild;
 				updateGuild(guild);
