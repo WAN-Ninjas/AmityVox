@@ -6,6 +6,7 @@ package invites
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,10 +28,41 @@ type Handler struct {
 	Logger     *slog.Logger
 }
 
+// parseRemoteInvite checks if an invite code contains a remote domain.
+// Supported formats: "CODE@domain.com" or "domain.com/CODE".
+// Returns (localCode, domain, isRemote).
+func parseRemoteInvite(code string) (string, string, bool) {
+	// Format: CODE@domain.com
+	if idx := strings.LastIndex(code, "@"); idx > 0 && idx < len(code)-1 {
+		localCode := code[:idx]
+		domain := code[idx+1:]
+		if strings.Contains(domain, ".") {
+			return localCode, domain, true
+		}
+	}
+	// Format: domain.com/CODE (domain must contain a dot, code must not)
+	if idx := strings.Index(code, "/"); idx > 0 && idx < len(code)-1 {
+		domain := code[:idx]
+		localCode := code[idx+1:]
+		if strings.Contains(domain, ".") && !strings.Contains(localCode, "/") {
+			return localCode, domain, true
+		}
+	}
+	return code, "", false
+}
+
 // HandleGetInvite handles GET /api/v1/invites/{code}.
 // Returns the invite info including guild name and member count.
+// Supports remote invite formats: CODE@domain.com or domain.com/CODE.
 func (h *Handler) HandleGetInvite(w http.ResponseWriter, r *http.Request) {
 	code := chi.URLParam(r, "code")
+
+	localCode, domain, isRemote := parseRemoteInvite(code)
+
+	if isRemote {
+		h.handleGetRemoteInvite(w, r, localCode, domain)
+		return
+	}
 
 	var inv models.Invite
 	err := h.Pool.QueryRow(r.Context(),
@@ -76,11 +108,49 @@ func (h *Handler) HandleGetInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetRemoteInvite proxies an invite lookup to a remote federated instance.
+func (h *Handler) handleGetRemoteInvite(w http.ResponseWriter, r *http.Request, code, domain string) {
+	ctx := r.Context()
+
+	// Check if we're federated with this domain.
+	var peerID string
+	var peerStatus string
+	err := h.Pool.QueryRow(ctx,
+		`SELECT fp.peer_id, fp.status FROM federation_peers fp
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fp.instance_id = $1 AND i.domain = $2`,
+		h.InstanceID, domain,
+	).Scan(&peerID, &peerStatus)
+
+	if err != nil || peerStatus != "active" {
+		apiutil.WriteError(w, http.StatusForbidden, "not_federated", "This instance is not federated with "+domain)
+		return
+	}
+
+	// We're federated — return a response indicating this is a remote invite.
+	// The frontend will use joinFederatedGuild(domain, null, code) to accept.
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"federated":       true,
+		"instance_domain": domain,
+		"invite_code":     code,
+		"guild_name":      "Server on " + domain,
+		"member_count":    0,
+	})
+}
+
 // HandleAcceptInvite handles POST /api/v1/invites/{code}.
 // Joins the authenticated user to the guild associated with the invite.
+// For remote invites, returns instructions for the client to use the federation join endpoint.
 func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	code := chi.URLParam(r, "code")
 	userID := auth.UserIDFromContext(r.Context())
+
+	localCode, domain, isRemote := parseRemoteInvite(code)
+
+	if isRemote {
+		h.handleAcceptRemoteInvite(w, r, userID, localCode, domain)
+		return
+	}
 
 	var inv models.Invite
 	err := h.Pool.QueryRow(r.Context(),
@@ -179,6 +249,35 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"guild_id": inv.GuildID,
 		"joined":   true,
+	})
+}
+
+// handleAcceptRemoteInvite checks federation status for a remote invite and
+// returns instructions for the client to proceed via the federation join endpoint.
+func (h *Handler) handleAcceptRemoteInvite(w http.ResponseWriter, r *http.Request, userID, code, domain string) {
+	ctx := r.Context()
+
+	// Check federation status.
+	var peerStatus string
+	err := h.Pool.QueryRow(ctx,
+		`SELECT fp.status FROM federation_peers fp
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fp.instance_id = $1 AND i.domain = $2`,
+		h.InstanceID, domain,
+	).Scan(&peerStatus)
+
+	if err != nil || peerStatus != "active" {
+		apiutil.WriteError(w, http.StatusForbidden, "not_federated", "This instance is not federated with "+domain)
+		return
+	}
+
+	// Return redirect to federation join endpoint.
+	// The client should call POST /api/v1/federation/guilds/join with
+	// { instance_domain, invite_code }.
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"federated":       true,
+		"instance_domain": domain,
+		"invite_code":     code,
 	})
 }
 

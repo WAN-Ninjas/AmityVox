@@ -1086,6 +1086,226 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 	w.Write(respBody)
 }
 
+// HandleFederatedGuildDiscover returns discoverable guilds to a verified federated peer.
+// POST /federation/v1/guilds/discover?q=&tag=&limit=
+// Requires federation signature verification — only authenticated peers can discover.
+func (ss *SyncService) HandleFederatedGuildDiscover(w http.ResponseWriter, r *http.Request) {
+	// Verify the sender is an authenticated federation peer.
+	_, _, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	tag := r.URL.Query().Get("tag")
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	baseSQL := `SELECT g.id, g.name, g.description, g.icon_id, g.banner_id,
+	            g.tags, g.member_count, g.created_at
+	     FROM guilds g
+	     WHERE g.discoverable = true`
+
+	argN := 1
+	var args []interface{}
+	if query != "" {
+		baseSQL += fmt.Sprintf(` AND g.name ILIKE '%%' || $%d || '%%'`, argN)
+		args = append(args, query)
+		argN++
+	}
+	if tag != "" && tag != "All" {
+		baseSQL += fmt.Sprintf(` AND $%d = ANY(g.tags)`, argN)
+		args = append(args, tag)
+		argN++
+	}
+	baseSQL += fmt.Sprintf(` ORDER BY g.member_count DESC LIMIT $%d`, argN)
+	args = append(args, limit)
+
+	rows, err := ss.fed.pool.Query(r.Context(), baseSQL, args...)
+	if err != nil {
+		http.Error(w, "Failed to query guilds", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type discoverGuild struct {
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Description *string  `json:"description,omitempty"`
+		IconID      *string  `json:"icon_id,omitempty"`
+		BannerID    *string  `json:"banner_id,omitempty"`
+		Tags        []string `json:"tags,omitempty"`
+		MemberCount int      `json:"member_count"`
+		CreatedAt   string   `json:"created_at"`
+	}
+
+	guilds := make([]discoverGuild, 0)
+	for rows.Next() {
+		var g discoverGuild
+		var tags []string
+		var createdAt time.Time
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.IconID, &g.BannerID,
+			&tags, &g.MemberCount, &createdAt); err != nil {
+			http.Error(w, "Failed to read guilds", http.StatusInternalServerError)
+			return
+		}
+		g.Tags = tags
+		g.CreatedAt = createdAt.Format(time.RFC3339)
+		guilds = append(guilds, g)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(guilds)
+}
+
+// HandleProxyDiscoverRemoteGuilds proxies a discover request to a remote peer's instance.
+// GET /api/v1/federation/peers/{peerID}/guilds?q=&tag=&limit=
+func (ss *SyncService) HandleProxyDiscoverRemoteGuilds(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	peerID := chi.URLParam(r, "peerID")
+	if peerID == "" {
+		http.Error(w, "Missing peer ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify peer exists and is active.
+	var peerDomain string
+	var peerStatus string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT i.domain, fp.status FROM federation_peers fp
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fp.instance_id = $1 AND fp.peer_id = $2`,
+		ss.fed.instanceID, peerID,
+	).Scan(&peerDomain, &peerStatus)
+	if err != nil {
+		http.Error(w, "Federation peer not found", http.StatusNotFound)
+		return
+	}
+	if peerStatus != "active" {
+		http.Error(w, "Federation peer is not active", http.StatusForbidden)
+		return
+	}
+
+	// Build query string for remote instance's discover endpoint.
+	remoteQuery := neturl.Values{}
+	if q := r.URL.Query().Get("q"); q != "" {
+		remoteQuery.Set("q", q)
+	}
+	if tag := r.URL.Query().Get("tag"); tag != "" {
+		remoteQuery.Set("tag", tag)
+	}
+	limit := "50"
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = strconv.Itoa(n)
+		}
+	}
+	remoteQuery.Set("limit", limit)
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/discover?%s", peerDomain, remoteQuery.Encode())
+
+	// Proxy the discover request to the remote instance with federation signing.
+	payload := map[string]string{"action": "discover"}
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, payload)
+	if err != nil {
+		ss.logger.Warn("failed to proxy remote guild discover",
+			slog.String("peer", peerDomain), slog.String("error", err.Error()))
+		http.Error(w, "Failed to contact remote instance", http.StatusBadGateway)
+		return
+	}
+
+	if statusCode != http.StatusOK {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		w.Write(respBody)
+		return
+	}
+
+	// Parse the remote response and inject instance_domain into each guild.
+	var remoteGuilds []json.RawMessage
+	if err := json.Unmarshal(respBody, &remoteGuilds); err != nil {
+		// Try unwrapping from data envelope.
+		var envelope struct {
+			Data []json.RawMessage `json:"data"`
+		}
+		if err2 := json.Unmarshal(respBody, &envelope); err2 != nil {
+			// Pass through as-is.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(respBody)
+			return
+		}
+		remoteGuilds = envelope.Data
+	}
+
+	// Enrich each guild with instance_domain.
+	enriched := make([]map[string]interface{}, 0, len(remoteGuilds))
+	for _, raw := range remoteGuilds {
+		var guild map[string]interface{}
+		if json.Unmarshal(raw, &guild) == nil {
+			guild["instance_domain"] = peerDomain
+			enriched = append(enriched, guild)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": enriched})
+}
+
+// HandleGetPublicFederationPeers returns basic info for all active federation peers.
+// GET /api/v1/federation/peers/public
+func (ss *SyncService) HandleGetPublicFederationPeers(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := ss.fed.pool.Query(r.Context(),
+		`SELECT fp.peer_id, i.domain, i.name, fp.status, fp.established_at
+		 FROM federation_peers fp
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fp.instance_id = $1 AND fp.status = 'active'
+		 ORDER BY i.domain`, ss.fed.instanceID)
+	if err != nil {
+		http.Error(w, "Failed to query peers", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type publicPeer struct {
+		ID            string    `json:"id"`
+		Domain        string    `json:"domain"`
+		Name          *string   `json:"name,omitempty"`
+		Status        string    `json:"status"`
+		EstablishedAt time.Time `json:"established_at"`
+	}
+
+	peers := []publicPeer{}
+	for rows.Next() {
+		var p publicPeer
+		if err := rows.Scan(&p.ID, &p.Domain, &p.Name, &p.Status, &p.EstablishedAt); err != nil {
+			http.Error(w, "Failed to read peers", http.StatusInternalServerError)
+			return
+		}
+		peers = append(peers, p)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": peers})
+}
+
 // signAndPost signs a payload with the federation service and POSTs to a URL.
 // Returns the response body, status code, and any error.
 // The URL must use HTTPS and the host must pass SSRF validation.

@@ -44,6 +44,7 @@ type User struct {
 	Handle         string     `json:"handle,omitempty"`
 	LastOnline     *time.Time `json:"last_online,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
+	InstanceDomain *string    `json:"instance_domain,omitempty"` // Set for remote/federated users
 }
 
 // SelfUser is a response-only wrapper that includes the email field.

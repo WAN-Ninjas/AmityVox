@@ -21,6 +21,7 @@ export interface User {
 	handle?: string;
 	last_online: string | null;
 	created_at: string;
+	instance_domain?: string | null; // Set for federated/remote users
 }
 
 export interface UserLink {
