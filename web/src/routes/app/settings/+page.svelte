@@ -1796,7 +1796,7 @@
 								</div>
 							{/each}
 
-							<button class="btn-primary" onclick={saveTypePrefs} disabled={typePrefsSaving}>
+							<button class="btn-primary" onclick={saveTypePrefs} disabled={typePrefsSaving || !typePrefsLoaded}>
 								{typePrefsSaving ? 'Saving...' : 'Save Type Preferences'}
 							</button>
 						{/if}

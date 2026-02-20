@@ -123,8 +123,12 @@
 	async function markGuildAsRead(guildId: string) {
 		const guildChannelIds: string[] = [];
 		for (const [channelId, gId] of $channelGuildMap) {
-			if (gId === guildId && ($unreadCounts.get(channelId) ?? 0) > 0) {
-				guildChannelIds.push(channelId);
+			if (gId === guildId) {
+				const unread = $unreadCounts.get(channelId) ?? 0;
+				const mentions = $unreadState.get(channelId)?.mentionCount ?? 0;
+				if (unread > 0 || mentions > 0) {
+					guildChannelIds.push(channelId);
+				}
 			}
 		}
 		// Clear unread counts and mention counts locally first
