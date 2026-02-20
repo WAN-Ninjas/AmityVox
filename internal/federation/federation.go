@@ -7,7 +7,9 @@ package federation
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -15,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -110,30 +113,33 @@ type SignedPayload struct {
 
 // Service provides federation operations.
 type Service struct {
-	pool       *pgxpool.Pool
-	instanceID string
-	domain     string
-	privateKey ed25519.PrivateKey
-	logger     *slog.Logger
+	pool           *pgxpool.Pool
+	instanceID     string
+	domain         string
+	privateKey     ed25519.PrivateKey
+	enforceIPCheck bool
+	logger         *slog.Logger
 }
 
 // Config holds the configuration for the federation service.
 type Config struct {
-	Pool       *pgxpool.Pool
-	InstanceID string
-	Domain     string
-	PrivateKey ed25519.PrivateKey // loaded from PEM at startup
-	Logger     *slog.Logger
+	Pool           *pgxpool.Pool
+	InstanceID     string
+	Domain         string
+	PrivateKey     ed25519.PrivateKey // loaded from PEM at startup
+	EnforceIPCheck bool
+	Logger         *slog.Logger
 }
 
 // New creates a new federation service.
 func New(cfg Config) *Service {
 	return &Service{
-		pool:       cfg.Pool,
-		instanceID: cfg.InstanceID,
-		domain:     cfg.Domain,
-		privateKey: cfg.PrivateKey,
-		logger:     cfg.Logger,
+		pool:           cfg.Pool,
+		instanceID:     cfg.InstanceID,
+		domain:         cfg.Domain,
+		privateKey:     cfg.PrivateKey,
+		enforceIPCheck: cfg.EnforceIPCheck,
+		logger:         cfg.Logger,
 	}
 }
 
@@ -322,21 +328,56 @@ func DiscoverInstance(ctx context.Context, domain string) (*DiscoveryResponse, e
 }
 
 // RegisterRemoteInstance saves a discovered remote instance to the database.
+// It also computes a key fingerprint and logs a warning if the key changed.
 func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryResponse) error {
 	now := time.Now().UTC()
-	_, err := s.pool.Exec(ctx,
+
+	// Compute fingerprint for the new key.
+	newFingerprint, fpErr := ComputeKeyFingerprint(disc.PublicKey)
+	if fpErr != nil {
+		s.logger.Warn("could not compute key fingerprint for remote instance",
+			slog.String("domain", disc.Domain), slog.String("error", fpErr.Error()))
+	}
+
+	// Check for key change (only if instance already exists).
+	var oldPublicKey, oldFingerprint string
+	err := s.pool.QueryRow(ctx,
+		`SELECT public_key, COALESCE(key_fingerprint, '') FROM instances WHERE id = $1`,
+		disc.InstanceID,
+	).Scan(&oldPublicKey, &oldFingerprint)
+	if err == nil && oldPublicKey != "" && oldPublicKey != disc.PublicKey && fpErr == nil {
+		// Key changed — record in audit log.
+		if oldFingerprint == "" {
+			oldFingerprint, _ = ComputeKeyFingerprint(oldPublicKey)
+		}
+		auditID := models.NewULID().String()
+		if _, aErr := s.pool.Exec(ctx,
+			`INSERT INTO federation_key_audit (id, instance_id, old_fingerprint, new_fingerprint, old_public_key, detected_at)
+			 VALUES ($1, $2, $3, $4, $5, now())`,
+			auditID, disc.InstanceID, oldFingerprint, newFingerprint, oldPublicKey,
+		); aErr != nil {
+			s.logger.Warn("failed to record key audit", slog.String("error", aErr.Error()))
+		}
+		s.logger.Warn("federation key change detected",
+			slog.String("instance", disc.Domain),
+			slog.String("old_fingerprint", oldFingerprint),
+			slog.String("new_fingerprint", newFingerprint))
+	}
+
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO instances (id, domain, public_key, name, software, software_version,
-		                        federation_mode, created_at, last_seen_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		                        federation_mode, key_fingerprint, created_at, last_seen_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT (domain) DO UPDATE SET
 			public_key = EXCLUDED.public_key,
 			name = EXCLUDED.name,
 			software = EXCLUDED.software,
 			software_version = EXCLUDED.software_version,
 			federation_mode = EXCLUDED.federation_mode,
+			key_fingerprint = EXCLUDED.key_fingerprint,
 			last_seen_at = EXCLUDED.last_seen_at`,
 		disc.InstanceID, disc.Domain, disc.PublicKey, disc.Name,
-		disc.Software, disc.SoftwareVersion, disc.FederationMode, now, now,
+		disc.Software, disc.SoftwareVersion, disc.FederationMode, newFingerprint, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("registering remote instance %s: %w", disc.Domain, err)
@@ -434,6 +475,7 @@ func NegotiateCapabilities(local, remote []string) []string {
 
 // HandleHandshake handles POST /federation/v1/handshake — the endpoint a
 // remote instance calls to initiate or refresh a federation peering relationship.
+// Creates a reverse peer record so both instances are aware of the peering.
 func (s *Service) HandleHandshake(w http.ResponseWriter, r *http.Request) {
 	var req HandshakeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -444,6 +486,42 @@ func (s *Service) HandleHandshake(w http.ResponseWriter, r *http.Request) {
 			Reason:   "invalid request body",
 		})
 		return
+	}
+
+	// Verify timestamp freshness.
+	if msg := validateTimestamp(req.Timestamp); msg != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(HandshakeResponse{
+			Accepted: false,
+			Reason:   msg,
+		})
+		return
+	}
+
+	// Verify source IP matches sender domain.
+	if ipMsg := s.verifySourceIP(r, req.SenderID); ipMsg != "" {
+		s.logger.Warn("handshake IP mismatch",
+			slog.String("sender", req.SenderDomain),
+			slog.String("detail", ipMsg))
+		if s.enforceIPCheck {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(HandshakeResponse{
+				Accepted: false,
+				Reason:   "source IP does not match sender domain",
+			})
+			return
+		}
+	}
+
+	// Resolve and store sender's IPs.
+	if req.SenderDomain != "" {
+		if ips, err := net.LookupHost(req.SenderDomain); err == nil && len(ips) > 0 {
+			s.pool.Exec(r.Context(),
+				`UPDATE instances SET resolved_ips = $1 WHERE id = $2`,
+				ips, req.SenderID)
+		}
 	}
 
 	// Check if federation is allowed for this peer.
@@ -461,7 +539,39 @@ func (s *Service) HandleHandshake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get local federation mode.
+	var localMode string
+	s.pool.QueryRow(r.Context(),
+		`SELECT federation_mode FROM instances WHERE id = $1`, s.instanceID).Scan(&localMode)
+
+	// Create or update reverse peer record.
+	if allowed {
+		// For open mode: auto-approve; for allowlist mode: leave as pending.
+		peerStatus := models.FederationPeerPending
+		var handshakeCompletedAt *time.Time
+		if localMode == "open" {
+			peerStatus = models.FederationPeerActive
+			now := time.Now().UTC()
+			handshakeCompletedAt = &now
+		}
+		s.pool.Exec(r.Context(),
+			`INSERT INTO federation_peers (instance_id, peer_id, status, established_at, initiated_by, handshake_completed_at)
+			 VALUES ($1, $2, $3, now(), 'remote', $4)
+			 ON CONFLICT (instance_id, peer_id) DO UPDATE SET
+				handshake_completed_at = COALESCE(federation_peers.handshake_completed_at, $4),
+				initiated_by = COALESCE(federation_peers.initiated_by, 'remote')`,
+			s.instanceID, req.SenderID, peerStatus, handshakeCompletedAt)
+	}
+
 	if !allowed {
+		// For allowlist mode, create pending peer but reject the handshake.
+		if localMode == "allowlist" {
+			s.pool.Exec(r.Context(),
+				`INSERT INTO federation_peers (instance_id, peer_id, status, established_at, initiated_by)
+				 VALUES ($1, $2, 'pending', now(), 'remote')
+				 ON CONFLICT (instance_id, peer_id) DO NOTHING`,
+				s.instanceID, req.SenderID)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(HandshakeResponse{
@@ -688,4 +798,123 @@ func (s *Service) PeerSupportsCapability(ctx context.Context, peerID, capability
 		}
 	}
 	return false
+}
+
+// ComputeKeyFingerprint computes the SHA-256 fingerprint of a PEM-encoded public key.
+func ComputeKeyFingerprint(publicKeyPEM string) (string, error) {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil {
+		return "", fmt.Errorf("failed to decode PEM block")
+	}
+	hash := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// validateTimestamp checks that a federation payload timestamp is fresh.
+// Rejects payloads older than 5 minutes or more than 30 seconds in the future.
+func validateTimestamp(ts time.Time) string {
+	now := time.Now().UTC()
+	age := now.Sub(ts)
+	if age > 5*time.Minute {
+		return fmt.Sprintf("timestamp too old: %s ago", age.Truncate(time.Second))
+	}
+	if age < -30*time.Second {
+		return fmt.Sprintf("timestamp too far in the future: %s ahead", (-age).Truncate(time.Second))
+	}
+	return ""
+}
+
+// verifySourceIP checks that the connecting IP matches the stored resolved IPs
+// for a sender instance. Returns an empty string if valid, or a warning message.
+func (s *Service) verifySourceIP(r *http.Request, senderID string) string {
+	// Extract connecting IP (strip port).
+	connectIP := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(connectIP); err == nil {
+		connectIP = host
+	}
+
+	// Look up stored resolved IPs.
+	var resolvedIPs []string
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT resolved_ips FROM instances WHERE id = $1`, senderID,
+	).Scan(&resolvedIPs)
+	if err != nil || len(resolvedIPs) == 0 {
+		// No stored IPs — fall back to live DNS resolution.
+		var domain string
+		if dErr := s.pool.QueryRow(r.Context(),
+			`SELECT domain FROM instances WHERE id = $1`, senderID,
+		).Scan(&domain); dErr != nil {
+			return "could not resolve sender domain"
+		}
+		ips, lookupErr := net.LookupHost(domain)
+		if lookupErr != nil {
+			return fmt.Sprintf("DNS lookup failed for %s: %s", domain, lookupErr)
+		}
+		resolvedIPs = ips
+	}
+
+	for _, ip := range resolvedIPs {
+		if ip == connectIP {
+			return ""
+		}
+	}
+
+	return fmt.Sprintf("connecting IP %s not in resolved IPs for sender", connectIP)
+}
+
+// SendHandshake sends a handshake request to a remote instance and returns the response.
+func (s *Service) SendHandshake(ctx context.Context, remoteDomain string) (*HandshakeResponse, error) {
+	if err := ValidateFederationDomain(remoteDomain); err != nil {
+		return nil, fmt.Errorf("domain validation: %w", err)
+	}
+
+	req := HandshakeRequest{
+		SenderID:          s.instanceID,
+		SenderDomain:      s.domain,
+		ProtocolVersion:   Version,
+		SupportedVersions: SupportedVersions,
+		Capabilities:      DefaultCapabilities,
+		Timestamp:         time.Now().UTC(),
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling handshake: %w", err)
+	}
+
+	target := (&url.URL{Scheme: "https", Host: remoteDomain, Path: "/federation/v1/handshake"}).String()
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", target, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return errors.New("stopped after 3 redirects")
+			}
+			if r.URL.Scheme != "https" {
+				return errors.New("redirects must use https")
+			}
+			if err := ValidateFederationDomain(r.URL.Hostname()); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(httpReq) // SSRF validated: domain checked by ValidateFederationDomain above
+	if err != nil {
+		return nil, fmt.Errorf("sending handshake to %s: %w", remoteDomain, err)
+	}
+	defer resp.Body.Close()
+
+	var hsResp HandshakeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&hsResp); err != nil {
+		return nil, fmt.Errorf("decoding handshake response: %w", err)
+	}
+
+	return &hsResp, nil
 }

@@ -44,6 +44,7 @@ import (
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/notifications"
@@ -71,7 +72,8 @@ type Server struct {
 	InstanceID string
 	Version     string
 	Logger      *slog.Logger
-	UserHandler *users.Handler // exposed for federation wiring
+	FedSvc      *federation.Service // exposed for admin federation handlers
+	UserHandler *users.Handler      // exposed for federation wiring
 	server      *http.Server
 }
 
@@ -193,6 +195,7 @@ func (s *Server) registerRoutes() {
 		Media:      s.Media,
 		EventBus:   s.EventBus,
 		Cache:      s.Cache,
+		FedSvc:     s.FedSvc,
 	}
 	webhookH := &webhooks.Handler{
 		Pool:     s.DB.Pool,
@@ -1043,7 +1046,11 @@ widgetH := &widgets.Handler{
 				// Federation dashboard and management.
 				r.Get("/federation/dashboard", adminH.HandleGetFederationDashboard)
 				r.Put("/federation/peers/{peerID}/control", adminH.HandleUpdatePeerControl)
+				r.Post("/federation/peers/{peerID}/approve", adminH.HandleApproveFederationPeer)
+				r.Post("/federation/peers/{peerID}/reject", adminH.HandleRejectFederationPeer)
 				r.Get("/federation/peers/controls", adminH.HandleGetPeerControls)
+				r.Get("/federation/key-audit", adminH.HandleGetKeyAudit)
+				r.Post("/federation/key-audit/{auditID}/acknowledge", adminH.HandleAcknowledgeKeyChange)
 				r.Get("/federation/delivery-receipts", adminH.HandleGetDeliveryReceipts)
 				r.Post("/federation/delivery-receipts/{receiptID}/retry", adminH.HandleRetryDelivery)
 				r.Get("/federation/search-config", adminH.HandleGetFederatedSearchConfig)

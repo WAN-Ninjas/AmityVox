@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import type { KeyAuditEntry } from '$lib/types';
 
 	// Typed fetch helpers using the existing api client's token.
 	async function adminGet<T>(path: string): Promise<T> {
@@ -131,7 +132,16 @@
 		default_capabilities: string[];
 	}
 
-	type Tab = 'overview' | 'controls' | 'delivery' | 'search' | 'protocol' | 'blocklist';
+	interface PendingPeer {
+		peer_id: string;
+		peer_domain: string;
+		peer_name: string | null;
+		peer_software: string;
+		federation_status: string;
+		established_at: string;
+	}
+
+	type Tab = 'overview' | 'controls' | 'delivery' | 'search' | 'protocol' | 'blocklist' | 'security';
 
 	// --- State ---
 	let currentTab = $state<Tab>('overview');
@@ -145,9 +155,14 @@
 	let deliveryReceipts = $state<DeliveryReceipt[]>([]);
 	let searchConfig = $state<SearchConfig>({ enabled: false, index_outgoing: false, index_incoming: false, allowed_peers: [] });
 	let protocolInfo = $state<ProtocolInfo | null>(null);
+	let keyAuditEntries = $state<KeyAuditEntry[]>([]);
+	let pendingPeers = $derived<PendingPeer[]>(
+		dashboard?.peers.filter(p => p.federation_status === 'pending') ?? []
+	);
 
 	let loadingControls = $state(false);
 	let loadingDelivery = $state(false);
+	let loadingSecurity = $state(false);
 	let savingSearch = $state(false);
 	let deliveryFilter = $state('');
 
@@ -202,6 +217,47 @@
 			protocolInfo = await adminGet<ProtocolInfo>('/admin/federation/protocol');
 		} catch (e: any) {
 			addToast('Failed to load protocol info: ' + e.message, 'error');
+		}
+	}
+
+	async function loadKeyAudit() {
+		loadingSecurity = true;
+		try {
+			keyAuditEntries = await api.getKeyAudit();
+		} catch (e: any) {
+			addToast('Failed to load key audit: ' + e.message, 'error');
+		} finally {
+			loadingSecurity = false;
+		}
+	}
+
+	async function approvePeer(peerId: string) {
+		try {
+			await api.approveFederationPeer(peerId);
+			addToast('Peer approved', 'success');
+			await loadDashboard();
+		} catch (e: any) {
+			addToast('Failed to approve peer: ' + e.message, 'error');
+		}
+	}
+
+	async function rejectPeer(peerId: string) {
+		try {
+			await api.rejectFederationPeer(peerId);
+			addToast('Peer rejected', 'success');
+			await loadDashboard();
+		} catch (e: any) {
+			addToast('Failed to reject peer: ' + e.message, 'error');
+		}
+	}
+
+	async function acknowledgeKeyChange(auditId: string) {
+		try {
+			await api.acknowledgeKeyChange(auditId);
+			addToast('Key change acknowledged', 'success');
+			await loadKeyAudit();
+		} catch (e: any) {
+			addToast('Failed to acknowledge: ' + e.message, 'error');
 		}
 	}
 
@@ -280,6 +336,7 @@
 		if (currentTab === 'search') loadSearchConfig();
 		if (currentTab === 'protocol') loadProtocol();
 		if (currentTab === 'blocklist') loadControls();
+		if (currentTab === 'security') loadKeyAudit();
 	});
 </script>
 
@@ -302,7 +359,8 @@
 				['delivery', 'Delivery'],
 				['search', 'Federated Search'],
 				['protocol', 'Protocol'],
-				['blocklist', 'Block/Allow Lists']
+				['blocklist', 'Block/Allow Lists'],
+				['security', 'Security']
 			] as [tab, label]}
 				<button
 					class="px-4 py-2 text-sm font-medium border-b-2 transition-colors {currentTab === tab
@@ -718,6 +776,112 @@
 									>
 										Block
 									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			</div>
+		{:else if currentTab === 'security'}
+			<div class="space-y-6">
+				<!-- Pending Handshake Requests -->
+				<div>
+					<h2 class="text-lg font-semibold text-text-primary mb-3">Pending Handshake Requests</h2>
+					<p class="text-sm text-text-muted mb-4">
+						Instances requesting to federate with this server. Approve to establish a mutual peering connection.
+					</p>
+					{#if pendingPeers.length === 0}
+						<div class="bg-bg-secondary p-6 rounded-lg text-center text-text-muted text-sm">
+							No pending handshake requests.
+						</div>
+					{:else}
+						<div class="space-y-2">
+							{#each pendingPeers as peer (peer.peer_id)}
+								<div class="bg-bg-secondary p-4 rounded-lg flex items-center justify-between">
+									<div>
+										<span class="font-medium text-text-primary">{peer.peer_domain}</span>
+										{#if peer.peer_name}
+											<span class="text-text-muted ml-2">({peer.peer_name})</span>
+										{/if}
+										<div class="text-xs text-text-muted mt-1">
+											{peer.peer_software} &middot; Requested {formatDate(peer.established_at)}
+										</div>
+									</div>
+									<div class="flex items-center gap-2">
+										<button
+											class="px-3 py-1.5 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors font-medium"
+											onclick={() => approvePeer(peer.peer_id)}
+										>
+											Approve
+										</button>
+										<button
+											class="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors font-medium"
+											onclick={() => rejectPeer(peer.peer_id)}
+										>
+											Reject
+										</button>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Key Rotation Alerts -->
+				<div>
+					<h2 class="text-lg font-semibold text-text-primary mb-3">Key Rotation Alerts</h2>
+					<p class="text-sm text-text-muted mb-4">
+						Detected public key changes from federated instances. Key changes may indicate a server migration or a potential security issue.
+					</p>
+					{#if loadingSecurity}
+						<div class="flex items-center justify-center py-8">
+							<div class="animate-spin h-6 w-6 border-2 border-brand-500 border-t-transparent rounded-full"></div>
+						</div>
+					{:else if keyAuditEntries.length === 0}
+						<div class="bg-bg-secondary p-6 rounded-lg text-center text-text-muted text-sm">
+							No unacknowledged key changes.
+						</div>
+					{:else}
+						<div class="space-y-2">
+							{#each keyAuditEntries as entry (entry.id)}
+								<div class="bg-bg-secondary p-4 rounded-lg">
+									<div class="flex items-center justify-between mb-2">
+										<div>
+											<span class="font-medium text-text-primary">
+												{entry.instance_domain}
+											</span>
+											{#if entry.instance_name}
+												<span class="text-text-muted ml-2">({entry.instance_name})</span>
+											{/if}
+										</div>
+										<div class="flex items-center gap-2">
+											{#if entry.acknowledged_at}
+												<span class="text-xs text-text-muted">
+													Acknowledged {formatDate(entry.acknowledged_at)}
+												</span>
+											{:else}
+												<button
+													class="px-3 py-1.5 text-xs bg-brand-500/20 text-brand-400 rounded hover:bg-brand-500/30 transition-colors font-medium"
+													onclick={() => acknowledgeKeyChange(entry.id)}
+												>
+													Acknowledge
+												</button>
+											{/if}
+										</div>
+									</div>
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+										<div>
+											<span class="text-text-muted">Old fingerprint:</span>
+											<span class="text-red-400 font-mono ml-1">{entry.old_fingerprint.slice(0, 16)}...</span>
+										</div>
+										<div>
+											<span class="text-text-muted">New fingerprint:</span>
+											<span class="text-green-400 font-mono ml-1">{entry.new_fingerprint.slice(0, 16)}...</span>
+										</div>
+									</div>
+									<div class="text-xs text-text-muted mt-2">
+										Detected {formatDate(entry.detected_at)}
+									</div>
 								</div>
 							{/each}
 						</div>

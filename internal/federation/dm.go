@@ -470,6 +470,26 @@ func (ss *SyncService) verifyFederationRequest(w http.ResponseWriter, r *http.Re
 		return nil, "", false
 	}
 
+	// Check timestamp freshness.
+	if msg := validateTimestamp(signed.Timestamp); msg != "" {
+		ss.logger.Warn("federation request rejected: stale timestamp",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("detail", msg))
+		http.Error(w, "Stale or future timestamp", http.StatusBadRequest)
+		return nil, "", false
+	}
+
+	// Verify source IP.
+	if ipMsg := ss.fed.verifySourceIP(r, signed.SenderID); ipMsg != "" {
+		ss.logger.Warn("federation source IP mismatch",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("detail", ipMsg))
+		if ss.fed.enforceIPCheck {
+			http.Error(w, "Source IP mismatch", http.StatusForbidden)
+			return nil, "", false
+		}
+	}
+
 	// Check federation is allowed.
 	allowed, err := ss.fed.IsFederationAllowed(r.Context(), signed.SenderID)
 	if err != nil || !allowed {

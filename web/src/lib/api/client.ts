@@ -67,7 +67,8 @@ import type {
 	GalleryTag,
 	GalleryPost,
 	ServerNotification,
-	NotificationTypePreference
+	NotificationTypePreference,
+	KeyAuditEntry
 } from '$lib/types';
 
 const API_BASE = '/api/v1';
@@ -822,6 +823,22 @@ class ApiClient {
 
 	removeFederationPeer(peerId: string): Promise<void> {
 		return this.del(`/admin/federation/peers/${peerId}`);
+	}
+
+	approveFederationPeer(peerId: string): Promise<{ status: string }> {
+		return this.post(`/admin/federation/peers/${peerId}/approve`);
+	}
+
+	rejectFederationPeer(peerId: string): Promise<{ status: string }> {
+		return this.post(`/admin/federation/peers/${peerId}/reject`);
+	}
+
+	getKeyAudit(): Promise<KeyAuditEntry[]> {
+		return this.get('/admin/federation/key-audit');
+	}
+
+	acknowledgeKeyChange(auditId: string): Promise<{ status: string }> {
+		return this.post(`/admin/federation/key-audit/${auditId}/acknowledge`);
 	}
 
 	// --- Admin Instance Bans ---
