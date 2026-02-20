@@ -760,6 +760,18 @@ export interface FederationPeer {
 	created_at: string;
 }
 
+export interface KeyAuditEntry {
+	id: string;
+	instance_id: string;
+	instance_domain: string;
+	instance_name: string | null;
+	old_fingerprint: string;
+	new_fingerprint: string;
+	detected_at: string;
+	acknowledged_by: string | null;
+	acknowledged_at: string | null;
+}
+
 // --- Onboarding ---
 
 export interface OnboardingConfig {

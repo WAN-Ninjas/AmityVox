@@ -16,21 +16,27 @@ import (
 
 // Config is the top-level configuration for an AmityVox instance.
 type Config struct {
-	Instance  InstanceConfig  `toml:"instance"`
-	Database  DatabaseConfig  `toml:"database"`
-	NATS      NATSConfig      `toml:"nats"`
-	Cache     CacheConfig     `toml:"cache"`
-	Storage   StorageConfig   `toml:"storage"`
-	LiveKit   LiveKitConfig   `toml:"livekit"`
-	Search    SearchConfig    `toml:"search"`
-	Auth      AuthConfig      `toml:"auth"`
-	Media     MediaConfig     `toml:"media"`
-	Push      PushConfig      `toml:"push"`
-	Giphy     GiphyConfig     `toml:"giphy"`
-	HTTP      HTTPConfig      `toml:"http"`
-	WebSocket WebSocketConfig `toml:"websocket"`
-	Logging   LoggingConfig   `toml:"logging"`
-	Metrics   MetricsConfig   `toml:"metrics"`
+	Instance   InstanceConfig   `toml:"instance"`
+	Database   DatabaseConfig   `toml:"database"`
+	NATS       NATSConfig       `toml:"nats"`
+	Cache      CacheConfig      `toml:"cache"`
+	Storage    StorageConfig    `toml:"storage"`
+	LiveKit    LiveKitConfig    `toml:"livekit"`
+	Search     SearchConfig     `toml:"search"`
+	Auth       AuthConfig       `toml:"auth"`
+	Media      MediaConfig      `toml:"media"`
+	Push       PushConfig       `toml:"push"`
+	Giphy      GiphyConfig      `toml:"giphy"`
+	HTTP       HTTPConfig       `toml:"http"`
+	WebSocket  WebSocketConfig  `toml:"websocket"`
+	Logging    LoggingConfig    `toml:"logging"`
+	Metrics    MetricsConfig    `toml:"metrics"`
+	Federation FederationConfig `toml:"federation"`
+}
+
+// FederationConfig defines federation security settings.
+type FederationConfig struct {
+	EnforceIPCheck bool `toml:"enforce_ip_check"`
 }
 
 // GiphyConfig defines Giphy API integration settings.
@@ -450,6 +456,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AMITYVOX_LOGGING_FORMAT"); v != "" {
 		cfg.Logging.Format = v
+	}
+
+	// Federation
+	if v := os.Getenv("AMITYVOX_FEDERATION_ENFORCE_IP_CHECK"); v != "" {
+		cfg.Federation.EnforceIPCheck = v == "true" || v == "1"
 	}
 
 	// Giphy

@@ -235,10 +235,11 @@ func runServe() error {
 
 	// Create federation service.
 	fedSvc := federation.New(federation.Config{
-		Pool:       db.Pool,
-		InstanceID: instanceID,
-		Domain:     cfg.Instance.Domain,
-		Logger:     logger,
+		Pool:           db.Pool,
+		InstanceID:     instanceID,
+		Domain:         cfg.Instance.Domain,
+		EnforceIPCheck: cfg.Federation.EnforceIPCheck,
+		Logger:         logger,
 	})
 
 	// Create AutoMod service.
@@ -302,6 +303,7 @@ func runServe() error {
 	srv.Encryption = encryptionSvc
 	srv.AutoMod = automodSvc
 	srv.Notifications = notifSvc
+	srv.FedSvc = fedSvc
 	srv.Version = version
 
 	// Register API routes after all optional services are set.
@@ -310,6 +312,7 @@ func runServe() error {
 	// Mount federation endpoints (rate limited by IP — no auth context).
 	fedRL := srv.RateLimitGlobal()
 	srv.Router.With(fedRL).Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
+	srv.Router.With(fedRL).Post("/federation/v1/handshake", fedSvc.HandleHandshake)
 
 	// Create and start federation sync service (message routing between instances).
 	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
