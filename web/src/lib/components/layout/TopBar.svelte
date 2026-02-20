@@ -18,20 +18,24 @@
 	let { onToggleMembers, onTogglePins, onToggleFollowers, onToggleGallery, showPins = false, showFollowers = false, showGallery = false }: Props = $props();
 	let showSearch = $state(false);
 	let topicExpanded = $state(false);
+	let showMobileMenu = $state(false);
 
 	function handleKeydown(e: KeyboardEvent) {
 		if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
 			e.preventDefault();
 			showSearch = !showSearch;
 		}
+		if (e.key === 'Escape' && showMobileMenu) {
+			showMobileMenu = false;
+		}
 	}
 </script>
 
 <svelte:document onkeydown={handleKeydown} />
 
-<header class="flex h-12 items-center border-b border-bg-floating bg-bg-tertiary px-4">
-	<!-- Back/Forward navigation buttons -->
-	<div class="mr-2 flex items-center gap-0.5">
+<header class="flex h-12 items-center border-b border-bg-floating bg-bg-tertiary pl-12 pr-4 md:pl-4">
+	<!-- Back/Forward navigation buttons (desktop only) -->
+	<div class="mr-2 hidden items-center gap-0.5 md:flex">
 		<button
 			class="rounded p-1 transition-colors {$canGoBack ? 'text-text-muted hover:text-text-primary' : 'cursor-default text-text-muted/30'}"
 			onclick={() => goBack()}
@@ -87,10 +91,10 @@
 	{/if}
 
 	<div class="ml-auto flex items-center gap-1">
-		<!-- Channel settings gear (ManageChannels permission required) -->
+		<!-- Channel settings gear (ManageChannels permission required) — desktop only -->
 		{#if $currentChannel && $canManageChannels}
 			<button
-				class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
+				class="hidden rounded p-1.5 text-text-muted transition-colors hover:text-text-primary md:block"
 				onclick={() => editChannelSignal.set($currentChannel!.id)}
 				title="Channel Settings"
 			>
@@ -101,10 +105,10 @@
 			</button>
 		{/if}
 
-		<!-- Pinned messages toggle -->
+		<!-- Pinned messages toggle — desktop only -->
 		{#if $currentChannel}
 			<button
-				class="rounded p-1.5 transition-colors {showPins ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
+				class="hidden rounded p-1.5 transition-colors md:block {showPins ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
 				onclick={onTogglePins}
 				title="Pinned Messages"
 			>
@@ -114,10 +118,10 @@
 			</button>
 		{/if}
 
-		<!-- Followers toggle (announcement channels only) -->
+		<!-- Followers toggle (announcement channels only) — desktop only -->
 		{#if $currentChannel?.channel_type === 'announcement'}
 			<button
-				class="rounded p-1.5 transition-colors {showFollowers ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
+				class="hidden rounded p-1.5 transition-colors md:block {showFollowers ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
 				onclick={onToggleFollowers}
 				title="Channel Followers"
 			>
@@ -127,10 +131,10 @@
 			</button>
 		{/if}
 
-		<!-- Gallery toggle -->
+		<!-- Gallery toggle — desktop only -->
 		{#if $currentChannel}
 			<button
-				class="rounded p-1.5 transition-colors {showGallery ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
+				class="hidden rounded p-1.5 transition-colors md:block {showGallery ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
 				onclick={onToggleGallery}
 				title="Gallery"
 			>
@@ -140,7 +144,7 @@
 			</button>
 		{/if}
 
-		<!-- Member toggle -->
+		<!-- Member toggle — always visible -->
 		{#if $currentGuild}
 			<button
 				class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
@@ -153,7 +157,7 @@
 			</button>
 		{/if}
 
-		<!-- Search -->
+		<!-- Search — always visible -->
 		<button
 			class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
 			title="Search (Ctrl+K)"
@@ -164,6 +168,61 @@
 				<path d="m21 21-4.35-4.35" />
 			</svg>
 		</button>
+
+		<!-- Mobile overflow menu -->
+		{#if $currentChannel}
+			<div class="relative md:hidden">
+				<button
+					class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
+					onclick={() => (showMobileMenu = !showMobileMenu)}
+					title="More actions"
+				>
+					<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+						<circle cx="12" cy="5" r="2" />
+						<circle cx="12" cy="12" r="2" />
+						<circle cx="12" cy="19" r="2" />
+					</svg>
+				</button>
+				{#if showMobileMenu}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div class="fixed inset-0 z-40" onclick={() => (showMobileMenu = false)}></div>
+					<div class="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg bg-bg-floating py-1 shadow-xl">
+						{#if $canManageChannels}
+							<button
+								class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
+								onclick={() => { editChannelSignal.set($currentChannel!.id); showMobileMenu = false; }}
+							>
+								<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><circle cx="12" cy="12" r="3" /></svg>
+								Channel Settings
+							</button>
+						{/if}
+						<button
+							class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
+							onclick={() => { onTogglePins?.(); showMobileMenu = false; }}
+						>
+							<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg>
+							Pinned Messages
+						</button>
+						{#if $currentChannel?.channel_type === 'announcement'}
+							<button
+								class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
+								onclick={() => { onToggleFollowers?.(); showMobileMenu = false; }}
+							>
+								<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+								Followers
+							</button>
+						{/if}
+						<button
+							class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
+							onclick={() => { onToggleGallery?.(); showMobileMenu = false; }}
+						>
+							<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+							Gallery
+						</button>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
 </header>
 

@@ -26,6 +26,7 @@
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
 	let showVoiceRecorder = $state(false);
+	let showInputMore = $state(false);
 
 	// --- Mention autocomplete ---
 	let showMentionAutocomplete = $state(false);
@@ -821,13 +822,16 @@
 					class="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted placeholder:font-mono"
 					rows="1"
 					aria-label="Message input"
+					autocomplete="off"
+					autocorrect="on"
+					name="chat-message"
 				></textarea>
 
 				<!-- Right-side icon toolbar -->
 				{#if !isEditing}
 				<div class="flex items-center gap-2">
 					<button
-						class="flex items-center justify-center transition-colors {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
+						class="hidden items-center justify-center transition-colors md:flex {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
 						title={silentMode ? 'Silent mode on (click to disable)' : 'Send silently (no notifications)'}
 						onclick={() => {
 							silentMode = !silentMode;
@@ -848,8 +852,8 @@
 						{/if}
 					</button>
 
-				<!-- Schedule message button -->
-					<div class="relative">
+				<!-- Schedule message button — desktop only -->
+					<div class="relative hidden md:block">
 						<button
 							class="flex items-center justify-center text-text-muted hover:text-text-primary"
 							title="Schedule message"
@@ -865,7 +869,7 @@
 							</svg>
 						</button>
 						{#if showSchedulePicker}
-							<div class="absolute bottom-10 right-0 z-50 w-64 rounded-lg border border-bg-floating bg-bg-primary p-3 shadow-lg">
+							<div class="fixed inset-x-0 bottom-0 z-50 rounded-t-xl border-t border-bg-floating bg-bg-primary p-3 shadow-lg md:absolute md:inset-auto md:bottom-10 md:right-0 md:w-64 md:rounded-lg md:border">
 								<div class="mb-2 text-xs font-semibold uppercase text-text-muted">Schedule Message</div>
 								<div class="flex flex-col gap-1">
 									{#each getSchedulePresets() as preset}
@@ -895,8 +899,8 @@
 						{/if}
 					</div>
 
-				<!-- GIF picker button -->
-					<div class="giphy-picker relative">
+				<!-- GIF picker button — desktop only -->
+					<div class="giphy-picker relative hidden md:block">
 						<button
 							class="flex h-5 items-center rounded border border-text-muted px-1 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
 							title="GIF"
@@ -909,8 +913,8 @@
 						{/if}
 					</div>
 
-				<!-- Sticker picker button -->
-					<div class="sticker-picker relative">
+				<!-- Sticker picker button — desktop only -->
+					<div class="sticker-picker relative hidden md:block">
 						<button
 							class="flex items-center justify-center text-text-muted hover:text-text-primary"
 							title="Stickers"
@@ -945,9 +949,9 @@
 						{/if}
 					</div>
 
-				<!-- Voice message button -->
+				<!-- Voice message button — desktop only -->
 					<button
-						class="flex items-center justify-center text-text-muted hover:text-text-primary"
+						class="hidden items-center justify-center text-text-muted hover:text-text-primary md:flex"
 						title="Record voice message"
 						onclick={() => {
 							showVoiceRecorder = true;
@@ -962,6 +966,79 @@
 							<path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
 						</svg>
 					</button>
+
+				<!-- Mobile "+" overflow button -->
+					<div class="relative md:hidden">
+						<button
+							class="flex items-center justify-center text-text-muted hover:text-text-primary"
+							title="More"
+							onclick={() => (showInputMore = !showInputMore)}
+						>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+								<path d="M12 5v14m-7-7h14" />
+							</svg>
+						</button>
+						{#if showInputMore}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div class="fixed inset-0 z-40" onclick={() => (showInputMore = false)}></div>
+							<div class="absolute bottom-8 right-0 z-50 flex gap-2 rounded-lg bg-bg-floating p-2 shadow-xl">
+								<button
+									class="flex items-center justify-center rounded p-1.5 transition-colors {silentMode ? 'text-yellow-500' : 'text-text-muted hover:text-text-primary'}"
+									title={silentMode ? 'Silent on' : 'Silent'}
+									onclick={() => { silentMode = !silentMode; showInputMore = false; }}
+								>
+									<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										{#if silentMode}
+											<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+											<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+										{:else}
+											<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+										{/if}
+									</svg>
+								</button>
+								<button
+									class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
+									title="Schedule"
+									onclick={() => { showSchedulePicker = !showSchedulePicker; showInputMore = false; }}
+								>
+									<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+									</svg>
+								</button>
+								<div class="giphy-picker">
+									<button
+										class="flex h-7 items-center rounded border border-text-muted px-1.5 text-[10px] font-bold text-text-muted hover:border-text-primary hover:text-text-primary"
+										title="GIF"
+										onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showInputMore = false; }}
+									>
+										GIF
+									</button>
+								</div>
+								<div class="sticker-picker">
+									<button
+										class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
+										title="Stickers"
+										onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showInputMore = false; }}
+									>
+										<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+											<path d="M15 2v5a2 2 0 002 2h5" />
+										</svg>
+									</button>
+								</div>
+								<button
+									class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
+									title="Voice"
+									onclick={() => { showVoiceRecorder = true; showInputMore = false; }}
+								>
+									<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+										<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+										<path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+									</svg>
+								</button>
+							</div>
+						{/if}
+					</div>
 				</div>
 				{/if}
 

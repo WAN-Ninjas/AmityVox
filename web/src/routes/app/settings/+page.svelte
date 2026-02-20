@@ -1340,9 +1340,39 @@
 	<title>Settings — AmityVox</title>
 </svelte:head>
 
-<div class="flex h-full">
-	<!-- Settings sidebar -->
-	<nav class="w-52 shrink-0 overflow-y-auto bg-bg-secondary p-4">
+<div class="flex h-full flex-col md:flex-row">
+	<!-- Mobile tab selector -->
+	<div class="flex items-center gap-2 border-b border-bg-floating bg-bg-secondary px-4 py-2 md:hidden">
+		<button
+			class="rounded p-1 text-text-muted hover:text-text-primary"
+			onclick={() => goto('/app')}
+			title="Back"
+		>
+			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M15 19l-7-7 7-7" />
+			</svg>
+		</button>
+		<select
+			class="flex-1 rounded border border-bg-modifier bg-bg-primary px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500"
+			bind:value={currentTab}
+		>
+			{#each tabs as tab (tab.id)}
+				<option value={tab.id}>{tab.label}</option>
+			{/each}
+		</select>
+		<button
+			class="rounded p-1 text-red-400 hover:text-red-300"
+			onclick={handleLogout}
+			title="Log Out"
+		>
+			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+			</svg>
+		</button>
+	</div>
+
+	<!-- Settings sidebar (desktop only) -->
+	<nav class="hidden w-52 shrink-0 overflow-y-auto bg-bg-secondary p-4 md:block">
 		<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">User Settings</h3>
 		<ul class="space-y-0.5">
 			{#each tabs as tab (tab.id)}
@@ -1378,7 +1408,7 @@
 	</nav>
 
 	<!-- Settings content -->
-	<div class="flex-1 overflow-y-auto bg-bg-tertiary p-8">
+	<div class="flex-1 overflow-y-auto bg-bg-tertiary p-4 md:p-8">
 		<div class="max-w-xl">
 			{#if error}
 				<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>

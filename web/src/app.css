@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== Mobile touch optimizations ===== */
+html {
+	touch-action: manipulation;
+}
+
 /* ===== Theme Definitions ===== */
 
 /* Dark (default — Terminal Forge / GitHub-dark inspired) */
