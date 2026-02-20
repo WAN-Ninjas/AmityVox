@@ -452,8 +452,9 @@ func (h *Handler) HandleUnsuspendUser(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := chi.URLParam(r, "userID")
 
+	mask := ^models.UserFlagSuspended
 	_, err := h.Pool.Exec(r.Context(),
-		`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagSuspended, userID)
+		`UPDATE users SET flags = flags & $1 WHERE id = $2`, mask, userID)
 	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unsuspend user")
 		return
@@ -481,8 +482,9 @@ func (h *Handler) HandleSetAdmin(w http.ResponseWriter, r *http.Request) {
 		_, err = h.Pool.Exec(r.Context(),
 			`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagAdmin, userID)
 	} else {
+		mask := ^models.UserFlagAdmin
 		_, err = h.Pool.Exec(r.Context(),
-			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagAdmin, userID)
+			`UPDATE users SET flags = flags & $1 WHERE id = $2`, mask, userID)
 	}
 	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update admin status")
@@ -512,8 +514,9 @@ func (h *Handler) HandleSetGlobalMod(w http.ResponseWriter, r *http.Request) {
 		tag, err = h.Pool.Exec(r.Context(),
 			`UPDATE users SET flags = flags | $1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
 	} else {
+		mask := ^models.UserFlagGlobalMod
 		tag, err = h.Pool.Exec(r.Context(),
-			`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagGlobalMod, userID)
+			`UPDATE users SET flags = flags & $1 WHERE id = $2`, mask, userID)
 	}
 	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update global mod status")
@@ -571,8 +574,9 @@ func (h *Handler) HandleInstanceUnbanUser(w http.ResponseWriter, r *http.Request
 	}
 	targetID := chi.URLParam(r, "userID")
 
+	mask := ^models.UserFlagSuspended
 	_, err := h.Pool.Exec(r.Context(),
-		`UPDATE users SET flags = flags & ~$1 WHERE id = $2`, models.UserFlagSuspended, targetID)
+		`UPDATE users SET flags = flags & $1 WHERE id = $2`, mask, targetID)
 	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to unban user")
 		return

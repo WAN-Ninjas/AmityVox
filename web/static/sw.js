@@ -265,8 +265,8 @@ self.addEventListener('push', (event) => {
 
 		const options = {
 			body: data.body || '',
-			icon: '/favicon.png',
-			badge: '/favicon.png',
+			icon: '/icon-192.png',
+			badge: '/icon-192.png',
 			tag,
 			renotify: true,
 			data: { url, type: data.type, notification_id: data.notification_id },
@@ -282,7 +282,7 @@ self.addEventListener('push', (event) => {
 		event.waitUntil(
 			self.registration.showNotification('AmityVox', {
 				body: event.data.text(),
-				icon: '/favicon.png'
+				icon: '/icon-192.png'
 			})
 		);
 	}
