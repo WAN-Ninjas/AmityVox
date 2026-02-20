@@ -30,9 +30,10 @@
 	interface Props {
 		channelId: string;
 		guildId: string;
+		federatedGuildId?: string | null;
 	}
 
-	let { channelId, guildId }: Props = $props();
+	let { channelId, guildId, federatedGuildId = null }: Props = $props();
 
 	let joinOp = $state(createAsyncOp());
 	let cameraOp = $state(createAsyncOp());

@@ -10,9 +10,10 @@
 
 	interface Props {
 		onopenthread?: (threadChannel: Channel, parentMessage: Message) => void;
+		federatedGuildId?: string | null;
 	}
 
-	let { onopenthread }: Props = $props();
+	let { onopenthread, federatedGuildId = null }: Props = $props();
 
 	let messagesContainer: HTMLDivElement;
 	let shouldAutoScroll = $state(true);
@@ -106,7 +107,7 @@
 	$effect(() => {
 		const channelId = $currentChannelId;
 		if (channelId) {
-			loadMessages(channelId);
+			loadMessages(channelId, undefined, federatedGuildId);
 		}
 	});
 
@@ -196,7 +197,7 @@
 		if (scrollTop < 50 && !$isLoadingMessages && messages.length > 0) {
 			const channelId = $currentChannelId;
 			if (channelId) {
-				loadMessages(channelId, messages[0]?.id);
+				loadMessages(channelId, messages[0]?.id, federatedGuildId);
 			}
 		}
 
@@ -321,6 +322,7 @@
 
 <div class="relative flex-1 overflow-hidden">
 	<!-- Selection mode toggle bar -->
+	{#if !federatedGuildId}
 	<div class="absolute right-4 top-2 z-10">
 		<button
 			class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectionMode ? 'bg-brand-500 text-white' : 'bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-bg-modifier'}"
@@ -337,6 +339,7 @@
 			{/if}
 		</button>
 	</div>
+	{/if}
 
 	<!-- Jump to Unread banner -->
 	{#if showJumpToUnread}

@@ -599,6 +599,22 @@ class ApiClient {
 		return this.post(`/federation/guilds/${guildId}/channels/${channelId}/messages`, { content, nonce });
 	}
 
+	getFederatedGuildMembers(guildId: string): Promise<GuildMember[]> {
+		return this.get(`/federation/guilds/${guildId}/members`);
+	}
+
+	addFederatedReaction(guildId: string, channelId: string, messageId: string, emoji: string): Promise<void> {
+		return this.put(`/federation/guilds/${guildId}/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
+	}
+
+	removeFederatedReaction(guildId: string, channelId: string, messageId: string, emoji: string): Promise<void> {
+		return this.delete(`/federation/guilds/${guildId}/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
+	}
+
+	sendFederatedTyping(guildId: string, channelId: string): Promise<void> {
+		return this.post(`/federation/guilds/${guildId}/channels/${channelId}/typing`, {});
+	}
+
 	// --- File Upload ---
 
 	async uploadFile(file: File, altText?: string): Promise<{ id: string; url: string }> {
