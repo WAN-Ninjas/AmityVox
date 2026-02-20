@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -881,8 +882,8 @@ func (s *Service) SendHandshake(ctx context.Context, remoteDomain string) (*Hand
 		return nil, fmt.Errorf("marshaling handshake: %w", err)
 	}
 
-	url := fmt.Sprintf("https://%s/federation/v1/handshake", remoteDomain)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
+	target := (&url.URL{Scheme: "https", Host: remoteDomain, Path: "/federation/v1/handshake"}).String()
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", target, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
