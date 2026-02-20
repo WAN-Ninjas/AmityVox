@@ -615,6 +615,10 @@ class ApiClient {
 		return this.post(`/federation/guilds/${guildId}/channels/${channelId}/typing`, {});
 	}
 
+	ensureFederatedUser(user: { user_id: string; instance_domain: string; username: string; display_name?: string | null; avatar_id?: string | null }): Promise<void> {
+		return this.post('/federation/users/ensure', user);
+	}
+
 	// --- File Upload ---
 
 	async uploadFile(file: File, altText?: string): Promise<{ id: string; url: string }> {

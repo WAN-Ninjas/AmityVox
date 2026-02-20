@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentGuild, currentGuildId, federatedGuilds, isFederatedGuild } from '$lib/stores/guilds';
-	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId, editChannelSignal } from '$lib/stores/channels';
+	import { channelList, textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId, editChannelSignal } from '$lib/stores/channels';
 	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -45,6 +45,18 @@
 
 	const currentFederatedGuild = $derived(
 		$currentGuildId ? $federatedGuilds.get($currentGuildId) ?? null : null
+	);
+
+	// Federated guild: categories and grouped channels.
+	const fedCategories = $derived(
+		currentFederatedGuild
+			? $channelList.filter(c => c.channel_type === ('category' as any)).sort((a, b) => a.position - b.position)
+			: []
+	);
+	const fedChannels = $derived(
+		currentFederatedGuild
+			? $channelList.filter(c => c.channel_type !== ('category' as any)).sort((a, b) => a.position - b.position)
+			: []
 	);
 
 	// Status picker
@@ -745,33 +757,68 @@
 	<!-- Channel list -->
 	<div class="flex-1 overflow-y-auto px-2 py-2">
 		{#if currentFederatedGuild}
-			<!-- Federated guild channels (read-only list from cache) -->
-			{#each $textChannels as channel (channel.id)}
+			<!-- Federated guild channels with category grouping and proper type icons -->
+			{@const uncategorized = fedChannels.filter(c => !c.category_id)}
+			{@const guildPath = `/app/guilds/${currentFederatedGuild.guild_id}`}
+
+			{#snippet fedChannelButton(channel: Channel)}
+				{@const isActive = $currentChannelId === channel.id}
+				{@const isVoice = channel.channel_type === 'voice' || channel.channel_type === 'stage'}
 				<button
-					class="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors"
-					class:bg-bg-modifier={$currentChannelId === channel.id}
-					class:text-text-primary={$currentChannelId === channel.id}
-					class:text-text-muted={$currentChannelId !== channel.id}
-					class:hover:bg-bg-modifier={true}
-					class:hover:text-text-secondary={$currentChannelId !== channel.id}
-					onclick={() => { pendingThreadOpen.set('__close__'); setChannel(channel.id); goto(`/app/guilds/${currentFederatedGuild.guild_id}/channels/${channel.id}`); }}
+					class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {isActive ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
+					onclick={() => { if (!isVoice) { pendingThreadOpen.set('__close__'); setChannel(channel.id); goto(`${guildPath}/channels/${channel.id}`); } }}
+					disabled={isVoice}
 				>
-					<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-					</svg>
-					<span class="truncate">{channel.name}</span>
+					{#if channel.channel_type === 'voice' || channel.channel_type === 'stage'}
+						<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+							<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+						</svg>
+					{:else if channel.channel_type === 'announcement'}
+						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+						</svg>
+					{:else if channel.channel_type === 'forum'}
+						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+						</svg>
+					{:else if channel.channel_type === 'gallery'}
+						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<rect x="3" y="3" width="7" height="7" rx="1" />
+							<rect x="14" y="3" width="7" height="7" rx="1" />
+							<rect x="3" y="14" width="7" height="7" rx="1" />
+							<rect x="14" y="14" width="7" height="7" rx="1" />
+						</svg>
+					{:else}
+						<span class="text-lg leading-none text-brand-500 font-mono">#</span>
+					{/if}
+					<span class="flex-1 truncate font-mono">{channel.name}</span>
 				</button>
+			{/snippet}
+
+			<!-- Uncategorized channels first -->
+			{#each uncategorized as channel (channel.id)}
+				{@render fedChannelButton(channel)}
 			{/each}
-			{#each $voiceChannels as channel (channel.id)}
-				<button
-					class="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
-					disabled
-				>
-					<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M12 12a1 1 0 11-2 0 1 1 0 012 0z" />
-					</svg>
-					<span class="truncate">{channel.name}</span>
-				</button>
+
+			<!-- Categories with their channels -->
+			{#each fedCategories as category (category.id)}
+				{@const catChannels = fedChannels.filter(c => c.category_id === category.id)}
+				{#if catChannels.length > 0}
+					<button
+						class="mt-2 mb-0.5 flex w-full items-center gap-1 px-1 text-left text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
+						onclick={() => toggleSection(category.id)}
+					>
+						<svg class="h-3 w-3 shrink-0 transition-transform {isSectionCollapsed(category.id) ? '-rotate-90' : ''}" fill="currentColor" viewBox="0 0 20 20">
+							<path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+						</svg>
+						<span class="truncate">{category.name}</span>
+					</button>
+					{#if !isSectionCollapsed(category.id)}
+						{#each catChannels as channel (channel.id)}
+							{@render fedChannelButton(channel)}
+						{/each}
+					{/if}
+				{/if}
 			{/each}
 		{:else if $currentGuild}
 			<!-- Create Channel button -->

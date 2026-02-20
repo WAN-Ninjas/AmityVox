@@ -5,6 +5,7 @@
 	import { channels } from '$lib/stores/channels';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import Avatar from '$components/common/Avatar.svelte';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import { tick } from 'svelte';
 
 	interface Props {
@@ -254,7 +255,7 @@
 					<div class="mt-0.5 shrink-0">
 						<Avatar
 							name={msg.author?.display_name ?? msg.author?.username ?? 'U'}
-							src={msg.author?.avatar_id ? `/api/v1/files/${msg.author.avatar_id}` : null}
+							src={avatarUrl(msg.author?.avatar_id, msg.author?.instance_domain)}
 							size="sm"
 						/>
 					</div>
