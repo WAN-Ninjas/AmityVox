@@ -40,8 +40,8 @@
 
 	<!-- Quick Actions -->
 	<div class="flex gap-3 px-6 pt-4">
-		<button class="btn-primary text-sm" onclick={() => { createModalMode = 'create'; showCreateModal = true; }}>Create a Guild</button>
-		<button class="btn-secondary text-sm" onclick={() => { createModalMode = 'join'; showCreateModal = true; }}>Join a Guild</button>
+		<button class="btn-primary text-sm" onclick={() => { createModalMode = 'create'; showCreateModal = true; }}>Create a Server</button>
+		<button class="btn-secondary text-sm" onclick={() => { createModalMode = 'join'; showCreateModal = true; }}>Join a Server</button>
 	</div>
 
 	<!-- Dashboard Panels -->

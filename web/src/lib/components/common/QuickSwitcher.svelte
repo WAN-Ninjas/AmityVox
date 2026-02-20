@@ -162,7 +162,7 @@
 	// Category labels for display.
 	const categoryLabels: Record<string, string> = {
 		recent: 'Recent Channels',
-		guild: 'Guilds',
+		guild: 'Servers',
 		channel: 'Channels',
 		dm: 'Direct Messages'
 	};
@@ -294,7 +294,7 @@
 					bind:value={query}
 					type="text"
 					class="flex-1 bg-transparent text-base text-text-primary outline-none placeholder:text-text-muted"
-					placeholder="Jump to a channel or guild..."
+					placeholder="Jump to a channel or server..."
 					spellcheck="false"
 					autocomplete="off"
 				/>
@@ -308,7 +308,7 @@
 						{#if query.trim()}
 							No results found for "{query}"
 						{:else}
-							No channels or guilds found
+							No channels or servers found
 						{/if}
 					</div>
 				{:else}

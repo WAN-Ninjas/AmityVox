@@ -55,7 +55,7 @@
 	}
 </script>
 
-<Modal {open} {onclose} title={mode === 'create' ? 'Create a Guild' : 'Join a Guild'}>
+<Modal {open} {onclose} title={mode === 'create' ? 'Create a Server' : 'Join a Server'}>
 	<div class="mb-4 flex gap-2">
 		<button
 			class="flex-1 rounded py-2 text-sm font-medium transition-colors"
@@ -86,12 +86,12 @@
 	{#if mode === 'create'}
 		<div class="mb-4">
 			<label for="guildNameInput" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-				Guild Name
+				Server Name
 			</label>
-			<input id="guildNameInput" type="text" bind:value={guildName} class="input w-full" placeholder="My Guild" maxlength="100" />
+			<input id="guildNameInput" type="text" bind:value={guildName} class="input w-full" placeholder="My Server" maxlength="100" />
 		</div>
 		<button class="btn-primary w-full" onclick={handleCreate} disabled={createOp.loading || !guildName.trim()}>
-			{createOp.loading ? 'Creating...' : 'Create Guild'}
+			{createOp.loading ? 'Creating...' : 'Create Server'}
 		</button>
 	{:else}
 		<div class="mb-4">
@@ -101,7 +101,7 @@
 			<input id="inviteInput" type="text" bind:value={inviteCode} class="input w-full" placeholder="abc123 or https://..." />
 		</div>
 		<button class="btn-primary w-full" onclick={handleJoin} disabled={joinOp.loading || !inviteCode.trim()}>
-			{joinOp.loading ? 'Joining...' : 'Join Guild'}
+			{joinOp.loading ? 'Joining...' : 'Join Server'}
 		</button>
 	{/if}
 </Modal>

@@ -886,7 +886,7 @@
 		try {
 			adminGuilds = await api.getAdminGuilds({ query: guildSearch, sort: guildSort, limit: 100 });
 		} catch (err: any) {
-			addToast(err.message || 'Failed to load guilds', 'error');
+			addToast(err.message || 'Failed to load servers', 'error');
 		} finally {
 			loadingGuilds = false;
 		}
@@ -903,7 +903,7 @@
 		try {
 			selectedGuildDetail = await api.getAdminGuildDetails(guildId);
 		} catch (err: any) {
-			addToast(err.message || 'Failed to load guild details', 'error');
+			addToast(err.message || 'Failed to load server details', 'error');
 			guildDetailModalOpen = false;
 		} finally {
 			loadingGuildDetail = false;
@@ -916,9 +916,9 @@
 			await api.adminDeleteGuild(guildId);
 			adminGuilds = adminGuilds.filter(g => g.id !== guildId);
 			guildDetailModalOpen = false;
-			addToast(`Guild "${guildName}" deleted.`, 'success');
+			addToast(`Server "${guildName}" deleted.`, 'success');
 		} catch (err: any) {
-			addToast(err.message || 'Failed to delete guild', 'error');
+			addToast(err.message || 'Failed to delete server', 'error');
 		}
 	}
 
@@ -932,7 +932,7 @@
 		try {
 			userGuildsList = await api.getAdminUserGuilds(userId);
 		} catch (err: any) {
-			addToast(err.message || 'Failed to load user guilds', 'error');
+			addToast(err.message || 'Failed to load user servers', 'error');
 			userGuildsList = [];
 		} finally {
 			loadingUserGuilds = false;
@@ -950,7 +950,7 @@
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'dashboard', label: 'Dashboard' },
 		{ id: 'users', label: 'Users' },
-		{ id: 'guilds', label: 'Guilds' },
+		{ id: 'guilds', label: 'Servers' },
 		{ id: 'bots', label: 'Bots' },
 		{ id: 'bans', label: 'Instance Bans' },
 		{ id: 'registration', label: 'Registration' },
@@ -1002,9 +1002,9 @@
 </Modal>
 
 <!-- Guild Detail Modal -->
-<Modal open={guildDetailModalOpen} title="Guild Details" onclose={() => (guildDetailModalOpen = false)}>
+<Modal open={guildDetailModalOpen} title="Server Details" onclose={() => (guildDetailModalOpen = false)}>
 	{#if loadingGuildDetail}
-		<p class="text-sm text-text-muted">Loading guild details...</p>
+		<p class="text-sm text-text-muted">Loading server details...</p>
 	{:else if selectedGuildDetail}
 		<div class="space-y-4">
 			<div class="flex items-center gap-3">
@@ -1070,7 +1070,7 @@
 					class="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
 					onclick={() => handleDeleteGuild(selectedGuildDetail!.id, selectedGuildDetail!.name)}
 				>
-					Delete Guild
+					Delete Server
 				</button>
 			</div>
 		</div>
@@ -1340,7 +1340,7 @@
 							<p class="text-xs text-text-muted">{stats.online_users} online</p>
 						</div>
 						<div class="rounded-lg bg-bg-secondary p-4">
-							<p class="text-sm text-text-muted">Total Guilds</p>
+							<p class="text-sm text-text-muted">Total Servers</p>
 							<p class="mt-1 text-2xl font-bold text-text-primary">{stats.guilds.toLocaleString()}</p>
 							<p class="text-xs text-text-muted">{stats.channels} channels</p>
 						</div>
@@ -1491,18 +1491,18 @@
 										class="text-xs text-text-muted hover:text-text-primary"
 										onclick={() => loadUserGuilds(user.id)}
 									>
-										{expandedUserGuilds === user.id ? 'Hide' : 'Guilds'}
+										{expandedUserGuilds === user.id ? 'Hide' : 'Servers'}
 									</button>
 								</div>
 							</div>
 							{#if expandedUserGuilds === user.id}
 								<div class="ml-12 mt-1 mb-2 rounded-lg bg-bg-modifier/30 p-3">
 									{#if loadingUserGuilds}
-										<p class="text-xs text-text-muted">Loading guilds...</p>
+										<p class="text-xs text-text-muted">Loading servers...</p>
 									{:else if userGuildsList.length === 0}
-										<p class="text-xs text-text-muted">Not a member of any guilds.</p>
+										<p class="text-xs text-text-muted">Not a member of any servers.</p>
 									{:else}
-										<p class="text-xs text-text-muted mb-2">{userGuildsList.length} guild{userGuildsList.length !== 1 ? 's' : ''}</p>
+										<p class="text-xs text-text-muted mb-2">{userGuildsList.length} server{userGuildsList.length !== 1 ? 's' : ''}</p>
 										<div class="space-y-1">
 											{#each userGuildsList as ug (ug.id)}
 												<div class="flex items-center justify-between rounded bg-bg-secondary/50 px-2 py-1.5">
@@ -1526,7 +1526,7 @@
 			<!-- ==================== GUILDS ==================== -->
 			{:else if currentTab === 'guilds'}
 				<div class="mb-6 flex items-center justify-between">
-					<h1 class="text-2xl font-bold text-text-primary">Guild Management</h1>
+					<h1 class="text-2xl font-bold text-text-primary">Server Management</h1>
 					<button class="btn-secondary text-sm" onclick={() => { adminGuilds = []; loadGuilds(); }}>
 						{loadingGuilds ? 'Loading...' : 'Refresh'}
 					</button>
@@ -1536,7 +1536,7 @@
 					<input
 						type="text"
 						class="input flex-1"
-						placeholder="Search guilds by name..."
+						placeholder="Search servers by name..."
 						bind:value={guildSearch}
 						oninput={handleGuildSearch}
 					/>
@@ -1549,13 +1549,13 @@
 				</div>
 
 				{#if loadingGuilds}
-					<p class="text-sm text-text-muted">Loading guilds...</p>
+					<p class="text-sm text-text-muted">Loading servers...</p>
 				{:else if adminGuilds.length === 0}
 					<div class="rounded-lg bg-bg-secondary p-6 text-center">
-						<p class="text-sm text-text-muted">No guilds found.</p>
+						<p class="text-sm text-text-muted">No servers found.</p>
 					</div>
 				{:else}
-					<p class="mb-3 text-xs text-text-muted">{adminGuilds.length} guild{adminGuilds.length !== 1 ? 's' : ''}</p>
+					<p class="mb-3 text-xs text-text-muted">{adminGuilds.length} server{adminGuilds.length !== 1 ? 's' : ''}</p>
 					<div class="space-y-2">
 						{#each adminGuilds as guild (guild.id)}
 							<div class="flex items-center justify-between rounded-lg bg-bg-secondary p-3">
@@ -1660,7 +1660,7 @@
 									</div>
 									<div class="flex items-center gap-3">
 										<div class="flex gap-2 text-xs text-text-muted">
-											<span>{bot.guild_permissions?.length ?? 0} guilds</span>
+											<span>{bot.guild_permissions?.length ?? 0} servers</span>
 											<span>&middot;</span>
 											<span>{bot.event_subscriptions?.length ?? 0} subs</span>
 											{#if bot.rate_limit}
@@ -1675,7 +1675,7 @@
 								{#if isExpanded}
 									<div class="border-t border-bg-modifier p-4 space-y-4">
 										<div>
-											<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Guild Permissions</h4>
+											<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Server Permissions</h4>
 											{#if bot.guild_permissions && bot.guild_permissions.length > 0}
 												<div class="space-y-2">
 													{#each bot.guild_permissions as perm}
@@ -1694,7 +1694,7 @@
 													{/each}
 												</div>
 											{:else}
-												<p class="text-xs text-text-muted">No guild-specific permissions configured.</p>
+												<p class="text-xs text-text-muted">No server-specific permissions configured.</p>
 											{/if}
 										</div>
 
@@ -1705,7 +1705,7 @@
 													<table class="w-full text-left text-xs">
 														<thead class="bg-bg-primary">
 															<tr>
-																<th class="px-3 py-2 text-text-muted font-bold uppercase tracking-wide">Guild</th>
+																<th class="px-3 py-2 text-text-muted font-bold uppercase tracking-wide">Server</th>
 																<th class="px-3 py-2 text-text-muted font-bold uppercase tracking-wide">Events</th>
 																<th class="px-3 py-2 text-text-muted font-bold uppercase tracking-wide">Webhook</th>
 																<th class="px-3 py-2 text-text-muted font-bold uppercase tracking-wide">Created</th>

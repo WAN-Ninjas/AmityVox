@@ -40,7 +40,7 @@
 
 	async function addDomain() {
 		if (!newGuildId.trim() || !newDomain.trim()) {
-			addToast('Guild ID and domain are required', 'error');
+			addToast('Server ID and domain are required', 'error');
 			return;
 		}
 		adding = true;
@@ -102,7 +102,7 @@
 	<div class="flex items-center justify-between">
 		<div>
 			<h2 class="text-xl font-bold text-text-primary">Custom Domains</h2>
-			<p class="text-text-muted text-sm">Map custom domains to guilds (guild.example.com)</p>
+			<p class="text-text-muted text-sm">Map custom domains to servers (server.example.com)</p>
 		</div>
 		<button
 			class="btn-primary text-sm px-4 py-2"
@@ -116,7 +116,7 @@
 	<div class="bg-bg-tertiary rounded-lg p-4">
 		<h3 class="text-sm font-semibold text-text-secondary mb-2">How Custom Domains Work</h3>
 		<ol class="text-sm text-text-muted space-y-1 list-decimal list-inside">
-			<li>Add a domain for a guild</li>
+			<li>Add a domain for a server</li>
 			<li>Add a TXT record to your DNS for verification</li>
 			<li>Verify domain ownership</li>
 			<li>Add a CNAME record pointing to your instance domain</li>
@@ -130,8 +130,8 @@
 			<h3 class="text-sm font-semibold text-text-secondary mb-4">Add Custom Domain</h3>
 			<div class="space-y-4">
 				<div>
-					<label for="dom-guild-id" class="block text-sm font-medium text-text-secondary mb-1">Guild ID</label>
-					<input id="dom-guild-id" type="text" class="input w-full" placeholder="Paste guild ULID" bind:value={newGuildId} />
+					<label for="dom-guild-id" class="block text-sm font-medium text-text-secondary mb-1">Server ID</label>
+					<input id="dom-guild-id" type="text" class="input w-full" placeholder="Paste server ULID" bind:value={newGuildId} />
 				</div>
 				<div>
 					<label for="dom-domain" class="block text-sm font-medium text-text-secondary mb-1">Domain</label>
@@ -180,7 +180,7 @@
 								{/if}
 							</div>
 							<div class="text-sm text-text-muted">
-								Guild: {domain.guild_name} - Created: {formatDate(domain.created_at)}
+								Server: {domain.guild_name} - Created: {formatDate(domain.created_at)}
 								{#if domain.verified_at}
 									- Verified: {formatDate(domain.verified_at)}
 								{/if}

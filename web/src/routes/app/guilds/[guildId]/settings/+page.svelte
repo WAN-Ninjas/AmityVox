@@ -770,7 +770,7 @@
 			updateGuild(updated);
 			iconFile = null;
 			iconPreview = null;
-			success = 'Guild updated!';
+			success = 'Server updated!';
 			setTimeout(() => (success = ''), 3000);
 		} catch (err: any) {
 			error = err.message || 'Failed to save';
@@ -782,7 +782,7 @@
 	async function handleDelete() {
 		if (!$currentGuild) return;
 		if (deleteConfirm !== $currentGuild.name) {
-			error = 'Type the guild name to confirm deletion.';
+			error = 'Type the server name to confirm deletion.';
 			return;
 		}
 		try {
@@ -1410,7 +1410,7 @@
 	}
 
 	const actionTypeLabels: Record<string, string> = {
-		guild_update: 'Guild Updated',
+		guild_update: 'Server Updated',
 		channel_create: 'Channel Created',
 		channel_update: 'Channel Updated',
 		channel_delete: 'Channel Deleted',
@@ -1430,13 +1430,13 @@
 </script>
 
 <svelte:head>
-	<title>Guild Settings — AmityVox</title>
+	<title>Server Settings — AmityVox</title>
 </svelte:head>
 
 {#if isOwner || $canManageGuild}
 <div class="flex h-full">
 	<nav class="w-52 shrink-0 overflow-y-auto bg-bg-secondary p-4">
-		<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Guild Settings</h3>
+		<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Server Settings</h3>
 		<ul class="space-y-0.5">
 			{#each tabs as tab (tab.id)}
 				<li>
@@ -1454,7 +1454,7 @@
 			class="w-full rounded px-2 py-1.5 text-left text-sm text-text-muted hover:bg-bg-modifier hover:text-text-secondary"
 			onclick={() => goto(`/app/guilds/${$page.params.guildId}`)}
 		>
-			Back to guild
+			Back to server
 		</button>
 	</nav>
 
@@ -1469,7 +1469,7 @@
 
 			<!-- ==================== OVERVIEW ==================== -->
 			{#if currentTab === 'overview'}
-				<h1 class="mb-6 text-xl font-bold text-text-primary">Guild Overview</h1>
+				<h1 class="mb-6 text-xl font-bold text-text-primary">Server Overview</h1>
 
 				<!-- Icon + name -->
 				<div class="mb-6 flex items-center gap-4">
@@ -1488,12 +1488,12 @@
 						</label>
 					</div>
 					<div class="text-sm text-text-muted">
-						Click the icon to upload a new guild image.
+						Click the icon to upload a new server image.
 					</div>
 				</div>
 
 				<div class="mb-4">
-					<label for="guildName" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Guild Name</label>
+					<label for="guildName" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Server Name</label>
 					<input id="guildName" type="text" bind:value={name} class="input w-full" maxlength="100" />
 				</div>
 
@@ -1519,7 +1519,7 @@
 						{:else if verificationLevel === 2}
 							Members must be registered on this instance for at least 5 minutes.
 						{:else if verificationLevel === 3}
-							Members must have been a member of this guild for at least 10 minutes before they can participate.
+							Members must have been a member of this server for at least 10 minutes before they can participate.
 						{:else}
 							Members must have a verified phone number linked to their account.
 						{/if}
@@ -1573,15 +1573,15 @@
 					<div class="mt-12 border-t border-bg-modifier pt-6">
 						<h2 class="mb-2 text-lg font-semibold text-red-400">Danger Zone</h2>
 						<p class="mb-3 text-sm text-text-muted">
-							Deleting a guild is permanent and cannot be undone. Type <strong class="text-text-primary">{$currentGuild?.name}</strong> to confirm.
+							Deleting a server is permanent and cannot be undone. Type <strong class="text-text-primary">{$currentGuild?.name}</strong> to confirm.
 						</p>
-						<input type="text" class="input mb-3 w-full" bind:value={deleteConfirm} placeholder="Type guild name to confirm..." />
+						<input type="text" class="input mb-3 w-full" bind:value={deleteConfirm} placeholder="Type server name to confirm..." />
 						<button
 							class="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
 							onclick={handleDelete}
 							disabled={deleteConfirm !== $currentGuild?.name}
 						>
-							Delete Guild
+							Delete Server
 						</button>
 					</div>
 				{/if}
@@ -2774,7 +2774,7 @@
 			{:else if currentTab === 'ban-lists'}
 				<h1 class="mb-6 text-xl font-bold text-text-primary">Ban Lists</h1>
 				<p class="mb-4 text-sm text-text-muted">
-					Create and manage shared ban lists. Public lists can be subscribed to by other guilds.
+					Create and manage shared ban lists. Public lists can be subscribed to by other servers.
 				</p>
 
 				<!-- Create Ban List Form -->
@@ -2795,7 +2795,7 @@
 					<div class="mb-3 flex items-center gap-2">
 						<label class="flex items-center gap-2 text-sm text-text-muted">
 							<input type="checkbox" bind:checked={newBanListPublic} class="rounded" />
-							Make public (other guilds can discover and subscribe)
+							Make public (other servers can discover and subscribe)
 						</label>
 					</div>
 					<button
@@ -2959,7 +2959,7 @@
 				<div class="mb-6">
 					<h2 class="mb-3 text-sm font-bold uppercase tracking-wide text-text-muted">Subscriptions</h2>
 					<p class="mb-3 text-xs text-text-muted">
-						Subscribe to ban lists from other guilds. When auto-ban is enabled, users on subscribed lists are automatically banned.
+						Subscribe to ban lists from other servers. When auto-ban is enabled, users on subscribed lists are automatically banned.
 					</p>
 
 					{#if banListSubscriptions.length === 0}
@@ -3220,6 +3220,6 @@
 </div>
 {:else}
 <div class="flex h-full items-center justify-center">
-	<p class="text-text-muted">You don't have permission to view guild settings.</p>
+	<p class="text-text-muted">You don't have permission to view server settings.</p>
 </div>
 {/if}
