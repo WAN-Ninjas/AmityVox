@@ -142,8 +142,8 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 	}
 
 	rows, err := h.Pool.Query(r.Context(),
-		`SELECT fp.instance_id, fp.peer_id, fp.status, fp.established_at, fp.last_synced_at,
-		        i.domain, i.name, i.software
+		`SELECT fp.peer_id, fp.status, fp.established_at, fp.last_synced_at,
+		        i.domain, i.name, i.software, i.software_version
 		 FROM federation_peers fp
 		 JOIN instances i ON i.id = fp.peer_id
 		 WHERE fp.instance_id = $1
@@ -154,19 +154,23 @@ func (h *Handler) HandleGetFederationPeers(w http.ResponseWriter, r *http.Reques
 	}
 	defer rows.Close()
 
-	type peerWithInfo struct {
-		models.FederationPeer
-		PeerDomain   string  `json:"peer_domain"`
-		PeerName     *string `json:"peer_name,omitempty"`
-		PeerSoftware string  `json:"peer_software"`
+	type peerResponse struct {
+		ID              string     `json:"id"`
+		Domain          string     `json:"domain"`
+		Name            *string    `json:"name,omitempty"`
+		Software        string     `json:"software"`
+		SoftwareVersion *string    `json:"software_version,omitempty"`
+		Status          string     `json:"status"`
+		LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
+		CreatedAt       time.Time  `json:"created_at"`
 	}
 
-	peers := []peerWithInfo{}
+	peers := []peerResponse{}
 	for rows.Next() {
-		var p peerWithInfo
+		var p peerResponse
 		if err := rows.Scan(
-			&p.InstanceID, &p.PeerID, &p.Status, &p.EstablishedAt, &p.LastSyncedAt,
-			&p.PeerDomain, &p.PeerName, &p.PeerSoftware,
+			&p.ID, &p.Status, &p.CreatedAt, &p.LastSeenAt,
+			&p.Domain, &p.Name, &p.Software, &p.SoftwareVersion,
 		); err != nil {
 			apiutil.InternalError(w, h.Logger, "Failed to read federation peers", err)
 			return
@@ -247,11 +251,10 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 	}
 
 	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
-		"instance_id":    h.InstanceID,
-		"peer_id":        peerID,
-		"peer_domain":    req.Domain,
-		"status":         models.FederationPeerActive,
-		"established_at": now,
+		"id":         peerID,
+		"domain":     req.Domain,
+		"status":     models.FederationPeerActive,
+		"created_at": now,
 	})
 }
 
