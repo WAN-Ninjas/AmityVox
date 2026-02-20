@@ -1042,10 +1042,10 @@ widgetH := &widgets.Handler{
 
 				// Federation dashboard and management.
 				r.Get("/federation/dashboard", adminH.HandleGetFederationDashboard)
-				r.Patch("/federation/peers/{peerID}/control", adminH.HandleUpdatePeerControl)
-				r.Get("/federation/peer-controls", adminH.HandleGetPeerControls)
-				r.Get("/federation/deliveries", adminH.HandleGetDeliveryReceipts)
-				r.Post("/federation/deliveries/{deliveryID}/retry", adminH.HandleRetryDelivery)
+				r.Put("/federation/peers/{peerID}/control", adminH.HandleUpdatePeerControl)
+				r.Get("/federation/peers/controls", adminH.HandleGetPeerControls)
+				r.Get("/federation/delivery-receipts", adminH.HandleGetDeliveryReceipts)
+				r.Post("/federation/delivery-receipts/{receiptID}/retry", adminH.HandleRetryDelivery)
 				r.Get("/federation/search-config", adminH.HandleGetFederatedSearchConfig)
 				r.Patch("/federation/search-config", adminH.HandleUpdateFederatedSearchConfig)
 				r.Get("/federation/protocol", adminH.HandleGetProtocolInfo)

@@ -203,6 +203,10 @@ func (s *Service) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 // Sign creates a signed payload from the given data using this instance's
 // Ed25519 private key.
 func (s *Service) Sign(data interface{}) (*SignedPayload, error) {
+	if len(s.privateKey) == 0 {
+		return nil, fmt.Errorf("federation private key not configured")
+	}
+
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling payload: %w", err)

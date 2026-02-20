@@ -2449,6 +2449,13 @@
 			{:else if currentTab === 'federation'}
 				<h1 class="mb-6 text-2xl font-bold text-text-primary">Federation Peers</h1>
 
+				<a
+					href="/app/admin/federation"
+					class="mb-6 inline-flex items-center gap-2 rounded-lg bg-bg-tertiary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-quaternary"
+				>
+					Open Federation Dashboard <span aria-hidden="true">&rarr;</span>
+				</a>
+
 				<div class="mb-6 flex gap-2">
 					<input
 						type="text" class="input flex-1" placeholder="Enter domain (e.g., chat.example.com)..."
