@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
+	import { currentGuild, currentGuildId, federatedGuilds, isFederatedGuild } from '$lib/stores/guilds';
 	import { textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId, editChannelSignal } from '$lib/stores/channels';
 	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
@@ -42,6 +42,10 @@
 	}
 
 	let { width = 224 }: Props = $props();
+
+	const currentFederatedGuild = $derived(
+		$currentGuildId ? $federatedGuilds.get($currentGuildId) ?? null : null
+	);
 
 	// Status picker
 	let showStatusPicker = $state(false);
@@ -685,7 +689,14 @@
 
 <aside class="flex h-full shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" style="width: {width}px;" aria-label="Channel list">
 	<!-- Guild header -->
-	{#if $currentGuild}
+	{#if currentFederatedGuild}
+		<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
+			<div class="flex items-center gap-2 min-w-0">
+				<h2 class="truncate text-sm font-semibold text-text-primary">{currentFederatedGuild.name}</h2>
+				<FederationBadge domain={currentFederatedGuild.instance_domain} />
+			</div>
+		</div>
+	{:else if $currentGuild}
 		<div
 			class="flex h-12 items-center justify-between border-b border-bg-floating px-4"
 			oncontextmenu={(e) => { e.preventDefault(); guildContextMenu = { x: e.clientX, y: e.clientY }; channelContextMenu = null; dmContextMenu = null; }}
@@ -733,7 +744,36 @@
 
 	<!-- Channel list -->
 	<div class="flex-1 overflow-y-auto px-2 py-2">
-		{#if $currentGuild}
+		{#if currentFederatedGuild}
+			<!-- Federated guild channels (read-only list from cache) -->
+			{#each $textChannels as channel (channel.id)}
+				<button
+					class="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors"
+					class:bg-bg-modifier={$currentChannelId === channel.id}
+					class:text-text-primary={$currentChannelId === channel.id}
+					class:text-text-muted={$currentChannelId !== channel.id}
+					class:hover:bg-bg-modifier={true}
+					class:hover:text-text-secondary={$currentChannelId !== channel.id}
+					onclick={() => { setChannel(channel.id); goto(`/app/guilds/${currentFederatedGuild.guild_id}/channels/${channel.id}`); }}
+				>
+					<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+					</svg>
+					<span class="truncate">{channel.name}</span>
+				</button>
+			{/each}
+			{#each $voiceChannels as channel (channel.id)}
+				<button
+					class="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
+					disabled
+				>
+					<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M12 12a1 1 0 11-2 0 1 1 0 012 0z" />
+					</svg>
+					<span class="truncate">{channel.name}</span>
+				</button>
+			{/each}
+		{:else if $currentGuild}
 			<!-- Create Channel button -->
 			{#if $canManageChannels}
 				<button

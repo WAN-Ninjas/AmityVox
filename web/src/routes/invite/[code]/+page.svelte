@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-	import { updateGuild } from '$lib/stores/guilds';
+	import { updateGuild, addFederatedGuild } from '$lib/stores/guilds';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
 
 	let guildName = $state('');
@@ -82,7 +82,13 @@
 		joining = true;
 		try {
 			if (isFederated) {
-				await api.joinFederatedGuild(instanceDomain, undefined, inviteCode);
+				const resp = await api.joinFederatedGuild(instanceDomain, undefined, inviteCode);
+				addFederatedGuild({
+					guild_id: resp.guild_id, name: resp.name, icon_id: resp.icon_id,
+					description: resp.description, member_count: resp.member_count,
+					channels_json: resp.channels ?? [], roles_json: resp.roles ?? [],
+					instance_domain: instanceDomain
+				});
 				addToast(`Joined ${guildName}!`, 'success');
 				goto('/app');
 			} else {
@@ -90,12 +96,15 @@
 
 				if ((guild as any).federated) {
 					// Server returned redirect to federation
-					await api.joinFederatedGuild(
-						(guild as any).instance_domain,
-						undefined,
-						(guild as any).invite_code
-					);
-					addToast(`Joined server on ${(guild as any).instance_domain}!`, 'success');
+					const fedDomain = (guild as any).instance_domain;
+					const fedResp = await api.joinFederatedGuild(fedDomain, undefined, (guild as any).invite_code);
+					addFederatedGuild({
+						guild_id: fedResp.guild_id, name: fedResp.name, icon_id: fedResp.icon_id,
+						description: fedResp.description, member_count: fedResp.member_count,
+						channels_json: fedResp.channels ?? [], roles_json: fedResp.roles ?? [],
+						instance_domain: fedDomain
+					});
+					addToast(`Joined server on ${fedDomain}!`, 'success');
 					goto('/app');
 				} else {
 					updateGuild(guild);

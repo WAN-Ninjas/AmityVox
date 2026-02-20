@@ -575,7 +575,10 @@ class ApiClient {
 
 	// --- Federation Guilds ---
 
-	joinFederatedGuild(instanceDomain: string, guildId?: string, inviteCode?: string): Promise<unknown> {
+	joinFederatedGuild(instanceDomain: string, guildId?: string, inviteCode?: string): Promise<{
+		guild_id: string; name: string; icon_id: string | null; description: string | null;
+		member_count: number; channels: unknown[]; roles: unknown[];
+	}> {
 		return this.post('/federation/guilds/join', { instance_domain: instanceDomain, guild_id: guildId, invite_code: inviteCode });
 	}
 

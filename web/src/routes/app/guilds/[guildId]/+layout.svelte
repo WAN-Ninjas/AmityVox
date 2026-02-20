@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import type { Snippet } from 'svelte';
-	import { setGuild } from '$lib/stores/guilds';
-	import { loadChannels, loadHiddenThreads } from '$lib/stores/channels';
+	import { setGuild, isFederatedGuild, federatedGuilds } from '$lib/stores/guilds';
+	import { loadChannels, loadFederatedChannels, loadHiddenThreads } from '$lib/stores/channels';
+	import { get } from 'svelte/store';
 
 	interface Props {
 		children: Snippet;
@@ -15,8 +16,13 @@
 		const guildId = $page.params.guildId;
 		if (guildId) {
 			setGuild(guildId);
-			loadChannels(guildId);
-			loadHiddenThreads();
+			if (isFederatedGuild(guildId)) {
+				const fg = get(federatedGuilds).get(guildId);
+				if (fg) loadFederatedChannels(fg.channels_json);
+			} else {
+				loadChannels(guildId);
+				loadHiddenThreads();
+			}
 		}
 	});
 </script>

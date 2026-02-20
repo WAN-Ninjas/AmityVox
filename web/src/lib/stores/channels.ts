@@ -166,6 +166,27 @@ export async function loadChannels(guildId: string) {
 	channels.setAll(list.map(c => [c.id, c]));
 }
 
+/** Load channels from federation cache data (simplified channel objects). */
+export function loadFederatedChannels(channelsJson: unknown[]) {
+	const list = (channelsJson as Array<{ id: string; name: string; topic?: string | null; position?: number; channel_type?: string }>)
+		.map(c => ({
+			id: c.id,
+			guild_id: '',
+			name: c.name,
+			topic: c.topic ?? null,
+			position: c.position ?? 0,
+			channel_type: c.channel_type ?? 'text',
+			parent_channel_id: null,
+			locked: false,
+			locked_by: null,
+			locked_at: null,
+			slowmode_seconds: 0,
+			nsfw: false,
+			created_at: '',
+		} as Channel));
+	channels.setAll(list.map(c => [c.id, c]));
+}
+
 export function setChannel(id: string | null) {
 	currentChannelId.set(id);
 }

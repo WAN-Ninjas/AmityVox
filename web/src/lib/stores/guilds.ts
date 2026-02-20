@@ -49,6 +49,10 @@ export function removeGuild(guildId: string) {
 	guilds.removeEntry(guildId);
 }
 
+export function addFederatedGuild(fg: FederatedGuild) {
+	federatedGuilds.setEntry(fg.guild_id, fg);
+}
+
 export function removeFederatedGuild(guildId: string) {
 	federatedGuilds.removeEntry(guildId);
 }
