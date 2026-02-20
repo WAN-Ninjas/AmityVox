@@ -140,6 +140,7 @@
 
 	$effect(() => {
 		if (activeTab === 'federated' && selectedPeerId && peers.length > 0) {
+			selectedCategory; // track category changes for federated filters
 			loadRemoteGuilds();
 		}
 	});

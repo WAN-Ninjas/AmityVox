@@ -123,13 +123,7 @@ func (h *Handler) handleGetRemoteInvite(w http.ResponseWriter, r *http.Request, 
 	).Scan(&peerID, &peerStatus)
 
 	if err != nil || peerStatus != "active" {
-		apiutil.WriteJSON(w, http.StatusForbidden, map[string]interface{}{
-			"error": map[string]interface{}{
-				"code":    "not_federated",
-				"message": "This instance is not federated with " + domain,
-				"domain":  domain,
-			},
-		})
+		apiutil.WriteError(w, http.StatusForbidden, "not_federated", "This instance is not federated with "+domain)
 		return
 	}
 
@@ -273,13 +267,7 @@ func (h *Handler) handleAcceptRemoteInvite(w http.ResponseWriter, r *http.Reques
 	).Scan(&peerStatus)
 
 	if err != nil || peerStatus != "active" {
-		apiutil.WriteJSON(w, http.StatusForbidden, map[string]interface{}{
-			"error": map[string]interface{}{
-				"code":    "not_federated",
-				"message": "This instance is not federated with " + domain,
-				"domain":  domain,
-			},
-		})
+		apiutil.WriteError(w, http.StatusForbidden, "not_federated", "This instance is not federated with "+domain)
 		return
 	}
 

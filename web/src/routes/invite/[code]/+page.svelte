@@ -23,6 +23,13 @@
 	let requestingFederation = $state(false);
 	let federationRequested = $state(false);
 
+	function extractDomainFromInvite(code: string): string {
+		if (code.includes('@')) return code.split('@').pop() ?? '';
+		const slash = code.indexOf('/');
+		if (slash > 0) return code.slice(0, slash);
+		return '';
+	}
+
 	$effect(() => {
 		loadInvite();
 	});
@@ -59,7 +66,7 @@
 			// Check for not_federated error
 			if (err.code === 'not_federated' || err.message?.includes('not federated')) {
 				notFederated = true;
-				notFederatedDomain = err.domain || '';
+				notFederatedDomain = err.domain || extractDomainFromInvite(code) || '';
 			} else {
 				error = err.message || 'Invite not found or has expired';
 			}
