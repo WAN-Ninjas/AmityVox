@@ -2,9 +2,10 @@
 // Implements a stale-while-revalidate strategy for static assets
 // and a network-first strategy for API calls.
 
-const CACHE_VERSION = 'amityvox-v2';
+const CACHE_VERSION = 'amityvox-v3';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
+const FILE_CACHE = `${CACHE_VERSION}-files`;
 
 // Static assets to pre-cache on install.
 const PRECACHE_URLS = [
@@ -22,6 +23,10 @@ const STATIC_PATTERNS = [
 
 const API_PATTERNS = [
 	/\/api\/v1\//
+];
+
+const FILE_PATTERNS = [
+	/\/api\/v1\/files\//        // Media files (avatars, attachments, icons)
 ];
 
 const NO_CACHE_PATTERNS = [
@@ -54,7 +59,7 @@ self.addEventListener('activate', (event) => {
 			.then((keys) => {
 				return Promise.all(
 					keys
-						.filter((key) => key.startsWith('amityvox-') && key !== STATIC_CACHE && key !== API_CACHE)
+						.filter((key) => key.startsWith('amityvox-') && key !== STATIC_CACHE && key !== API_CACHE && key !== FILE_CACHE)
 						.map((key) => caches.delete(key))
 				);
 			})
@@ -76,6 +81,13 @@ self.addEventListener('fetch', (event) => {
 
 	// Skip no-cache patterns.
 	if (NO_CACHE_PATTERNS.some((p) => p.test(url.pathname))) return;
+
+	// Media files — bypass browser HTTP cache (busts old immutable entries),
+	// serve from SW cache with background revalidation.
+	if (FILE_PATTERNS.some((p) => p.test(url.pathname))) {
+		event.respondWith(networkFirstNoHttpCache(event.request, FILE_CACHE));
+		return;
+	}
 
 	// API requests — network first, fall back to cache.
 	if (API_PATTERNS.some((p) => p.test(url.pathname))) {
@@ -122,6 +134,26 @@ async function networkFirst(request, cacheName) {
 				headers: { 'Content-Type': 'application/json' }
 			}
 		);
+	}
+}
+
+/**
+ * Network First (bypass HTTP cache) — Fetches with cache: 'no-store' to skip
+ * the browser's HTTP cache entirely. This busts stale entries that were
+ * previously served with immutable headers. Falls back to SW cache on failure.
+ */
+async function networkFirstNoHttpCache(request, cacheName) {
+	const cache = await caches.open(cacheName);
+	try {
+		const response = await fetch(request, { cache: 'no-store' });
+		if (response.ok) {
+			cache.put(request, response.clone());
+		}
+		return response;
+	} catch {
+		const cached = await cache.match(request);
+		if (cached) return cached;
+		return new Response('', { status: 504, statusText: 'Offline' });
 	}
 }
 

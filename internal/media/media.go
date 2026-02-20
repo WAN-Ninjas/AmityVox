@@ -500,9 +500,17 @@ func (s *Service) HandleGetFile(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, safeFilename))
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
+	w.Header().Set("ETag", fmt.Sprintf(`"%s"`, fileID))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+
+	// Support conditional requests — return 304 if the browser already has this file.
+	if match := r.Header.Get("If-None-Match"); match == fmt.Sprintf(`"%s"`, fileID) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	io.Copy(w, obj)
 }
 

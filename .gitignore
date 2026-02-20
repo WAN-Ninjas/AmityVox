@@ -39,6 +39,9 @@ amityvox.toml
 .env
 .env.*
 !.env.example
+deploy/caddy/Caddyfile
+deploy/livekit/livekit.yaml
+deploy/garage/garage.toml
 
 # Dependencies (vendored separately if needed)
 /vendor/
