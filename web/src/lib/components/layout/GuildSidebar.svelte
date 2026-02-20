@@ -375,7 +375,7 @@
 
 <!-- Invite Modal (triggered from guild context menu) -->
 {#if showInviteForGuild}
-	<InviteModal open={true} onclose={() => (showInviteForGuild = null)} />
+	<InviteModal open={true} guildId={showInviteForGuild} onclose={() => (showInviteForGuild = null)} />
 {/if}
 
 <CreateGuildModal bind:open={showCreateModal} onclose={() => (showCreateModal = false)} />
