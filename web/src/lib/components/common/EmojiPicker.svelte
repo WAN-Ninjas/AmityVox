@@ -41,7 +41,7 @@
 
 <svelte:document onclick={handleClickOutside} onkeydown={handleKeydown} />
 
-<div class="emoji-picker absolute bottom-full right-0 z-50 mb-2 w-80 rounded-lg bg-bg-floating shadow-xl" role="dialog" aria-label="Emoji picker">
+<div class="emoji-picker fixed inset-x-0 bottom-0 z-50 max-h-[60vh] rounded-t-xl bg-bg-floating shadow-xl md:absolute md:inset-auto md:bottom-full md:right-0 md:mb-2 md:w-80 md:max-h-none md:rounded-lg" role="dialog" aria-label="Emoji picker">
 	<!-- Search -->
 	<div class="border-b border-bg-modifier p-2">
 		<input

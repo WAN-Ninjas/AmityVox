@@ -45,6 +45,12 @@
 		}
 	});
 
+	// Auto-close mobile sidebar on navigation.
+	$effect(() => {
+		$page.url.pathname;
+		mobileSidebarOpen = false;
+	});
+
 	onMount(() => {
 		// Load settings from localStorage immediately.
 		loadSettings();

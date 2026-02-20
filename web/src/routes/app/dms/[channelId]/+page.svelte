@@ -168,7 +168,7 @@
 		</div>
 	{/if}
 
-	<header class="flex h-12 items-center gap-3 border-b border-bg-floating bg-bg-tertiary px-4">
+	<header class="flex h-12 items-center gap-3 border-b border-bg-floating bg-bg-tertiary pl-12 pr-4 md:pl-4">
 		{#if recipient && !isGroupDM}
 			<button
 				class="flex min-w-0 flex-1 items-center gap-3 rounded-md transition-colors hover:bg-bg-modifier"
@@ -205,7 +205,7 @@
 					</svg>
 				</button>
 				<button
-					class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50"
+					class="hidden rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50 md:block"
 					onclick={() => startCall(true)}
 					disabled={callLoading}
 					title="Start Video Call"
@@ -216,7 +216,7 @@
 				</button>
 			{/if}
 			<button
-				class="rounded p-1.5 transition-colors hover:bg-bg-modifier {dmChannel?.encrypted ? 'text-green-400 hover:text-green-300' : 'text-text-muted hover:text-text-secondary'}"
+				class="hidden rounded p-1.5 transition-colors hover:bg-bg-modifier md:block {dmChannel?.encrypted ? 'text-green-400 hover:text-green-300' : 'text-text-muted hover:text-text-secondary'}"
 				onclick={() => (showEncryption = true)}
 				title={dmChannel?.encrypted ? 'Encryption enabled' : 'Set up encryption'}
 			>
@@ -260,7 +260,7 @@
 					</svg>
 				</button>
 				<button
-					class="rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50"
+					class="hidden rounded p-1.5 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary disabled:opacity-50 md:block"
 					onclick={() => startCall(true)}
 					disabled={callLoading}
 					title="Start Video Call"

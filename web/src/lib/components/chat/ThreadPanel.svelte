@@ -163,7 +163,7 @@
 	}
 </script>
 
-<div class="flex h-full w-80 shrink-0 flex-col border-l border-bg-floating bg-bg-secondary">
+<div class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:h-full md:w-80 md:shrink-0 md:border-l md:border-bg-floating">
 	<!-- Header -->
 	<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
 		<div class="min-w-0">
@@ -281,6 +281,8 @@
 				placeholder="Reply to thread..."
 				class="max-h-24 min-h-[20px] flex-1 resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
 				rows="1"
+				autocomplete="off"
+				name="thread-message"
 			></textarea>
 		</div>
 	</div>

@@ -368,7 +368,7 @@
 	{/if}
 
 	{#if showFollowers && !activeThread && !showPins}
-		<aside class="flex w-64 shrink-0 flex-col border-l border-bg-floating bg-bg-secondary">
+		<aside class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:w-64 md:shrink-0 md:border-l md:border-bg-floating">
 			<div class="flex items-center justify-between border-b border-bg-floating px-4 py-3">
 				<h2 class="text-sm font-bold text-text-primary">Channel Followers</h2>
 				<button
@@ -457,20 +457,29 @@
 	{/if}
 
 	{#if showGallery && !activeThread}
-		<aside class="flex w-80 shrink-0 flex-col border-l border-bg-floating bg-bg-secondary">
+		<aside class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:w-80 md:shrink-0 md:border-l md:border-bg-floating">
 			<GalleryPanel channelId={$currentChannelId ?? undefined} guildId={$page.params.guildId} canManage={true} onclose={() => (showGallery = false)} />
 		</aside>
 	{/if}
 
 	{#if showMembers && !showPins && !activeThread && !showFollowers && !showGallery}
-		<div class="hidden lg:flex">
-			<ResizeHandle
-				width={$memberListWidth}
-				onresize={(w) => memberListWidth.set(w)}
-				onreset={() => memberListWidth.reset()}
-				side="right"
-			/>
+		<!-- Desktop: inline sidebar with resize handle -->
+		<div class="hidden lg:contents">
+			<div class="flex">
+				<ResizeHandle
+					width={$memberListWidth}
+					onresize={(w) => memberListWidth.set(w)}
+					onreset={() => memberListWidth.reset()}
+					side="right"
+				/>
+			</div>
+			<MemberList />
 		</div>
-		<MemberList />
+		<!-- Mobile: overlay from right -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="fixed inset-0 z-40 bg-black/50 lg:hidden" onclick={() => (showMembers = false)}></div>
+		<aside class="fixed inset-y-0 right-0 z-50 w-72 overflow-y-auto bg-bg-secondary lg:hidden">
+			<MemberList />
+		</aside>
 	{/if}
 </div>

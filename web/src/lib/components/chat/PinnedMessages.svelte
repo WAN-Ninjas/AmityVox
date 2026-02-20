@@ -37,7 +37,7 @@
 	}
 </script>
 
-<aside class="flex h-full w-80 shrink-0 flex-col border-l border-bg-floating bg-bg-secondary">
+<aside class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:h-full md:w-80 md:shrink-0 md:border-l md:border-bg-floating">
 	<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
 		<h2 class="text-sm font-semibold text-text-primary">Pinned Messages</h2>
 		<button
