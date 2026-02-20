@@ -625,12 +625,15 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	var replyToIDs []string
 	if len(req.ReplyToIDs) > 0 {
 		var validCount int
-		if err := ss.fed.pool.QueryRow(ctx,
+		err := ss.fed.pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM messages WHERE id = ANY($1) AND channel_id = $2`,
 			req.ReplyToIDs, channelID,
-		).Scan(&validCount); err == nil && validCount == len(req.ReplyToIDs) {
-			replyToIDs = req.ReplyToIDs
+		).Scan(&validCount)
+		if err != nil || validCount != len(req.ReplyToIDs) {
+			http.Error(w, "One or more reply_to_ids not found in channel", http.StatusBadRequest)
+			return
 		}
+		replyToIDs = req.ReplyToIDs
 	}
 
 	_, err := ss.fed.pool.Exec(ctx,
