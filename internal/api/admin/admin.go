@@ -212,9 +212,9 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		// Register the remote instance in the instances table.
+		// Register the remote instance and capture the canonical ID via RETURNING.
 		now := time.Now().UTC()
-		_, regErr := h.Pool.Exec(r.Context(),
+		regErr := h.Pool.QueryRow(r.Context(),
 			`INSERT INTO instances (id, domain, public_key, name, software, software_version,
 			                        federation_mode, created_at, last_seen_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -224,15 +224,15 @@ func (h *Handler) HandleAddFederationPeer(w http.ResponseWriter, r *http.Request
 				software = EXCLUDED.software,
 				software_version = EXCLUDED.software_version,
 				federation_mode = EXCLUDED.federation_mode,
-				last_seen_at = EXCLUDED.last_seen_at`,
+				last_seen_at = EXCLUDED.last_seen_at
+			 RETURNING id`,
 			disc.InstanceID, disc.Domain, disc.PublicKey, disc.Name,
 			disc.Software, disc.SoftwareVersion, disc.FederationMode, now, now,
-		)
+		).Scan(&peerID)
 		if regErr != nil {
 			apiutil.InternalError(w, h.Logger, "Failed to register remote instance", regErr)
 			return
 		}
-		peerID = disc.InstanceID
 	}
 
 	now := time.Now().UTC()

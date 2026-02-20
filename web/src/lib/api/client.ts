@@ -119,7 +119,8 @@ class ApiClient {
 			if (!res.ok) {
 				throw new ApiRequestError(res.statusText, 'unknown', res.status);
 			}
-			return undefined as T;
+			// 2xx with non-JSON body is a server bug (204 is handled above).
+			throw new ApiRequestError('Invalid server response', 'invalid_json', res.status);
 		}
 
 		if (!res.ok) {
