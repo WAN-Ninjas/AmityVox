@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { GuildMember, Role } from '$lib/types';
 	import { memberListWidth } from '$lib/stores/layout';
-	import { currentGuildId, currentGuild } from '$lib/stores/guilds';
+	import { currentGuildId, currentGuild, isFederatedGuild } from '$lib/stores/guilds';
 	import { currentUser } from '$lib/stores/auth';
 	import { api } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -54,16 +54,26 @@
 		const guildId = $currentGuildId;
 		if (guildId) {
 			loadingGuildId = guildId;
-			Promise.all([
-				api.getMembers(guildId),
-				api.getRoles(guildId),
-			]).then(([m, r]) => {
-				if (loadingGuildId === guildId) {
-					setGuildMembers(m);
-					allGuildRoles = r;
-					setGuildRoles(r);
-				}
-			}).catch(() => {});
+			if (isFederatedGuild(guildId)) {
+				api.getFederatedGuildMembers(guildId).then((m) => {
+					if (loadingGuildId === guildId) {
+						setGuildMembers(m);
+						allGuildRoles = [];
+						setGuildRoles([]);
+					}
+				}).catch(() => {});
+			} else {
+				Promise.all([
+					api.getMembers(guildId),
+					api.getRoles(guildId),
+				]).then(([m, r]) => {
+					if (loadingGuildId === guildId) {
+						setGuildMembers(m);
+						allGuildRoles = r;
+						setGuildRoles(r);
+					}
+				}).catch(() => {});
+			}
 		} else {
 			loadingGuildId = null;
 			setGuildMembers([]);
@@ -147,7 +157,8 @@
 	const isContextSelf = $derived(contextMenu?.member.user_id === $currentUser?.id);
 	const isContextOwner = $derived(contextMenu?.member.user_id === $currentGuild?.owner_id);
 	const canModerate = $derived(!isContextSelf && !isContextOwner);
-	const hasAnyModPerm = $derived($canKickMembers || $canBanMembers || $canTimeoutMembers || $canAssignRoles);
+	const isFederated = $derived($currentGuildId ? isFederatedGuild($currentGuildId) : false);
+	const hasAnyModPerm = $derived(!isFederated && ($canKickMembers || $canBanMembers || $canTimeoutMembers || $canAssignRoles));
 
 	const timeoutPresets = [
 		{ label: '1 minute', seconds: 60 },

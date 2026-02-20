@@ -52,9 +52,23 @@ type federatedGuildMessagesRequest struct {
 }
 
 type federatedGuildPostMessageRequest struct {
-	UserID  string `json:"user_id"`
-	Content string `json:"content"`
-	Nonce   string `json:"nonce,omitempty"`
+	UserID      string   `json:"user_id"`
+	Content     string   `json:"content"`
+	Nonce       string   `json:"nonce,omitempty"`
+	ReplyToIDs  []string `json:"reply_to_ids,omitempty"`
+}
+
+type federatedGuildMembersRequest struct {
+	UserID string `json:"user_id"`
+}
+
+type federatedGuildReactionRequest struct {
+	UserID string `json:"user_id"`
+	Emoji  string `json:"emoji"`
+}
+
+type federatedGuildTypingRequest struct {
+	UserID string `json:"user_id"`
 }
 
 type guildPreviewResponse struct {
@@ -607,10 +621,25 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	msgID := models.NewULID().String()
 	now := time.Now()
 
+	// Validate reply_to_ids if provided — all must exist in this channel.
+	var replyToIDs []string
+	if len(req.ReplyToIDs) > 0 {
+		var validCount int
+		err := ss.fed.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM messages WHERE id = ANY($1) AND channel_id = $2`,
+			req.ReplyToIDs, channelID,
+		).Scan(&validCount)
+		if err != nil || validCount != len(req.ReplyToIDs) {
+			http.Error(w, "One or more reply_to_ids not found in channel", http.StatusBadRequest)
+			return
+		}
+		replyToIDs = req.ReplyToIDs
+	}
+
 	_, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO messages (id, channel_id, author_id, content, created_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		msgID, channelID, req.UserID, req.Content, now)
+		`INSERT INTO messages (id, channel_id, author_id, content, reply_to_ids, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		msgID, channelID, req.UserID, req.Content, replyToIDs, now)
 	if err != nil {
 		ss.logger.Error("failed to create federated guild message", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -625,12 +654,374 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	msg := map[string]interface{}{
 		"id": msgID, "channel_id": channelID, "guild_id": guildID,
 		"author_id": req.UserID, "content": req.Content, "created_at": now,
+		"reply_to_ids": replyToIDs,
 	}
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", channelID, msg)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": msg})
+}
+
+// HandleFederatedGuildMembers returns the member list for a guild to a federated peer.
+// POST /federation/v1/guilds/{guildID}/members
+func (ss *SyncService) HandleFederatedGuildMembers(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	if guildID == "" {
+		http.Error(w, "Missing guild ID", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildMembersRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" {
+		http.Error(w, "Missing user_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify the user belongs to the sender's instance.
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	// Verify requesting user is a member.
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil || !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	rows, err := ss.fed.pool.Query(ctx,
+		`SELECT gm.user_id, u.username, u.display_name, u.avatar_id,
+		        COALESCE(i.domain, '') AS instance_domain,
+		        COALESCE(
+		          (SELECT json_agg(mr.role_id) FROM member_roles mr
+		           WHERE mr.guild_id = gm.guild_id AND mr.user_id = gm.user_id),
+		          '[]'::json
+		        ) AS role_ids,
+		        gm.joined_at
+		 FROM guild_members gm
+		 JOIN users u ON u.id = gm.user_id
+		 LEFT JOIN instances i ON i.id = u.instance_id
+		 WHERE gm.guild_id = $1
+		 ORDER BY gm.joined_at ASC
+		 LIMIT 200`, guildID)
+	if err != nil {
+		ss.logger.Error("failed to query guild members", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	members := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var userID, username string
+		var displayName, avatarID *string
+		var instanceDomain string
+		var roleIDsJSON json.RawMessage
+		var joinedAt time.Time
+		if err := rows.Scan(&userID, &username, &displayName, &avatarID,
+			&instanceDomain, &roleIDsJSON, &joinedAt); err != nil {
+			ss.logger.Warn("failed to scan member row", slog.String("error", err.Error()))
+			continue
+		}
+		members = append(members, map[string]interface{}{
+			"user_id":         userID,
+			"username":        username,
+			"display_name":    displayName,
+			"avatar_id":       avatarID,
+			"instance_domain": instanceDomain,
+			"role_ids":        roleIDsJSON,
+			"joined_at":       joinedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": members})
+}
+
+// HandleFederatedGuildReactionAdd adds a reaction on behalf of a federated user.
+// POST /federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions
+func (ss *SyncService) HandleFederatedGuildReactionAdd(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	if guildID == "" || channelID == "" || messageID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildReactionRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" || req.Emoji == "" {
+		http.Error(w, "Missing user_id or emoji", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	// Verify channel belongs to guild and is not private.
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	// Verify membership.
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil || !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	// Verify message exists in the channel.
+	var msgChannelID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT channel_id FROM messages WHERE id = $1`, messageID,
+	).Scan(&msgChannelID); err != nil || msgChannelID != channelID {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+
+	if _, err := ss.fed.pool.Exec(ctx,
+		`INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+		 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+		messageID, req.UserID, req.Emoji); err != nil {
+		ss.logger.Error("failed to add federated reaction", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	evt := map[string]interface{}{
+		"message_id": messageID, "channel_id": channelID, "guild_id": guildID,
+		"user_id": req.UserID, "emoji": req.Emoji,
+	}
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionAdd, "MESSAGE_REACTION_ADD", channelID, evt)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleFederatedGuildReactionRemove removes a reaction on behalf of a federated user.
+// POST /federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove
+func (ss *SyncService) HandleFederatedGuildReactionRemove(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	if guildID == "" || channelID == "" || messageID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildReactionRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" || req.Emoji == "" {
+		http.Error(w, "Missing user_id or emoji", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	// Verify channel belongs to guild and is not private.
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	// Verify membership.
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil || !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	// Verify message exists in the channel.
+	var msgChannelID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT channel_id FROM messages WHERE id = $1`, messageID,
+	).Scan(&msgChannelID); err != nil || msgChannelID != channelID {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+
+	if _, err := ss.fed.pool.Exec(ctx,
+		`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+		messageID, req.UserID, req.Emoji); err != nil {
+		ss.logger.Error("failed to remove federated reaction", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	evt := map[string]interface{}{
+		"message_id": messageID, "channel_id": channelID, "guild_id": guildID,
+		"user_id": req.UserID, "emoji": req.Emoji,
+	}
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionDel, "MESSAGE_REACTION_REMOVE", channelID, evt)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleFederatedGuildTyping handles a typing indicator from a federated user.
+// POST /federation/v1/guilds/{guildID}/channels/{channelID}/typing
+func (ss *SyncService) HandleFederatedGuildTyping(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	if guildID == "" || channelID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildTypingRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" {
+		http.Error(w, "Missing user_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	// Verify channel belongs to guild and is not private.
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	// Verify membership.
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil || !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	// Publish typing event to NATS — no persistence needed.
+	evt := map[string]interface{}{
+		"channel_id": channelID,
+		"guild_id":   guildID,
+		"user_id":    req.UserID,
+	}
+	ss.bus.PublishChannelEvent(ctx, events.SubjectTypingStart, "TYPING_START", channelID, evt)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleProxyFederatedTyping proxies a typing indicator to a remote guild.
+// POST /api/v1/federation/guilds/{guildID}/channels/{channelID}/typing
+func (ss *SyncService) HandleProxyFederatedTyping(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	if guildID == "" || channelID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT i.domain FROM federation_guild_cache fgc
+		 JOIN instances i ON i.id = fgc.instance_id
+		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
+		guildID, userID,
+	).Scan(&instanceDomain); err != nil {
+		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		return
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/typing",
+		instanceDomain, guildID, channelID)
+	_, statusCode, err := ss.signAndPost(ctx, remoteURL, federatedGuildTypingRequest{UserID: userID})
+	if err != nil {
+		http.Error(w, "Failed to contact remote instance", http.StatusBadGateway)
+		return
+	}
+
+	w.WriteHeader(statusCode)
 }
 
 // ============================================================
@@ -1044,8 +1435,9 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 	}
 
 	var localReq struct {
-		Content string `json:"content"`
-		Nonce   string `json:"nonce"`
+		Content    string   `json:"content"`
+		Nonce      string   `json:"nonce"`
+		ReplyToIDs []string `json:"reply_to_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&localReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1071,6 +1463,7 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 
 	payload := federatedGuildPostMessageRequest{
 		UserID: userID, Content: localReq.Content, Nonce: localReq.Nonce,
+		ReplyToIDs: localReq.ReplyToIDs,
 	}
 
 	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/create",
@@ -1304,6 +1697,148 @@ func (ss *SyncService) HandleGetPublicFederationPeers(w http.ResponseWriter, r *
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": peers})
+}
+
+// HandleProxyGetFederatedGuildMembers proxies member list fetch to a remote guild.
+// GET /api/v1/federation/guilds/{guildID}/members
+func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	if guildID == "" {
+		http.Error(w, "Missing guild ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT i.domain FROM federation_guild_cache fgc
+		 JOIN instances i ON i.id = fgc.instance_id
+		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
+		guildID, userID,
+	).Scan(&instanceDomain); err != nil {
+		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		return
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/members", instanceDomain, guildID)
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, federatedGuildMembersRequest{UserID: userID})
+	if err != nil {
+		http.Error(w, "Failed to contact remote instance", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
+}
+
+// HandleProxyAddFederatedReaction proxies adding a reaction to a remote guild message.
+// PUT /api/v1/federation/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/{emoji}
+func (ss *SyncService) HandleProxyAddFederatedReaction(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	emoji := chi.URLParam(r, "emoji")
+	if guildID == "" || channelID == "" || messageID == "" || emoji == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT i.domain FROM federation_guild_cache fgc
+		 JOIN instances i ON i.id = fgc.instance_id
+		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
+		guildID, userID,
+	).Scan(&instanceDomain); err != nil {
+		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		return
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/%s/reactions",
+		instanceDomain, guildID, channelID, messageID)
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, federatedGuildReactionRequest{
+		UserID: userID, Emoji: emoji,
+	})
+	if err != nil {
+		http.Error(w, "Failed to contact remote instance", http.StatusBadGateway)
+		return
+	}
+
+	if statusCode == http.StatusNoContent {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
+}
+
+// HandleProxyRemoveFederatedReaction proxies removing a reaction from a remote guild message.
+// DELETE /api/v1/federation/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/{emoji}
+func (ss *SyncService) HandleProxyRemoveFederatedReaction(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	emoji := chi.URLParam(r, "emoji")
+	if guildID == "" || channelID == "" || messageID == "" || emoji == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT i.domain FROM federation_guild_cache fgc
+		 JOIN instances i ON i.id = fgc.instance_id
+		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
+		guildID, userID,
+	).Scan(&instanceDomain); err != nil {
+		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		return
+	}
+
+	// The remote-facing handler uses POST for deletion (federation always signs POST payloads),
+	// but we route differently by using the remove endpoint path.
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/%s/reactions/remove",
+		instanceDomain, guildID, channelID, messageID)
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, federatedGuildReactionRequest{
+		UserID: userID, Emoji: emoji,
+	})
+	if err != nil {
+		http.Error(w, "Failed to contact remote instance", http.StatusBadGateway)
+		return
+	}
+
+	if statusCode == http.StatusNoContent {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
 }
 
 // signAndPost signs a payload with the federation service and POSTs to a URL.
