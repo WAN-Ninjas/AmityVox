@@ -13,7 +13,7 @@
 <p align="center">
   <a href="LICENSE">AGPL-3.0</a> &middot;
   <a href="https://discord.gg/VvxgUpF3uQ">Discord</a> &middot;
-  <a href="https://amityvox.chat/">Live Instance</a> &middot;
+  <a href="https://app.amityvox.chat/">Live Instance</a> &middot;
   <a href="https://github.com/WAN-Ninjas/AmityVox/issues">Issues</a>
 </p>
 
