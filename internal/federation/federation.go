@@ -403,9 +403,15 @@ func (s *Service) RefreshPeerKeys(ctx context.Context) {
 	var domains []string
 	for rows.Next() {
 		var domain string
-		if rows.Scan(&domain) == nil {
-			domains = append(domains, domain)
+		if err := rows.Scan(&domain); err != nil {
+			s.logger.Warn("failed to scan federation peer domain", slog.String("error", err.Error()))
+			continue
 		}
+		domains = append(domains, domain)
+	}
+	if err := rows.Err(); err != nil {
+		s.logger.Warn("error iterating federation peers", slog.String("error", err.Error()))
+		return
 	}
 
 	for _, domain := range domains {
