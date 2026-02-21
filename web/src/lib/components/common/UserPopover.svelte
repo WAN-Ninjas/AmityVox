@@ -232,7 +232,7 @@
 			<div class="-mt-8">
 				<Avatar
 					name={user.display_name ?? user.username}
-					src={avatarUrl(user.avatar_id, user.instance_domain)}
+					src={avatarUrl(user.avatar_id, user.instance_id && $currentUser && user.instance_id !== $currentUser.instance_id ? user.instance_id : undefined)}
 					size="lg"
 					{status}
 				/>

@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-	import { updateGuild, addFederatedGuild } from '$lib/stores/guilds';
+	import { updateGuild, loadGuilds } from '$lib/stores/guilds';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
 
 	let guildName = $state('');
@@ -83,29 +83,22 @@
 		try {
 			if (isFederated) {
 				const resp = await api.joinFederatedGuild(instanceDomain, undefined, inviteCode);
-				addFederatedGuild({
-					guild_id: resp.guild_id, name: resp.name, icon_id: resp.icon_id,
-					description: resp.description, member_count: resp.member_count,
-					channels_json: resp.channels ?? [], roles_json: resp.roles ?? [],
-					instance_domain: instanceDomain
-				});
+				// Best-effort refresh — a stale guild list is acceptable; navigation
+				// must always succeed after a successful join.
+				loadGuilds().catch(() => {});
 				addToast(`Joined ${guildName}!`, 'success');
-				goto('/app');
+				goto(`/app/guilds/${resp.guild_id}`);
 			} else {
 				const guild = await api.acceptInvite(code);
 
 				if ((guild as any).federated) {
-					// Server returned redirect to federation
 					const fedDomain = (guild as any).instance_domain;
 					const fedResp = await api.joinFederatedGuild(fedDomain, undefined, (guild as any).invite_code);
-					addFederatedGuild({
-						guild_id: fedResp.guild_id, name: fedResp.name, icon_id: fedResp.icon_id,
-						description: fedResp.description, member_count: fedResp.member_count,
-						channels_json: fedResp.channels ?? [], roles_json: fedResp.roles ?? [],
-						instance_domain: fedDomain
-					});
+					// Best-effort refresh — a stale guild list is acceptable; navigation
+					// must always succeed after a successful join.
+					loadGuilds().catch(() => {});
 					addToast(`Joined server on ${fedDomain}!`, 'success');
-					goto('/app');
+					goto(`/app/guilds/${fedResp.guild_id}`);
 				} else {
 					updateGuild(guild);
 					addToast(`Joined ${guildName || 'server'}!`, 'success');

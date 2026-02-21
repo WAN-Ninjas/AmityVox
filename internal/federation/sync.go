@@ -194,7 +194,7 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 				slog.String("error", err.Error()),
 			)
 		} else {
-			ss.persistInboundMessage(r.Context(), signed.SenderID, msg.Type, msg.ChannelID, eventData)
+			ss.persistInboundMessage(r.Context(), signed.SenderID, msg.Type, msg.GuildID, msg.ChannelID, eventData)
 		}
 	}
 
@@ -240,9 +240,9 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update federation guild cache for guild-level events from remote instances.
+	// Update real tables for guild-level events from remote instances.
 	if msg.GuildID != "" {
-		ss.updateGuildCacheFromEvent(r.Context(), signed.SenderID, msg.Type, msg.GuildID, eventData)
+		ss.updateFederatedGuildFromEvent(r.Context(), signed.SenderID, msg.Type, msg.GuildID, eventData)
 	}
 
 	// Track inbound event count for the sender peer.
@@ -258,25 +258,42 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 // persistInboundMessage writes inbound federated message events to the local
-// database using federation_channel_mirrors to map remote channel IDs to local ones.
-func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstanceID, eventType, remoteChannelID string, data json.RawMessage) {
-	// Look up the local channel ID via mirror mapping, scoped to the sender instance.
-	var localChannelID string
+// database. Guild channels are now stored in the real channels table with the
+// same IDs as the remote instance, so we check for direct existence first.
+// DM channels still use federation_channel_mirrors for ID mapping.
+func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstanceID, eventType, guildID, remoteChannelID string, data json.RawMessage) {
+	channelID := remoteChannelID // Start with the channel ID as-is
+
+	// Check if this channel exists directly (guild channels stored with real IDs).
+	var exists bool
 	err := ss.fed.pool.QueryRow(ctx,
-		`SELECT local_channel_id FROM federation_channel_mirrors
-		 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
-		remoteChannelID, remoteInstanceID,
-	).Scan(&localChannelID)
+		`SELECT EXISTS(SELECT 1 FROM channels WHERE id = $1)`, channelID,
+	).Scan(&exists)
 	if err != nil {
-		if err != pgx.ErrNoRows {
-			ss.logger.Warn("failed to lookup channel mirror",
-				slog.String("remote_channel_id", remoteChannelID),
-				slog.String("remote_instance_id", remoteInstanceID),
-				slog.String("error", err.Error()),
-			)
-		}
-		// No mirror for this channel — skip persistence (channel setup happens in DM/guild PRs).
+		ss.logger.Warn("failed to check channel existence",
+			slog.String("channel_id", channelID),
+			slog.String("error", err.Error()))
 		return
+	}
+
+	if !exists {
+		// Fall back to DM mirror lookup.
+		err = ss.fed.pool.QueryRow(ctx,
+			`SELECT local_channel_id FROM federation_channel_mirrors
+			 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
+			remoteChannelID, remoteInstanceID,
+		).Scan(&channelID)
+		if err != nil {
+			if err != pgx.ErrNoRows {
+				ss.logger.Warn("failed to lookup channel mirror",
+					slog.String("remote_channel_id", remoteChannelID),
+					slog.String("remote_instance_id", remoteInstanceID),
+					slog.String("error", err.Error()),
+				)
+			}
+			// Channel unknown — skip persistence.
+			return
+		}
 	}
 
 	switch eventType {
@@ -301,7 +318,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			`INSERT INTO messages (id, channel_id, author_id, content, created_at)
 			 VALUES ($1, $2, $3, $4, $5)
 			 ON CONFLICT (id) DO NOTHING`,
-			msgData.ID, localChannelID, msgData.AuthorID, msgData.Content, createdAt)
+			msgData.ID, channelID, msgData.AuthorID, msgData.Content, createdAt)
 		if err != nil {
 			ss.logger.Warn("failed to persist inbound message",
 				slog.String("message_id", msgData.ID),
@@ -319,7 +336,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 		}
 		if _, err := ss.fed.pool.Exec(ctx,
 			`UPDATE messages SET content = $1, edited_at = now() WHERE id = $2 AND channel_id = $3`,
-			msgData.Content, msgData.ID, localChannelID); err != nil {
+			msgData.Content, msgData.ID, channelID); err != nil {
 			ss.logger.Warn("failed to persist inbound message update",
 				slog.String("message_id", msgData.ID),
 				slog.String("error", err.Error()))
@@ -335,7 +352,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 		}
 		if _, err := ss.fed.pool.Exec(ctx,
 			`DELETE FROM messages WHERE id = $1 AND channel_id = $2`,
-			msgData.ID, localChannelID); err != nil {
+			msgData.ID, channelID); err != nil {
 			ss.logger.Warn("failed to persist inbound message delete",
 				slog.String("message_id", msgData.ID),
 				slog.String("error", err.Error()))
@@ -385,6 +402,22 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 		// Pins update — let the event flow through to clients via NATS.
 		// No local persistence needed since pin state is managed by the remote instance.
 	}
+
+	// Store inbound event in federation_events for backfill support.
+	// Use the event's created_at timestamp for HLC if available, otherwise fall back to now.
+	hlcWallMs := time.Now().UnixMilli()
+	var tsExtract struct {
+		CreatedAt *time.Time `json:"created_at"`
+	}
+	if json.Unmarshal(data, &tsExtract) == nil && tsExtract.CreatedAt != nil {
+		hlcWallMs = tsExtract.CreatedAt.UnixMilli()
+	}
+	ss.fed.pool.Exec(ctx,
+		`INSERT INTO federation_events (id, instance_id, event_type, guild_id, channel_id, hlc_wall_ms, hlc_counter, payload)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (id) DO NOTHING`,
+		models.NewULID().String(), remoteInstanceID, eventType, guildID, channelID,
+		hlcWallMs, 0, data)
 }
 
 // persistInboundPresence updates the local user stub's presence when a
@@ -829,22 +862,36 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 			return
 		}
 		// Include guild_ids in the presence data for routing on the remote side.
+		// Fail-closed: if we can't determine guild memberships, don't forward.
 		var guildIDs []string
 		rows, err := ss.fed.pool.Query(ctx,
 			`SELECT guild_id FROM guild_members WHERE user_id = $1`, event.UserID)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var gid string
-				if rows.Scan(&gid) == nil {
-					guildIDs = append(guildIDs, gid)
-				}
+		if err != nil {
+			ss.logger.Error("failed to query guild memberships for presence",
+				slog.String("user_id", event.UserID),
+				slog.String("error", err.Error()))
+			return // Fail-closed: don't forward presence without guild_ids
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var gid string
+			if err := rows.Scan(&gid); err != nil {
+				ss.logger.Warn("failed to scan guild_id for presence",
+					slog.String("error", err.Error()))
+				continue
 			}
+			guildIDs = append(guildIDs, gid)
+		}
+		if err := rows.Err(); err != nil {
+			ss.logger.Error("rows iteration error for presence guild_ids",
+				slog.String("error", err.Error()))
+			return // Fail-closed
+		}
+		if len(guildIDs) == 0 {
+			return // No guilds = no one to forward to
 		}
 		if dataMap, ok := data.(map[string]interface{}); ok {
-			if len(guildIDs) > 0 {
-				dataMap["guild_ids"] = guildIDs
-			}
+			dataMap["guild_ids"] = guildIDs
 			data = dataMap
 		}
 	}
@@ -911,5 +958,323 @@ func eventTypeToSubject(eventType string) string {
 // RetryDelay is exported for testing.
 func RetryDelay(attempt int) time.Duration {
 	return retryDelay(attempt)
+}
+
+// syncRequest is the payload sent by a peer requesting event backfill after reconnection.
+type syncRequest struct {
+	LastSeenHLC HLCTimestamp `json:"last_seen_hlc"`
+	GuildIDs    []string    `json:"guild_ids"`
+}
+
+// syncEvent is a single event in a sync response.
+type syncEvent struct {
+	ID        string          `json:"id"`
+	Type      string          `json:"event_type"`
+	GuildID   string          `json:"guild_id"`
+	ChannelID string          `json:"channel_id"`
+	HLC       HLCTimestamp    `json:"hlc"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// syncResponse is the response returned by HandleSync.
+type syncResponse struct {
+	Events    []syncEvent `json:"events"`
+	Truncated bool        `json:"truncated"`
+}
+
+// maxSyncEvents is the maximum number of events returned in a single sync response.
+const maxSyncEvents = 1000
+
+// HandleSync handles POST /federation/v1/sync — replays events since a given
+// HLC timestamp for backfill after reconnect. The request must be signed by a
+// known peer using the same Ed25519 verification pattern as HandleInbox.
+func (ss *SyncService) HandleSync(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	var signed SignedPayload
+	if err := json.Unmarshal(body, &signed); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Look up sender's public key.
+	var publicKeyPEM string
+	err = ss.fed.pool.QueryRow(r.Context(),
+		`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
+	).Scan(&publicKeyPEM)
+	if err == pgx.ErrNoRows {
+		ss.logger.Info("sync: unknown sender", slog.String("sender_id", signed.SenderID))
+		http.Error(w, "Unknown sender instance", http.StatusForbidden)
+		return
+	}
+	if err != nil {
+		ss.logger.Error("sync: failed to look up sender", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify signature.
+	valid, err := VerifySignature(publicKeyPEM, signed.Payload, signed.Signature)
+	if err != nil || !valid {
+		ss.logger.Warn("sync: invalid federation signature", slog.String("sender_id", signed.SenderID))
+		http.Error(w, "Invalid signature", http.StatusForbidden)
+		return
+	}
+
+	// Check timestamp freshness.
+	if msg := validateTimestamp(signed.Timestamp); msg != "" {
+		ss.logger.Warn("sync rejected: stale timestamp",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("detail", msg))
+		http.Error(w, "Stale or future timestamp", http.StatusBadRequest)
+		return
+	}
+
+	// Verify source IP (soft check).
+	if ipMsg := ss.fed.verifySourceIP(r, signed.SenderID); ipMsg != "" {
+		ss.logger.Warn("sync: source IP mismatch",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("detail", ipMsg))
+		if ss.fed.enforceIPCheck {
+			http.Error(w, "Source IP mismatch", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Check federation is allowed from this sender.
+	allowed, err := ss.fed.IsFederationAllowed(r.Context(), signed.SenderID)
+	if err != nil || !allowed {
+		http.Error(w, "Federation not allowed", http.StatusForbidden)
+		return
+	}
+
+	// Decode the sync request from the signed payload.
+	var req syncRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid sync request payload", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.GuildIDs) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(syncResponse{Events: []syncEvent{}, Truncated: false})
+		return
+	}
+
+	// Verify the requesting instance is a peer for each requested guild.
+	// Only return events for guilds where the sender has federation_channel_peers entries.
+	var authorizedGuildIDs []string
+	authRows, err := ss.fed.pool.Query(r.Context(),
+		`SELECT DISTINCT c.guild_id FROM federation_channel_peers fcp
+		 JOIN channels c ON c.id = fcp.channel_id
+		 WHERE fcp.instance_id = $1 AND c.guild_id = ANY($2)`,
+		signed.SenderID, req.GuildIDs)
+	if err != nil {
+		ss.logger.Error("sync: failed to verify guild access",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer authRows.Close()
+	for authRows.Next() {
+		var gid string
+		if err := authRows.Scan(&gid); err == nil {
+			authorizedGuildIDs = append(authorizedGuildIDs, gid)
+		}
+	}
+
+	if len(authorizedGuildIDs) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(syncResponse{Events: []syncEvent{}, Truncated: false})
+		return
+	}
+
+	// Query federation_events for events after the given HLC timestamp
+	// that belong to the authorized guilds.
+	rows, err := ss.fed.pool.Query(r.Context(),
+		`SELECT id, event_type, guild_id, channel_id, hlc_wall_ms, hlc_counter, payload
+		 FROM federation_events
+		 WHERE (hlc_wall_ms > $1 OR (hlc_wall_ms = $1 AND hlc_counter > $2))
+		   AND guild_id = ANY($3)
+		 ORDER BY hlc_wall_ms, hlc_counter
+		 LIMIT $4`,
+		req.LastSeenHLC.WallMs, req.LastSeenHLC.Counter, authorizedGuildIDs, maxSyncEvents+1)
+	if err != nil {
+		ss.logger.Error("sync: failed to query federation events",
+			slog.String("sender_id", signed.SenderID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var syncEvents []syncEvent
+	for rows.Next() {
+		var evt syncEvent
+		if err := rows.Scan(&evt.ID, &evt.Type, &evt.GuildID, &evt.ChannelID,
+			&evt.HLC.WallMs, &evt.HLC.Counter, &evt.Payload); err != nil {
+			ss.logger.Warn("sync: failed to scan event row", slog.String("error", err.Error()))
+			continue
+		}
+		syncEvents = append(syncEvents, evt)
+	}
+	if err := rows.Err(); err != nil {
+		ss.logger.Error("sync: rows iteration error", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Determine if the result set was truncated (more events than the limit).
+	truncated := len(syncEvents) > maxSyncEvents
+	if truncated {
+		syncEvents = syncEvents[:maxSyncEvents]
+	}
+
+	ss.logger.Info("sync: replaying events for peer",
+		slog.String("sender_id", signed.SenderID),
+		slog.Int("event_count", len(syncEvents)),
+		slog.Bool("truncated", truncated))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(syncResponse{
+		Events:    syncEvents,
+		Truncated: truncated,
+	})
+}
+
+// RequestBackfill sends a sync request to a peer after reconnection to retrieve
+// any events missed while the peer was degraded or unreachable. It queries the
+// local last_synced_at for the peer, builds a signed sync request, and processes
+// the returned events through persistInboundMessage.
+func (ss *SyncService) RequestBackfill(ctx context.Context, peerID string) error {
+	// 1. Get last_synced_at from federation_peers.
+	var lastSyncedAt *time.Time
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT last_synced_at FROM federation_peers
+		 WHERE instance_id = $1 AND peer_id = $2`,
+		ss.fed.instanceID, peerID,
+	).Scan(&lastSyncedAt)
+	if err != nil {
+		return fmt.Errorf("querying last_synced_at for peer %s: %w", peerID, err)
+	}
+
+	// Convert to HLC timestamp. If never synced, use epoch.
+	var lastHLC HLCTimestamp
+	if lastSyncedAt != nil {
+		lastHLC = HLCTimestamp{WallMs: lastSyncedAt.UnixMilli(), Counter: 0}
+	}
+
+	// 2. Get guild IDs where the peer has members (remote users from that instance).
+	rows, err := ss.fed.pool.Query(ctx,
+		`SELECT DISTINCT gm.guild_id FROM guild_members gm
+		 JOIN users u ON u.id = gm.user_id
+		 WHERE u.instance_id = $1`,
+		peerID)
+	if err != nil {
+		return fmt.Errorf("querying guild IDs for peer %s: %w", peerID, err)
+	}
+	defer rows.Close()
+
+	var guildIDs []string
+	for rows.Next() {
+		var gid string
+		if err := rows.Scan(&gid); err != nil {
+			ss.logger.Warn("backfill: failed to scan guild_id", slog.String("error", err.Error()))
+			continue
+		}
+		guildIDs = append(guildIDs, gid)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating guild IDs for peer %s: %w", peerID, err)
+	}
+
+	if len(guildIDs) == 0 {
+		ss.logger.Debug("backfill: no shared guilds with peer, skipping",
+			slog.String("peer_id", peerID))
+		return nil
+	}
+
+	// 3. Build and sign the sync request.
+	syncReq := syncRequest{
+		LastSeenHLC: lastHLC,
+		GuildIDs:    guildIDs,
+	}
+
+	signed, err := ss.fed.Sign(syncReq)
+	if err != nil {
+		return fmt.Errorf("signing sync request for peer %s: %w", peerID, err)
+	}
+
+	// 4. Look up the peer's domain.
+	var peerDomain string
+	err = ss.fed.pool.QueryRow(ctx,
+		`SELECT domain FROM instances WHERE id = $1`, peerID,
+	).Scan(&peerDomain)
+	if err != nil {
+		return fmt.Errorf("looking up domain for peer %s: %w", peerID, err)
+	}
+
+	// 5. POST the signed sync request to the peer.
+	syncURL := fmt.Sprintf("https://%s/federation/v1/sync", peerDomain)
+
+	body, err := json.Marshal(signed)
+	if err != nil {
+		return fmt.Errorf("marshaling sync request for peer %s: %w", peerID, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", syncURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating sync request for peer %s: %w", peerID, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
+
+	resp, err := ss.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending sync request to peer %s (%s): %w", peerID, peerDomain, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("sync request to peer %s returned status %d", peerID, resp.StatusCode)
+	}
+
+	// 6. Decode and process the sync response. Limit to 1MB to match other
+	// federation endpoints and guard against oversized payloads.
+	var syncResp syncResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&syncResp); err != nil {
+		return fmt.Errorf("decoding sync response from peer %s: %w", peerID, err)
+	}
+
+	for _, evt := range syncResp.Events {
+		if evt.ChannelID != "" {
+			ss.persistInboundMessage(ctx, peerID, evt.Type, evt.GuildID, evt.ChannelID, evt.Payload)
+		}
+		// Route guild-level events (GUILD_UPDATE, CHANNEL_CREATE, CHANNEL_DELETE,
+		// GUILD_DELETE, GUILD_MEMBER_ADD, GUILD_MEMBER_REMOVE) through the same
+		// handler used by the inbox so federated guild state stays consistent.
+		if evt.GuildID != "" {
+			ss.updateFederatedGuildFromEvent(ctx, peerID, evt.Type, evt.GuildID, evt.Payload)
+		}
+	}
+
+	ss.logger.Info("backfill completed from peer",
+		slog.String("peer_id", peerID),
+		slog.String("domain", peerDomain),
+		slog.Int("events_received", len(syncResp.Events)),
+		slog.Bool("truncated", syncResp.Truncated))
+
+	// 7. Update last_synced_at.
+	ss.fed.pool.Exec(ctx,
+		`UPDATE federation_peers SET last_synced_at = now()
+		 WHERE instance_id = $1 AND peer_id = $2`,
+		ss.fed.instanceID, peerID)
+
+	return nil
 }
 

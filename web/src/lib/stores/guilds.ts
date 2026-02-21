@@ -1,8 +1,7 @@
 // Guild store — manages guild list and current guild selection.
-// Supports both local guilds and federated (remote) guilds.
 
-import { writable, derived, get } from 'svelte/store';
-import type { Guild, FederatedGuild } from '$lib/types';
+import { writable, derived } from 'svelte/store';
+import type { Guild } from '$lib/types';
 import { api } from '$lib/api/client';
 import { createMapStore } from '$lib/stores/mapHelpers';
 
@@ -14,25 +13,16 @@ export const currentGuild = derived(
 	([$guilds, $id]) => ($id ? $guilds.get($id) ?? null : null)
 );
 
-/** Federated guild metadata from the READY payload, keyed by guild_id. */
-export const federatedGuilds = createMapStore<string, FederatedGuild>();
-
-/** Set of guild IDs that are federated (remote). */
-export const federatedGuildIds = derived(federatedGuilds, ($fg) => new Set($fg.keys()));
-
-/** Returns true if the given guild ID is a federated (remote) guild. */
-export function isFederatedGuild(guildId: string): boolean {
-	return get(federatedGuilds).has(guildId);
+/** Returns true if the given guild is federated (belongs to a remote instance).
+ *  Guilds with null/undefined instance_id are always local. */
+export function isGuildFederated(guild: Guild, localInstanceId: string): boolean {
+	if (!guild.instance_id) return false;
+	return guild.instance_id !== localInstanceId;
 }
 
 export async function loadGuilds() {
 	const list = await api.getMyGuilds();
 	guilds.setAll(list.map(g => [g.id, g]));
-}
-
-/** Load federated guilds from the READY payload. */
-export function loadFederatedGuilds(fgs: FederatedGuild[]) {
-	federatedGuilds.setAll(fgs.map(fg => [fg.guild_id, fg]));
 }
 
 export function setGuild(id: string | null) {
@@ -47,12 +37,4 @@ export function updateGuild(guild: Guild) {
 
 export function removeGuild(guildId: string) {
 	guilds.removeEntry(guildId);
-}
-
-export function addFederatedGuild(fg: FederatedGuild) {
-	federatedGuilds.setEntry(fg.guild_id, fg);
-}
-
-export function removeFederatedGuild(guildId: string) {
-	federatedGuilds.removeEntry(guildId);
 }

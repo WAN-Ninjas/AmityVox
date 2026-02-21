@@ -4,7 +4,7 @@ import { writable, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { currentUser } from './auth';
-import { loadGuilds, loadFederatedGuilds, updateGuild, removeGuild, currentGuildId, isFederatedGuild } from './guilds';
+import { loadGuilds, updateGuild, removeGuild, currentGuildId } from './guilds';
 import { updateChannel, removeChannel, loadChannels, channels as channelsStore, currentChannelId } from './channels';
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
@@ -43,9 +43,6 @@ export function connectGateway(token: string) {
 				currentUser.set(ready.user);
 				gatewayConnected.set(true);
 				loadGuilds();
-				if (ready.federated_guilds) {
-					loadFederatedGuilds(ready.federated_guilds);
-				}
 				loadDMs();
 				loadReadState();
 				loadChannelGuildMap();
@@ -95,9 +92,7 @@ export function connectGateway(token: string) {
 					const activeChannelId = get(currentChannelId);
 					if (activeChannelId) {
 						clearChannelMessages(activeChannelId);
-						const guildId = get(currentGuildId);
-						const fedGuildId = guildId && isFederatedGuild(guildId) ? guildId : null;
-						loadMessages(activeChannelId, undefined, fedGuildId);
+						loadMessages(activeChannelId);
 					}
 					addToast('Reconnected to server', 'success', 3000);
 				}

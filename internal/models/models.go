@@ -8,16 +8,24 @@ import (
 // Instance represents a single AmityVox deployment. Each instance has a unique
 // domain and Ed25519 keypair for federation. Corresponds to the instances table.
 type Instance struct {
-	ID              string     `json:"id"`
-	Domain          string     `json:"domain"`
-	PublicKey       string     `json:"public_key"`
-	Name            *string    `json:"name,omitempty"`
-	Description     *string    `json:"description,omitempty"`
-	Software        string     `json:"software"`
-	SoftwareVersion *string    `json:"software_version,omitempty"`
-	FederationMode  string     `json:"federation_mode"`
-	CreatedAt       time.Time  `json:"created_at"`
-	LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
+	ID              string          `json:"id"`
+	Domain          string          `json:"domain"`
+	PublicKey       string          `json:"public_key"`
+	Name            *string         `json:"name,omitempty"`
+	Description     *string         `json:"description,omitempty"`
+	Software        string          `json:"software"`
+	SoftwareVersion *string         `json:"software_version,omitempty"`
+	FederationMode  string          `json:"federation_mode"`
+	ProtocolVersion *string         `json:"protocol_version,omitempty"`
+	Capabilities    json.RawMessage `json:"capabilities,omitempty"`
+	LiveKitURL      *string         `json:"livekit_url,omitempty"`
+	PrivateKeyPEM   *string         `json:"-"`
+	ResolvedIPs     []string        `json:"resolved_ips,omitempty"`
+	KeyFingerprint  *string         `json:"key_fingerprint,omitempty"`
+	Shorthand       *string         `json:"shorthand,omitempty"`
+	VoiceMode       string          `json:"voice_mode,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	LastSeenAt      *time.Time      `json:"last_seen_at,omitempty"`
 }
 
 // User represents a user account on an AmityVox instance. Users are identified

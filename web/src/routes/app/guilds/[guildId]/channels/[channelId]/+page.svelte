@@ -2,7 +2,7 @@
 	import { page } from '$app/stores';
 	import type { Channel, Message, ChannelFollower } from '$lib/types';
 	import { setChannel, currentChannel, currentChannelId, pendingThreadOpen, activeThreadId, channels as channelsStore } from '$lib/stores/channels';
-	import { currentGuild, federatedGuilds } from '$lib/stores/guilds';
+	import { currentGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
@@ -34,10 +34,6 @@
 	let isUploading = $state(false);
 	let nsfwAccepted = $state(false);
 	const isArchived = $derived($currentChannel?.archived ?? false);
-	const federatedGuildId = $derived(
-		$page.params.guildId && $federatedGuilds.has($page.params.guildId) ? $page.params.guildId : null
-	);
-
 	// --- Channel Followers (announcement channels) ---
 	let followers = $state<ChannelFollower[]>([]);
 	let loadingFollowers = $state(false);
@@ -66,7 +62,6 @@
 	function handleDragEnter(e: DragEvent) {
 		e.preventDefault();
 		dragCounter++;
-		if (federatedGuildId) return; // No file drops in federated guilds
 		// Gallery/forum channels handle their own drag UX — don't show the page-level overlay.
 		const ct = $currentChannel?.channel_type;
 		if (ct === 'gallery' || ct === 'forum') return;
@@ -316,31 +311,23 @@
 			{showPins}
 			{showFollowers}
 			{showGallery}
-			{federatedGuildId}
 		/>
 		{#if $currentChannel?.channel_type === 'voice' || $currentChannel?.channel_type === 'stage'}
 			<VoiceChannelView
 				channelId={$currentChannelId ?? ''}
 				guildId={$page.params.guildId}
-				{federatedGuildId}
 			/>
-		{:else if $currentChannel?.channel_type === 'forum' && !federatedGuildId}
+		{:else if $currentChannel?.channel_type === 'forum'}
 			<ForumChannelView
 				channelId={$currentChannelId ?? ''}
 				onopenthread={openThread}
 			/>
-		{:else if $currentChannel?.channel_type === 'gallery' && !federatedGuildId}
+		{:else if $currentChannel?.channel_type === 'gallery'}
 			<GalleryChannelView
 				bind:this={galleryViewRef}
 				channelId={$currentChannelId ?? ''}
 				onopenthread={openThread}
 			/>
-		{:else if federatedGuildId && ($currentChannel?.channel_type === 'forum' || $currentChannel?.channel_type === 'gallery')}
-			<div class="flex flex-1 items-center justify-center">
-				<div class="text-center">
-					<p class="text-sm text-text-muted">This channel type is not available for federated servers.</p>
-				</div>
-			</div>
 		{:else}
 			{#if isArchived}
 				<div class="flex items-center gap-2 border-b border-bg-floating bg-yellow-500/10 px-4 py-2">
@@ -350,7 +337,7 @@
 					<span class="text-sm font-medium text-yellow-500">This channel is archived. It is read-only.</span>
 				</div>
 			{/if}
-			<MessageList onopenthread={openThread} {federatedGuildId} />
+			<MessageList onopenthread={openThread} />
 			<TypingIndicator typingUsers={$currentTypingUsers} />
 			{#if isArchived}
 				<div class="border-t border-bg-floating px-4 pb-4 pt-2">
@@ -362,12 +349,12 @@
 					</div>
 				</div>
 			{:else}
-				<MessageInput {federatedGuildId} />
+				<MessageInput />
 			{/if}
 		{/if}
 	</div>
 
-	{#if activeThread && !federatedGuildId}
+	{#if activeThread}
 		<ThreadPanel
 			threadChannel={activeThread.channel}
 			parentMessage={activeThread.parentMessage}

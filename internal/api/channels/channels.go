@@ -34,6 +34,7 @@ type Handler struct {
 	Pool     *pgxpool.Pool
 	EventBus *events.Bus
 	Logger   *slog.Logger
+	FedProxy apiutil.FederationProxy // optional, nil if federation disabled
 }
 
 // --- DM Spam Detection ---
@@ -233,6 +234,23 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Forward to home instance if channel belongs to a federated guild.
+	if h.FedProxy != nil {
+		var guildID *string
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(),
+			`SELECT c.guild_id, g.instance_id FROM channels c
+			 LEFT JOIN guilds g ON g.id = c.guild_id
+			 WHERE c.id = $1`, channelID,
+		).Scan(&guildID, &instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
+			return
+		}
+		if guildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *guildID, instanceID, "channel_update", userID, req) {
+			return
+		}
+	}
+
 	// Validate encryption toggle: only text, DM, and group channels support encryption.
 	if req.Encrypted != nil {
 		var channelType string
@@ -335,6 +353,23 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
+
+	// Forward to home instance if channel belongs to a federated guild.
+	if h.FedProxy != nil {
+		var fedGuildID *string
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(),
+			`SELECT c.guild_id, g.instance_id FROM channels c
+			 LEFT JOIN guilds g ON g.id = c.guild_id
+			 WHERE c.id = $1`, channelID,
+		).Scan(&fedGuildID, &instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
+			return
+		}
+		if fedGuildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *fedGuildID, instanceID, "channel_delete", userID, nil) {
+			return
+		}
+	}
 
 	// Threads (channels with parent_channel_id) can be deleted with ManageThreads or ManageChannels.
 	// Regular channels require ManageChannels.
@@ -1099,6 +1134,23 @@ func (h *Handler) HandleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
 
+	// Forward to home instance if channel belongs to a federated guild.
+	if h.FedProxy != nil {
+		var guildID *string
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(),
+			`SELECT c.guild_id, g.instance_id FROM channels c
+			 LEFT JOIN guilds g ON g.id = c.guild_id
+			 WHERE c.id = $1`, channelID,
+		).Scan(&guildID, &instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
+			return
+		}
+		if guildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *guildID, instanceID, "message_delete", userID, map[string]string{"message_id": messageID}) {
+			return
+		}
+	}
+
 	// Check authorship (permission-based deletion requires guild context, simplified here).
 	var authorID string
 	err := h.Pool.QueryRow(r.Context(),
@@ -1390,6 +1442,23 @@ func (h *Handler) HandlePinMessage(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
 
+	// Forward to home instance if channel belongs to a federated guild.
+	if h.FedProxy != nil {
+		var guildID *string
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(),
+			`SELECT c.guild_id, g.instance_id FROM channels c
+			 LEFT JOIN guilds g ON g.id = c.guild_id
+			 WHERE c.id = $1`, channelID,
+		).Scan(&guildID, &instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
+			return
+		}
+		if guildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *guildID, instanceID, "message_pin", userID, map[string]string{"message_id": messageID}) {
+			return
+		}
+	}
+
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_MESSAGES permission")
 		return
@@ -1439,6 +1508,23 @@ func (h *Handler) HandleUnpinMessage(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
+
+	// Forward to home instance if channel belongs to a federated guild.
+	if h.FedProxy != nil {
+		var guildID *string
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(),
+			`SELECT c.guild_id, g.instance_id FROM channels c
+			 LEFT JOIN guilds g ON g.id = c.guild_id
+			 WHERE c.id = $1`, channelID,
+		).Scan(&guildID, &instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
+			return
+		}
+		if guildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *guildID, instanceID, "message_unpin", userID, map[string]string{"message_id": messageID}) {
+			return
+		}
+	}
 
 	// Permission check: ManageMessages.
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ManageMessages) {

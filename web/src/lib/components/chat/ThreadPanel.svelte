@@ -255,7 +255,7 @@
 					<div class="mt-0.5 shrink-0">
 						<Avatar
 							name={msg.author?.display_name ?? msg.author?.username ?? 'U'}
-							src={avatarUrl(msg.author?.avatar_id, msg.author?.instance_domain)}
+							src={avatarUrl(msg.author?.avatar_id, msg.author?.instance_id || undefined)}
 							size="sm"
 						/>
 					</div>

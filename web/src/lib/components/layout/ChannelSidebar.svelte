@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { currentGuild, currentGuildId, federatedGuilds, isFederatedGuild } from '$lib/stores/guilds';
+	import { currentGuild, currentGuildId } from '$lib/stores/guilds';
 	import { channelList, textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId, editChannelSignal } from '$lib/stores/channels';
 	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
@@ -27,10 +27,10 @@
 	import StatusPicker from '$components/common/StatusPicker.svelte';
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
-	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import type { Channel, GuildEvent } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import DragHandle from '$components/common/DragHandle.svelte';
+	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import { DragController, calculateInsertionIndex } from '$lib/utils/dragDrop';
 	import { onDestroy } from 'svelte';
 
@@ -42,26 +42,6 @@
 	}
 
 	let { width = 224 }: Props = $props();
-
-	const currentFederatedGuild = $derived(
-		$currentGuildId ? $federatedGuilds.get($currentGuildId) ?? null : null
-	);
-
-	// Federated guild: categories and grouped channels.
-	const fedCategories = $derived(
-		currentFederatedGuild
-			? $channelList
-					.filter(c => c.guild_id === currentFederatedGuild.guild_id && c.channel_type === 'category')
-					.sort((a, b) => a.position - b.position)
-			: []
-	);
-	const fedChannels = $derived(
-		currentFederatedGuild
-			? $channelList
-					.filter(c => c.guild_id === currentFederatedGuild.guild_id && c.channel_type !== 'category')
-					.sort((a, b) => a.position - b.position)
-			: []
-	);
 
 	// Status picker
 	let showStatusPicker = $state(false);
@@ -705,19 +685,17 @@
 
 <aside class="flex h-full shrink-0 flex-col border-r border-[--border-primary] bg-bg-secondary" style="width: {width}px;" aria-label="Channel list">
 	<!-- Guild header -->
-	{#if currentFederatedGuild}
-		<div class="flex h-12 items-center justify-between border-b border-bg-floating px-4">
-			<div class="flex items-center gap-2 min-w-0">
-				<h2 class="truncate text-sm font-semibold text-text-primary">{currentFederatedGuild.name}</h2>
-				<FederationBadge domain={currentFederatedGuild.instance_domain} />
-			</div>
-		</div>
-	{:else if $currentGuild}
+	{#if $currentGuild}
 		<div
 			class="flex h-12 items-center justify-between border-b border-bg-floating px-4"
 			oncontextmenu={(e) => { e.preventDefault(); guildContextMenu = { x: e.clientX, y: e.clientY }; channelContextMenu = null; dmContextMenu = null; }}
 		>
-			<h2 class="truncate text-sm font-semibold text-text-primary">{$currentGuild.name}</h2>
+			<div class="flex min-w-0 items-center gap-1.5">
+				<h2 class="truncate text-sm font-semibold text-text-primary">{$currentGuild.name}</h2>
+				{#if $currentGuild.instance_id && $currentUser && $currentGuild.instance_id !== $currentUser.instance_id}
+					<FederationBadge domain={$currentGuild.instance_id} compact />
+				{/if}
+			</div>
 			<div class="flex items-center gap-1">
 				{#if $totalUnreads > 0}
 					<button
@@ -760,72 +738,7 @@
 
 	<!-- Channel list -->
 	<div class="flex-1 overflow-y-auto px-2 py-2">
-		{#if currentFederatedGuild}
-			<!-- Federated guild channels with category grouping and proper type icons -->
-			{@const categoryIds = new Set(fedCategories.map(c => c.id))}
-			{@const uncategorized = fedChannels.filter(c => !c.category_id || !categoryIds.has(c.category_id))}
-			{@const guildPath = `/app/guilds/${currentFederatedGuild.guild_id}`}
-
-			{#snippet fedChannelButton(channel: Channel)}
-				{@const isActive = $currentChannelId === channel.id}
-				{@const isVoice = channel.channel_type === 'voice' || channel.channel_type === 'stage'}
-				<button
-					class="mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {isActive ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
-					onclick={() => { if (!isVoice) { pendingThreadOpen.set('__close__'); setChannel(channel.id); goto(`${guildPath}/channels/${channel.id}`); } }}
-					disabled={isVoice}
-				>
-					{#if channel.channel_type === 'voice' || channel.channel_type === 'stage'}
-						<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-							<path d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-						</svg>
-					{:else if channel.channel_type === 'announcement'}
-						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
-						</svg>
-					{:else if channel.channel_type === 'forum'}
-						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-						</svg>
-					{:else if channel.channel_type === 'gallery'}
-						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<rect x="3" y="3" width="7" height="7" rx="1" />
-							<rect x="14" y="3" width="7" height="7" rx="1" />
-							<rect x="3" y="14" width="7" height="7" rx="1" />
-							<rect x="14" y="14" width="7" height="7" rx="1" />
-						</svg>
-					{:else}
-						<span class="text-lg leading-none text-brand-500 font-mono">#</span>
-					{/if}
-					<span class="flex-1 truncate font-mono">{channel.name}</span>
-				</button>
-			{/snippet}
-
-			<!-- Uncategorized channels first -->
-			{#each uncategorized as channel (channel.id)}
-				{@render fedChannelButton(channel)}
-			{/each}
-
-			<!-- Categories with their channels -->
-			{#each fedCategories as category (category.id)}
-				{@const catChannels = fedChannels.filter(c => c.category_id === category.id)}
-				{#if catChannels.length > 0}
-					<button
-						class="mt-2 mb-0.5 flex w-full items-center gap-1 px-1 text-left text-2xs font-bold uppercase tracking-wide text-text-muted hover:text-text-secondary"
-						onclick={() => toggleSection(category.id)}
-					>
-						<svg class="h-3 w-3 shrink-0 transition-transform {isSectionCollapsed(category.id) ? '-rotate-90' : ''}" fill="currentColor" viewBox="0 0 20 20">
-							<path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-						</svg>
-						<span class="truncate">{category.name}</span>
-					</button>
-					{#if !isSectionCollapsed(category.id)}
-						{#each catChannels as channel (channel.id)}
-							{@render fedChannelButton(channel)}
-						{/each}
-					{/if}
-				{/if}
-			{/each}
-		{:else if $currentGuild}
+		{#if $currentGuild}
 			<!-- Create Channel button -->
 			{#if $canManageChannels}
 				<button
@@ -1167,9 +1080,6 @@
 								</svg>
 							{/if}
 							<span class="flex-1 truncate">{dmName}</span>
-							{#if dmRecipient?.instance_domain || (dmRecipient?.instance_id && $currentUser && dmRecipient.instance_id !== $currentUser.instance_id)}
-								<FederationBadge domain={dmRecipient.instance_domain ?? dmRecipient.instance_id} compact />
-							{/if}
 							{#if dmMuted}
 								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
 									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />

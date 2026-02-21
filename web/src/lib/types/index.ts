@@ -43,7 +43,7 @@ export interface MutualGuild {
 
 export interface Guild {
 	id: string;
-	instance_id: string;
+	instance_id: string | null;
 	owner_id: string;
 	name: string;
 	description: string | null;
@@ -273,17 +273,6 @@ export const GatewayOp = {
 	HeartbeatAck: 11
 } as const;
 
-export interface FederatedGuild {
-	guild_id: string;
-	name: string;
-	icon_id: string | null;
-	description: string | null;
-	member_count: number;
-	channels_json: unknown[];
-	roles_json: unknown[];
-	instance_domain: string;
-}
-
 export interface ReadyEvent {
 	user: User;
 	guild_ids: string[];
@@ -299,7 +288,7 @@ export interface ReadyEvent {
 		display_name?: string | null;
 		avatar_id?: string | null;
 	}>;
-	federated_guilds?: FederatedGuild[];
+	// No more federated_guilds — they come in guild_ids now with instance_id set
 }
 
 export interface TypingEvent {
@@ -344,6 +333,8 @@ export interface InstanceInfo {
 	software: string;
 	software_version: string;
 	federation_mode: string;
+	shorthand: string | null;
+	voice_mode: 'direct' | 'relay';
 	created_at: string;
 }
 
@@ -754,6 +745,7 @@ export interface FederationPeer {
 	id: string;
 	domain: string;
 	name: string | null;
+	shorthand: string | null;
 	software: string | null;
 	software_version: string | null;
 	status: string;
