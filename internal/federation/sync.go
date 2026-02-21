@@ -158,6 +158,19 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If GuildID is empty, try to extract it from the data payload. The HOST
+	// message handler may only set ChannelID; without GuildID, the gateway's
+	// shouldDispatchTo cannot route the event to the correct clients.
+	if msg.GuildID == "" {
+		var dataGuild struct {
+			GuildID string `json:"guild_id"`
+		}
+		if eventData, err := json.Marshal(msg.Data); err == nil {
+			json.Unmarshal(eventData, &dataGuild)
+			msg.GuildID = dataGuild.GuildID
+		}
+	}
+
 	// Update HLC with remote timestamp.
 	ss.hlc.Update(msg.Timestamp)
 
@@ -185,6 +198,12 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Persist inbound presence updates to the local user stub.
+	if msg.Type == "PRESENCE_UPDATE" {
+		eventData, _ := json.Marshal(msg.Data)
+		ss.persistInboundPresence(r.Context(), signed.SenderID, eventData)
+	}
+
 	// Dispatch to local event bus for gateway and workers.
 	eventData, err := json.Marshal(msg.Data)
 	if err != nil {
@@ -192,10 +211,22 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For PRESENCE_UPDATE, extract user_id into the event envelope so the
+	// gateway's shouldDispatchTo can route it to shared-guild clients.
+	var eventUserID string
+	if msg.Type == "PRESENCE_UPDATE" {
+		var presPayload struct {
+			UserID string `json:"user_id"`
+		}
+		json.Unmarshal(eventData, &presPayload)
+		eventUserID = presPayload.UserID
+	}
+
 	event := events.Event{
 		Type:      federationToGatewayType(msg.Type),
 		GuildID:   msg.GuildID,
 		ChannelID: msg.ChannelID,
+		UserID:    eventUserID,
 		Data:      eventData,
 	}
 
@@ -353,6 +384,37 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 	case "CHANNEL_PINS_UPDATE":
 		// Pins update — let the event flow through to clients via NATS.
 		// No local persistence needed since pin state is managed by the remote instance.
+	}
+}
+
+// persistInboundPresence updates the local user stub's presence when a
+// PRESENCE_UPDATE arrives from a federated peer.
+// validPresenceStatuses is the allowlist of status_presence values accepted
+// from federated peers, matching the CHECK constraint on the users table.
+var validPresenceStatuses = map[string]bool{
+	"online": true, "idle": true, "focus": true,
+	"busy": true, "invisible": true, "offline": true,
+}
+
+func (ss *SyncService) persistInboundPresence(ctx context.Context, remoteInstanceID string, data json.RawMessage) {
+	var presData struct {
+		UserID string `json:"user_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &presData); err != nil || presData.UserID == "" || presData.Status == "" {
+		return
+	}
+	if !validPresenceStatuses[presData.Status] {
+		return
+	}
+	// Only update user stubs belonging to the remote instance.
+	if _, err := ss.fed.pool.Exec(ctx,
+		`UPDATE users SET status_presence = $1 WHERE id = $2 AND instance_id = $3`,
+		presData.Status, presData.UserID, remoteInstanceID,
+	); err != nil {
+		ss.logger.Warn("failed to persist inbound presence",
+			slog.String("user_id", presData.UserID),
+			slog.String("error", err.Error()))
 	}
 }
 
@@ -552,6 +614,7 @@ func (ss *SyncService) StartRouter(ctx context.Context) {
 		events.SubjectTypingStart,
 		events.SubjectVoiceStateUpdate,
 		events.SubjectCallRing,
+		events.SubjectPresenceUpdate,
 	}
 
 	for _, subject := range subjects {
@@ -740,9 +803,55 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 		return
 	}
 
+	// Ensure GuildID is populated for channel-scoped events. The local message
+	// handler publishes MESSAGE_CREATE with only ChannelID set; without the
+	// GuildID, the remote instance cannot route the event to gateway clients.
+	guildID := event.GuildID
+	if guildID == "" && event.ChannelID != "" {
+		var nullableGuildID *string
+		if err := ss.fed.pool.QueryRow(ctx,
+			`SELECT guild_id FROM channels WHERE id = $1`, event.ChannelID,
+		).Scan(&nullableGuildID); err == nil && nullableGuildID != nil {
+			guildID = *nullableGuildID
+		}
+	}
+
+	// For PRESENCE_UPDATE, only forward local users' presence to peers.
+	if event.Type == "PRESENCE_UPDATE" && event.UserID != "" {
+		var userInstanceID *string
+		if err := ss.fed.pool.QueryRow(ctx,
+			`SELECT instance_id FROM users WHERE id = $1`, event.UserID,
+		).Scan(&userInstanceID); err != nil {
+			return
+		}
+		// Only forward presence for local users (instance_id matches this instance).
+		if userInstanceID == nil || *userInstanceID != ss.fed.instanceID {
+			return
+		}
+		// Include guild_ids in the presence data for routing on the remote side.
+		var guildIDs []string
+		rows, err := ss.fed.pool.Query(ctx,
+			`SELECT guild_id FROM guild_members WHERE user_id = $1`, event.UserID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var gid string
+				if rows.Scan(&gid) == nil {
+					guildIDs = append(guildIDs, gid)
+				}
+			}
+		}
+		if dataMap, ok := data.(map[string]interface{}); ok {
+			if len(guildIDs) > 0 {
+				dataMap["guild_ids"] = guildIDs
+			}
+			data = dataMap
+		}
+	}
+
 	msg := FederatedMessage{
 		Type:      event.Type,
-		GuildID:   event.GuildID,
+		GuildID:   guildID,
 		ChannelID: event.ChannelID,
 		Data:      data,
 	}
@@ -794,6 +903,7 @@ func eventTypeToSubject(eventType string) string {
 		"TYPING_START":         events.SubjectTypingStart,
 		"VOICE_STATE_UPDATE":   events.SubjectVoiceStateUpdate,
 		"CALL_RING":            events.SubjectCallRing,
+		"PRESENCE_UPDATE":      events.SubjectPresenceUpdate,
 	}
 	return mapping[eventType]
 }
