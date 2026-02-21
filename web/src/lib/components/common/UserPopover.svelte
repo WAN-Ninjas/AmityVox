@@ -14,6 +14,7 @@
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import { clientNicknames, setClientNickname } from '$lib/stores/nicknames';
 	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
+	import { avatarUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		userId: string;
@@ -231,7 +232,7 @@
 			<div class="-mt-8">
 				<Avatar
 					name={user.display_name ?? user.username}
-					src={user.avatar_id ? `/api/v1/files/${user.avatar_id}` : null}
+					src={avatarUrl(user.avatar_id, user.instance_domain)}
 					size="lg"
 					{status}
 				/>

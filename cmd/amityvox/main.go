@@ -366,6 +366,13 @@ func runServe() error {
 		r.Post("/{guildID}/channels/{channelID}/typing", syncSvc.HandleProxyFederatedTyping)
 	})
 
+	// Federation user proxy endpoints (authenticated, for local users managing remote user stubs).
+	srv.Router.Route("/api/v1/federation/users", func(r chi.Router) {
+		r.Use(auth.RequireAuth(authSvc))
+		r.Use(srv.RateLimitGlobal())
+		r.Post("/ensure", syncSvc.HandleProxyEnsureFederatedUser)
+	})
+
 	// Federation peers and discovery proxy endpoints (authenticated, for local users).
 	srv.Router.Route("/api/v1/federation/peers", func(r chi.Router) {
 		r.Use(auth.RequireAuth(authSvc))

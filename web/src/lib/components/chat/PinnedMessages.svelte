@@ -3,6 +3,7 @@
 	import { currentChannelId } from '$lib/stores/channels';
 	import { api } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
+	import { avatarUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		onclose: () => void;
@@ -74,7 +75,7 @@
 					<div class="flex items-center gap-2">
 						<Avatar
 							name={pin.author?.display_name ?? pin.author?.username ?? '?'}
-							src={pin.author?.avatar_id ? `/api/v1/files/${pin.author.avatar_id}` : null}
+							src={avatarUrl(pin.author?.avatar_id, pin.author?.instance_domain)}
 							size="sm"
 						/>
 						<span class="text-sm font-medium text-text-primary">

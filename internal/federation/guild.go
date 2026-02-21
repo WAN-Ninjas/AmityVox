@@ -1097,27 +1097,45 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 		return nil, fmt.Errorf("looking up guild: %w", err)
 	}
 
+	// Load guild categories and include them as synthetic "category" channel entries
+	// so federated clients can group channels under their parent categories.
+	channels := make([]map[string]interface{}, 0)
+	catRows, err := ss.fed.pool.Query(ctx,
+		`SELECT id, name, position FROM guild_categories WHERE guild_id = $1 ORDER BY position`, guildID)
+	if err == nil {
+		defer catRows.Close()
+		for catRows.Next() {
+			var id, name string
+			var position int
+			if catRows.Scan(&id, &name, &position) == nil {
+				channels = append(channels, map[string]interface{}{
+					"id": id, "channel_type": "category", "name": name, "topic": nil, "position": position, "category_id": nil,
+				})
+			}
+		}
+	}
+
 	// Load non-private channels only (private channels require explicit access).
 	channelRows, err := ss.fed.pool.Query(ctx,
-		`SELECT id, channel_type, name, topic, position FROM channels
+		`SELECT id, channel_type, name, topic, position, category_id FROM channels
 		 WHERE guild_id = $1 AND (channel_type <> 'private' OR channel_type IS NULL)
 		 ORDER BY position`, guildID)
 	if err == nil {
 		defer channelRows.Close()
-		channels := make([]map[string]interface{}, 0)
 		for channelRows.Next() {
 			var id string
 			var channelType *string
 			var name, topic *string
 			var position int
-			if channelRows.Scan(&id, &channelType, &name, &topic, &position) == nil {
+			var categoryID *string
+			if channelRows.Scan(&id, &channelType, &name, &topic, &position, &categoryID) == nil {
 				channels = append(channels, map[string]interface{}{
-					"id": id, "channel_type": channelType, "name": name, "topic": topic, "position": position,
+					"id": id, "channel_type": channelType, "name": name, "topic": topic, "position": position, "category_id": categoryID,
 				})
 			}
 		}
-		resp.ChannelsJSON, _ = json.Marshal(channels)
 	}
+	resp.ChannelsJSON, _ = json.Marshal(channels)
 	if resp.ChannelsJSON == nil {
 		resp.ChannelsJSON = json.RawMessage("[]")
 	}
@@ -1700,6 +1718,8 @@ func (ss *SyncService) HandleGetPublicFederationPeers(w http.ResponseWriter, r *
 }
 
 // HandleProxyGetFederatedGuildMembers proxies member list fetch to a remote guild.
+// The remote returns flat member objects; this handler transforms them into the
+// GuildMember shape the frontend expects (with a nested "user" object).
 // GET /api/v1/federation/guilds/{guildID}/members
 func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
@@ -1734,9 +1754,70 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 		return
 	}
 
+	if statusCode != http.StatusOK {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		w.Write(respBody)
+		return
+	}
+
+	// Parse the flat remote response and transform into GuildMember shape.
+	var remoteResp struct {
+		Data []struct {
+			UserID         string          `json:"user_id"`
+			Username       string          `json:"username"`
+			DisplayName    *string         `json:"display_name"`
+			AvatarID       *string         `json:"avatar_id"`
+			InstanceDomain string          `json:"instance_domain"`
+			RoleIDs        json.RawMessage `json:"role_ids"`
+			JoinedAt       time.Time       `json:"joined_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &remoteResp); err != nil {
+		// Fallback: return raw response if parsing fails.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		w.Write(respBody)
+		return
+	}
+
+	members := make([]map[string]interface{}, 0, len(remoteResp.Data))
+	for _, m := range remoteResp.Data {
+		// Parse role_ids array.
+		var roles []string
+		if len(m.RoleIDs) > 0 {
+			json.Unmarshal(m.RoleIDs, &roles)
+		}
+		if roles == nil {
+			roles = []string{}
+		}
+
+		// Determine the instance_domain to use: if empty, it's a local user
+		// on the remote instance, so use the remote instance domain.
+		domain := m.InstanceDomain
+		if domain == "" {
+			domain = instanceDomain
+		}
+
+		members = append(members, map[string]interface{}{
+			"guild_id":  guildID,
+			"user_id":   m.UserID,
+			"nickname":  nil,
+			"avatar_id": nil,
+			"joined_at": m.JoinedAt,
+			"roles":     roles,
+			"user": map[string]interface{}{
+				"id":              m.UserID,
+				"username":        m.Username,
+				"display_name":    m.DisplayName,
+				"avatar_id":       m.AvatarID,
+				"instance_domain": domain,
+			},
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	w.Write(respBody)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": members})
 }
 
 // HandleProxyAddFederatedReaction proxies adding a reaction to a remote guild message.
@@ -1880,4 +1961,55 @@ func (ss *SyncService) signAndPost(ctx context.Context, targetURL string, payloa
 		return nil, resp.StatusCode, fmt.Errorf("reading response from %s: %w", targetURL, err)
 	}
 	return respBody, resp.StatusCode, nil
+}
+
+// HandleProxyEnsureFederatedUser creates or updates a local user stub for a
+// remote user so that local operations (e.g. creating a DM) can succeed.
+// POST /api/v1/federation/users/ensure
+func (ss *SyncService) HandleProxyEnsureFederatedUser(w http.ResponseWriter, r *http.Request) {
+	callerID := auth.UserIDFromContext(r.Context())
+	if callerID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		UserID         string  `json:"user_id"`
+		InstanceDomain string  `json:"instance_domain"`
+		Username       string  `json:"username"`
+		DisplayName    *string `json:"display_name"`
+		AvatarID       *string `json:"avatar_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" || req.InstanceDomain == "" || req.Username == "" {
+		http.Error(w, "user_id, instance_domain, and username are required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Resolve instance_domain → instance_id.
+	var instanceID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`, req.InstanceDomain,
+	).Scan(&instanceID); err != nil {
+		if err == pgx.ErrNoRows {
+			http.Error(w, "Unknown instance domain", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ss.ensureRemoteUserStub(ctx, instanceID, federatedUserInfo{
+		ID:          req.UserID,
+		Username:    req.Username,
+		DisplayName: req.DisplayName,
+		AvatarID:    req.AvatarID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
 }

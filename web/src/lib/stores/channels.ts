@@ -167,19 +167,19 @@ export async function loadChannels(guildId: string) {
 }
 
 /** Load channels from federation cache data (simplified channel objects). */
-export function loadFederatedChannels(channelsJson: unknown[]) {
+export function loadFederatedChannels(guildId: string, channelsJson: unknown[]) {
 	if (!Array.isArray(channelsJson)) {
 		channels.setAll([]);
 		return;
 	}
-	const list = (channelsJson as Array<{ id: string; name: string; topic?: string | null; position?: number; channel_type?: string }>)
-		.filter((c): c is { id: string; name: string; topic?: string | null; position?: number; channel_type?: string } =>
+	const list = (channelsJson as Array<{ id: string; name: string; topic?: string | null; position?: number; channel_type?: string; category_id?: string | null }>)
+		.filter((c): c is { id: string; name: string; topic?: string | null; position?: number; channel_type?: string; category_id?: string | null } =>
 			!!c && typeof (c as any).id === 'string' && typeof (c as any).name === 'string'
 		)
 		.map(c => ({
 			id: c.id,
-			guild_id: null,
-			category_id: null,
+			guild_id: guildId,
+			category_id: c.category_id ?? null,
 			name: c.name,
 			topic: c.topic ?? null,
 			position: c.position ?? 0,

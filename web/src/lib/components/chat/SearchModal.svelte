@@ -6,6 +6,7 @@
 	import { currentChannelId } from '$lib/stores/channels';
 	import Modal from '$components/common/Modal.svelte';
 	import Avatar from '$components/common/Avatar.svelte';
+	import { avatarUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		open?: boolean;
@@ -138,7 +139,7 @@
 					<div class="flex items-center gap-2 text-xs">
 						<Avatar
 							name={msg.author?.display_name ?? msg.author?.username ?? 'U'}
-							src={msg.author?.avatar_id ? `/api/v1/files/${msg.author.avatar_id}` : null}
+							src={avatarUrl(msg.author?.avatar_id, msg.author?.instance_domain)}
 							size="sm"
 						/>
 						<span class="font-medium text-text-primary">

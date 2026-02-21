@@ -97,7 +97,7 @@ export interface Channel {
 	recipients?: User[];
 }
 
-export type ChannelType = 'text' | 'voice' | 'dm' | 'group' | 'announcement' | 'forum' | 'gallery' | 'stage';
+export type ChannelType = 'text' | 'voice' | 'dm' | 'group' | 'announcement' | 'forum' | 'gallery' | 'stage' | 'category';
 
 export interface Message {
 	id: string;

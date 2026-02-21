@@ -32,6 +32,7 @@
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { clientNicknames } from '$lib/stores/nicknames';
 	import { isEmojiOnly } from '$lib/utils/emoji';
+	import { avatarUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		message: Message;
@@ -537,7 +538,7 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="mt-0.5 shrink-0 cursor-pointer" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>
-			<Avatar name={displayName} src={message.author?.avatar_id ? `/api/v1/files/${message.author.avatar_id}` : null} status={authorPresence} />
+			<Avatar name={displayName} src={avatarUrl(message.author?.avatar_id, message.author?.instance_domain)} status={authorPresence} />
 		</div>
 	{/if}
 
