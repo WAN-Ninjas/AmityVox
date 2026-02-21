@@ -171,19 +171,10 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inv.IsExpired() {
-		apiutil.WriteError(w, http.StatusGone, "invite_expired", "This invite has expired")
-		return
-	}
-	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
-		apiutil.WriteError(w, http.StatusGone, "invite_exhausted", "This invite has reached its maximum uses")
-		return
-	}
-
 	// If this guild is federated, proxy the join to the home instance.
-	// The home instance handles member creation and channel peer registration.
+	// The home instance validates the invite and handles member creation.
+	var instanceID *string
 	if h.FedProxy != nil {
-		var instanceID *string
 		err := h.Pool.QueryRow(r.Context(),
 			`SELECT instance_id FROM guilds WHERE id = $1`, inv.GuildID,
 		).Scan(&instanceID)
@@ -191,12 +182,22 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 			apiutil.InternalError(w, h.Logger, "Failed to check guild federation status", err)
 			return
 		}
-		if err == nil && instanceID != nil {
+		if instanceID != nil {
 			if h.FedProxy.ProxyToHomeInstance(w, r, inv.GuildID, instanceID, "member_join", userID,
 				map[string]string{"user_id": userID, "invite_code": code}) {
 				return
 			}
 		}
+	}
+
+	// Local guild — validate expiry and usage limits.
+	if inv.IsExpired() {
+		apiutil.WriteError(w, http.StatusGone, "invite_expired", "This invite has expired")
+		return
+	}
+	if inv.MaxUses != nil && inv.Uses >= *inv.MaxUses {
+		apiutil.WriteError(w, http.StatusGone, "invite_exhausted", "This invite has reached its maximum uses")
+		return
 	}
 
 	// Check if user is banned from this guild.

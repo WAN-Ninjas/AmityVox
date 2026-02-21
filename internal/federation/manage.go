@@ -1339,17 +1339,60 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	// Validate the invite exists, belongs to this guild, and is still usable.
+	// Validate the invite code is provided.
 	if req.InviteCode == "" {
 		writeManageError(w, http.StatusBadRequest, "Invite code is required")
 		return
 	}
+
+	// Check if the user is banned from this guild (before starting the transaction).
+	var banned bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, userID).Scan(&banned); err != nil {
+		ss.logger.Error("failed to check guild ban for federated join",
+			slog.String("guild_id", guildID), slog.String("user_id", userID),
+			slog.String("error", err.Error()))
+		writeManageError(w, http.StatusInternalServerError, "Failed to check ban status")
+		return
+	}
+	if banned {
+		writeManageError(w, http.StatusForbidden, "User is banned from this guild")
+		return
+	}
+
+	// Create a minimal user stub if the user doesn't exist locally yet.
+	ss.ensureRemoteUserStub(ctx, senderInstanceID, federatedUserInfo{
+		ID: userID,
+	})
+	// Verify the stub was created and belongs to the sender instance.
+	var stubInstanceID *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT instance_id FROM users WHERE id = $1`, userID,
+	).Scan(&stubInstanceID); err != nil {
+		writeManageError(w, http.StatusInternalServerError, "Failed to register remote user")
+		return
+	}
+	if stubInstanceID == nil || *stubInstanceID != senderInstanceID {
+		writeManageError(w, http.StatusForbidden, "User does not belong to sender instance")
+		return
+	}
+
+	// Use a transaction with row locks to enforce invite limits and member count atomically.
+	tx, err := ss.fed.pool.Begin(ctx)
+	if err != nil {
+		writeManageError(w, http.StatusInternalServerError, "Failed to start join transaction")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Validate the invite exists, belongs to this guild, and is still usable (locked for update).
 	var invGuildID string
 	var invMaxUses *int
 	var invUses int
 	var invExpiresAt *time.Time
-	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT guild_id, max_uses, uses, expires_at FROM invites WHERE code = $1`,
+	if err := tx.QueryRow(ctx,
+		`SELECT guild_id, max_uses, uses, expires_at FROM invites WHERE code = $1 FOR UPDATE`,
 		req.InviteCode,
 	).Scan(&invGuildID, &invMaxUses, &invUses, &invExpiresAt); err != nil {
 		writeManageError(w, http.StatusNotFound, "Invite not found")
@@ -1368,49 +1411,22 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	// Check if the user is banned from this guild.
-	var banned bool
-	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
-		guildID, userID).Scan(&banned); err != nil {
-		ss.logger.Error("failed to check guild ban for federated join",
-			slog.String("guild_id", guildID), slog.String("user_id", userID),
-			slog.String("error", err.Error()))
-		writeManageError(w, http.StatusInternalServerError, "Failed to check ban status")
-		return
-	}
-	if banned {
-		writeManageError(w, http.StatusForbidden, "User is banned from this guild")
-		return
-	}
-
-	// Check max members.
+	// Check max members (locked for update).
 	var maxMembers, currentMembers int
-	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT max_members, member_count FROM guilds WHERE id = $1`, guildID,
-	).Scan(&maxMembers, &currentMembers); err == nil {
-		if maxMembers > 0 && currentMembers >= maxMembers {
-			writeManageError(w, http.StatusForbidden, "Guild has reached its maximum member count")
-			return
-		}
+	if err := tx.QueryRow(ctx,
+		`SELECT max_members, member_count FROM guilds WHERE id = $1 FOR UPDATE`, guildID,
+	).Scan(&maxMembers, &currentMembers); err != nil {
+		writeManageError(w, http.StatusInternalServerError, "Failed to check guild capacity")
+		return
 	}
-
-	// Create a minimal user stub if the user doesn't exist locally yet.
-	ss.ensureRemoteUserStub(ctx, senderInstanceID, federatedUserInfo{
-		ID: userID,
-	})
-	// Verify the stub was created (FK safety).
-	var userExists bool
-	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, userID,
-	).Scan(&userExists); err != nil || !userExists {
-		writeManageError(w, http.StatusInternalServerError, "Failed to register remote user")
+	if maxMembers > 0 && currentMembers >= maxMembers {
+		writeManageError(w, http.StatusForbidden, "Guild has reached its maximum member count")
 		return
 	}
 
 	// Add to guild_members.
 	now := time.Now().UTC()
-	tag, err := ss.fed.pool.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO guild_members (guild_id, user_id, joined_at)
 		 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
 		guildID, userID, now)
@@ -1420,20 +1436,27 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 	}
 
 	if tag.RowsAffected() > 0 {
-		// Register channel peers so events flow to the sender instance.
-		ss.addInstanceToGuildChannelPeers(ctx, guildID, senderInstanceID)
-
-		if _, err := ss.fed.pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`UPDATE invites SET uses = uses + 1 WHERE code = $1`, req.InviteCode); err != nil {
 			ss.logger.Error("failed to increment invite usage",
 				slog.String("invite_code", req.InviteCode), slog.String("error", err.Error()))
 		}
 
-		if _, err := ss.fed.pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`UPDATE guilds SET member_count = member_count + 1 WHERE id = $1`, guildID); err != nil {
 			ss.logger.Error("failed to increment guild member count",
 				slog.String("guild_id", guildID), slog.String("error", err.Error()))
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		writeManageError(w, http.StatusInternalServerError, "Failed to finalize join")
+		return
+	}
+
+	if tag.RowsAffected() > 0 {
+		// Register channel peers so events flow to the sender instance (outside tx).
+		ss.addInstanceToGuildChannelPeers(ctx, guildID, senderInstanceID)
 
 		ss.bus.PublishGuildEvent(ctx, events.SubjectGuildMemberAdd, "GUILD_MEMBER_ADD", guildID,
 			map[string]interface{}{
