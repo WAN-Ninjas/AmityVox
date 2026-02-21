@@ -246,7 +246,20 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
 			return
 		}
-		if guildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *guildID, instanceID, "channel_update", userID, req) {
+		// Build a flat payload that includes channel_id alongside the update fields
+		// so the manage handler can identify which channel to update.
+		updateData, err := json.Marshal(req)
+		if err != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to marshal channel update", err)
+			return
+		}
+		var updateMap map[string]interface{}
+		if err := json.Unmarshal(updateData, &updateMap); err != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to prepare update payload", err)
+			return
+		}
+		updateMap["channel_id"] = channelID
+		if guildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *guildID, instanceID, "channel_update", userID, updateMap) {
 			return
 		}
 	}
@@ -366,7 +379,7 @@ func (h *Handler) HandleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up channel")
 			return
 		}
-		if fedGuildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *fedGuildID, instanceID, "channel_delete", userID, nil) {
+		if fedGuildID != nil && h.FedProxy.ProxyToHomeInstance(w, r, *fedGuildID, instanceID, "channel_delete", userID, map[string]string{"channel_id": channelID}) {
 			return
 		}
 	}
@@ -2242,10 +2255,13 @@ func (h *Handler) enrichMessagesWithAuthors(ctx context.Context, messages []mode
 	}
 
 	rows, err := h.Pool.Query(ctx,
-		`SELECT id, instance_id, username, display_name, avatar_id,
-		        status_text, status_emoji, status_presence, status_expires_at,
-		        bio, banner_id, accent_color, pronouns, flags, created_at
-		 FROM users WHERE id = ANY($1)`, ids)
+		`SELECT u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns, u.flags, u.created_at,
+		        COALESCE(i.domain, '') AS instance_domain
+		 FROM users u
+		 LEFT JOIN instances i ON i.id = u.instance_id
+		 WHERE u.id = ANY($1)`, ids)
 	if err != nil {
 		return
 	}
@@ -2254,12 +2270,17 @@ func (h *Handler) enrichMessagesWithAuthors(ctx context.Context, messages []mode
 	userMap := make(map[string]*models.User)
 	for rows.Next() {
 		var u models.User
+		var instanceDomain string
 		if err := rows.Scan(
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
 			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
 			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
+			&instanceDomain,
 		); err != nil {
 			continue
+		}
+		if instanceDomain != "" {
+			u.InstanceDomain = &instanceDomain
 		}
 		userCopy := u
 		userMap[u.ID] = &userCopy
