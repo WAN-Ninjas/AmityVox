@@ -314,7 +314,7 @@ func runServe() error {
 	// Register API routes after all optional services are set.
 	srv.RegisterRoutes()
 
-	// Mount federation endpoints (rate limited by IP — no auth context).
+	// Public federation discovery and handshake (rate limited — no signature verification).
 	fedRL := srv.RateLimitGlobal()
 	srv.Router.With(fedRL).Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
 	srv.Router.With(fedRL).Post("/federation/v1/handshake", fedSvc.HandleHandshake)
@@ -326,31 +326,35 @@ func runServe() error {
 	if voiceSvc != nil {
 		syncSvc.SetVoiceService(voiceSvc, srv.Config.LiveKit.PublicURL)
 	}
-	srv.Router.With(fedRL).Post("/federation/v1/inbox", syncSvc.HandleInbox)
-	srv.Router.With(fedRL).Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
+
+	// Signed federation endpoints — no rate limit. These verify Ed25519 signatures
+	// from authenticated peers, so IP-based rate limiting is unnecessary and causes
+	// 429 errors that break real-time event delivery between instances.
+	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	srv.Router.Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
 
 	// Wire federation DM notifier into the users handler.
 	if cfg.Instance.FederationMode != "closed" && srv.UserHandler != nil {
 		srv.UserHandler.NotifyFederatedDM = syncSvc.NotifyFederatedDM
 	}
 
-	// Federation DM endpoints.
-	srv.Router.With(fedRL).Post("/federation/v1/dm/create", syncSvc.HandleFederatedDMCreate)
-	srv.Router.With(fedRL).Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
-	srv.Router.With(fedRL).Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
-	srv.Router.With(fedRL).Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
+	// Federation DM endpoints (signed, no rate limit).
+	srv.Router.Post("/federation/v1/dm/create", syncSvc.HandleFederatedDMCreate)
+	srv.Router.Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
+	srv.Router.Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
+	srv.Router.Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
 
-	// Federation guild endpoints (remote-facing, rate limited by IP).
-	srv.Router.With(fedRL).Get("/federation/v1/guilds/{guildID}/preview", syncSvc.HandleFederatedGuildPreview)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/join", syncSvc.HandleFederatedGuildJoin)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/leave", syncSvc.HandleFederatedGuildLeave)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/invite-accept", syncSvc.HandleFederatedGuildInviteAccept)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages", syncSvc.HandleFederatedGuildMessages)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/create", syncSvc.HandleFederatedGuildPostMessage)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/members", syncSvc.HandleFederatedGuildMembers)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/typing", syncSvc.HandleFederatedGuildTyping)
+	// Federation guild endpoints (signed, no rate limit).
+	srv.Router.Get("/federation/v1/guilds/{guildID}/preview", syncSvc.HandleFederatedGuildPreview)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/join", syncSvc.HandleFederatedGuildJoin)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/leave", syncSvc.HandleFederatedGuildLeave)
+	srv.Router.Post("/federation/v1/guilds/invite-accept", syncSvc.HandleFederatedGuildInviteAccept)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages", syncSvc.HandleFederatedGuildMessages)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/create", syncSvc.HandleFederatedGuildPostMessage)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/members", syncSvc.HandleFederatedGuildMembers)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/typing", syncSvc.HandleFederatedGuildTyping)
 
 	// Federation guild proxy endpoints (authenticated, for local users accessing remote guilds).
 	srv.Router.Route("/api/v1/federation/guilds", func(r chi.Router) {
@@ -381,11 +385,11 @@ func runServe() error {
 		r.Get("/{peerID}/guilds", syncSvc.HandleProxyDiscoverRemoteGuilds)
 	})
 
-	// Federation guild discovery (remote-facing, requires federation signature verification).
-	srv.Router.With(fedRL).Post("/federation/v1/guilds/discover", syncSvc.HandleFederatedGuildDiscover)
+	// Federation guild discovery (signed, no rate limit).
+	srv.Router.Post("/federation/v1/guilds/discover", syncSvc.HandleFederatedGuildDiscover)
 
-	// Federation voice endpoint (remote-facing, for generating voice tokens for federated users).
-	srv.Router.With(fedRL).Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
+	// Federation voice endpoint (signed, no rate limit).
+	srv.Router.Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
 
 	// Federation voice proxy endpoints (authenticated, for local users joining remote voice channels).
 	srv.Router.Route("/api/v1/federation/voice", func(r chi.Router) {
