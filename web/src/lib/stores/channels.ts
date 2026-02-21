@@ -172,8 +172,8 @@ export function loadFederatedChannels(guildId: string, channelsJson: unknown[]) 
 		channels.setAll([]);
 		return;
 	}
-	const list = (channelsJson as Array<{ id: string; name: string; topic?: string | null; position?: number; channel_type?: string; category_id?: string | null }>)
-		.filter((c): c is { id: string; name: string; topic?: string | null; position?: number; channel_type?: string; category_id?: string | null } =>
+	const list = (channelsJson as Array<{ id: string; name: string; topic?: string | null; position?: number; channel_type?: string; category_id?: string | null; parent_channel_id?: string | null; encrypted?: boolean }>)
+		.filter((c): c is { id: string; name: string; topic?: string | null; position?: number; channel_type?: string; category_id?: string | null; parent_channel_id?: string | null; encrypted?: boolean } =>
 			!!c && typeof (c as any).id === 'string' && typeof (c as any).name === 'string'
 		)
 		.map(c => ({
@@ -184,10 +184,10 @@ export function loadFederatedChannels(guildId: string, channelsJson: unknown[]) 
 			topic: c.topic ?? null,
 			position: c.position ?? 0,
 			channel_type: (c.channel_type ?? 'text') as Channel['channel_type'],
-			parent_channel_id: null,
+			parent_channel_id: c.parent_channel_id ?? null,
 			slowmode_seconds: 0,
 			nsfw: false,
-			encrypted: false,
+			encrypted: c.encrypted ?? false,
 			archived: false,
 			locked: false,
 			locked_by: null,

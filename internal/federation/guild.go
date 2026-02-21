@@ -493,9 +493,10 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 	}
 
 	query := `SELECT m.id, m.channel_id, m.author_id, m.content, m.created_at,
-	                 u.username, u.display_name, u.avatar_id
+	                 u.username, u.display_name, u.avatar_id, COALESCE(i.domain, '')
 	          FROM messages m
 	          JOIN users u ON u.id = m.author_id
+	          LEFT JOIN instances i ON i.id = u.instance_id
 	          WHERE m.channel_id = $1`
 	args := []interface{}{channelID}
 	argN := 2
@@ -533,18 +534,23 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 		var createdAt time.Time
 		var username string
 		var displayName, avatarID *string
+		var instanceDomain string
 		if err := rows.Scan(&id, &chID, &authorID, &content, &createdAt,
-			&username, &displayName, &avatarID); err != nil {
+			&username, &displayName, &avatarID, &instanceDomain); err != nil {
 			ss.logger.Warn("failed to scan federated message row", slog.String("error", err.Error()))
 			continue
+		}
+		authorObj := map[string]interface{}{
+			"id": authorID, "username": username,
+			"display_name": displayName, "avatar_id": avatarID,
+		}
+		if instanceDomain != "" {
+			authorObj["instance_domain"] = instanceDomain
 		}
 		messages = append(messages, map[string]interface{}{
 			"id": id, "channel_id": chID, "author_id": authorID,
 			"content": content, "created_at": createdAt,
-			"author": map[string]interface{}{
-				"id": authorID, "username": username,
-				"display_name": displayName, "avatar_id": avatarID,
-			},
+			"author": authorObj,
 		})
 	}
 
@@ -651,10 +657,32 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 		ss.logger.Warn("failed to update last_message_id", slog.String("error", err.Error()))
 	}
 
+	// Fetch author data so the event includes the full author object.
+	// Without this, the frontend falls back to author_id (a ULID) as the display name.
+	var authorUsername string
+	var authorDisplayName, authorAvatarID *string
+	var authorInstanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT u.username, u.display_name, u.avatar_id, COALESCE(i.domain, '')
+		 FROM users u LEFT JOIN instances i ON i.id = u.instance_id
+		 WHERE u.id = $1`, req.UserID,
+	).Scan(&authorUsername, &authorDisplayName, &authorAvatarID, &authorInstanceDomain); err != nil {
+		ss.logger.Warn("failed to fetch author for federated message", slog.String("error", err.Error()))
+		authorUsername = req.UserID // fallback so the event isn't blank
+	}
+
+	authorObj := map[string]interface{}{
+		"id": req.UserID, "username": authorUsername,
+		"display_name": authorDisplayName, "avatar_id": authorAvatarID,
+	}
+	if authorInstanceDomain != "" {
+		authorObj["instance_domain"] = authorInstanceDomain
+	}
+
 	msg := map[string]interface{}{
 		"id": msgID, "channel_id": channelID, "guild_id": guildID,
 		"author_id": req.UserID, "content": req.Content, "created_at": now,
-		"reply_to_ids": replyToIDs,
+		"reply_to_ids": replyToIDs, "author": authorObj,
 	}
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", channelID, msg)
 
@@ -1117,7 +1145,7 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 
 	// Load non-private channels only (private channels require explicit access).
 	channelRows, err := ss.fed.pool.Query(ctx,
-		`SELECT id, channel_type, name, topic, position, category_id FROM channels
+		`SELECT id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted FROM channels
 		 WHERE guild_id = $1 AND (channel_type <> 'private' OR channel_type IS NULL)
 		 ORDER BY position`, guildID)
 	if err == nil {
@@ -1127,10 +1155,13 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 			var channelType *string
 			var name, topic *string
 			var position int
-			var categoryID *string
-			if channelRows.Scan(&id, &channelType, &name, &topic, &position, &categoryID) == nil {
+			var categoryID, parentChannelID *string
+			var encrypted bool
+			if channelRows.Scan(&id, &channelType, &name, &topic, &position, &categoryID, &parentChannelID, &encrypted) == nil {
 				channels = append(channels, map[string]interface{}{
-					"id": id, "channel_type": channelType, "name": name, "topic": topic, "position": position, "category_id": categoryID,
+					"id": id, "channel_type": channelType, "name": name, "topic": topic,
+					"position": position, "category_id": categoryID,
+					"parent_channel_id": parentChannelID, "encrypted": encrypted,
 				})
 			}
 		}
