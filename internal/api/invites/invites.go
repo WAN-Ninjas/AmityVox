@@ -26,6 +26,7 @@ type Handler struct {
 	EventBus   *events.Bus
 	InstanceID string
 	Logger     *slog.Logger
+	FedProxy   apiutil.FederationProxy
 }
 
 // parseRemoteInvite checks if an invite code contains a remote domain.
@@ -170,6 +171,26 @@ func (h *Handler) HandleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If this guild is federated, proxy the join to the home instance.
+	// The home instance validates the invite and handles member creation.
+	var instanceID *string
+	if h.FedProxy != nil {
+		err := h.Pool.QueryRow(r.Context(),
+			`SELECT instance_id FROM guilds WHERE id = $1`, inv.GuildID,
+		).Scan(&instanceID)
+		if err != nil && err != pgx.ErrNoRows {
+			apiutil.InternalError(w, h.Logger, "Failed to check guild federation status", err)
+			return
+		}
+		if instanceID != nil {
+			if h.FedProxy.ProxyToHomeInstance(w, r, inv.GuildID, instanceID, "member_join", userID,
+				map[string]string{"user_id": userID, "invite_code": code}) {
+				return
+			}
+		}
+	}
+
+	// Local guild — validate expiry and usage limits.
 	if inv.IsExpired() {
 		apiutil.WriteError(w, http.StatusGone, "invite_expired", "This invite has expired")
 		return

@@ -190,6 +190,7 @@ func (s *Server) registerRoutes() {
 		EventBus:   s.EventBus,
 		InstanceID: s.InstanceID,
 		Logger:     s.Logger,
+		FedProxy:   s.FedProxy,
 	}
 	adminH := &admin.Handler{
 		Pool:       s.DB.Pool,

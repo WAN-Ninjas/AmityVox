@@ -1212,8 +1212,30 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 
 // updateFederatedGuildFromEvent updates real tables when receiving inbound
 // guild-level events from remote instances (GUILD_UPDATE, CHANNEL_CREATE,
-// CHANNEL_UPDATE, CHANNEL_DELETE, GUILD_DELETE).
+// CHANNEL_UPDATE, CHANNEL_DELETE, GUILD_MEMBER_ADD, GUILD_MEMBER_REMOVE,
+// GUILD_DELETE).
 func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, senderID, eventType, guildID string, data json.RawMessage) {
+	// Verify the sender instance owns this guild to prevent a malicious peer
+	// from modifying or deleting guilds it doesn't own.
+	var guildInstanceID *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT instance_id FROM guilds WHERE id = $1`, guildID,
+	).Scan(&guildInstanceID); err != nil {
+		ss.logger.Warn("federation event for unknown guild",
+			slog.String("guild_id", guildID), slog.String("sender", senderID))
+		return
+	}
+	if guildInstanceID == nil || *guildInstanceID != senderID {
+		ownerStr := "<nil>"
+		if guildInstanceID != nil {
+			ownerStr = *guildInstanceID
+		}
+		ss.logger.Warn("federation event sender does not own guild",
+			slog.String("guild_id", guildID), slog.String("sender", senderID),
+			slog.String("owner", ownerStr))
+		return
+	}
+
 	switch eventType {
 	case "GUILD_UPDATE":
 		var update struct {
@@ -1288,7 +1310,7 @@ func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, sender
 				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET
 				 name = EXCLUDED.name, topic = EXCLUDED.topic, position = EXCLUDED.position,
 				 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id,
-				 encrypted = EXCLUDED.encrypted`,
+					 encrypted = EXCLUDED.encrypted`,
 				ch.ID, guildID, ch.ChannelType, ch.Name, ch.Topic, ch.Position,
 				ch.CategoryID, ch.ParentChannelID, ch.Encrypted); err != nil {
 				ss.logger.Warn("failed to insert federated channel from event",
@@ -1602,7 +1624,8 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 					`INSERT INTO channels (id, guild_id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted)
 					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET
 					 name = EXCLUDED.name, topic = EXCLUDED.topic, position = EXCLUDED.position,
-					 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id`,
+					 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id,
+					 encrypted = EXCLUDED.encrypted`,
 					ch.ID, joinResp.GuildID, chType, ch.Name, ch.Topic, ch.Position,
 					ch.CategoryID, ch.ParentChannelID, ch.Encrypted); err != nil {
 					ss.logger.Warn("failed to insert federated channel",
