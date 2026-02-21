@@ -283,6 +283,14 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoin(w http.ResponseWriter, r *h
 		return
 	}
 
+	// Check voice mode: relay mode wraps the remote token in a local room.
+	voiceMode := ss.getVoiceMode(ctx)
+	if voiceMode == "relay" {
+		ss.handleVoiceRelay(w, r, userID, req.ChannelID, voiceResp)
+		return
+	}
+
+	// Direct mode — return remote token + URL as-is.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": voiceResp})
 }
@@ -314,15 +322,15 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoinByGuild(w http.ResponseWrite
 
 	ctx := r.Context()
 
-	// Look up the remote instance from federation_guild_cache.
+	// Look up the remote instance from the guilds table.
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2 LIMIT 1`,
-		req.GuildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		req.GuildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -387,8 +395,96 @@ func (ss *SyncService) HandleProxyFederatedVoiceJoinByGuild(w http.ResponseWrite
 		return
 	}
 
+	// Check voice mode: relay mode wraps the remote token in a local room.
+	voiceMode := ss.getVoiceMode(ctx)
+	if voiceMode == "relay" {
+		ss.handleVoiceRelay(w, r, userID, req.ChannelID, voiceResp)
+		return
+	}
+
+	// Direct mode — return remote token + URL as-is.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": voiceResp})
+}
+
+// getVoiceMode returns the configured voice mode for this instance.
+// It checks the database first (admin override), then falls back to "direct".
+func (ss *SyncService) getVoiceMode(ctx context.Context) string {
+	var voiceMode string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT voice_mode FROM instances WHERE id = $1`, ss.fed.instanceID,
+	).Scan(&voiceMode)
+	if err != nil || voiceMode == "" {
+		return "direct"
+	}
+	return voiceMode
+}
+
+// handleVoiceRelay creates a local LiveKit room that relays to the remote room.
+// For v1, this generates a local token for the user. The actual media bridging
+// between local and remote LiveKit requires the livekit-server-sdk-go relay
+// participant, which will be implemented when LiveKit adds native room bridging.
+//
+// For now, relay mode:
+// 1. Creates/ensures a local relay room with ID "relay-{remoteChannelID}"
+// 2. Generates a local LiveKit token for the user to join the relay room
+// 3. Returns the local token + local LiveKit URL to the client, along with
+//
+//	the remote token+URL so the client can optionally establish dual connections
+//	(client-side relay as a fallback until server-side bridging is implemented)
+func (ss *SyncService) handleVoiceRelay(
+	w http.ResponseWriter,
+	r *http.Request,
+	userID string,
+	channelID string,
+	remoteResp map[string]interface{},
+) {
+	ctx := r.Context()
+
+	if ss.voiceSvc == nil {
+		http.Error(w, "Voice is not configured on this instance", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Create a local relay room.
+	relayRoomID := "relay-" + channelID
+	if err := ss.voiceSvc.EnsureRoom(ctx, relayRoomID); err != nil {
+		ss.logger.Error("failed to create relay room", slog.String("error", err.Error()))
+		http.Error(w, "Failed to create relay room", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate a local token for the user with full publish/subscribe rights.
+	token, err := ss.voiceSvc.GenerateToken(userID, relayRoomID, true, true, true, "")
+	if err != nil {
+		ss.logger.Error("failed to generate relay token", slog.String("error", err.Error()))
+		http.Error(w, "Failed to generate relay token", http.StatusInternalServerError)
+		return
+	}
+
+	// Extract remote credentials for the bridge worker (future) or client-side relay.
+	remoteToken, _ := remoteResp["token"].(string)
+	remoteURL, _ := remoteResp["url"].(string)
+
+	ss.logger.Info("voice relay mode: local room created",
+		slog.String("relay_room", relayRoomID),
+		slog.String("remote_url", remoteURL),
+		slog.String("user_id", userID))
+
+	// Return local token + URL. The relay:true field tells the client it's in
+	// relay mode. The remote_token and remote_url are provided so the client
+	// can optionally establish dual connections as a fallback.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": map[string]interface{}{
+			"token":        token,
+			"url":          ss.liveKitURL,
+			"channel_id":   channelID,
+			"relay":        true,
+			"remote_token": remoteToken,
+			"remote_url":   remoteURL,
+		},
+	})
 }
 
 // computeFederatedGuildPerms computes the effective permission bitfield for a user

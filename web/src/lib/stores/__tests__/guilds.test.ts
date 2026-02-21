@@ -17,14 +17,10 @@ import {
 	updateGuild,
 	removeGuild,
 	loadGuilds,
-	federatedGuilds,
-	federatedGuildIds,
-	isFederatedGuild,
-	loadFederatedGuilds,
-	removeFederatedGuild
+	isGuildFederated
 } from '../guilds';
 import { api } from '$lib/api/client';
-import type { Guild, FederatedGuild } from '$lib/types';
+import type { Guild } from '$lib/types';
 
 function createMockGuild(overrides?: Partial<Guild>): Guild {
 	return {
@@ -166,99 +162,21 @@ describe('guilds store', () => {
 		expect(map.has('guild-new-2')).toBe(true);
 		expect(map.get('guild-new-1')?.name).toBe('New Alpha');
 	});
-});
 
-function createMockFederatedGuild(overrides?: Partial<FederatedGuild>): FederatedGuild {
-	return {
-		guild_id: 'fed-guild-1',
-		name: 'Remote Guild',
-		icon_id: null,
-		description: null,
-		member_count: 50,
-		channels_json: [],
-		roles_json: [],
-		instance_domain: 'remote.example.com',
-		...overrides
-	};
-}
-
-describe('federated guilds store', () => {
-	beforeEach(() => {
-		federatedGuilds.set(new Map());
+	it('isGuildFederated returns true when instance_id differs from local', () => {
+		const localGuild = createMockGuild({ id: 'g1', instance_id: 'local-inst' });
+		const fedGuild = createMockGuild({ id: 'g2', instance_id: 'remote-inst' });
+		expect(isGuildFederated(localGuild, 'local-inst')).toBe(false);
+		expect(isGuildFederated(fedGuild, 'local-inst')).toBe(true);
 	});
 
-	it('starts with empty federated guild map', () => {
-		expect(get(federatedGuilds).size).toBe(0);
-	});
+	it('isGuildFederated returns false when instance_id is null or undefined', () => {
+		const nullGuild = createMockGuild({ id: 'g3', instance_id: null });
+		expect(isGuildFederated(nullGuild, 'local-inst')).toBe(false);
 
-	it('loadFederatedGuilds populates the store', () => {
-		const fg1 = createMockFederatedGuild({ guild_id: 'fg-1', name: 'Remote Alpha' });
-		const fg2 = createMockFederatedGuild({ guild_id: 'fg-2', name: 'Remote Beta', instance_domain: 'other.net' });
-
-		loadFederatedGuilds([fg1, fg2]);
-
-		const map = get(federatedGuilds);
-		expect(map.size).toBe(2);
-		expect(map.get('fg-1')?.name).toBe('Remote Alpha');
-		expect(map.get('fg-2')?.instance_domain).toBe('other.net');
-	});
-
-	it('loadFederatedGuilds replaces previous data', () => {
-		loadFederatedGuilds([createMockFederatedGuild({ guild_id: 'fg-old' })]);
-		expect(get(federatedGuilds).has('fg-old')).toBe(true);
-
-		loadFederatedGuilds([createMockFederatedGuild({ guild_id: 'fg-new' })]);
-		expect(get(federatedGuilds).has('fg-old')).toBe(false);
-		expect(get(federatedGuilds).has('fg-new')).toBe(true);
-	});
-
-	it('federatedGuildIds derived store returns Set of IDs', () => {
-		loadFederatedGuilds([
-			createMockFederatedGuild({ guild_id: 'fg-1' }),
-			createMockFederatedGuild({ guild_id: 'fg-2' })
-		]);
-
-		const ids = get(federatedGuildIds);
-		expect(ids.size).toBe(2);
-		expect(ids.has('fg-1')).toBe(true);
-		expect(ids.has('fg-2')).toBe(true);
-		expect(ids.has('fg-3')).toBe(false);
-	});
-
-	it('isFederatedGuild returns true for federated guilds', () => {
-		loadFederatedGuilds([createMockFederatedGuild({ guild_id: 'fg-1' })]);
-
-		expect(isFederatedGuild('fg-1')).toBe(true);
-		expect(isFederatedGuild('local-guild')).toBe(false);
-	});
-
-	it('removeFederatedGuild removes a federated guild', () => {
-		loadFederatedGuilds([
-			createMockFederatedGuild({ guild_id: 'fg-1' }),
-			createMockFederatedGuild({ guild_id: 'fg-2' })
-		]);
-
-		removeFederatedGuild('fg-1');
-
-		const map = get(federatedGuilds);
-		expect(map.size).toBe(1);
-		expect(map.has('fg-1')).toBe(false);
-		expect(map.has('fg-2')).toBe(true);
-	});
-
-	it('removeFederatedGuild on non-existent guild does nothing', () => {
-		loadFederatedGuilds([createMockFederatedGuild({ guild_id: 'fg-1' })]);
-
-		removeFederatedGuild('nonexistent');
-
-		expect(get(federatedGuilds).size).toBe(1);
-	});
-
-	it('loadFederatedGuilds with empty array clears the store', () => {
-		loadFederatedGuilds([createMockFederatedGuild({ guild_id: 'fg-1' })]);
-		expect(get(federatedGuilds).size).toBe(1);
-
-		loadFederatedGuilds([]);
-		expect(get(federatedGuilds).size).toBe(0);
+		const undefinedGuild = createMockGuild({ id: 'g4' });
+		// Force instance_id to undefined to simulate missing field from API
+		(undefinedGuild as any).instance_id = undefined;
+		expect(isGuildFederated(undefinedGuild, 'local-inst')).toBe(false);
 	});
 });

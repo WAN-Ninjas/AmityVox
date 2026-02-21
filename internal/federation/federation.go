@@ -69,6 +69,8 @@ type DiscoveryResponse struct {
 	SupportedProtocols []string `json:"supported_protocols"`
 	Capabilities       []string `json:"capabilities,omitempty"`
 	LiveKitURL         string   `json:"livekit_url,omitempty"`
+	Shorthand          *string  `json:"shorthand,omitempty"`
+	VoiceMode          string   `json:"voice_mode,omitempty"`
 }
 
 // HandshakeRequest is sent by an initiating instance to establish a federation
@@ -113,12 +115,13 @@ type SignedPayload struct {
 
 // Service provides federation operations.
 type Service struct {
-	pool           *pgxpool.Pool
-	instanceID     string
-	domain         string
-	privateKey     ed25519.PrivateKey
-	enforceIPCheck bool
-	logger         *slog.Logger
+	pool            *pgxpool.Pool
+	instanceID      string
+	domain          string
+	privateKey      ed25519.PrivateKey
+	enforceIPCheck  bool
+	logger          *slog.Logger
+	onPeerRecovered func(ctx context.Context, peerID string) // called when a peer transitions to healthy
 }
 
 // Config holds the configuration for the federation service.
@@ -143,16 +146,27 @@ func New(cfg Config) *Service {
 	}
 }
 
+// SetOnPeerRecovered sets a callback that fires when a peer transitions from
+// non-healthy to healthy status. Used by SyncService to trigger backfill.
+func (s *Service) SetOnPeerRecovered(fn func(ctx context.Context, peerID string)) {
+	s.onPeerRecovered = fn
+}
+
 // HandleDiscovery handles GET /.well-known/amityvox — the federation discovery
 // endpoint that other instances use to find this instance's public key, API
 // endpoint, and federation capabilities.
 func (s *Service) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 	var inst models.Instance
 	err := s.pool.QueryRow(r.Context(),
-		`SELECT id, domain, public_key, name, software, software_version, federation_mode
+		`SELECT id, domain, public_key, name, description, software, software_version,
+		        federation_mode, protocol_version, capabilities, livekit_url, private_key_pem,
+		        resolved_ips, key_fingerprint, shorthand, voice_mode, created_at, last_seen_at
 		 FROM instances WHERE id = $1`, s.instanceID).Scan(
-		&inst.ID, &inst.Domain, &inst.PublicKey, &inst.Name,
+		&inst.ID, &inst.Domain, &inst.PublicKey, &inst.Name, &inst.Description,
 		&inst.Software, &inst.SoftwareVersion, &inst.FederationMode,
+		&inst.ProtocolVersion, &inst.Capabilities, &inst.LiveKitURL, &inst.PrivateKeyPEM,
+		&inst.ResolvedIPs, &inst.KeyFingerprint, &inst.Shorthand, &inst.VoiceMode,
+		&inst.CreatedAt, &inst.LastSeenAt,
 	)
 	if err != nil {
 		s.logger.Error("federation discovery: failed to query instance",
@@ -166,24 +180,14 @@ func (s *Service) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		version = *inst.SoftwareVersion
 	}
 
-	// Load capabilities from database.
-	var capsJSON json.RawMessage
-	capErr := s.pool.QueryRow(r.Context(),
-		`SELECT COALESCE(capabilities, '[]'::jsonb) FROM instances WHERE id = $1`,
-		s.instanceID).Scan(&capsJSON)
+	// Parse capabilities from the instance record.
 	var caps []string
-	if capErr == nil {
-		json.Unmarshal(capsJSON, &caps)
+	if len(inst.Capabilities) > 0 {
+		json.Unmarshal(inst.Capabilities, &caps)
 	}
 	if len(caps) == 0 {
 		caps = DefaultCapabilities
 	}
-
-	// Fetch LiveKit public URL for federated voice.
-	var liveKitURL *string
-	s.pool.QueryRow(r.Context(),
-		`SELECT livekit_url FROM instances WHERE id = $1`, s.instanceID,
-	).Scan(&liveKitURL)
 
 	resp := DiscoveryResponse{
 		InstanceID:         inst.ID,
@@ -196,9 +200,11 @@ func (s *Service) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		APIEndpoint:        fmt.Sprintf("https://%s/federation/v1", inst.Domain),
 		SupportedProtocols: SupportedVersions,
 		Capabilities:       caps,
+		Shorthand:          inst.Shorthand,
+		VoiceMode:          inst.VoiceMode,
 	}
-	if liveKitURL != nil {
-		resp.LiveKitURL = *liveKitURL
+	if inst.LiveKitURL != nil {
+		resp.LiveKitURL = *inst.LiveKitURL
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -364,10 +370,29 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 			slog.String("new_fingerprint", newFingerprint))
 	}
 
+	// Resolve shorthand collisions: if the remote instance advertises a shorthand
+	// that already belongs to a different instance, append a numeric suffix.
+	remoteShorthand := disc.Shorthand
+	if remoteShorthand != nil && *remoteShorthand != "" {
+		resolved, shErr := s.resolveShorthandCollision(ctx, disc.InstanceID, *remoteShorthand)
+		if shErr != nil {
+			s.logger.Warn("shorthand collision resolution failed, clearing shorthand",
+				slog.String("domain", disc.Domain), slog.String("error", shErr.Error()))
+			remoteShorthand = nil
+		} else {
+			remoteShorthand = &resolved
+		}
+	}
+
+	voiceMode := disc.VoiceMode
+	if voiceMode == "" {
+		voiceMode = "direct"
+	}
+
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO instances (id, domain, public_key, name, software, software_version,
-		                        federation_mode, key_fingerprint, created_at, last_seen_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                        federation_mode, key_fingerprint, shorthand, voice_mode, created_at, last_seen_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 ON CONFLICT (domain) DO UPDATE SET
 			public_key = EXCLUDED.public_key,
 			name = EXCLUDED.name,
@@ -375,14 +400,66 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 			software_version = EXCLUDED.software_version,
 			federation_mode = EXCLUDED.federation_mode,
 			key_fingerprint = EXCLUDED.key_fingerprint,
+			shorthand = EXCLUDED.shorthand,
+			voice_mode = EXCLUDED.voice_mode,
 			last_seen_at = EXCLUDED.last_seen_at`,
 		disc.InstanceID, disc.Domain, disc.PublicKey, disc.Name,
-		disc.Software, disc.SoftwareVersion, disc.FederationMode, newFingerprint, now, now,
+		disc.Software, disc.SoftwareVersion, disc.FederationMode, newFingerprint,
+		remoteShorthand, voiceMode, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("registering remote instance %s: %w", disc.Domain, err)
 	}
 	return nil
+}
+
+// resolveShorthandCollision checks if a shorthand is already used by a different
+// instance and, if so, appends numeric suffixes (1, 2, 3, ...) until a unique
+// shorthand is found. Returns the resolved (possibly suffixed) shorthand.
+func (s *Service) resolveShorthandCollision(ctx context.Context, instanceID, shorthand string) (string, error) {
+	// Check if this exact shorthand is already used by a different instance.
+	var existingID string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE shorthand = $1 AND id <> $2 LIMIT 1`,
+		shorthand, instanceID,
+	).Scan(&existingID)
+	if err != nil {
+		// No conflict (ErrNoRows) or query error.
+		if err == pgx.ErrNoRows {
+			return shorthand, nil
+		}
+		return "", fmt.Errorf("checking shorthand collision: %w", err)
+	}
+
+	// Collision found — try numeric suffixes.
+	for i := 1; i <= 99; i++ {
+		candidate := fmt.Sprintf("%s%d", shorthand, i)
+		if len(candidate) > 5 {
+			// Truncate the base to fit within 5 chars.
+			maxBase := 5 - len(fmt.Sprintf("%d", i))
+			if maxBase < 1 {
+				return "", fmt.Errorf("shorthand %q cannot be resolved within 5-char limit", shorthand)
+			}
+			candidate = fmt.Sprintf("%s%d", shorthand[:maxBase], i)
+		}
+
+		err = s.pool.QueryRow(ctx,
+			`SELECT id FROM instances WHERE shorthand = $1 AND id <> $2 LIMIT 1`,
+			candidate, instanceID,
+		).Scan(&existingID)
+		if err == pgx.ErrNoRows {
+			s.logger.Info("resolved shorthand collision",
+				slog.String("original", shorthand),
+				slog.String("resolved", candidate),
+				slog.String("instance", instanceID))
+			return candidate, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("checking shorthand collision for %q: %w", candidate, err)
+		}
+	}
+
+	return "", fmt.Errorf("could not resolve shorthand collision for %q after 99 attempts", shorthand)
 }
 
 // RefreshPeerKeys re-discovers all active federation peers and updates their
@@ -716,12 +793,21 @@ func (s *Service) HandleDeliveryReceipt(w http.ResponseWriter, r *http.Request) 
 }
 
 // UpdatePeerHealth updates the health status of a federation peer after a
-// successful or failed event exchange.
+// successful or failed event exchange. If the peer transitions from a
+// non-healthy status (degraded, unreachable, unknown) to healthy, it triggers
+// a backfill request via the onPeerRecovered callback.
 func (s *Service) UpdatePeerHealth(ctx context.Context, peerID string, healthy bool, eventLagMs int) {
 	status := "healthy"
 	if !healthy {
 		status = "degraded"
 	}
+
+	// Check previous status to detect recovery transitions.
+	var previousStatus string
+	err := s.pool.QueryRow(ctx,
+		`SELECT status FROM federation_peer_status WHERE peer_id = $1`, peerID,
+	).Scan(&previousStatus)
+	wasUnhealthy := err != nil || (previousStatus != "healthy")
 
 	s.pool.Exec(ctx,
 		`INSERT INTO federation_peer_status (peer_id, instance_id, status, event_lag_ms, last_event_at, updated_at)
@@ -729,6 +815,11 @@ func (s *Service) UpdatePeerHealth(ctx context.Context, peerID string, healthy b
 		 ON CONFLICT (peer_id) DO UPDATE SET
 			status = $3, event_lag_ms = $4, last_event_at = now(), updated_at = now()`,
 		peerID, s.instanceID, status, eventLagMs)
+
+	// Trigger backfill when a peer recovers to healthy from a non-healthy state.
+	if healthy && wasUnhealthy && s.onPeerRecovered != nil {
+		go s.onPeerRecovered(context.Background(), peerID)
+	}
 }
 
 // IncrementPeerEventCount increments the sent/received event counters for a peer.

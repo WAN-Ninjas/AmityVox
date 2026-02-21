@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -32,6 +33,7 @@ type Handler struct {
 	EventBus   *events.Bus
 	InstanceID string
 	Logger     *slog.Logger
+	FedProxy   apiutil.FederationProxy // optional, nil if federation disabled
 }
 
 type createGuildRequest struct {
@@ -265,6 +267,18 @@ func (h *Handler) HandleUpdateGuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "guild_update", userID, req) {
+			return
+		}
+	}
+
 	// If tags were provided, update them; otherwise keep existing.
 	var tagsArg interface{} = nil
 	if req.Tags != nil {
@@ -313,6 +327,18 @@ func (h *Handler) HandleUpdateGuild(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleDeleteGuild(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	guildID := chi.URLParam(r, "guildID")
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "guild_delete", userID, nil) {
+			return
+		}
+	}
 
 	var ownerID string
 	err := h.Pool.QueryRow(r.Context(), `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID)
@@ -495,6 +521,18 @@ func (h *Handler) HandleCreateGuildChannel(w http.ResponseWriter, r *http.Reques
 	var req createChannelRequest
 	if !apiutil.DecodeJSON(w, r, &req) {
 		return
+	}
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "channel_create", userID, req) {
+			return
+		}
 	}
 
 	if req.Name == "" || len(req.Name) > 100 {
@@ -718,6 +756,18 @@ func (h *Handler) HandleUpdateGuildMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "member_update", userID, req) {
+			return
+		}
+	}
+
 	// Permission check: manage nicknames for nickname, manage roles for roles, etc.
 	if req.Nickname != nil && userID != memberID {
 		if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageNicknames) {
@@ -778,6 +828,18 @@ func (h *Handler) HandleRemoveGuildMember(w http.ResponseWriter, r *http.Request
 	userID := auth.UserIDFromContext(r.Context())
 	guildID := chi.URLParam(r, "guildID")
 	memberID := chi.URLParam(r, "memberID")
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "member_remove", userID, map[string]string{"member_id": memberID}) {
+			return
+		}
+	}
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.KickMembers) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need KICK_MEMBERS permission")
@@ -864,6 +926,32 @@ func (h *Handler) HandleCreateGuildBan(w http.ResponseWriter, r *http.Request) {
 	guildID := chi.URLParam(r, "guildID")
 	targetID := chi.URLParam(r, "userID")
 
+	// Decode the ban request body early so it can be forwarded to the home instance.
+	// The body is optional — an empty body is allowed (EOF). Any other decode
+	// error means the JSON is malformed and should be rejected with 400.
+	var req banRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "member_ban", actorID, map[string]interface{}{
+			"user_id":                targetID,
+			"reason":                 req.Reason,
+			"duration_seconds":       req.DurationSeconds,
+			"delete_message_seconds": req.DeleteMessageSeconds,
+		}) {
+			return
+		}
+	}
+
 	if !h.hasGuildPermission(r.Context(), guildID, actorID, permissions.BanMembers) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
 		return
@@ -886,9 +974,6 @@ func (h *Handler) HandleCreateGuildBan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	var req banRequest
-	json.NewDecoder(r.Body).Decode(&req)
 
 	// Compute expiry time for timed bans.
 	var expiresAt *time.Time
@@ -940,6 +1025,18 @@ func (h *Handler) HandleRemoveGuildBan(w http.ResponseWriter, r *http.Request) {
 	actorID := auth.UserIDFromContext(r.Context())
 	guildID := chi.URLParam(r, "guildID")
 	targetID := chi.URLParam(r, "userID")
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "member_unban", actorID, map[string]string{"user_id": targetID}) {
+			return
+		}
+	}
 
 	if !h.hasGuildPermission(r.Context(), guildID, actorID, permissions.BanMembers) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need BAN_MEMBERS permission")
@@ -1021,6 +1118,18 @@ func (h *Handler) HandleCreateGuildRole(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "role_create", userID, req) {
+			return
+		}
+	}
+
 	if req.Name == "" || len(req.Name) > 100 {
 		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Role name must be 1-100 characters")
 		return
@@ -1093,6 +1202,18 @@ func (h *Handler) HandleUpdateGuildRole(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "role_update", userID, req) {
+			return
+		}
+	}
+
 	var role models.Role
 	err := h.Pool.QueryRow(r.Context(),
 		`UPDATE roles SET
@@ -1142,6 +1263,18 @@ func (h *Handler) HandleDeleteGuildRole(w http.ResponseWriter, r *http.Request) 
 	userID := auth.UserIDFromContext(r.Context())
 	guildID := chi.URLParam(r, "guildID")
 	roleID := chi.URLParam(r, "roleID")
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "role_delete", userID, map[string]string{"role_id": roleID}) {
+			return
+		}
+	}
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageRoles) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_ROLES permission")
@@ -1645,6 +1778,19 @@ func (h *Handler) HandleCreateGuildCategory(w http.ResponseWriter, r *http.Reque
 	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "category_create", userID, req) {
+			return
+		}
+	}
+
 	if req.Name == "" || len(req.Name) > 100 {
 		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Category name must be 1-100 characters")
 		return
@@ -1691,6 +1837,18 @@ func (h *Handler) HandleUpdateGuildCategory(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "category_update", userID, req) {
+			return
+		}
+	}
+
 	var cat models.GuildCategory
 	err := h.Pool.QueryRow(r.Context(),
 		`UPDATE guild_categories SET
@@ -1719,6 +1877,18 @@ func (h *Handler) HandleDeleteGuildCategory(w http.ResponseWriter, r *http.Reque
 	guildID := chi.URLParam(r, "guildID")
 	categoryID := chi.URLParam(r, "categoryID")
 	userID := auth.UserIDFromContext(r.Context())
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "category_delete", userID, map[string]string{"category_id": categoryID}) {
+			return
+		}
+	}
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.ManageChannels) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need MANAGE_CHANNELS permission")
@@ -2387,6 +2557,18 @@ func (h *Handler) HandleRemoveMemberRole(w http.ResponseWriter, r *http.Request)
 	guildID := chi.URLParam(r, "guildID")
 	memberID := chi.URLParam(r, "memberID")
 	roleID := chi.URLParam(r, "roleID")
+
+	// Forward to home instance if guild is federated.
+	if h.FedProxy != nil {
+		var instanceID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT instance_id FROM guilds WHERE id = $1`, guildID).Scan(&instanceID); err != nil && err != pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to look up guild")
+			return
+		}
+		if h.FedProxy.ProxyToHomeInstance(w, r, guildID, instanceID, "member_role_remove", userID, map[string]string{"member_id": memberID, "role_id": roleID}) {
+			return
+		}
+	}
 
 	if !h.hasGuildPermission(r.Context(), guildID, userID, permissions.AssignRoles) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need ASSIGN_ROLES permission")

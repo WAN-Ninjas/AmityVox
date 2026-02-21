@@ -538,7 +538,7 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="mt-0.5 shrink-0 cursor-pointer" onclick={(e) => { userPopover = { x: e.clientX, y: e.clientY }; }}>
-			<Avatar name={displayName} src={avatarUrl(message.author?.avatar_id, message.author?.instance_domain)} status={authorPresence} />
+			<Avatar name={displayName} src={avatarUrl(message.author?.avatar_id, message.author?.instance_id || undefined)} status={authorPresence} />
 		</div>
 	{/if}
 

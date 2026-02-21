@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
-	import { loadGuilds as reloadGuilds, addFederatedGuild } from '$lib/stores/guilds';
+	import { loadGuilds as reloadGuilds } from '$lib/stores/guilds';
 	import { addToast } from '$lib/stores/toast';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
 	import type { Guild, FederationPeer } from '$lib/types';
@@ -67,7 +67,9 @@
 		joining = guild.id;
 		try {
 			await api.joinGuild(guild.id);
-			await reloadGuilds();
+			// Best-effort refresh — a stale guild list is acceptable; navigation
+			// must always succeed after a successful join.
+			reloadGuilds().catch(() => {});
 			goto(`/app/guilds/${guild.id}`);
 		} catch (err: any) {
 			error = err.message || 'Failed to join server';
@@ -81,17 +83,11 @@
 		joining = guild.id;
 		try {
 			const resp = await api.joinFederatedGuild(guild.instance_domain, guild.id);
-			addFederatedGuild({
-				guild_id: resp.guild_id,
-				name: resp.name,
-				icon_id: resp.icon_id,
-				description: resp.description,
-				member_count: resp.member_count,
-				channels_json: resp.channels ?? [],
-				roles_json: resp.roles ?? [],
-				instance_domain: guild.instance_domain
-			});
+			// Best-effort refresh — a stale guild list is acceptable; navigation
+			// must always succeed after a successful join.
+			reloadGuilds().catch(() => {});
 			addToast(`Joined ${guild.name} on ${guild.instance_domain}!`, 'success');
+			goto(`/app/guilds/${resp.guild_id}`);
 		} catch (err: any) {
 			remoteError = err.message || 'Failed to join federated server';
 		} finally {

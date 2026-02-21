@@ -228,7 +228,7 @@
 						onclick={() => toggleExpand(member.user_id)}
 						oncontextmenu={(e) => { e.preventDefault(); popover = { userId: member.user_id, x: e.clientX, y: e.clientY }; }}
 					>
-						<Avatar name={member.user?.display_name ?? member.user?.username ?? '?'} src={avatarUrl(member.user?.avatar_id, member.user?.instance_domain)} size="sm" />
+						<Avatar name={member.user?.display_name ?? member.user?.username ?? '?'} src={avatarUrl(member.user?.avatar_id, member.user?.instance_id || undefined)} size="sm" />
 						<div class="min-w-0 flex-1">
 							<div class="flex items-center gap-2">
 								<span class="truncate text-sm font-medium text-text-primary">

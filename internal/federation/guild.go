@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	neturl "net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -87,8 +89,14 @@ type guildJoinResponse struct {
 	IconID       *string         `json:"icon_id,omitempty"`
 	Description  *string         `json:"description,omitempty"`
 	MemberCount  int             `json:"member_count"`
+	OwnerID      string          `json:"owner_id"`
+	InstanceID   string          `json:"instance_id"`
 	ChannelsJSON json.RawMessage `json:"channels"`
 	RolesJSON    json.RawMessage `json:"roles"`
+	// Owner user stub info so the joining instance can create a local user stub.
+	OwnerUsername    string  `json:"owner_username"`
+	OwnerDisplayName *string `json:"owner_display_name,omitempty"`
+	OwnerAvatarID    *string `json:"owner_avatar_id,omitempty"`
 }
 
 // ============================================================
@@ -1032,12 +1040,12 @@ func (ss *SyncService) HandleProxyFederatedTyping(w http.ResponseWriter, r *http
 
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -1119,8 +1127,14 @@ func (ss *SyncService) addInstanceToGuildChannelPeers(ctx context.Context, guild
 func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID string) (*guildJoinResponse, error) {
 	var resp guildJoinResponse
 	err := ss.fed.pool.QueryRow(ctx,
-		`SELECT id, name, icon_id, description, member_count FROM guilds WHERE id = $1`, guildID,
-	).Scan(&resp.GuildID, &resp.Name, &resp.IconID, &resp.Description, &resp.MemberCount)
+		`SELECT g.id, g.name, g.icon_id, g.description, g.member_count, g.owner_id, COALESCE(g.instance_id, ''),
+		        u.username, u.display_name, u.avatar_id
+		 FROM guilds g
+		 JOIN users u ON u.id = g.owner_id
+		 WHERE g.id = $1`, guildID,
+	).Scan(&resp.GuildID, &resp.Name, &resp.IconID, &resp.Description, &resp.MemberCount,
+		&resp.OwnerID, &resp.InstanceID,
+		&resp.OwnerUsername, &resp.OwnerDisplayName, &resp.OwnerAvatarID)
 	if err != nil {
 		return nil, fmt.Errorf("looking up guild: %w", err)
 	}
@@ -1196,10 +1210,10 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 	return &resp, nil
 }
 
-// updateGuildCacheFromEvent updates the local federation_guild_cache when
-// receiving inbound guild-level events from remote instances (GUILD_UPDATE,
-// CHANNEL_CREATE, CHANNEL_DELETE, GUILD_DELETE).
-func (ss *SyncService) updateGuildCacheFromEvent(ctx context.Context, senderID, eventType, guildID string, data json.RawMessage) {
+// updateFederatedGuildFromEvent updates real tables when receiving inbound
+// guild-level events from remote instances (GUILD_UPDATE, CHANNEL_CREATE,
+// CHANNEL_UPDATE, CHANNEL_DELETE, GUILD_DELETE).
+func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, senderID, eventType, guildID string, data json.RawMessage) {
 	switch eventType {
 	case "GUILD_UPDATE":
 		var update struct {
@@ -1211,8 +1225,7 @@ func (ss *SyncService) updateGuildCacheFromEvent(ctx context.Context, senderID, 
 		if json.Unmarshal(data, &update) != nil {
 			return
 		}
-		// Build a single UPDATE with only the changed fields.
-		setClauses := []string{"cached_at = now()"}
+		setClauses := []string{}
 		args := []interface{}{}
 		argN := 1
 		if update.Name != nil {
@@ -1235,23 +1248,194 @@ func (ss *SyncService) updateGuildCacheFromEvent(ctx context.Context, senderID, 
 			args = append(args, *update.MemberCount)
 			argN++
 		}
-		if len(args) > 0 {
-			query := fmt.Sprintf("UPDATE federation_guild_cache SET %s WHERE guild_id = $%d",
+		if len(setClauses) > 0 {
+			query := fmt.Sprintf("UPDATE guilds SET %s WHERE id = $%d",
 				strings.Join(setClauses, ", "), argN)
 			args = append(args, guildID)
-			ss.fed.pool.Exec(ctx, query, args...)
+			if _, err := ss.fed.pool.Exec(ctx, query, args...); err != nil {
+				ss.logger.Warn("failed to update federated guild from event",
+					slog.String("guild_id", guildID), slog.String("error", err.Error()))
+			}
 		}
 
-	case "CHANNEL_CREATE", "CHANNEL_UPDATE", "CHANNEL_DELETE":
-		// Re-fetch channels for this guild and update the cache.
-		// The guild is hosted on the remote instance — rebuild channels_json from local knowledge
-		// when events arrive. For now, mark cache as stale by updating cached_at.
-		ss.fed.pool.Exec(ctx,
-			`UPDATE federation_guild_cache SET cached_at = now() WHERE guild_id = $1`, guildID)
+	case "CHANNEL_CREATE":
+		var ch struct {
+			ID              string  `json:"id"`
+			ChannelType     string  `json:"channel_type"`
+			Name            *string `json:"name"`
+			Topic           *string `json:"topic"`
+			Position        int     `json:"position"`
+			CategoryID      *string `json:"category_id"`
+			ParentChannelID *string `json:"parent_channel_id"`
+			Encrypted       bool    `json:"encrypted"`
+			GuildID         string  `json:"guild_id"`
+		}
+		if json.Unmarshal(data, &ch) != nil {
+			return
+		}
+		if ch.ChannelType == "category" {
+			if _, err := ss.fed.pool.Exec(ctx,
+				`INSERT INTO guild_categories (id, guild_id, name, position)
+				 VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET
+				 name = EXCLUDED.name, position = EXCLUDED.position`,
+				ch.ID, guildID, ch.Name, ch.Position); err != nil {
+				ss.logger.Warn("failed to insert federated category from event",
+					slog.String("id", ch.ID), slog.String("error", err.Error()))
+			}
+		} else {
+			if _, err := ss.fed.pool.Exec(ctx,
+				`INSERT INTO channels (id, guild_id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET
+				 name = EXCLUDED.name, topic = EXCLUDED.topic, position = EXCLUDED.position,
+				 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id,
+				 encrypted = EXCLUDED.encrypted`,
+				ch.ID, guildID, ch.ChannelType, ch.Name, ch.Topic, ch.Position,
+				ch.CategoryID, ch.ParentChannelID, ch.Encrypted); err != nil {
+				ss.logger.Warn("failed to insert federated channel from event",
+					slog.String("id", ch.ID), slog.String("error", err.Error()))
+			}
+		}
+
+	case "CHANNEL_UPDATE":
+		var ch struct {
+			ID              string  `json:"id"`
+			ChannelType     string  `json:"channel_type"`
+			Name            *string `json:"name"`
+			Topic           *string `json:"topic"`
+			Position        *int    `json:"position"`
+			Encrypted       *bool   `json:"encrypted"`
+			CategoryID      *string `json:"category_id"`
+			ParentChannelID *string `json:"parent_channel_id"`
+		}
+		if json.Unmarshal(data, &ch) != nil {
+			return
+		}
+		if ch.ChannelType == "category" {
+			setClauses := []string{}
+			args := []interface{}{}
+			argN := 1
+			if ch.Name != nil {
+				setClauses = append(setClauses, fmt.Sprintf("name = $%d", argN))
+				args = append(args, *ch.Name)
+				argN++
+			}
+			if ch.Position != nil {
+				setClauses = append(setClauses, fmt.Sprintf("position = $%d", argN))
+				args = append(args, *ch.Position)
+				argN++
+			}
+			if len(setClauses) > 0 {
+				query := fmt.Sprintf("UPDATE guild_categories SET %s WHERE id = $%d",
+					strings.Join(setClauses, ", "), argN)
+				args = append(args, ch.ID)
+				ss.fed.pool.Exec(ctx, query, args...)
+			}
+		} else {
+			setClauses := []string{}
+			args := []interface{}{}
+			argN := 1
+			if ch.Name != nil {
+				setClauses = append(setClauses, fmt.Sprintf("name = $%d", argN))
+				args = append(args, *ch.Name)
+				argN++
+			}
+			if ch.Topic != nil {
+				setClauses = append(setClauses, fmt.Sprintf("topic = $%d", argN))
+				args = append(args, *ch.Topic)
+				argN++
+			}
+			if ch.Position != nil {
+				setClauses = append(setClauses, fmt.Sprintf("position = $%d", argN))
+				args = append(args, *ch.Position)
+				argN++
+			}
+			if ch.Encrypted != nil {
+				setClauses = append(setClauses, fmt.Sprintf("encrypted = $%d", argN))
+				args = append(args, *ch.Encrypted)
+				argN++
+			}
+			if ch.CategoryID != nil {
+				setClauses = append(setClauses, fmt.Sprintf("category_id = $%d", argN))
+				args = append(args, *ch.CategoryID)
+				argN++
+			}
+			if ch.ParentChannelID != nil {
+				setClauses = append(setClauses, fmt.Sprintf("parent_channel_id = $%d", argN))
+				args = append(args, *ch.ParentChannelID)
+				argN++
+			}
+			if len(setClauses) > 0 {
+				query := fmt.Sprintf("UPDATE channels SET %s WHERE id = $%d",
+					strings.Join(setClauses, ", "), argN)
+				args = append(args, ch.ID)
+				ss.fed.pool.Exec(ctx, query, args...)
+			}
+		}
+
+	case "CHANNEL_DELETE":
+		var ch struct {
+			ID          string `json:"id"`
+			ChannelType string `json:"channel_type"`
+		}
+		if json.Unmarshal(data, &ch) != nil {
+			return
+		}
+		if ch.ChannelType == "category" {
+			ss.fed.pool.Exec(ctx, `DELETE FROM guild_categories WHERE id = $1`, ch.ID)
+		} else {
+			ss.fed.pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, ch.ID)
+		}
+
+	case "GUILD_MEMBER_ADD":
+		var member struct {
+			GuildID     string  `json:"guild_id"`
+			UserID      string  `json:"user_id"`
+			Username    string  `json:"username"`
+			DisplayName *string `json:"display_name"`
+			AvatarID    *string `json:"avatar_id"`
+		}
+		if json.Unmarshal(data, &member) != nil || member.UserID == "" {
+			return
+		}
+		// Create or update user stub with the sender's instance_id so the user
+		// is correctly marked as federated (instance_id != NULL).
+		ss.ensureRemoteUserStub(ctx, senderID, federatedUserInfo{
+			ID:          member.UserID,
+			Username:    member.Username,
+			DisplayName: member.DisplayName,
+			AvatarID:    member.AvatarID,
+		})
+		// Insert the member into guild_members (idempotent).
+		if _, err := ss.fed.pool.Exec(ctx,
+			`INSERT INTO guild_members (guild_id, user_id, joined_at)
+			 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
+			guildID, member.UserID); err != nil {
+			ss.logger.Warn("failed to insert federated guild member from event",
+				slog.String("guild_id", guildID), slog.String("user_id", member.UserID),
+				slog.String("error", err.Error()))
+		}
+
+	case "GUILD_MEMBER_REMOVE":
+		var member struct {
+			UserID string `json:"user_id"`
+		}
+		if json.Unmarshal(data, &member) != nil || member.UserID == "" {
+			return
+		}
+		if _, err := ss.fed.pool.Exec(ctx,
+			`DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`,
+			guildID, member.UserID); err != nil {
+			ss.logger.Warn("failed to remove federated guild member from event",
+				slog.String("guild_id", guildID), slog.String("user_id", member.UserID),
+				slog.String("error", err.Error()))
+		}
 
 	case "GUILD_DELETE":
-		ss.fed.pool.Exec(ctx,
-			`DELETE FROM federation_guild_cache WHERE guild_id = $1`, guildID)
+		// Cascading deletes via FK will clean up channels, categories, roles, members.
+		if _, err := ss.fed.pool.Exec(ctx, `DELETE FROM guilds WHERE id = $1`, guildID); err != nil {
+			ss.logger.Warn("failed to delete federated guild from event",
+				slog.String("guild_id", guildID), slog.String("error", err.Error()))
+		}
 	}
 }
 
@@ -1329,36 +1513,136 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Cache guild metadata.
+	// Store federated guild data in real tables.
 	var joinResp guildJoinResponse
-	if err := json.Unmarshal(respBody, &joinResp); err == nil && joinResp.GuildID != "" {
-		var remoteInstanceID string
-		if err := ss.fed.pool.QueryRow(ctx,
-			`SELECT id FROM instances WHERE domain = $1`, req.InstanceDomain,
-		).Scan(&remoteInstanceID); err != nil {
-			if disc, err := DiscoverInstance(ctx, req.InstanceDomain); err == nil {
-				ss.fed.RegisterRemoteInstance(ctx, disc)
-				remoteInstanceID = disc.InstanceID
+	if err := json.Unmarshal(respBody, &joinResp); err != nil || joinResp.GuildID == "" {
+		ss.logger.Warn("failed to parse guild join response", slog.String("error", fmt.Sprintf("%v", err)))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(respBody)
+		return
+	}
+
+	// Ensure remote instance is registered locally.
+	var remoteInstanceID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`, req.InstanceDomain,
+	).Scan(&remoteInstanceID); err != nil {
+		disc, discErr := DiscoverInstance(ctx, req.InstanceDomain)
+		if discErr != nil {
+			ss.logger.Error("failed to discover remote instance for guild join",
+				slog.String("domain", req.InstanceDomain), slog.String("error", discErr.Error()))
+			http.Error(w, "Failed to register remote instance", http.StatusBadGateway)
+			return
+		}
+		ss.fed.RegisterRemoteInstance(ctx, disc)
+		remoteInstanceID = disc.InstanceID
+	}
+
+	// Ensure guild owner exists as a local user stub (required by guilds.owner_id FK).
+	ss.ensureRemoteUserStub(ctx, remoteInstanceID, federatedUserInfo{
+		ID:          joinResp.OwnerID,
+		Username:    joinResp.OwnerUsername,
+		DisplayName: joinResp.OwnerDisplayName,
+		AvatarID:    joinResp.OwnerAvatarID,
+	})
+
+	// Insert guild into real guilds table (idempotent via ON CONFLICT DO UPDATE).
+	if _, err := ss.fed.pool.Exec(ctx,
+		`INSERT INTO guilds (id, instance_id, owner_id, name, description, icon_id, member_count, discoverable, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, false, now())
+		 ON CONFLICT (id) DO UPDATE SET
+		   name = EXCLUDED.name, description = EXCLUDED.description, icon_id = EXCLUDED.icon_id,
+		   member_count = EXCLUDED.member_count, owner_id = EXCLUDED.owner_id`,
+		joinResp.GuildID, remoteInstanceID, joinResp.OwnerID,
+		joinResp.Name, joinResp.Description, joinResp.IconID, joinResp.MemberCount,
+	); err != nil {
+		ss.logger.Error("failed to insert federated guild into guilds table",
+			slog.String("guild_id", joinResp.GuildID), slog.String("error", err.Error()))
+		// Still return success to the user — the remote join succeeded.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": joinResp})
+		return
+	}
+
+	// Parse and insert channels (categories go to guild_categories, others to channels).
+	var channels []struct {
+		ID              string  `json:"id"`
+		ChannelType     *string `json:"channel_type"`
+		Name            *string `json:"name"`
+		Topic           *string `json:"topic"`
+		Position        int     `json:"position"`
+		CategoryID      *string `json:"category_id"`
+		ParentChannelID *string `json:"parent_channel_id"`
+		Encrypted       bool    `json:"encrypted"`
+	}
+	if json.Unmarshal(joinResp.ChannelsJSON, &channels) == nil {
+		// Insert categories first (channels may reference them via category_id FK).
+		for _, ch := range channels {
+			if ch.ChannelType != nil && *ch.ChannelType == "category" {
+				if _, err := ss.fed.pool.Exec(ctx,
+					`INSERT INTO guild_categories (id, guild_id, name, position)
+					 VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET
+					 name = EXCLUDED.name, position = EXCLUDED.position`,
+					ch.ID, joinResp.GuildID, ch.Name, ch.Position); err != nil {
+					ss.logger.Warn("failed to insert federated category",
+						slog.String("id", ch.ID), slog.String("error", err.Error()))
+				}
 			}
 		}
-
-		if remoteInstanceID != "" {
-			if _, err := ss.fed.pool.Exec(ctx,
-				`INSERT INTO federation_guild_cache
-				 (guild_id, user_id, instance_id, name, icon_id, description, member_count, channels_json, roles_json, cached_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
-				 ON CONFLICT (guild_id, user_id) DO UPDATE SET
-				   name = EXCLUDED.name, icon_id = EXCLUDED.icon_id,
-				   description = EXCLUDED.description, member_count = EXCLUDED.member_count,
-				   channels_json = EXCLUDED.channels_json, roles_json = EXCLUDED.roles_json, cached_at = now()`,
-				joinResp.GuildID, userID, remoteInstanceID,
-				joinResp.Name, joinResp.IconID, joinResp.Description, joinResp.MemberCount,
-				joinResp.ChannelsJSON, joinResp.RolesJSON,
-			); err != nil {
-				ss.logger.Warn("failed to cache guild metadata", slog.String("error", err.Error()))
+		// Then insert non-category channels.
+		for _, ch := range channels {
+			if ch.ChannelType == nil || *ch.ChannelType != "category" {
+				chType := "text"
+				if ch.ChannelType != nil {
+					chType = *ch.ChannelType
+				}
+				if _, err := ss.fed.pool.Exec(ctx,
+					`INSERT INTO channels (id, guild_id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET
+					 name = EXCLUDED.name, topic = EXCLUDED.topic, position = EXCLUDED.position,
+					 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id`,
+					ch.ID, joinResp.GuildID, chType, ch.Name, ch.Topic, ch.Position,
+					ch.CategoryID, ch.ParentChannelID, ch.Encrypted); err != nil {
+					ss.logger.Warn("failed to insert federated channel",
+						slog.String("id", ch.ID), slog.String("error", err.Error()))
+				}
 			}
 		}
 	}
+
+	// Parse and insert roles.
+	var roles []struct {
+		ID       string  `json:"id"`
+		Name     string  `json:"name"`
+		Color    *string `json:"color"`
+		Position int     `json:"position"`
+	}
+	if json.Unmarshal(joinResp.RolesJSON, &roles) == nil {
+		for _, role := range roles {
+			if _, err := ss.fed.pool.Exec(ctx,
+				`INSERT INTO roles (id, guild_id, name, color, position)
+				 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET
+				 name = EXCLUDED.name, color = EXCLUDED.color, position = EXCLUDED.position`,
+				role.ID, joinResp.GuildID, role.Name, role.Color, role.Position); err != nil {
+				ss.logger.Warn("failed to insert federated role",
+					slog.String("id", role.ID), slog.String("error", err.Error()))
+			}
+		}
+	}
+
+	// Add the joining user as a guild member (idempotent).
+	if _, err := ss.fed.pool.Exec(ctx,
+		`INSERT INTO guild_members (guild_id, user_id, joined_at)
+		 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
+		joinResp.GuildID, userID); err != nil {
+		ss.logger.Warn("failed to insert local user as federated guild member",
+			slog.String("guild_id", joinResp.GuildID), slog.String("error", err.Error()))
+	}
+
+	// Register this instance as a peer for the guild's channels so events route here.
+	ss.addInstanceToGuildChannelPeers(ctx, joinResp.GuildID, ss.fed.instanceID)
 
 	// Wrap in API response envelope for frontend compatibility.
 	w.Header().Set("Content-Type", "application/json")
@@ -1383,14 +1667,15 @@ func (ss *SyncService) HandleProxyLeaveFederatedGuild(w http.ResponseWriter, r *
 
 	ctx := r.Context()
 
+	// Look up the remote instance domain from the real guilds table.
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -1407,8 +1692,31 @@ func (ss *SyncService) HandleProxyLeaveFederatedGuild(w http.ResponseWriter, r *
 		return
 	}
 
+	// Remove the local user from guild_members.
 	ss.fed.pool.Exec(ctx,
-		`DELETE FROM federation_guild_cache WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
+		`DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
+
+	// If no local members remain in this federated guild, clean up the local guild data.
+	// Local users have NULL instance_id, so use IS NULL instead of matching instance_id.
+	var remainingLocalMembers int
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM guild_members gm
+		 JOIN users u ON u.id = gm.user_id
+		 WHERE gm.guild_id = $1 AND u.instance_id IS NULL`,
+		guildID,
+	).Scan(&remainingLocalMembers); err != nil {
+		ss.logger.Warn("failed to count remaining local members in federated guild",
+			slog.String("guild_id", guildID), slog.String("error", err.Error()))
+	} else if remainingLocalMembers == 0 {
+		// No local users remain — remove channel peers and optionally the guild.
+		ss.fed.pool.Exec(ctx,
+			`DELETE FROM federation_channel_peers
+			 WHERE instance_id = $1 AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)`,
+			ss.fed.instanceID, guildID)
+		// Delete the federated guild and its cascaded data (channels, categories, roles, members).
+		// Only delete if instance_id IS NOT NULL to prevent accidentally deleting local guilds.
+		ss.fed.pool.Exec(ctx, `DELETE FROM guilds WHERE id = $1 AND instance_id IS NOT NULL`, guildID)
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1433,12 +1741,12 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMessages(w http.ResponseWrite
 
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -1501,12 +1809,12 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -1769,12 +2077,12 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -1873,12 +2181,12 @@ func (ss *SyncService) HandleProxyAddFederatedReaction(w http.ResponseWriter, r 
 
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -1923,12 +2231,12 @@ func (ss *SyncService) HandleProxyRemoveFederatedReaction(w http.ResponseWriter,
 
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT i.domain FROM federation_guild_cache fgc
-		 JOIN instances i ON i.id = fgc.instance_id
-		 WHERE fgc.guild_id = $1 AND fgc.user_id = $2`,
-		guildID, userID,
+		`SELECT i.domain FROM guilds g
+		 JOIN instances i ON i.id = g.instance_id
+		 WHERE g.id = $1`,
+		guildID,
 	).Scan(&instanceDomain); err != nil {
-		http.Error(w, "Guild not found in federation cache", http.StatusNotFound)
+		http.Error(w, "Guild not found", http.StatusNotFound)
 		return
 	}
 
@@ -2043,4 +2351,244 @@ func (ss *SyncService) HandleProxyEnsureFederatedUser(w http.ResponseWriter, r *
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Aggregated Guild Discovery ---
+
+// aggregatedDiscoverGuild is a single guild in the aggregated discover response.
+// Local guilds have empty InstanceID/InstanceDomain/InstanceShorthand.
+type aggregatedDiscoverGuild struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Description       *string  `json:"description,omitempty"`
+	IconID            *string  `json:"icon_id,omitempty"`
+	BannerID          *string  `json:"banner_id,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	MemberCount       int      `json:"member_count"`
+	CreatedAt         string   `json:"created_at"`
+	InstanceID        string   `json:"instance_id,omitempty"`
+	InstanceDomain    string   `json:"instance_domain,omitempty"`
+	InstanceShorthand string   `json:"instance_shorthand,omitempty"`
+}
+
+// HandleAggregatedDiscover fans out guild discovery to all active federation
+// peers in parallel, merges results with local discoverable guilds, deduplicates,
+// sorts by member_count DESC, and returns a unified list.
+// GET /api/v1/federation/discover?q=&tag=&limit=
+func (ss *SyncService) HandleAggregatedDiscover(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	tag := r.URL.Query().Get("tag")
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	ctx := r.Context()
+
+	// 1. Query local discoverable guilds (instance_id IS NULL = local only).
+	localGuilds := ss.queryLocalDiscoverableGuilds(ctx, query, tag, limit)
+
+	// 2. Get all active federation peers.
+	type peerInfo struct {
+		id        string
+		domain    string
+		shorthand *string
+	}
+
+	peerRows, err := ss.fed.pool.Query(ctx,
+		`SELECT fp.peer_id, i.domain, i.shorthand
+		 FROM federation_peers fp
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fp.instance_id = $1 AND fp.status = 'active'`,
+		ss.fed.instanceID)
+	if err != nil {
+		ss.logger.Error("aggregated discover: failed to query peers", slog.String("error", err.Error()))
+		// Still return local results even if peer query fails.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": localGuilds})
+		return
+	}
+	defer peerRows.Close()
+
+	var peers []peerInfo
+	for peerRows.Next() {
+		var p peerInfo
+		if err := peerRows.Scan(&p.id, &p.domain, &p.shorthand); err != nil {
+			ss.logger.Warn("aggregated discover: failed to scan peer row", slog.String("error", err.Error()))
+			continue
+		}
+		peers = append(peers, p)
+	}
+
+	// 3. Fan out signed discovery requests to all peers in parallel.
+	type peerResult struct {
+		guilds []aggregatedDiscoverGuild
+	}
+	results := make(chan peerResult, len(peers))
+
+	var wg sync.WaitGroup
+	for _, peer := range peers {
+		wg.Add(1)
+		go func(p peerInfo) {
+			defer wg.Done()
+
+			peerCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			// Build remote discover URL with query params.
+			remoteQuery := neturl.Values{}
+			if query != "" {
+				remoteQuery.Set("q", query)
+			}
+			if tag != "" {
+				remoteQuery.Set("tag", tag)
+			}
+			remoteQuery.Set("limit", strconv.Itoa(limit))
+
+			remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/discover?%s", p.domain, remoteQuery.Encode())
+
+			// Sign and POST using existing signAndPost method.
+			respBody, statusCode, err := ss.signAndPost(peerCtx, remoteURL, map[string]string{"action": "discover"})
+			if err != nil {
+				ss.logger.Warn("aggregated discover: peer request failed",
+					slog.String("peer", p.domain), slog.String("error", err.Error()))
+				return
+			}
+			if statusCode != http.StatusOK {
+				ss.logger.Warn("aggregated discover: peer returned non-200",
+					slog.String("peer", p.domain), slog.Int("status", statusCode))
+				return
+			}
+
+			// Parse remote guilds — try bare array first, then data envelope.
+			var rawGuilds []json.RawMessage
+			if err := json.Unmarshal(respBody, &rawGuilds); err != nil {
+				var envelope struct {
+					Data []json.RawMessage `json:"data"`
+				}
+				if err2 := json.Unmarshal(respBody, &envelope); err2 != nil {
+					ss.logger.Warn("aggregated discover: failed to parse peer response",
+						slog.String("peer", p.domain), slog.String("error", err2.Error()))
+					return
+				}
+				rawGuilds = envelope.Data
+			}
+
+			// Enrich each guild with instance info.
+			shorthand := ""
+			if p.shorthand != nil {
+				shorthand = *p.shorthand
+			}
+
+			var enriched []aggregatedDiscoverGuild
+			for _, raw := range rawGuilds {
+				var g aggregatedDiscoverGuild
+				if err := json.Unmarshal(raw, &g); err != nil {
+					continue
+				}
+				g.InstanceID = p.id
+				g.InstanceDomain = p.domain
+				g.InstanceShorthand = shorthand
+				enriched = append(enriched, g)
+			}
+
+			results <- peerResult{guilds: enriched}
+		}(peer)
+	}
+
+	// Close channel when all goroutines complete.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// 4. Collect all results: local guilds first, then remote.
+	allGuilds := make([]aggregatedDiscoverGuild, 0, len(localGuilds)+len(peers)*limit)
+	allGuilds = append(allGuilds, localGuilds...)
+	for pr := range results {
+		allGuilds = append(allGuilds, pr.guilds...)
+	}
+
+	// 5. Deduplicate by (instance_id + guild_id). Empty instance_id = local.
+	seen := make(map[string]bool, len(allGuilds))
+	deduped := make([]aggregatedDiscoverGuild, 0, len(allGuilds))
+	for _, g := range allGuilds {
+		key := g.InstanceID + ":" + g.ID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		deduped = append(deduped, g)
+	}
+
+	// 6. Sort by member_count DESC.
+	sort.Slice(deduped, func(i, j int) bool {
+		return deduped[i].MemberCount > deduped[j].MemberCount
+	})
+
+	// 7. Apply limit.
+	if len(deduped) > limit {
+		deduped = deduped[:limit]
+	}
+
+	// 8. Return.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": deduped})
+}
+
+// queryLocalDiscoverableGuilds queries the local database for discoverable
+// guilds that are owned by this instance (instance_id IS NULL).
+func (ss *SyncService) queryLocalDiscoverableGuilds(ctx context.Context, query, tag string, limit int) []aggregatedDiscoverGuild {
+	baseSQL := `SELECT g.id, g.name, g.description, g.icon_id, g.banner_id,
+	            g.tags, g.member_count, g.created_at
+	     FROM guilds g
+	     WHERE g.discoverable = true AND g.instance_id IS NULL`
+
+	argN := 1
+	var args []interface{}
+	if query != "" {
+		baseSQL += fmt.Sprintf(` AND g.name ILIKE '%%' || $%d || '%%'`, argN)
+		args = append(args, query)
+		argN++
+	}
+	if tag != "" && tag != "All" {
+		baseSQL += fmt.Sprintf(` AND $%d = ANY(g.tags)`, argN)
+		args = append(args, tag)
+		argN++
+	}
+	baseSQL += fmt.Sprintf(` ORDER BY g.member_count DESC LIMIT $%d`, argN)
+	args = append(args, limit)
+
+	rows, err := ss.fed.pool.Query(ctx, baseSQL, args...)
+	if err != nil {
+		ss.logger.Error("aggregated discover: failed to query local guilds", slog.String("error", err.Error()))
+		return nil
+	}
+	defer rows.Close()
+
+	guilds := make([]aggregatedDiscoverGuild, 0)
+	for rows.Next() {
+		var g aggregatedDiscoverGuild
+		var tags []string
+		var createdAt time.Time
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.IconID, &g.BannerID,
+			&tags, &g.MemberCount, &createdAt); err != nil {
+			ss.logger.Error("aggregated discover: failed to scan local guild", slog.String("error", err.Error()))
+			continue
+		}
+		g.Tags = tags
+		g.CreatedAt = createdAt.Format(time.RFC3339)
+		// InstanceID/InstanceDomain/InstanceShorthand left empty for local guilds.
+		guilds = append(guilds, g)
+	}
+
+	return guilds
 }

@@ -166,6 +166,14 @@
 	let savingSearch = $state(false);
 	let deliveryFilter = $state('');
 
+	// Config form state
+	let configFedMode = $state('open');
+	let configShorthand = $state('');
+	let configVoiceMode = $state('direct');
+	let configName = $state('');
+	let configDescription = $state('');
+	let savingConfig = $state(false);
+
 	// --- Data loading ---
 	async function loadDashboard() {
 		loading = true;
@@ -176,6 +184,38 @@
 			error = e.message || 'Failed to load federation dashboard';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadConfig() {
+		try {
+			const inst = await adminGet<any>('/admin/instance');
+			configFedMode = inst.federation_mode || 'open';
+			configShorthand = inst.shorthand || '';
+			configVoiceMode = inst.voice_mode || 'direct';
+			configName = inst.name || '';
+			configDescription = inst.description || '';
+		} catch {
+			// Non-critical — config section will use defaults
+		}
+	}
+
+	async function saveConfig() {
+		savingConfig = true;
+		try {
+			await adminPatch('/admin/instance', {
+				federation_mode: configFedMode,
+				shorthand: configShorthand || null,
+				voice_mode: configVoiceMode,
+				name: configName || null,
+				description: configDescription || null,
+			});
+			addToast('Federation config saved', 'success');
+			await loadDashboard();
+		} catch (e: any) {
+			addToast(e.message || 'Failed to save config', 'error');
+		} finally {
+			savingConfig = false;
 		}
 	}
 
@@ -327,6 +367,7 @@
 
 	onMount(() => {
 		loadDashboard();
+		loadConfig();
 	});
 
 	// Load tab-specific data.
@@ -416,17 +457,47 @@
 				</div>
 			</div>
 
-			<!-- Federation Mode -->
-			<div class="bg-bg-secondary p-4 rounded-lg mb-6">
-				<div class="flex items-center gap-3">
-					<span class="text-text-muted text-sm">Federation Mode:</span>
-					<span class="px-3 py-1 rounded-full text-sm font-medium {dashboard.federation_mode === 'open'
-						? 'bg-green-500/20 text-green-400'
-						: dashboard.federation_mode === 'allowlist'
-						? 'bg-yellow-500/20 text-yellow-400'
-						: 'bg-red-500/20 text-red-400'}">
-						{dashboard.federation_mode}
-					</span>
+			<!-- Federation Config -->
+			<div class="rounded-lg bg-bg-secondary p-6 mb-6">
+				<h3 class="text-lg font-semibold text-text-primary mb-4">Federation Config</h3>
+				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+					<div>
+						<label class="block text-sm font-medium text-text-muted mb-1">Federation Mode</label>
+						<select bind:value={configFedMode} class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary">
+							<option value="open">Open</option>
+							<option value="allowlist">Allowlist</option>
+							<option value="closed">Closed</option>
+						</select>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-text-muted mb-1">Voice Mode</label>
+						<select bind:value={configVoiceMode} class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary">
+							<option value="direct">Direct</option>
+							<option value="relay">Relay</option>
+						</select>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-text-muted mb-1">Instance Shorthand</label>
+						<input type="text" bind:value={configShorthand} maxlength="5" placeholder="e.g. DEV"
+							class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary" />
+						<p class="mt-1 text-xs text-text-muted">Max 5 characters. Shown as badge on federated content.</p>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-text-muted mb-1">Instance Name</label>
+						<input type="text" bind:value={configName} placeholder="My Instance"
+							class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary" />
+					</div>
+					<div class="sm:col-span-2">
+						<label class="block text-sm font-medium text-text-muted mb-1">Description</label>
+						<textarea bind:value={configDescription} rows="2" placeholder="A brief description of this instance"
+							class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary resize-none"></textarea>
+					</div>
+				</div>
+				<div class="mt-4 flex justify-end">
+					<button onclick={saveConfig} disabled={savingConfig}
+						class="rounded-md bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50">
+						{savingConfig ? 'Saving...' : 'Save Config'}
+					</button>
 				</div>
 			</div>
 

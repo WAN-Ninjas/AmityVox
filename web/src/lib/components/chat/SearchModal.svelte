@@ -139,7 +139,7 @@
 					<div class="flex items-center gap-2 text-xs">
 						<Avatar
 							name={msg.author?.display_name ?? msg.author?.username ?? 'U'}
-							src={avatarUrl(msg.author?.avatar_id, msg.author?.instance_domain)}
+							src={avatarUrl(msg.author?.avatar_id, msg.author?.instance_id || undefined)}
 							size="sm"
 						/>
 						<span class="font-medium text-text-primary">

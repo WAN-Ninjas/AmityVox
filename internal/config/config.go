@@ -36,7 +36,9 @@ type Config struct {
 
 // FederationConfig defines federation security settings.
 type FederationConfig struct {
-	EnforceIPCheck bool `toml:"enforce_ip_check"`
+	EnforceIPCheck bool   `toml:"enforce_ip_check"`
+	Shorthand      string `toml:"shorthand"`
+	VoiceMode      string `toml:"voice_mode"`
 }
 
 // GiphyConfig defines Giphy API integration settings.
@@ -265,6 +267,9 @@ func defaults() Config {
 			Enabled: true,
 			Listen:  "0.0.0.0:9090",
 		},
+		Federation: FederationConfig{
+			VoiceMode: "direct",
+		},
 	}
 }
 
@@ -462,6 +467,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("AMITYVOX_FEDERATION_ENFORCE_IP_CHECK"); v != "" {
 		cfg.Federation.EnforceIPCheck = v == "true" || v == "1"
 	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_SHORTHAND"); v != "" {
+		cfg.Federation.Shorthand = v
+	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_VOICE_MODE"); v != "" {
+		cfg.Federation.VoiceMode = v
+	}
 
 	// Giphy
 	if v := os.Getenv("AMITYVOX_GIPHY_ENABLED"); v != "" {
@@ -526,6 +537,15 @@ func validate(cfg *Config) error {
 	validFedModes := map[string]bool{"open": true, "allowlist": true, "closed": true}
 	if !validFedModes[cfg.Instance.FederationMode] {
 		return fmt.Errorf("config: instance.federation_mode must be one of: open, allowlist, closed (got %q)", cfg.Instance.FederationMode)
+	}
+
+	if len(cfg.Federation.Shorthand) > 5 {
+		return fmt.Errorf("config: federation.shorthand must be at most 5 characters (got %d)", len(cfg.Federation.Shorthand))
+	}
+
+	validVoiceModes := map[string]bool{"direct": true, "relay": true}
+	if !validVoiceModes[cfg.Federation.VoiceMode] {
+		return fmt.Errorf("config: federation.voice_mode must be one of: direct, relay (got %q)", cfg.Federation.VoiceMode)
 	}
 
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

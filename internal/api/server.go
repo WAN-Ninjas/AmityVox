@@ -72,8 +72,9 @@ type Server struct {
 	InstanceID string
 	Version     string
 	Logger      *slog.Logger
-	FedSvc      *federation.Service // exposed for admin federation handlers
-	UserHandler *users.Handler      // exposed for federation wiring
+	FedSvc      *federation.Service       // exposed for admin federation handlers
+	FedProxy    apiutil.FederationProxy  // optional, set after sync service creation
+	UserHandler *users.Handler           // exposed for federation wiring
 	server      *http.Server
 }
 
@@ -176,11 +177,13 @@ func (s *Server) registerRoutes() {
 		EventBus:   s.EventBus,
 		InstanceID: s.InstanceID,
 		Logger:     s.Logger,
+		FedProxy:   s.FedProxy,
 	}
 	channelH := &channels.Handler{
 		Pool:     s.DB.Pool,
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
+		FedProxy: s.FedProxy,
 	}
 	inviteH := &invites.Handler{
 		Pool:       s.DB.Pool,
@@ -1126,6 +1129,9 @@ widgetH := &widgets.Handler{
 			if s.Media != nil {
 				r.Get("/files/{fileID}", s.Media.HandleGetFile)
 			}
+
+			// Federation media proxy — streams remote instance media to avoid CORS issues.
+			r.Get("/federation/media/{instanceId}/{fileId}", s.handleFederationMediaProxy)
 
 			r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
 		})

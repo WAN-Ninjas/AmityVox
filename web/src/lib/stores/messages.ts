@@ -12,12 +12,10 @@ export function getChannelMessages(channelId: string) {
 	return derived(messagesByChannel, ($map) => $map.get(channelId) ?? []);
 }
 
-export async function loadMessages(channelId: string, before?: string, federatedGuildId?: string | null) {
+export async function loadMessages(channelId: string, before?: string) {
 	isLoadingMessages.set(true);
 	try {
-		const msgs = federatedGuildId
-			? await api.getFederatedGuildMessages(federatedGuildId, channelId, { before, limit: 50 })
-			: await api.getMessages(channelId, { before, limit: 50 });
+		const msgs = await api.getMessages(channelId, { before, limit: 50 });
 		messagesByChannel.update((map) => {
 			const existing = map.get(channelId) ?? [];
 			// Merge, deduplicate by ID, sort by created_at.
