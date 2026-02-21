@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Guild, GuildFolder as GuildFolderType } from '$lib/types';
 	import { removeGuildFolder, loadGuildFolders } from '$lib/stores/guilds';
+	import { currentUser } from '$lib/stores/auth';
+	import { fileUrl } from '$lib/utils/avatar';
 	import { addToast } from '$lib/stores/toast';
 	import { api } from '$lib/api/client';
 
@@ -63,7 +65,7 @@
 				>
 					{#if guild.icon_id}
 						<img
-							src="/api/v1/files/{guild.icon_id}"
+							src={fileUrl(guild.icon_id, guild.instance_id && $currentUser && guild.instance_id !== $currentUser.instance_id ? guild.instance_id : null)}
 							alt={guild.name}
 							class="h-full w-full rounded-[inherit] object-cover"
 						/>
@@ -93,7 +95,7 @@
 					{#each previewGuilds as guild (guild.id)}
 						{#if guild.icon_id}
 							<img
-								src="/api/v1/files/{guild.icon_id}"
+								src={fileUrl(guild.icon_id, guild.instance_id && $currentUser && guild.instance_id !== $currentUser.instance_id ? guild.instance_id : null)}
 								alt=""
 								class="h-full w-full object-cover"
 							/>

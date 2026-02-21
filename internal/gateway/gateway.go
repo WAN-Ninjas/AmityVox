@@ -110,6 +110,7 @@ type Server struct {
 	heartbeatTimeout  time.Duration
 	listenAddr        string
 	buildVersion      string
+	localInstanceID   string // local instance ID for distinguishing federated guilds
 	logger            *slog.Logger
 
 	clients   map[*Client]struct{}
@@ -138,6 +139,7 @@ type ServerConfig struct {
 	HeartbeatTimeout  time.Duration
 	ListenAddr        string
 	BuildVersion      string
+	LocalInstanceID   string // local instance ID for distinguishing federated guilds
 	Logger            *slog.Logger
 	CORSOrigins       []string // Allowed WebSocket origin patterns; empty = allow all.
 }
@@ -159,6 +161,7 @@ func NewServer(cfg ServerConfig) *Server {
 		heartbeatTimeout:  cfg.HeartbeatTimeout,
 		listenAddr:        cfg.ListenAddr,
 		buildVersion:      cfg.BuildVersion,
+		localInstanceID:   cfg.LocalInstanceID,
 		logger:            cfg.Logger,
 		clients:           make(map[*Client]struct{}),
 		userClients:       make(map[string]map[*Client]struct{}),
@@ -394,21 +397,8 @@ func (s *Server) loadGuildMemberships(ctx context.Context, client *Client) {
 			client.guildIDs[guildID] = true
 		}
 	}
-
-	// Also load federated guild IDs so events for remote guilds are dispatched.
-	fedRows, err := s.pool.Query(ctx,
-		`SELECT guild_id FROM federation_guild_cache WHERE user_id = $1`, client.userID)
-	if err != nil {
-		s.logger.Warn("failed to load federated guild memberships", slog.String("error", err.Error()))
-		return
-	}
-	defer fedRows.Close()
-	for fedRows.Next() {
-		var guildID string
-		if fedRows.Scan(&guildID) == nil {
-			client.guildIDs[guildID] = true
-		}
-	}
+	// Federated guild memberships are stored in the real guild_members table,
+	// so the query above already includes them.
 }
 
 // loadFriendships queries the database to populate the client's friend list
@@ -600,32 +590,35 @@ func (s *Server) waitForIdentify(ctx context.Context, client *Client) error {
 		}
 	}
 
-	// Load federated guild metadata for sidebar display.
+	// Load federated guild metadata from real tables for sidebar display.
+	// Federated guilds are those where g.instance_id differs from the local instance.
 	federatedGuilds := make([]map[string]interface{}, 0)
-	if s.pool != nil {
+	if s.pool != nil && s.localInstanceID != "" {
 		fgRows, err := s.pool.Query(ctx,
-			`SELECT fgc.guild_id, fgc.name, fgc.icon_id, fgc.description,
-			        fgc.member_count, fgc.channels_json, fgc.roles_json, i.domain
-			 FROM federation_guild_cache fgc
-			 JOIN instances i ON i.id = fgc.instance_id
-			 WHERE fgc.user_id = $1`, userID)
+			`SELECT g.id, g.name, g.icon_id, g.description, g.member_count, i.domain
+			 FROM guild_members gm
+			 JOIN guilds g ON g.id = gm.guild_id
+			 JOIN instances i ON i.id = g.instance_id
+			 WHERE gm.user_id = $1 AND g.instance_id <> $2`, userID, s.localInstanceID)
 		if err == nil {
 			defer fgRows.Close()
 			for fgRows.Next() {
 				var guildID, name, domain string
 				var iconID, description *string
 				var memberCount int
-				var channelsJSON, rolesJSON json.RawMessage
 				if fgRows.Scan(&guildID, &name, &iconID, &description,
-					&memberCount, &channelsJSON, &rolesJSON, &domain) == nil {
+					&memberCount, &domain) == nil {
+					// Build channels_json and roles_json from real tables.
+					channelsJSON := s.buildFederatedChannelsJSON(ctx, guildID)
+					rolesJSON := s.buildFederatedRolesJSON(ctx, guildID)
 					federatedGuilds = append(federatedGuilds, map[string]interface{}{
-						"guild_id":      guildID,
-						"name":          name,
-						"icon_id":       iconID,
-						"description":   description,
-						"member_count":  memberCount,
-						"channels_json": channelsJSON,
-						"roles_json":    rolesJSON,
+						"guild_id":        guildID,
+						"name":            name,
+						"icon_id":         iconID,
+						"description":     description,
+						"member_count":    memberCount,
+						"channels_json":   channelsJSON,
+						"roles_json":      rolesJSON,
 						"instance_domain": domain,
 					})
 				}
@@ -1356,6 +1349,93 @@ func (s *Server) hasChannelAccess(ctx context.Context, client *Client, channelID
 		`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
 		channelID, client.userID).Scan(&isRecipient)
 	return isRecipient
+}
+
+// buildFederatedChannelsJSON assembles channels_json from real tables for a federated guild.
+func (s *Server) buildFederatedChannelsJSON(ctx context.Context, guildID string) json.RawMessage {
+	channels := make([]map[string]interface{}, 0)
+
+	// Load categories as synthetic "category" channel entries.
+	catRows, err := s.pool.Query(ctx,
+		`SELECT id, name, position FROM guild_categories WHERE guild_id = $1 ORDER BY position`, guildID)
+	if err != nil {
+		s.logger.Error("buildFederatedChannelsJSON: failed to query categories",
+			slog.String("guild_id", guildID), slog.String("error", err.Error()))
+	} else {
+		defer catRows.Close()
+		for catRows.Next() {
+			var id, name string
+			var position int
+			if catRows.Scan(&id, &name, &position) == nil {
+				channels = append(channels, map[string]interface{}{
+					"id": id, "channel_type": "category", "name": name,
+					"topic": nil, "position": position, "category_id": nil,
+				})
+			}
+		}
+	}
+
+	// Load non-private channels.
+	chRows, err := s.pool.Query(ctx,
+		`SELECT id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted
+		 FROM channels
+		 WHERE guild_id = $1 AND (channel_type <> 'private' OR channel_type IS NULL)
+		 ORDER BY position`, guildID)
+	if err != nil {
+		s.logger.Error("buildFederatedChannelsJSON: failed to query channels",
+			slog.String("guild_id", guildID), slog.String("error", err.Error()))
+	} else {
+		defer chRows.Close()
+		for chRows.Next() {
+			var id string
+			var channelType *string
+			var name, topic *string
+			var position int
+			var categoryID, parentChannelID *string
+			var encrypted bool
+			if chRows.Scan(&id, &channelType, &name, &topic, &position, &categoryID, &parentChannelID, &encrypted) == nil {
+				channels = append(channels, map[string]interface{}{
+					"id": id, "channel_type": channelType, "name": name, "topic": topic,
+					"position": position, "category_id": categoryID,
+					"parent_channel_id": parentChannelID, "encrypted": encrypted,
+				})
+			}
+		}
+	}
+
+	data, _ := json.Marshal(channels)
+	if data == nil {
+		return json.RawMessage("[]")
+	}
+	return data
+}
+
+// buildFederatedRolesJSON assembles roles_json from real tables for a federated guild.
+func (s *Server) buildFederatedRolesJSON(ctx context.Context, guildID string) json.RawMessage {
+	roles := make([]map[string]interface{}, 0)
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, color, position FROM roles WHERE guild_id = $1 ORDER BY position`, guildID)
+	if err != nil {
+		s.logger.Error("buildFederatedRolesJSON: failed to query roles",
+			slog.String("guild_id", guildID), slog.String("error", err.Error()))
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var id, name string
+			var color *string
+			var position int
+			if rows.Scan(&id, &name, &color, &position) == nil {
+				roles = append(roles, map[string]interface{}{
+					"id": id, "name": name, "color": color, "position": position,
+				})
+			}
+		}
+	}
+	data, _ := json.Marshal(roles)
+	if data == nil {
+		return json.RawMessage("[]")
+	}
+	return data
 }
 
 // ClientCount returns the number of currently connected clients.

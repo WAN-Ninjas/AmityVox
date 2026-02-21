@@ -70,10 +70,10 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 	if guildID != nil {
 		var remoteInstanceDomain *string
 		s.DB.Pool.QueryRow(r.Context(),
-			`SELECT i.domain FROM federation_guild_cache fgc
-			 JOIN instances i ON i.id = fgc.instance_id
-			 WHERE fgc.guild_id = $1 AND fgc.user_id = $2 LIMIT 1`,
-			*guildID, userID,
+			`SELECT i.domain FROM guilds g
+			 JOIN instances i ON i.id = g.instance_id
+			 WHERE g.id = $1 AND g.instance_id <> $2`,
+			*guildID, s.InstanceID,
 		).Scan(&remoteInstanceDomain)
 		if remoteInstanceDomain != nil {
 			// This is a federated guild — return redirect info for the client

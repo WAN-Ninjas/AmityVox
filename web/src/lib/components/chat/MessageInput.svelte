@@ -16,12 +16,6 @@
 	import MentionAutocomplete from '$components/chat/MentionAutocomplete.svelte';
 	import type { Sticker } from '$lib/types';
 
-	interface Props {
-		federatedGuildId?: string | null;
-	}
-
-	let { federatedGuildId = null }: Props = $props();
-
 	let content = $state('');
 	let inputEl: HTMLTextAreaElement;
 	let typingTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -196,9 +190,7 @@
 				}
 			}
 
-			const sent = federatedGuildId
-				? await api.sendFederatedGuildMessage(federatedGuildId, channelId, sendContent, { reply_to_ids: opts.reply_to_ids })
-				: await api.sendMessage(channelId, sendContent, opts);
+			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
 		} catch (e) {
 			content = msg;
@@ -810,7 +802,7 @@
 				{/if}
 
 				<!-- File upload -->
-				{#if !isEditing && !federatedGuildId}
+				{#if !isEditing}
 					<label class="flex cursor-pointer items-center justify-center text-text-muted hover:text-text-primary">
 						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 							<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
@@ -838,7 +830,6 @@
 				<!-- Right-side icon toolbar -->
 				{#if !isEditing}
 				<div class="flex items-center gap-2">
-					{#if !federatedGuildId}
 					<button
 						class="hidden items-center justify-center transition-colors md:flex {silentMode ? 'text-yellow-500 hover:text-yellow-400' : 'text-text-muted hover:text-text-primary'}"
 						title={silentMode ? 'Silent mode on (click to disable)' : 'Send silently (no notifications)'}
@@ -939,7 +930,6 @@
 						{/if}
 					</div>
 
-				{/if}
 				<!-- Emoji picker button -->
 					<div class="emoji-picker relative">
 						<button
@@ -960,7 +950,6 @@
 					</div>
 
 				<!-- Voice message button — desktop only -->
-				{#if !federatedGuildId}
 					<button
 						class="hidden items-center justify-center text-text-muted hover:text-text-primary md:flex"
 						title="Record voice message"
@@ -978,7 +967,6 @@
 						</svg>
 					</button>
 
-					{/if}
 			<!-- Mobile "+" overflow button -->
 					<div class="relative md:hidden">
 						<button
@@ -1059,9 +1047,6 @@
 					<span class="text-2xs text-text-muted">Esc cancel · Enter save</span>
 				{/if}
 			</div>
-		{/if}
-		{#if federatedGuildId}
-			<p class="mt-1 text-center text-2xs text-text-muted">Federated server — some features unavailable</p>
 		{/if}
 	</div>
 {/if}

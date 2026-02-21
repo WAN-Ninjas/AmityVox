@@ -88,3 +88,14 @@ format = "json"  # json, text
 [metrics]
 enabled = true
 listen = "0.0.0.0:9090"  # Prometheus endpoint
+
+[federation]
+# enforce_ip_check validates that federation requests come from IPs matching the sender domain.
+enforce_ip_check = false
+# shorthand is a short label (max 5 chars) displayed as a badge on federated guilds/users.
+# Leave empty to auto-derive from the domain name. Example: "AV", "HOME"
+shorthand = ""
+# voice_mode controls how voice traffic is routed for federated calls.
+# "direct" = clients connect directly to the remote instance's LiveKit server.
+# "relay"  = voice traffic is proxied through the local instance (adds latency, preserves privacy).
+voice_mode = "direct"

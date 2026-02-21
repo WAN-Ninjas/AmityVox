@@ -303,12 +303,17 @@ func runServe() error {
 		Logger: logger,
 	})
 
+	// Create federation sync service (message routing between instances).
+	// Created before the API server so handlers can use it for write-routing.
+	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
+
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)
 	srv.Encryption = encryptionSvc
 	srv.AutoMod = automodSvc
 	srv.Notifications = notifSvc
 	srv.FedSvc = fedSvc
+	srv.FedProxy = syncSvc
 	srv.Version = version
 
 	// Register API routes after all optional services are set.
@@ -319,19 +324,27 @@ func runServe() error {
 	srv.Router.With(fedRL).Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
 	srv.Router.With(fedRL).Post("/federation/v1/handshake", fedSvc.HandleHandshake)
 
-	// Create and start federation sync service (message routing between instances).
-	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
-
 	// Wire voice service into federation sync for federated voice token generation.
 	if voiceSvc != nil {
 		syncSvc.SetVoiceService(voiceSvc, srv.Config.LiveKit.PublicURL)
 	}
 
+	// Wire backfill trigger: when a peer recovers to healthy, request missed events.
+	fedSvc.SetOnPeerRecovered(func(ctx context.Context, peerID string) {
+		if err := syncSvc.RequestBackfill(ctx, peerID); err != nil {
+			logger.Error("federation backfill failed",
+				slog.String("peer_id", peerID),
+				slog.String("error", err.Error()))
+		}
+	})
+
 	// Signed federation endpoints — no rate limit. These verify Ed25519 signatures
 	// from authenticated peers, so IP-based rate limiting is unnecessary and causes
 	// 429 errors that break real-time event delivery between instances.
 	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	srv.Router.Post("/federation/v1/sync", syncSvc.HandleSync)
 	srv.Router.Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
+	srv.Router.Post("/federation/v1/users/{userID}/profile", syncSvc.HandleUserProfile)
 
 	// Wire federation DM notifier into the users handler.
 	if cfg.Instance.FederationMode != "closed" && srv.UserHandler != nil {
@@ -355,6 +368,11 @@ func runServe() error {
 	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
 	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)
 	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/typing", syncSvc.HandleFederatedGuildTyping)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/manage", syncSvc.HandleManage)
+
+	// Federation invite endpoints (resolve is public GET, accept is signed POST).
+	srv.Router.Get("/federation/v1/invites/{code}", syncSvc.HandleInviteResolve)
+	srv.Router.Post("/federation/v1/invites/{code}/accept", syncSvc.HandleInviteAccept)
 
 	// Federation guild proxy endpoints (authenticated, for local users accessing remote guilds).
 	srv.Router.Route("/api/v1/federation/guilds", func(r chi.Router) {
@@ -375,6 +393,7 @@ func runServe() error {
 		r.Use(auth.RequireAuth(authSvc))
 		r.Use(srv.RateLimitGlobal())
 		r.Post("/ensure", syncSvc.HandleProxyEnsureFederatedUser)
+		r.Get("/{instanceID}/{userID}/profile", syncSvc.HandleProxyUserProfile)
 	})
 
 	// Federation peers and discovery proxy endpoints (authenticated, for local users).
@@ -385,11 +404,26 @@ func runServe() error {
 		r.Get("/{peerID}/guilds", syncSvc.HandleProxyDiscoverRemoteGuilds)
 	})
 
+	// Aggregated federation guild discovery (authenticated, fans out to all peers).
+	srv.Router.With(auth.RequireAuth(authSvc), srv.RateLimitGlobal()).Get("/api/v1/federation/discover", syncSvc.HandleAggregatedDiscover)
+
+	// Federation invite proxy (authenticated, rate limited — for local users resolving cross-instance invites).
+	srv.Router.With(auth.RequireAuth(authSvc), srv.RateLimitGlobal()).Post("/api/v1/federation/invites/resolve", syncSvc.HandleProxyResolveInvite)
+
 	// Federation guild discovery (signed, no rate limit).
 	srv.Router.Post("/federation/v1/guilds/discover", syncSvc.HandleFederatedGuildDiscover)
 
 	// Federation voice endpoint (signed, no rate limit).
 	srv.Router.Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
+
+	// Federation MLS (E2EE) endpoints (signed, no rate limit).
+	// These allow remote instances to perform MLS operations on channels hosted by this instance.
+	srv.Router.Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/key-packages/{userID}", syncSvc.HandleMLSKeyPackages)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/key-packages/{userID}/claim", syncSvc.HandleMLSClaimKeyPackage)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/welcome", syncSvc.HandleMLSSendWelcome)
+	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/commits", syncSvc.HandleMLSPublishCommit)
+	srv.Router.Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/group-state", syncSvc.HandleMLSGetGroupState)
+	srv.Router.Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/commits", syncSvc.HandleMLSGetCommits)
 
 	// Federation voice proxy endpoints (authenticated, for local users joining remote voice channels).
 	srv.Router.Route("/api/v1/federation/voice", func(r chi.Router) {
@@ -425,6 +459,7 @@ func runServe() error {
 		HeartbeatTimeout:  heartbeatTimeout,
 		ListenAddr:        cfg.WebSocket.Listen,
 		BuildVersion:      version + "-" + commit + "-" + buildDate,
+		LocalInstanceID:   instanceID,
 		Logger:            logger,
 		CORSOrigins:       cfg.HTTP.CORSOrigins,
 	})
@@ -564,11 +599,15 @@ func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Confi
 
 	// Instance doesn't exist — create it.
 	id = models.NewULID().String()
+	var shorthand *string
+	if cfg.Federation.Shorthand != "" {
+		shorthand = &cfg.Federation.Shorthand
+	}
 	_, err = db.Pool.Exec(ctx,
-		`INSERT INTO instances (id, domain, public_key, private_key_pem, name, description, software_version, federation_mode, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		`INSERT INTO instances (id, domain, public_key, private_key_pem, name, description, software_version, federation_mode, shorthand, voice_mode, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 		 ON CONFLICT (domain) DO NOTHING`,
-		id, cfg.Instance.Domain, pubKeyPEMStr, privKeyPEMStr, cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode,
+		id, cfg.Instance.Domain, pubKeyPEMStr, privKeyPEMStr, cfg.Instance.Name, cfg.Instance.Description, version, cfg.Instance.FederationMode, shorthand, cfg.Federation.VoiceMode,
 	)
 	if err != nil && strings.Contains(err.Error(), "private_key_pem") {
 		_, err = db.Pool.Exec(ctx,
@@ -590,6 +629,12 @@ func ensureLocalInstance(ctx context.Context, db *database.DB, cfg *config.Confi
 	if err != nil {
 		return "", nil, fmt.Errorf("reading instance ID after insert: %w", err)
 	}
+
+	// Sync shorthand and voice_mode from config on every startup so admin
+	// TOML changes take effect without manual SQL updates.
+	db.Pool.Exec(ctx,
+		`UPDATE instances SET shorthand = $1, voice_mode = $2 WHERE id = $3`,
+		shorthand, cfg.Federation.VoiceMode, id)
 
 	return id, privKey, nil
 }

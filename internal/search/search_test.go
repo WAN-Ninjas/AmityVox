@@ -188,7 +188,7 @@ func TestSearchRequest_Defaults(t *testing.T) {
 
 func TestSearchResult_JSON(t *testing.T) {
 	result := SearchResult{
-		Hits:             []interface{}{map[string]string{"id": "msg_001"}},
+		IDs:              []string{"msg_001"},
 		EstimatedTotal:   100,
 		ProcessingTimeMs: 5,
 	}
@@ -209,14 +209,17 @@ func TestSearchResult_JSON(t *testing.T) {
 	if decoded.ProcessingTimeMs != 5 {
 		t.Errorf("processing_time_ms = %d, want 5", decoded.ProcessingTimeMs)
 	}
-	if len(decoded.Hits) != 1 {
-		t.Errorf("hits length = %d, want 1", len(decoded.Hits))
+	if len(decoded.IDs) != 1 {
+		t.Errorf("IDs length = %d, want 1", len(decoded.IDs))
+	}
+	if len(decoded.IDs) > 0 && decoded.IDs[0] != "msg_001" {
+		t.Errorf("IDs[0] = %q, want %q", decoded.IDs[0], "msg_001")
 	}
 }
 
-func TestSearchResult_EmptyHits(t *testing.T) {
+func TestSearchResult_EmptyIDs(t *testing.T) {
 	result := SearchResult{
-		Hits:           []interface{}{},
+		IDs:            []string{},
 		EstimatedTotal: 0,
 	}
 
@@ -230,8 +233,8 @@ func TestSearchResult_EmptyHits(t *testing.T) {
 		t.Fatalf("unmarshal error: %v", err)
 	}
 
-	if len(decoded.Hits) != 0 {
-		t.Errorf("hits length = %d, want 0", len(decoded.Hits))
+	if len(decoded.IDs) != 0 {
+		t.Errorf("IDs length = %d, want 0", len(decoded.IDs))
 	}
 }
 

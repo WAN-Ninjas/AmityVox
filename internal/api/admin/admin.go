@@ -48,6 +48,8 @@ type updateInstanceRequest struct {
 	Name           *string `json:"name"`
 	Description    *string `json:"description"`
 	FederationMode *string `json:"federation_mode"`
+	Shorthand      *string `json:"shorthand"`
+	VoiceMode      *string `json:"voice_mode"`
 }
 
 type addPeerRequest struct {
@@ -79,10 +81,13 @@ func (h *Handler) HandleGetInstance(w http.ResponseWriter, r *http.Request) {
 	var inst models.Instance
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT id, domain, public_key, name, description, software, software_version,
-		        federation_mode, created_at, last_seen_at
+		        federation_mode, protocol_version, capabilities, livekit_url, private_key_pem,
+		        resolved_ips, key_fingerprint, shorthand, voice_mode, created_at, last_seen_at
 		 FROM instances WHERE id = $1`, h.InstanceID).Scan(
 		&inst.ID, &inst.Domain, &inst.PublicKey, &inst.Name, &inst.Description,
 		&inst.Software, &inst.SoftwareVersion, &inst.FederationMode,
+		&inst.ProtocolVersion, &inst.Capabilities, &inst.LiveKitURL, &inst.PrivateKeyPEM,
+		&inst.ResolvedIPs, &inst.KeyFingerprint, &inst.Shorthand, &inst.VoiceMode,
 		&inst.CreatedAt, &inst.LastSeenAt,
 	)
 	if err != nil {
@@ -114,19 +119,39 @@ func (h *Handler) HandleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.Shorthand != nil && len(*req.Shorthand) > 5 {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_shorthand",
+			"Shorthand must be at most 5 characters")
+		return
+	}
+
+	if req.VoiceMode != nil {
+		valid := map[string]bool{"direct": true, "relay": true}
+		if !valid[*req.VoiceMode] {
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_voice_mode",
+				"Voice mode must be one of: direct, relay")
+			return
+		}
+	}
+
 	var inst models.Instance
 	err := h.Pool.QueryRow(r.Context(),
 		`UPDATE instances
 		 SET name = COALESCE($1, name),
 		     description = COALESCE($2, description),
-		     federation_mode = COALESCE($3, federation_mode)
-		 WHERE id = $4
+		     federation_mode = COALESCE($3, federation_mode),
+		     shorthand = COALESCE($4, shorthand),
+		     voice_mode = COALESCE($5, voice_mode)
+		 WHERE id = $6
 		 RETURNING id, domain, public_key, name, description, software, software_version,
-		           federation_mode, created_at, last_seen_at`,
-		req.Name, req.Description, req.FederationMode, h.InstanceID,
+		           federation_mode, protocol_version, capabilities, livekit_url, private_key_pem,
+		           resolved_ips, key_fingerprint, shorthand, voice_mode, created_at, last_seen_at`,
+		req.Name, req.Description, req.FederationMode, req.Shorthand, req.VoiceMode, h.InstanceID,
 	).Scan(
 		&inst.ID, &inst.Domain, &inst.PublicKey, &inst.Name, &inst.Description,
 		&inst.Software, &inst.SoftwareVersion, &inst.FederationMode,
+		&inst.ProtocolVersion, &inst.Capabilities, &inst.LiveKitURL, &inst.PrivateKeyPEM,
+		&inst.ResolvedIPs, &inst.KeyFingerprint, &inst.Shorthand, &inst.VoiceMode,
 		&inst.CreatedAt, &inst.LastSeenAt,
 	)
 	if err != nil {

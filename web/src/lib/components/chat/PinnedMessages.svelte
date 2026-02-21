@@ -75,7 +75,7 @@
 					<div class="flex items-center gap-2">
 						<Avatar
 							name={pin.author?.display_name ?? pin.author?.username ?? '?'}
-							src={avatarUrl(pin.author?.avatar_id, pin.author?.instance_domain)}
+							src={avatarUrl(pin.author?.avatar_id, pin.author?.instance_id || undefined)}
 							size="sm"
 						/>
 						<span class="text-sm font-medium text-text-primary">

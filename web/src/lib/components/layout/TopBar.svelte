@@ -13,10 +13,9 @@
 		showPins?: boolean;
 		showFollowers?: boolean;
 		showGallery?: boolean;
-		federatedGuildId?: string | null;
 	}
 
-	let { onToggleMembers, onTogglePins, onToggleFollowers, onToggleGallery, showPins = false, showFollowers = false, showGallery = false, federatedGuildId = null }: Props = $props();
+	let { onToggleMembers, onTogglePins, onToggleFollowers, onToggleGallery, showPins = false, showFollowers = false, showGallery = false }: Props = $props();
 	let showSearch = $state(false);
 	let topicExpanded = $state(false);
 	let showMobileMenu = $state(false);
@@ -73,14 +72,6 @@
 					Encrypted
 				</span>
 			{/if}
-			{#if federatedGuildId}
-				<span class="flex items-center gap-1 rounded-full bg-brand-500/10 px-2 py-0.5 text-2xs font-medium text-brand-400" title="Federated server">
-					<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
-					</svg>
-					Federated
-				</span>
-			{/if}
 			{#if $currentChannel.topic}
 				<span class="mx-1 text-text-muted">|</span>
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -100,7 +91,6 @@
 	{/if}
 
 	<div class="ml-auto flex items-center gap-1">
-		{#if !federatedGuildId}
 		<!-- Channel settings gear (ManageChannels permission required) — desktop only -->
 		{#if $currentChannel && $canManageChannels}
 			<button
@@ -153,7 +143,6 @@
 				</svg>
 			</button>
 		{/if}
-		{/if}
 
 		<!-- Member toggle — always visible -->
 		{#if $currentGuild}
@@ -181,7 +170,7 @@
 		</button>
 
 		<!-- Mobile overflow menu -->
-		{#if $currentChannel && !federatedGuildId}
+		{#if $currentChannel}
 			<div class="relative md:hidden">
 				<button
 					class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
