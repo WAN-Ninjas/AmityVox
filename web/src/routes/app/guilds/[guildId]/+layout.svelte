@@ -17,7 +17,7 @@
 			setGuild(guildId);
 			const fg = $federatedGuilds.get(guildId);
 			if (fg) {
-				loadFederatedChannels(fg.channels_json);
+				loadFederatedChannels(guildId, fg.channels_json);
 			} else {
 				loadChannels(guildId);
 				loadHiddenThreads();

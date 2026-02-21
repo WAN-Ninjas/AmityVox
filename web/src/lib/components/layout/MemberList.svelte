@@ -23,6 +23,7 @@
 	import { blockedUsers } from '$lib/stores/blocked';
 	import { goto } from '$app/navigation';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { avatarUrl } from '$lib/utils/avatar';
 
 	// Members are derived from the guildMembers store so real-time updates
 	// (e.g. avatar changes via USER_UPDATE) are reflected immediately.
@@ -191,6 +192,16 @@
 
 	async function startDM(member: GuildMember) {
 		try {
+			// For federated users, ensure a local user stub exists first so createDM works.
+			if (member.user?.instance_domain) {
+				await api.ensureFederatedUser({
+					user_id: member.user_id,
+					instance_domain: member.user.instance_domain,
+					username: member.user.username,
+					display_name: member.user.display_name,
+					avatar_id: member.user.avatar_id,
+				});
+			}
 			const channel = await api.createDM(member.user_id);
 			addDMChannel(channel);
 			closeContextMenu();
@@ -364,7 +375,7 @@
 					>
 						<Avatar
 							name={getMemberName(member)}
-							src={member.user?.avatar_id ? `/api/v1/files/${member.user.avatar_id}` : null}
+							src={avatarUrl(member.user?.avatar_id, member.user?.instance_domain)}
 							size="sm"
 							status={isOffline ? 'offline' : ($presenceMap.get(member.user_id) ?? 'online')}
 						/>
