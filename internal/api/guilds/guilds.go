@@ -611,9 +611,11 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 		        gm.timeout_until, gm.deaf, gm.mute,
 		        u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
 		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
-		        u.bio, u.banner_id, u.accent_color, u.pronouns, u.flags, u.created_at
+		        u.bio, u.banner_id, u.accent_color, u.pronouns, u.flags, u.created_at,
+		        COALESCE(i.domain, '') AS instance_domain
 		 FROM guild_members gm
 		 JOIN users u ON u.id = gm.user_id
+		 LEFT JOIN instances i ON i.id = u.instance_id
 		 WHERE gm.guild_id = $1
 		 ORDER BY gm.joined_at
 		 LIMIT 1000`,
@@ -629,15 +631,20 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var m models.GuildMember
 		var u models.User
+		var instanceDomain string
 		if err := rows.Scan(
 			&m.GuildID, &m.UserID, &m.Nickname, &m.AvatarID, &m.JoinedAt,
 			&m.TimeoutUntil, &m.Deaf, &m.Mute,
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
 			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
 			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
+			&instanceDomain,
 		); err != nil {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read members")
 			return
+		}
+		if instanceDomain != "" {
+			u.InstanceDomain = &instanceDomain
 		}
 		m.User = &u
 		members = append(members, m)
