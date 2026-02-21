@@ -1438,14 +1438,14 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 	if tag.RowsAffected() > 0 {
 		if _, err := tx.Exec(ctx,
 			`UPDATE invites SET uses = uses + 1 WHERE code = $1`, req.InviteCode); err != nil {
-			ss.logger.Error("failed to increment invite usage",
-				slog.String("invite_code", req.InviteCode), slog.String("error", err.Error()))
+			writeManageError(w, http.StatusInternalServerError, "Failed to increment invite usage")
+			return
 		}
 
 		if _, err := tx.Exec(ctx,
 			`UPDATE guilds SET member_count = member_count + 1 WHERE id = $1`, guildID); err != nil {
-			ss.logger.Error("failed to increment guild member count",
-				slog.String("guild_id", guildID), slog.String("error", err.Error()))
+			writeManageError(w, http.StatusInternalServerError, "Failed to update member count")
+			return
 		}
 	}
 
