@@ -1395,7 +1395,11 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 		`SELECT guild_id, max_uses, uses, expires_at FROM invites WHERE code = $1 FOR UPDATE`,
 		req.InviteCode,
 	).Scan(&invGuildID, &invMaxUses, &invUses, &invExpiresAt); err != nil {
-		writeManageError(w, http.StatusNotFound, "Invite not found")
+		if err == pgx.ErrNoRows {
+			writeManageError(w, http.StatusNotFound, "Invite not found")
+		} else {
+			writeManageError(w, http.StatusInternalServerError, "Failed to look up invite")
+		}
 		return
 	}
 	if invGuildID != guildID {
