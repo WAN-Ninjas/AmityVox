@@ -2272,18 +2272,26 @@ func (h *Handler) enrichMessagesWithEmbeds(ctx context.Context, messages []model
 }
 
 // enrichMessageWithAuthor fetches author user data for a single message.
+// Joins the instances table to populate InstanceDomain for federation badges.
 func (h *Handler) enrichMessageWithAuthor(ctx context.Context, msg *models.Message) {
 	var u models.User
+	var instanceDomain string
 	err := h.Pool.QueryRow(ctx,
-		`SELECT id, instance_id, username, display_name, avatar_id,
-		        status_text, status_emoji, status_presence, status_expires_at,
-		        bio, banner_id, accent_color, pronouns, flags, created_at
-		 FROM users WHERE id = $1`, msg.AuthorID).Scan(
+		`SELECT u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
+		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
+		        u.bio, u.banner_id, u.accent_color, u.pronouns, u.flags, u.created_at,
+		        COALESCE(i.domain, '')
+		 FROM users u LEFT JOIN instances i ON i.id = u.instance_id
+		 WHERE u.id = $1`, msg.AuthorID).Scan(
 		&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
 		&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
 		&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns, &u.Flags, &u.CreatedAt,
+		&instanceDomain,
 	)
 	if err == nil {
+		if instanceDomain != "" {
+			u.InstanceDomain = &instanceDomain
+		}
 		msg.Author = &u
 	}
 }
