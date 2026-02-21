@@ -1348,7 +1348,8 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 	// Check if the user is banned from this guild (before starting the transaction).
 	var banned bool
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2)`,
+		`SELECT EXISTS(SELECT 1 FROM guild_bans WHERE guild_id = $1 AND user_id = $2
+		 AND (expires_at IS NULL OR expires_at > NOW()))`,
 		guildID, userID).Scan(&banned); err != nil {
 		ss.logger.Error("failed to check guild ban for federated join",
 			slog.String("guild_id", guildID), slog.String("user_id", userID),
