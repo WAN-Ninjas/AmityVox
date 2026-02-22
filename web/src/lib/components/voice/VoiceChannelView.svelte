@@ -18,6 +18,7 @@
 	} from '$lib/stores/voice';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$components/common/Avatar.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
 	import MessageInput from '$components/chat/MessageInput.svelte';
@@ -133,7 +134,7 @@
 					<div class="flex -space-x-2">
 						{#each $participantList.slice(0, 8) as p (p.userId)}
 							<div class="relative" title={p.displayName ?? p.username}>
-								<Avatar name={p.displayName ?? p.username} src={p.avatarId ? `/api/v1/files/${p.avatarId}` : null} size="sm" />
+								<Avatar name={p.displayName ?? p.username} src={avatarUrl(p.avatarId, p.instanceId || undefined)} size="sm" />
 							</div>
 						{/each}
 						{#if $participantList.length > 8}

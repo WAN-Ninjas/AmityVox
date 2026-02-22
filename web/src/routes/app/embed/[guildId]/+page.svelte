@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { avatarUrl as buildAvatarUrl } from '$lib/utils/avatar';
 
 	interface WidgetData {
 		id: string;
@@ -53,8 +54,7 @@
 	}
 
 	function getAvatarUrl(avatarId: string | null): string {
-		if (!avatarId) return '';
-		return `/api/v1/files/${avatarId}`;
+		return buildAvatarUrl(avatarId) ?? '';
 	}
 
 	function getInviteUrl(code: string): string {

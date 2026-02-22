@@ -5,6 +5,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import { removeDMChannel, addDMChannel } from '$lib/stores/dms';
 	import { goto } from '$app/navigation';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from './Avatar.svelte';
 	import Modal from './Modal.svelte';
 	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
@@ -59,7 +60,7 @@
 					<div class="flex items-center gap-2.5 px-3 py-2">
 						<Avatar
 							name={member.display_name ?? member.username}
-							src={member.avatar_id ? `/api/v1/files/${member.avatar_id}` : null}
+							src={avatarUrl(member.avatar_id, member.instance_id || undefined)}
 							size="sm"
 						/>
 						<span class="flex-1 truncate text-sm text-text-secondary">

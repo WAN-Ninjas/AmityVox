@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { GalleryPost } from '$lib/types';
+	import { avatarUrl, fileUrl as buildFileUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		post: GalleryPost;
@@ -9,7 +10,7 @@
 	let { post, onclick }: Props = $props();
 
 	let isVideo = $derived(post.thumbnail?.content_type?.startsWith('video/') ?? false);
-	let thumbnailUrl = $derived(post.thumbnail ? `/api/v1/files/${post.thumbnail.id}` : null);
+	let thumbnailUrl = $derived(post.thumbnail ? buildFileUrl(post.thumbnail.id, post.thumbnail.instance_id || undefined) : null);
 
 	function formatDate(iso: string): string {
 		const date = new Date(iso);
@@ -136,7 +137,7 @@
 		<div class="flex items-center gap-2 text-[11px] text-text-muted">
 			{#if post.author?.avatar_id}
 				<img
-					src="/api/v1/files/{post.author.avatar_id}"
+					src={avatarUrl(post.author.avatar_id, post.author.instance_id || undefined)}
 					alt=""
 					class="h-4 w-4 rounded-full object-cover"
 				/>

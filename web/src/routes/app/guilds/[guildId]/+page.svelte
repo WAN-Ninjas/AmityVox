@@ -5,6 +5,7 @@
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
 	import type { GuildEvent, OnboardingConfig } from '$lib/types';
+	import { fileUrl } from '$lib/utils/avatar';
 	import OnboardingModal from '$lib/components/guild/OnboardingModal.svelte';
 
 	let events = $state<GuildEvent[]>([]);
@@ -351,7 +352,7 @@
 			{#if $currentGuild.banner_id}
 				<div class="h-40 w-full overflow-hidden">
 					<img
-						src="/api/v1/files/{$currentGuild.banner_id}"
+						src={fileUrl($currentGuild.banner_id, $currentGuild.instance_id || undefined)}
 						alt="{$currentGuild.name} banner"
 						class="h-full w-full object-cover"
 					/>
@@ -368,7 +369,7 @@
 				<div class="shrink-0 rounded-2xl bg-bg-secondary p-1.5 shadow-lg">
 					{#if $currentGuild.icon_id}
 						<img
-							src="/api/v1/files/{$currentGuild.icon_id}"
+							src={fileUrl($currentGuild.icon_id, $currentGuild.instance_id || undefined)}
 							alt={$currentGuild.name}
 							class="h-20 w-20 rounded-xl object-cover"
 						/>

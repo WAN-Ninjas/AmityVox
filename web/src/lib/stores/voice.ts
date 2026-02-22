@@ -26,6 +26,7 @@ export interface VoiceParticipant {
 	username: string;
 	displayName: string | null;
 	avatarId: string | null;
+	instanceId: string | null;
 	muted: boolean;
 	deafened: boolean;
 	speaking: boolean;
@@ -263,6 +264,7 @@ export function handleVoiceStateUpdate(data: {
 	username?: string;
 	display_name?: string | null;
 	avatar_id?: string | null;
+	instance_id?: string | null;
 	muted?: boolean;
 	deafened?: boolean;
 	action?: 'join' | 'leave' | 'update';
@@ -290,6 +292,7 @@ export function handleVoiceStateUpdate(data: {
 			username: data.username ?? 'Unknown',
 			displayName: data.display_name ?? null,
 			avatarId: data.avatar_id ?? null,
+			instanceId: data.instance_id ?? null,
 			muted: data.muted ?? false,
 			deafened: data.deafened ?? false,
 			speaking: false
@@ -546,6 +549,7 @@ function addLocalParticipant(participant: LocalParticipant) {
 			username: metadata.username ?? participant.identity,
 			displayName: metadata.displayName ?? null,
 			avatarId: metadata.avatarId ?? null,
+			instanceId: metadata.instanceId ?? null,
 			muted: !participant.isMicrophoneEnabled,
 			deafened: false,
 			speaking: participant.isSpeaking
@@ -563,6 +567,7 @@ function addRemoteParticipant(participant: RemoteParticipant) {
 			username: metadata.username ?? participant.identity,
 			displayName: metadata.displayName ?? null,
 			avatarId: metadata.avatarId ?? null,
+			instanceId: metadata.instanceId ?? null,
 			muted: !participant.isMicrophoneEnabled,
 			deafened: false,
 			speaking: participant.isSpeaking
@@ -576,6 +581,7 @@ function parseMetadata(metadata: string | undefined): {
 	username?: string;
 	displayName?: string;
 	avatarId?: string;
+	instanceId?: string;
 } {
 	if (!metadata) return {};
 	try {
