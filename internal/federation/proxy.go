@@ -272,6 +272,16 @@ func (ss *SyncService) ProxyReadGuildMembers(w http.ResponseWriter, r *http.Requ
 			domain = instanceDomain
 		}
 
+		user := map[string]interface{}{
+			"id":              m.UserID,
+			"username":        m.Username,
+			"display_name":    m.DisplayName,
+			"avatar_id":       m.AvatarID,
+			"instance_domain": domain,
+		}
+		if id := domainToID[domain]; id != "" {
+			user["instance_id"] = id
+		}
 		members = append(members, map[string]interface{}{
 			"guild_id":  guildID,
 			"user_id":   m.UserID,
@@ -279,14 +289,7 @@ func (ss *SyncService) ProxyReadGuildMembers(w http.ResponseWriter, r *http.Requ
 			"avatar_id": nil,
 			"joined_at": m.JoinedAt,
 			"roles":     roles,
-			"user": map[string]interface{}{
-				"id":              m.UserID,
-				"instance_id":     domainToID[domain],
-				"username":        m.Username,
-				"display_name":    m.DisplayName,
-				"avatar_id":       m.AvatarID,
-				"instance_domain": domain,
-			},
+			"user":      user,
 		})
 	}
 
