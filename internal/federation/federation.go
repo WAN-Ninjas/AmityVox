@@ -444,6 +444,7 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 	}
 
 	// Check if domain already exists with a different ID (rebuilt peer).
+	migrated := false
 	var existingID string
 	idErr := s.pool.QueryRow(ctx,
 		`SELECT id FROM instances WHERE domain = $1`, disc.Domain,
@@ -458,6 +459,7 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 		if err := s.migrateInstanceID(ctx, existingID, disc.InstanceID); err != nil {
 			return fmt.Errorf("migrating instance ID from %s to %s: %w", existingID, disc.InstanceID, err)
 		}
+		migrated = true
 
 		// Invalidate caches for both old and new IDs.
 		s.allowedCache.Invalidate(existingID)
@@ -493,7 +495,7 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 		return fmt.Errorf("registering remote instance %s: %w", disc.Domain, err)
 	}
 
-	if s.onInstanceRegistered != nil {
+	if !migrated && s.onInstanceRegistered != nil {
 		s.onInstanceRegistered(disc.InstanceID)
 	}
 	return nil
