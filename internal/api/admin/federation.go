@@ -183,6 +183,11 @@ func (h *Handler) HandleUpdatePeerControl(w http.ResponseWriter, r *http.Request
 			h.InstanceID, peerID)
 	}
 
+	// Invalidate the allowed cache so the change takes effect immediately.
+	if h.FedSvc != nil {
+		h.FedSvc.InvalidateAllowedCache(peerID)
+	}
+
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"peer_id": peerID,
 		"action":  req.Action,

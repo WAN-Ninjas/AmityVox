@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -122,6 +123,19 @@ type Service struct {
 	enforceIPCheck  bool
 	logger          *slog.Logger
 	onPeerRecovered func(ctx context.Context, peerID string) // called when a peer transitions to healthy
+
+	// Caches to eliminate hot-path DB queries on the inbox path.
+	allowedCache *TTLCache[bool]   // remoteInstanceID -> allowed
+	pubKeyCache  *TTLCache[string] // instanceID -> public_key PEM
+	fedModeCache *TTLCache[string] // "__local__" -> federation_mode
+
+	// Batched counter increments — flushed every 5s by StartCounterFlusher.
+	counterMu       sync.Mutex
+	pendingCounters map[string]*counterEntry
+
+	// onInstanceRegistered is called after RegisterRemoteInstance successfully
+	// registers or updates an instance, so SyncService can clear its negative cache.
+	onInstanceRegistered func(instanceID string)
 }
 
 // Config holds the configuration for the federation service.
@@ -134,22 +148,62 @@ type Config struct {
 	Logger         *slog.Logger
 }
 
+// counterEntry accumulates sent/received event counts per peer for batch flushing.
+type counterEntry struct {
+	sent     int64
+	received int64
+}
+
 // New creates a new federation service.
 func New(cfg Config) *Service {
-	return &Service{
-		pool:           cfg.Pool,
-		instanceID:     cfg.InstanceID,
-		domain:         cfg.Domain,
-		privateKey:     cfg.PrivateKey,
-		enforceIPCheck: cfg.EnforceIPCheck,
-		logger:         cfg.Logger,
+	s := &Service{
+		pool:            cfg.Pool,
+		instanceID:      cfg.InstanceID,
+		domain:          cfg.Domain,
+		privateKey:      cfg.PrivateKey,
+		enforceIPCheck:  cfg.EnforceIPCheck,
+		logger:          cfg.Logger,
+		allowedCache:    NewTTLCache[bool](60*time.Second, 500),
+		pubKeyCache:     NewTTLCache[string](5*time.Minute, 500),
+		fedModeCache:    NewTTLCache[string](60*time.Second, 1),
+		pendingCounters: make(map[string]*counterEntry),
 	}
+
+	// Pre-load federation mode cache at startup.
+	var mode string
+	if err := cfg.Pool.QueryRow(context.Background(),
+		`SELECT federation_mode FROM instances WHERE id = $1`, cfg.InstanceID,
+	).Scan(&mode); err == nil {
+		s.fedModeCache.Set("__local__", mode)
+	}
+
+	return s
 }
 
 // SetOnPeerRecovered sets a callback that fires when a peer transitions from
 // non-healthy to healthy status. Used by SyncService to trigger backfill.
 func (s *Service) SetOnPeerRecovered(fn func(ctx context.Context, peerID string)) {
 	s.onPeerRecovered = fn
+}
+
+// SetOnInstanceRegistered sets a callback that fires after RegisterRemoteInstance
+// successfully registers or updates a remote instance. Used by SyncService to
+// clear its negative cache for the new instance ID.
+func (s *Service) SetOnInstanceRegistered(fn func(instanceID string)) {
+	s.onInstanceRegistered = fn
+}
+
+// InvalidateAllowedCache removes a peer from the allowed cache, forcing
+// the next IsFederationAllowed call to re-query the database. Called by
+// admin peer control handlers when block/allow/mute actions change.
+func (s *Service) InvalidateAllowedCache(peerID string) {
+	s.allowedCache.Invalidate(peerID)
+}
+
+// InvalidateFedModeCache clears the cached federation_mode, forcing
+// IsFederationAllowed to re-read it from DB on next call.
+func (s *Service) InvalidateFedModeCache() {
+	s.fedModeCache.InvalidateAll()
 }
 
 // HandleDiscovery handles GET /.well-known/amityvox — the federation discovery
@@ -389,6 +443,34 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 		voiceMode = "direct"
 	}
 
+	// Check if domain already exists with a different ID (rebuilt peer).
+	var existingID string
+	idErr := s.pool.QueryRow(ctx,
+		`SELECT id FROM instances WHERE domain = $1`, disc.Domain,
+	).Scan(&existingID)
+	if idErr == nil && existingID != disc.InstanceID {
+		// Instance rebuilt with new ID — migrate all FK references atomically.
+		s.logger.Warn("instance ID change detected, migrating references",
+			slog.String("domain", disc.Domain),
+			slog.String("old_id", existingID),
+			slog.String("new_id", disc.InstanceID))
+
+		if err := s.migrateInstanceID(ctx, existingID, disc.InstanceID); err != nil {
+			return fmt.Errorf("migrating instance ID from %s to %s: %w", existingID, disc.InstanceID, err)
+		}
+
+		// Invalidate caches for both old and new IDs.
+		s.allowedCache.Invalidate(existingID)
+		s.allowedCache.Invalidate(disc.InstanceID)
+		s.pubKeyCache.Invalidate(existingID)
+		s.pubKeyCache.Invalidate(disc.InstanceID)
+
+		if s.onInstanceRegistered != nil {
+			s.onInstanceRegistered(disc.InstanceID)
+			s.onInstanceRegistered(existingID)
+		}
+	}
+
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO instances (id, domain, public_key, name, software, software_version,
 		                        federation_mode, key_fingerprint, shorthand, voice_mode, created_at, last_seen_at)
@@ -410,7 +492,53 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 	if err != nil {
 		return fmt.Errorf("registering remote instance %s: %w", disc.Domain, err)
 	}
+
+	if s.onInstanceRegistered != nil {
+		s.onInstanceRegistered(disc.InstanceID)
+	}
 	return nil
+}
+
+// migrateInstanceID updates all FK references from oldID to newID in a single
+// transaction, then updates the instances PK itself. This handles rebuilt peers
+// that generate a new ULID but keep the same domain.
+func (s *Service) migrateInstanceID(ctx context.Context, oldID, newID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("starting ID migration tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Update all child tables that reference instances(id).
+	fkUpdates := []string{
+		`UPDATE federation_peers SET peer_id = $1 WHERE peer_id = $2`,
+		`UPDATE federation_peers SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE federation_peer_status SET peer_id = $1 WHERE peer_id = $2`,
+		`UPDATE federation_peer_status SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE federation_peer_controls SET peer_id = $1 WHERE peer_id = $2`,
+		`UPDATE federation_peer_controls SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE federation_channel_peers SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE federation_channel_mirrors SET remote_instance_id = $1 WHERE remote_instance_id = $2`,
+		`UPDATE federation_events SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE guilds SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE channels SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE users SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE messages SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE roles SET instance_id = $1 WHERE instance_id = $2`,
+		`UPDATE federation_key_audit SET instance_id = $1 WHERE instance_id = $2`,
+	}
+	for _, q := range fkUpdates {
+		if _, err := tx.Exec(ctx, q, newID, oldID); err != nil {
+			return fmt.Errorf("updating FK: %w", err)
+		}
+	}
+
+	// Update the PK itself now that all FKs point to the new ID.
+	if _, err := tx.Exec(ctx, `UPDATE instances SET id = $1 WHERE id = $2`, newID, oldID); err != nil {
+		return fmt.Errorf("updating instances PK: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // resolveShorthandCollision checks if a shorthand is already used by a different
@@ -503,6 +631,9 @@ func (s *Service) RefreshPeerKeys(ctx context.Context) {
 				slog.String("peer", domain), slog.String("error", err.Error()))
 			continue
 		}
+		// Invalidate caches for the refreshed peer.
+		s.pubKeyCache.Invalidate(disc.InstanceID)
+		s.allowedCache.Invalidate(disc.InstanceID)
 		s.logger.Info("refreshed federation peer key", slog.String("peer", domain))
 	}
 }
@@ -511,6 +642,11 @@ func (s *Service) RefreshPeerKeys(ctx context.Context) {
 // with this instance based on the configured federation mode and per-peer
 // controls (blocklist/allowlist).
 func (s *Service) IsFederationAllowed(ctx context.Context, remoteInstanceID string) (bool, error) {
+	// Check cache first — eliminates 2-3 DB queries per inbox request.
+	if allowed, ok := s.allowedCache.Get(remoteInstanceID); ok {
+		return allowed, nil
+	}
+
 	// Check per-peer controls first — explicit block always wins.
 	var peerAction string
 	err := s.pool.QueryRow(ctx,
@@ -518,31 +654,35 @@ func (s *Service) IsFederationAllowed(ctx context.Context, remoteInstanceID stri
 		 WHERE instance_id = $1 AND peer_id = $2`,
 		s.instanceID, remoteInstanceID).Scan(&peerAction)
 	if err == nil {
-		// Explicit per-peer control exists.
 		if peerAction == "block" {
+			s.allowedCache.Set(remoteInstanceID, false)
 			return false, nil
 		}
 		if peerAction == "allow" {
+			s.allowedCache.Set(remoteInstanceID, true)
 			return true, nil
 		}
 		// "mute" falls through to federation mode check.
 	}
 
-	// Get local federation mode.
-	var mode string
-	err = s.pool.QueryRow(ctx,
-		`SELECT federation_mode FROM instances WHERE id = $1`, s.instanceID).Scan(&mode)
-	if err != nil {
-		return false, fmt.Errorf("getting federation mode: %w", err)
+	// Get local federation mode — use cache, fall back to DB on miss.
+	mode, ok := s.fedModeCache.Get("__local__")
+	if !ok {
+		err = s.pool.QueryRow(ctx,
+			`SELECT federation_mode FROM instances WHERE id = $1`, s.instanceID).Scan(&mode)
+		if err != nil {
+			return false, fmt.Errorf("getting federation mode: %w", err)
+		}
+		s.fedModeCache.Set("__local__", mode)
 	}
 
+	var result bool
 	switch mode {
 	case "open":
-		return true, nil
+		result = true
 	case "closed":
-		return false, nil
+		result = false
 	case "allowlist":
-		// Check if remote instance is in our federation peers with active status.
 		var exists bool
 		err := s.pool.QueryRow(ctx,
 			`SELECT EXISTS(
@@ -552,10 +692,13 @@ func (s *Service) IsFederationAllowed(ctx context.Context, remoteInstanceID stri
 		if err != nil {
 			return false, fmt.Errorf("checking allowlist: %w", err)
 		}
-		return exists, nil
+		result = exists
 	default:
-		return false, nil
+		result = false
 	}
+
+	s.allowedCache.Set(remoteInstanceID, result)
+	return result, nil
 }
 
 // NegotiateProtocol performs version negotiation between this instance and a
@@ -619,6 +762,18 @@ func (s *Service) HandleHandshake(w http.ResponseWriter, r *http.Request) {
 			Reason:   msg,
 		})
 		return
+	}
+
+	// Discover sender to ensure instances row is current (handles rebuilt peers).
+	if req.SenderDomain != "" {
+		disc, discErr := DiscoverInstance(r.Context(), req.SenderDomain)
+		if discErr == nil && disc != nil {
+			if regErr := s.RegisterRemoteInstance(r.Context(), disc); regErr != nil {
+				s.logger.Warn("handshake: failed to register/update sender instance",
+					slog.String("domain", req.SenderDomain),
+					slog.String("error", regErr.Error()))
+			}
+		}
 	}
 
 	// Verify source IP matches sender domain.
@@ -822,16 +977,98 @@ func (s *Service) UpdatePeerHealth(ctx context.Context, peerID string, healthy b
 	}
 }
 
-// IncrementPeerEventCount increments the sent/received event counters for a peer.
-func (s *Service) IncrementPeerEventCount(ctx context.Context, peerID string, sent bool) {
+// IncrementPeerEventCount accumulates sent/received event counts in memory.
+// Counts are flushed to the database in batch every 5 seconds by StartCounterFlusher.
+func (s *Service) IncrementPeerEventCount(_ context.Context, peerID string, sent bool) {
+	s.counterMu.Lock()
+	defer s.counterMu.Unlock()
+	entry, ok := s.pendingCounters[peerID]
+	if !ok {
+		entry = &counterEntry{}
+		s.pendingCounters[peerID] = entry
+	}
 	if sent {
-		s.pool.Exec(ctx,
-			`UPDATE federation_peer_status SET events_sent = events_sent + 1, updated_at = now()
-			 WHERE peer_id = $1`, peerID)
+		entry.sent++
 	} else {
-		s.pool.Exec(ctx,
-			`UPDATE federation_peer_status SET events_received = events_received + 1, updated_at = now()
-			 WHERE peer_id = $1`, peerID)
+		entry.received++
+	}
+}
+
+// StartCounterFlusher starts a background goroutine that flushes accumulated
+// event counters to the database every 5 seconds. On context cancellation it
+// performs a final flush before returning.
+func (s *Service) StartCounterFlusher(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.flushCounters(context.Background())
+			case <-ctx.Done():
+				s.flushCounters(context.Background())
+				return
+			}
+		}
+	}()
+}
+
+// flushCounters swaps the pending counters map and writes accumulated deltas
+// to federation_peer_status in a single transaction.
+func (s *Service) flushCounters(ctx context.Context) {
+	s.counterMu.Lock()
+	batch := s.pendingCounters
+	s.pendingCounters = make(map[string]*counterEntry)
+	s.counterMu.Unlock()
+
+	if len(batch) == 0 {
+		return
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		s.logger.Error("counter flush: failed to begin tx", slog.String("error", err.Error()))
+		// Put counters back so they're not lost.
+		s.counterMu.Lock()
+		for peerID, entry := range batch {
+			if existing, ok := s.pendingCounters[peerID]; ok {
+				existing.sent += entry.sent
+				existing.received += entry.received
+			} else {
+				s.pendingCounters[peerID] = entry
+			}
+		}
+		s.counterMu.Unlock()
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	for peerID, entry := range batch {
+		if _, err := tx.Exec(ctx,
+			`UPDATE federation_peer_status
+			 SET events_sent = events_sent + $1,
+			     events_received = events_received + $2,
+			     updated_at = now()
+			 WHERE peer_id = $3`,
+			entry.sent, entry.received, peerID); err != nil {
+			s.logger.Warn("counter flush: failed to update peer",
+				slog.String("peer_id", peerID), slog.String("error", err.Error()))
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		s.logger.Error("counter flush: failed to commit", slog.String("error", err.Error()))
+		// Re-add counters so they're not lost.
+		s.counterMu.Lock()
+		for peerID, entry := range batch {
+			if existing, ok := s.pendingCounters[peerID]; ok {
+				existing.sent += entry.sent
+				existing.received += entry.received
+			} else {
+				s.pendingCounters[peerID] = entry
+			}
+		}
+		s.counterMu.Unlock()
 	}
 }
 
