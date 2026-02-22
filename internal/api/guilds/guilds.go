@@ -601,6 +601,13 @@ func (h *Handler) HandleGetGuildMembers(w http.ResponseWriter, r *http.Request) 
 	userID := auth.UserIDFromContext(r.Context())
 	guildID := chi.URLParam(r, "guildID")
 
+	// Federation proxy: if this guild is remote, fetch members from home instance.
+	if h.FedProxy != nil {
+		if h.FedProxy.ProxyReadGuildMembers(w, r, guildID) {
+			return
+		}
+	}
+
 	if !h.isMember(r.Context(), guildID, userID) {
 		apiutil.WriteError(w, http.StatusForbidden, "not_member", "You are not a member of this guild")
 		return

@@ -458,6 +458,13 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
+	// Federation proxy: if this channel belongs to a remote guild, fetch from home instance.
+	if h.FedProxy != nil {
+		if h.FedProxy.ProxyReadChannelMessages(w, r, channelID) {
+			return
+		}
+	}
+
 	// Permission check: ViewChannel + ReadHistory.
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ReadHistory) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need READ_HISTORY permission")

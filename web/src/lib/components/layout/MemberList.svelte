@@ -364,7 +364,7 @@
 					>
 						<Avatar
 							name={getMemberName(member)}
-							src={avatarUrl(member.user?.avatar_id, member.user?.instance_domain ? member.user?.instance_id : undefined)}
+							src={avatarUrl(member.user?.avatar_id, member.user?.instance_id || undefined)}
 							size="sm"
 							status={isOffline ? 'offline' : ($presenceMap.get(member.user_id) ?? 'online')}
 						/>
