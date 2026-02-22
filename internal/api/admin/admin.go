@@ -159,6 +159,11 @@ func (h *Handler) HandleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate federation mode cache when admin changes it.
+	if req.FederationMode != nil && h.FedSvc != nil {
+		h.FedSvc.InvalidateFedModeCache()
+	}
+
 	apiutil.WriteJSON(w, http.StatusOK, inst)
 }
 

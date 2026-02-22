@@ -338,6 +338,12 @@ func runServe() error {
 		}
 	})
 
+	// Wire instance registration callback: clear SyncService negative cache
+	// when a remote instance is registered or updated (e.g., rebuilt peer).
+	fedSvc.SetOnInstanceRegistered(func(instanceID string) {
+		syncSvc.ClearNegativeCache(instanceID)
+	})
+
 	// Signed federation endpoints — no rate limit. These verify Ed25519 signatures
 	// from authenticated peers, so IP-based rate limiting is unnecessary and causes
 	// 429 errors that break real-time event delivery between instances.
@@ -435,6 +441,8 @@ func runServe() error {
 
 	if cfg.Instance.FederationMode != "closed" {
 		syncSvc.StartRouter(ctx)
+		fedSvc.StartCounterFlusher(ctx)
+		syncSvc.StartTimestampFlusher(ctx)
 		logger.Info("federation sync router started", slog.String("mode", cfg.Instance.FederationMode))
 	}
 
