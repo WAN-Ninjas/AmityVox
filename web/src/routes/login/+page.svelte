@@ -30,6 +30,9 @@
 <div class="flex min-h-screen items-center justify-center bg-bg-primary p-4">
 	<div class="w-full max-w-sm">
 		<div class="rounded border-t-2 border-brand-500 bg-bg-secondary p-8 shadow-xl">
+			<div class="mb-4 flex justify-center">
+				<img src="/logo.png" alt="AmityVox" class="h-16 w-16" />
+			</div>
 			<h1 class="mb-2 text-center text-2xl font-bold text-text-primary">Welcome back!</h1>
 			<p class="mb-6 text-center text-sm text-text-muted">We're so excited to see you again!</p>
 

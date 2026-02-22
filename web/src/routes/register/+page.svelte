@@ -42,6 +42,9 @@
 <div class="flex min-h-screen items-center justify-center bg-bg-primary p-4">
 	<div class="w-full max-w-sm">
 		<div class="rounded-lg bg-bg-secondary p-8 shadow-xl">
+			<div class="mb-4 flex justify-center">
+				<img src="/logo.png" alt="AmityVox" class="h-16 w-16" />
+			</div>
 			<h1 class="mb-2 text-center text-2xl font-bold text-text-primary">Create an account</h1>
 			<p class="mb-6 text-center text-sm text-text-muted">Join the conversation</p>
 
