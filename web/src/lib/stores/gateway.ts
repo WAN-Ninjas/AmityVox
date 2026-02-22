@@ -9,7 +9,7 @@ import { updateChannel, removeChannel, loadChannels, channels as channelsStore, 
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
-import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs } from './dms';
+import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs, updateDMChannel, dmChannels } from './dms';
 import { incrementUnread, loadReadState, loadChannelGuildMap, registerChannelGuild } from './unreads';
 import { handleNotificationCreate, handleNotificationUpdate, handleNotificationDelete, loadNotifications } from './notifications';
 import { initPushNotifications } from '$lib/utils/pushNotifications';
@@ -187,6 +187,11 @@ export function connectGateway(token: string) {
 				}
 					incrementUnread(msg.channel_id, isMention);
 					// Notifications are now server-generated via NOTIFICATION_CREATE events.
+				}
+				// Update DM channel metadata so the sidebar re-renders and re-sorts.
+				const dmChannel = get(dmChannels).get(msg.channel_id);
+				if (dmChannel) {
+					updateDMChannel({ ...dmChannel, last_message_id: msg.id });
 				}
 				break;
 			}
