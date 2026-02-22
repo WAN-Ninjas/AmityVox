@@ -182,13 +182,14 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
 	rows, err := h.Pool.Query(r.Context(),
-		`SELECT g.id, g.instance_id, g.owner_id, g.name, g.description, g.icon_id,
+		`SELECT g.id, g.instance_id, COALESCE(i.domain, ''), g.owner_id, g.name, g.description, g.icon_id,
 		        g.banner_id, g.default_permissions, g.flags, g.nsfw, g.discoverable,
 		        g.preferred_locale, g.max_members, g.vanity_url,
 		        g.verification_level, g.afk_channel_id, g.afk_timeout,
 		        g.tags, g.member_count, g.created_at
 		 FROM guilds g
 		 JOIN guild_members gm ON g.id = gm.guild_id
+		 LEFT JOIN instances i ON i.id = g.instance_id
 		 WHERE gm.user_id = $1
 		 ORDER BY g.name`,
 		userID,
@@ -203,7 +204,7 @@ func (h *Handler) HandleGetSelfGuilds(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var g models.Guild
 		if err := rows.Scan(
-			&g.ID, &g.InstanceID, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
+			&g.ID, &g.InstanceID, &g.InstanceDomain, &g.OwnerID, &g.Name, &g.Description, &g.IconID,
 			&g.BannerID, &g.DefaultPermissions, &g.Flags, &g.NSFW, &g.Discoverable,
 			&g.PreferredLocale, &g.MaxMembers, &g.VanityURL,
 			&g.VerificationLevel, &g.AFKChannelID, &g.AFKTimeout,
