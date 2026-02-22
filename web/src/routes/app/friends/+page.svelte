@@ -6,6 +6,7 @@
 	import { addDMChannel } from '$lib/stores/dms';
 	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$lib/components/common/Avatar.svelte';
 	import { currentUser } from '$lib/stores/auth';
 	import { getDMDisplayName } from '$lib/utils/dm';
@@ -274,7 +275,7 @@
 						<div class="mx-2 flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-bg-modifier">
 							<Avatar
 								name={displayName(user)}
-								src={user?.avatar_id ? `/api/v1/files/${user.avatar_id}` : null}
+								src={avatarUrl(user?.avatar_id, user?.instance_id || undefined)}
 								size="md"
 								{status}
 							/>
@@ -321,7 +322,7 @@
 						<div class="mx-2 flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-bg-modifier">
 							<Avatar
 								name={displayName(user)}
-								src={user?.avatar_id ? `/api/v1/files/${user.avatar_id}` : null}
+								src={avatarUrl(user?.avatar_id, user?.instance_id || undefined)}
 								size="md"
 								{status}
 							/>
@@ -360,7 +361,7 @@
 							<div class="mx-2 flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-bg-modifier">
 								<Avatar
 									name={displayName(user)}
-									src={user?.avatar_id ? `/api/v1/files/${user.avatar_id}` : null}
+									src={avatarUrl(user?.avatar_id, user?.instance_id || undefined)}
 									size="md"
 								/>
 								<div class="min-w-0 flex-1">
@@ -396,7 +397,7 @@
 							<div class="mx-2 flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-bg-modifier">
 								<Avatar
 									name={displayName(user)}
-									src={user?.avatar_id ? `/api/v1/files/${user.avatar_id}` : null}
+									src={avatarUrl(user?.avatar_id, user?.instance_id || undefined)}
 									size="md"
 								/>
 								<div class="min-w-0 flex-1">
@@ -430,7 +431,7 @@
 						<div class="mx-2 flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-bg-modifier">
 							<Avatar
 								name={user?.display_name ?? user?.username ?? 'Unknown'}
-								src={user?.avatar_id ? `/api/v1/files/${user.avatar_id}` : null}
+								src={avatarUrl(user?.avatar_id, user?.instance_id || undefined)}
 								size="md"
 							/>
 							<div class="min-w-0 flex-1">

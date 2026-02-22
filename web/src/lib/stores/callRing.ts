@@ -8,6 +8,7 @@ export interface IncomingCall {
 	callerName: string;
 	callerDisplayName?: string | null;
 	callerAvatarId?: string | null;
+	callerInstanceId?: string | null;
 	channelType: 'dm' | 'group';
 	timestamp: number;
 }

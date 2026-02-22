@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Attachment } from '$lib/types';
+	import { fileUrl as buildFileUrl } from '$lib/utils/avatar';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import Modal from '$lib/components/common/Modal.svelte';
@@ -30,7 +31,7 @@
 
 	const isVideo = $derived(attachment?.content_type.startsWith('video/'));
 	const isImage = $derived(attachment?.content_type.startsWith('image/'));
-	const fileUrl = $derived(attachment ? `/api/v1/files/${attachment.id}` : '');
+	const fileUrl = $derived(attachment ? buildFileUrl(attachment.id, attachment.instance_id || undefined) : '');
 
 	async function saveMeta() {
 		if (!attachment || saving) return;

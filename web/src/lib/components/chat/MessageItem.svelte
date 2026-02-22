@@ -32,7 +32,7 @@
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { clientNicknames } from '$lib/stores/nicknames';
 	import { isEmojiOnly } from '$lib/utils/emoji';
-	import { avatarUrl } from '$lib/utils/avatar';
+	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		message: Message;
@@ -388,19 +388,19 @@
 	function downloadAttachment(attachment: any) {
 		attachmentContextMenu = null;
 		const a = document.createElement('a');
-		a.href = `/api/v1/files/${attachment.id}`;
+		a.href = fileUrl(attachment.id, attachment.instance_id || undefined);
 		a.download = attachment.filename;
 		a.click();
 	}
 
 	function openAttachmentInTab(attachment: any) {
 		attachmentContextMenu = null;
-		window.open(`/api/v1/files/${attachment.id}`, '_blank');
+		window.open(fileUrl(attachment.id, attachment.instance_id || undefined), '_blank');
 	}
 
 	function copyAttachmentUrl(attachment: any) {
 		attachmentContextMenu = null;
-		navigator.clipboard.writeText(`${window.location.origin}/api/v1/files/${attachment.id}`);
+		navigator.clipboard.writeText(`${window.location.origin}${fileUrl(attachment.id, attachment.instance_id || undefined)}`);
 		addToast('URL copied', 'info');
 	}
 
@@ -731,7 +731,7 @@
 									onclick={() => revealImage(attachment.id)}
 								>
 									<img
-										src="/api/v1/files/{attachment.id}"
+										src={fileUrl(attachment.id, attachment.instance_id || undefined)}
 										alt={attachment.alt_text || attachment.filename}
 										class="max-h-80 max-w-md rounded transition-[filter]"
 										style="filter: blur(20px);"
@@ -745,21 +745,21 @@
 								</div>
 							{:else if isStickerMessage}
 								<img
-									src="/api/v1/files/{attachment.id}"
+									src={fileUrl(attachment.id, attachment.instance_id || undefined)}
 									alt={attachment.alt_text || attachment.filename}
 									class="h-40 w-40 object-contain cursor-pointer hover:scale-105 transition-transform"
 									loading="lazy"
-									onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
+									onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
 									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
 								/>
 							{:else}
 								<div class="inline-flex flex-col">
 									<img
-										src="/api/v1/files/{attachment.id}"
+										src={fileUrl(attachment.id, attachment.instance_id || undefined)}
 										alt={attachment.alt_text || attachment.filename}
 										class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
 										loading="lazy"
-										onclick={() => (lightboxSrc = `/api/v1/files/${attachment.id}`)}
+										onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
 										oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
 									/>
 									{#if attachment.alt_text}
@@ -769,13 +769,13 @@
 							{/if}
 						{:else if attachment.content_type?.startsWith('audio/')}
 							<AudioPlayer
-								src="/api/v1/files/{attachment.id}"
+								src={fileUrl(attachment.id, attachment.instance_id || undefined)}
 								waveform={message.voice_waveform}
 								durationMs={message.voice_duration_ms}
 							/>
 						{:else if attachment.content_type?.startsWith('video/')}
 							<VideoPlayer
-								src="/api/v1/files/{attachment.id}"
+								src={fileUrl(attachment.id, attachment.instance_id || undefined)}
 								width={attachment.width ?? undefined}
 								height={attachment.height ?? undefined}
 								filename={attachment.filename}
@@ -783,7 +783,7 @@
 						{:else}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<a
-								href="/api/v1/files/{attachment.id}"
+								href={fileUrl(attachment.id, attachment.instance_id || undefined)}
 								class="flex items-center gap-2 rounded bg-bg-secondary px-3 py-2 text-sm text-text-link hover:underline"
 								download={attachment.filename}
 								oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}

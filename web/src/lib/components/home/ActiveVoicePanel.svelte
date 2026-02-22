@@ -3,6 +3,7 @@
 	import { guilds } from '$lib/stores/guilds';
 	import { channels } from '$lib/stores/channels';
 	import { goto } from '$app/navigation';
+	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 	import Avatar from '$lib/components/common/Avatar.svelte';
 
 	// Build a grouped view: guild -> channel -> participants.
@@ -11,10 +12,11 @@
 			guildId: string;
 			guildName: string;
 			guildIconId: string | null;
+			guildInstanceId: string | null;
 			channels: Array<{
 				channelId: string;
 				channelName: string;
-				participants: Array<{ userId: string; username: string; displayName: string | null; avatarId: string | null; speaking: boolean }>;
+				participants: Array<{ userId: string; username: string; displayName: string | null; avatarId: string | null; instanceId: string | null; speaking: boolean }>;
 			}>;
 		}> = [];
 
@@ -33,6 +35,7 @@
 					guildId,
 					guildName: guild?.name ?? 'Unknown Server',
 					guildIconId: guild?.icon_id ?? null,
+					guildInstanceId: guild?.instance_id ?? null,
 					channels: []
 				};
 				groups.push(group);
@@ -46,6 +49,7 @@
 					username: p.username,
 					displayName: p.displayName,
 					avatarId: p.avatarId,
+					instanceId: p.instanceId,
 					speaking: p.speaking
 				}))
 			});
@@ -78,7 +82,7 @@
 				<div>
 					<div class="mb-1.5 flex items-center gap-1.5">
 						{#if group.guildIconId}
-							<img class="h-4 w-4 rounded object-cover" src="/api/v1/files/{group.guildIconId}" alt="" />
+							<img class="h-4 w-4 rounded object-cover" src={fileUrl(group.guildIconId, group.guildInstanceId || undefined)} alt="" />
 						{:else}
 							<span class="flex h-4 w-4 items-center justify-center rounded bg-brand-600 text-2xs font-bold text-white">
 								{group.guildName[0]?.toUpperCase() ?? '?'}
@@ -103,7 +107,7 @@
 									<div class="flex items-center gap-1 rounded bg-bg-secondary px-1.5 py-0.5" title={p.displayName ?? p.username}>
 										<Avatar
 											name={p.displayName ?? p.username}
-											src={p.avatarId ? `/api/v1/files/${p.avatarId}` : null}
+											src={avatarUrl(p.avatarId, p.instanceId || undefined)}
 											size="sm"
 										/>
 										<span class="max-w-16 truncate text-2xs text-text-muted">{p.displayName ?? p.username}</span>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ForumPost } from '$lib/types';
+	import { avatarUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		post: ForumPost;
@@ -36,7 +37,7 @@
 	<div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-modifier">
 		{#if post.author?.avatar_id}
 			<img
-				src="/api/v1/files/{post.author.avatar_id}"
+				src={avatarUrl(post.author.avatar_id, post.author.instance_id || undefined)}
 				alt=""
 				class="h-full w-full object-cover"
 			/>

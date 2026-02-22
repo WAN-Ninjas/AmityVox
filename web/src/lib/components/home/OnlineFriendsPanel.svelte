@@ -4,11 +4,12 @@
 	import { api } from '$lib/api/client';
 	import { addDMChannel } from '$lib/stores/dms';
 	import { goto } from '$app/navigation';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$lib/components/common/Avatar.svelte';
 
 	// Get friends that are currently online/idle/dnd.
 	const onlineFriends = $derived.by(() => {
-		const result: Array<{ id: string; username: string; displayName: string | null; avatarId: string | null; status: string }> = [];
+		const result: Array<{ id: string; username: string; displayName: string | null; avatarId: string | null; instanceId: string | null; status: string }> = [];
 		for (const [targetId, rel] of $relationships) {
 			if (rel.type !== 'friend') continue;
 			const status = $presenceMap.get(targetId);
@@ -18,6 +19,7 @@
 					username: rel.user?.username ?? targetId,
 					displayName: rel.user?.display_name ?? null,
 					avatarId: rel.user?.avatar_id ?? null,
+					instanceId: rel.user?.instance_id ?? null,
 					status
 				});
 			}
@@ -65,7 +67,7 @@
 				>
 					<Avatar
 						name={friend.displayName ?? friend.username}
-						src={friend.avatarId ? `/api/v1/files/${friend.avatarId}` : null}
+						src={avatarUrl(friend.avatarId, friend.instanceId || undefined)}
 						size="sm"
 						status={friend.status}
 					/>

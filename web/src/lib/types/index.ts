@@ -39,6 +39,7 @@ export interface MutualGuild {
 	id: string;
 	name: string;
 	icon_id: string | null;
+	instance_id?: string | null;
 }
 
 export interface Guild {
@@ -174,6 +175,7 @@ export interface Attachment {
 	alt_text?: string;
 	nsfw: boolean;
 	description: string | null;
+	instance_id?: string | null;
 	created_at: string;
 }
 
@@ -460,7 +462,7 @@ export interface GuildEvent {
 	status: 'scheduled' | 'active' | 'completed' | 'cancelled';
 	interested_count: number;
 	created_at: string;
-	creator?: { id: string; username: string; display_name?: string | null; avatar_id?: string | null };
+	creator?: { id: string; username: string; display_name?: string | null; avatar_id?: string | null; instance_id?: string | null };
 	user_rsvp: string | null;
 }
 
@@ -684,6 +686,7 @@ export interface ServerNotification {
 	actor_id: string;
 	actor_name: string;
 	actor_avatar_id: string | null;
+	actor_instance_id?: string | null;
 	content: string | null;
 	metadata: Record<string, unknown> | null;
 	read: boolean;

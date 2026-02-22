@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { currentUser } from '$lib/stores/auth';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$lib/components/common/Avatar.svelte';
 	import MyIssuesPanel from './MyIssuesPanel.svelte';
 	import OnlineFriendsPanel from './OnlineFriendsPanel.svelte';
@@ -24,7 +25,7 @@
 			{#if $currentUser}
 				<Avatar
 					name={$currentUser.display_name ?? $currentUser.username}
-					src={$currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null}
+					src={avatarUrl($currentUser.avatar_id)}
 					size="lg"
 					status={$currentUser.status_presence}
 				/>
