@@ -767,6 +767,14 @@ func (s *Service) HandleHandshake(w http.ResponseWriter, r *http.Request) {
 	if req.SenderDomain != "" {
 		disc, discErr := DiscoverInstance(r.Context(), req.SenderDomain)
 		if discErr == nil && disc != nil {
+			if disc.InstanceID != "" && disc.InstanceID != req.SenderID {
+				s.logger.Warn("handshake sender mismatch",
+					slog.String("domain", req.SenderDomain),
+					slog.String("request_id", req.SenderID),
+					slog.String("discovery_id", disc.InstanceID))
+				http.Error(w, "sender_id does not match discovery response", http.StatusBadRequest)
+				return
+			}
 			if regErr := s.RegisterRemoteInstance(r.Context(), disc); regErr != nil {
 				s.logger.Warn("handshake: failed to register/update sender instance",
 					slog.String("domain", req.SenderDomain),
@@ -1044,12 +1052,13 @@ func (s *Service) flushCounters(ctx context.Context) {
 
 	for peerID, entry := range batch {
 		if _, err := tx.Exec(ctx,
-			`UPDATE federation_peer_status
-			 SET events_sent = events_sent + $1,
-			     events_received = events_received + $2,
-			     updated_at = now()
-			 WHERE peer_id = $3`,
-			entry.sent, entry.received, peerID); err != nil {
+			`INSERT INTO federation_peer_status (peer_id, instance_id, events_sent, events_received, updated_at)
+			 VALUES ($3, $4, $1, $2, now())
+			 ON CONFLICT (peer_id) DO UPDATE SET
+			   events_sent = federation_peer_status.events_sent + EXCLUDED.events_sent,
+			   events_received = federation_peer_status.events_received + EXCLUDED.events_received,
+			   updated_at = now()`,
+			entry.sent, entry.received, peerID, s.instanceID); err != nil {
 			s.logger.Warn("counter flush: failed to update peer",
 				slog.String("peer_id", peerID), slog.String("error", err.Error()))
 		}
