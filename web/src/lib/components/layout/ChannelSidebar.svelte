@@ -22,6 +22,7 @@
 	import { e2ee, unlockedChannels } from '$lib/encryption/e2eeManager';
 	import VoiceConnectionBar from '$components/layout/VoiceConnectionBar.svelte';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import { canManageChannels, canManageGuild, canManageThreads } from '$lib/stores/permissions';
 	import { channelMutePrefs, guildMutePrefs, isChannelMuted, isGuildMuted, muteChannel, unmuteChannel, muteGuild, unmuteGuild } from '$lib/stores/muting';
 	import StatusPicker from '$components/common/StatusPicker.svelte';
@@ -1067,7 +1068,7 @@
 							role="button"
 							tabindex="-1"
 						>
-							<Avatar name={dmName} src={dmRecipient?.avatar_id ? `/api/v1/files/${dmRecipient.avatar_id}` : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
+							<Avatar name={dmName} src={dmRecipient?.avatar_id ? avatarUrl(dmRecipient.avatar_id, dmRecipient.instance_id || undefined) : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 						</span>
 							{#if dm.encrypted}
 								{@const unlocked = $unlockedChannels.has(dm.id)}
