@@ -508,7 +508,7 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 	}
 
 	query := `SELECT m.id, m.channel_id, m.author_id, m.content, m.created_at,
-	                 u.username, u.display_name, u.avatar_id, COALESCE(i.domain, '')
+	                 u.username, u.display_name, u.avatar_id, u.instance_id, COALESCE(i.domain, '')
 	          FROM messages m
 	          JOIN users u ON u.id = m.author_id
 	          LEFT JOIN instances i ON i.id = u.instance_id
@@ -548,16 +548,19 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 		var content *string
 		var createdAt time.Time
 		var username string
-		var displayName, avatarID *string
+		var displayName, avatarID, instanceID *string
 		var instanceDomain string
 		if err := rows.Scan(&id, &chID, &authorID, &content, &createdAt,
-			&username, &displayName, &avatarID, &instanceDomain); err != nil {
+			&username, &displayName, &avatarID, &instanceID, &instanceDomain); err != nil {
 			ss.logger.Warn("failed to scan federated message row", slog.String("error", err.Error()))
 			continue
 		}
 		authorObj := map[string]interface{}{
 			"id": authorID, "username": username,
 			"display_name": displayName, "avatar_id": avatarID,
+		}
+		if instanceID != nil {
+			authorObj["instance_id"] = *instanceID
 		}
 		if instanceDomain != "" {
 			authorObj["instance_domain"] = instanceDomain
