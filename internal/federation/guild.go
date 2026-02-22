@@ -2143,6 +2143,34 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 		return
 	}
 
+	// Build domain → instance_id map for avatar proxy URLs.
+	domainSet := map[string]bool{}
+	for _, m := range remoteResp.Data {
+		domain := m.InstanceDomain
+		if domain == "" {
+			domain = instanceDomain
+		}
+		domainSet[domain] = true
+	}
+	domains := make([]string, 0, len(domainSet))
+	for d := range domainSet {
+		domains = append(domains, d)
+	}
+	domainToID := map[string]string{}
+	if len(domains) > 0 {
+		rows, err := ss.fed.pool.Query(ctx,
+			`SELECT domain, id FROM instances WHERE domain = ANY($1)`, domains)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var d, id string
+				if rows.Scan(&d, &id) == nil {
+					domainToID[d] = id
+				}
+			}
+		}
+	}
+
 	members := make([]map[string]interface{}, 0, len(remoteResp.Data))
 	for _, m := range remoteResp.Data {
 		// Parse role_ids array.
@@ -2170,6 +2198,7 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 			"roles":     roles,
 			"user": map[string]interface{}{
 				"id":              m.UserID,
+				"instance_id":     domainToID[domain],
 				"username":        m.Username,
 				"display_name":    m.DisplayName,
 				"avatar_id":       m.AvatarID,
