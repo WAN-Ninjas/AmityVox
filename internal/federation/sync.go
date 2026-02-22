@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,12 @@ import (
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
 )
+
+// unknownSenderTTL is how long a negative-cache entry lasts before the next DB lookup.
+const unknownSenderTTL = 60 * time.Second
+
+// maxUnknownCacheSize caps the negative cache to prevent unbounded memory growth.
+const maxUnknownCacheSize = 1000
 
 // maxRetryAttempts is the maximum number of delivery attempts before moving
 // a message to the dead letter queue.
@@ -59,6 +66,11 @@ type SyncService struct {
 	client     *http.Client
 	voiceSvc   VoiceTokenGenerator // optional, for federated voice
 	liveKitURL string              // public LiveKit URL for this instance
+
+	// unknownCache is a negative cache for sender IDs that are not in the
+	// instances table. Prevents repeated DB queries from unknown senders.
+	unknownCache   map[string]time.Time // sender_id → expiry
+	unknownCacheMu sync.Mutex
 }
 
 // VoiceTokenGenerator is the subset of voice.Service that federation needs.
@@ -70,12 +82,49 @@ type VoiceTokenGenerator interface {
 // NewSyncService creates a new federation sync service.
 func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger) *SyncService {
 	return &SyncService{
-		fed:    fed,
-		bus:    bus,
-		hlc:    NewHLC(),
-		logger: logger,
-		client: &http.Client{Timeout: 15 * time.Second},
+		fed:          fed,
+		bus:          bus,
+		hlc:          NewHLC(),
+		logger:       logger,
+		client:       &http.Client{Timeout: 15 * time.Second},
+		unknownCache: make(map[string]time.Time),
 	}
+}
+
+// isNegativelyCached returns true if the sender is in the negative cache and
+// the entry has not expired. Expired entries are lazily removed.
+func (ss *SyncService) isNegativelyCached(senderID string) bool {
+	ss.unknownCacheMu.Lock()
+	defer ss.unknownCacheMu.Unlock()
+	expiry, ok := ss.unknownCache[senderID]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expiry) {
+		delete(ss.unknownCache, senderID)
+		return false
+	}
+	return true
+}
+
+// cacheUnknownSender adds a sender to the negative cache with the standard TTL.
+// If the cache exceeds maxUnknownCacheSize, the oldest entry is evicted.
+func (ss *SyncService) cacheUnknownSender(senderID string) {
+	ss.unknownCacheMu.Lock()
+	defer ss.unknownCacheMu.Unlock()
+	if len(ss.unknownCache) >= maxUnknownCacheSize {
+		// Evict the oldest entry.
+		var oldestID string
+		var oldestTime time.Time
+		for id, exp := range ss.unknownCache {
+			if oldestID == "" || exp.Before(oldestTime) {
+				oldestID = id
+				oldestTime = exp
+			}
+		}
+		delete(ss.unknownCache, oldestID)
+	}
+	ss.unknownCache[senderID] = time.Now().Add(unknownSenderTTL)
 }
 
 // SetVoiceService configures the voice service for federated voice token generation.
@@ -100,13 +149,21 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check negative cache before hitting the database.
+	if ss.isNegativelyCached(signed.SenderID) {
+		http.Error(w, "Unknown sender instance", http.StatusForbidden)
+		return
+	}
+
 	// Look up sender's public key.
 	var publicKeyPEM string
 	err = ss.fed.pool.QueryRow(r.Context(),
 		`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
 	).Scan(&publicKeyPEM)
 	if err == pgx.ErrNoRows {
-		ss.logger.Info("unknown sender, attempting discovery", slog.String("sender_id", signed.SenderID))
+		ss.cacheUnknownSender(signed.SenderID)
+		ss.logger.Warn("unknown sender, cached for 60s",
+			slog.String("sender_id", signed.SenderID))
 		http.Error(w, "Unknown sender instance", http.StatusForbidden)
 		return
 	}
@@ -1014,13 +1071,20 @@ func (ss *SyncService) HandleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check negative cache before hitting the database.
+	if ss.isNegativelyCached(signed.SenderID) {
+		http.Error(w, "Unknown sender instance", http.StatusForbidden)
+		return
+	}
+
 	// Look up sender's public key.
 	var publicKeyPEM string
 	err = ss.fed.pool.QueryRow(r.Context(),
 		`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
 	).Scan(&publicKeyPEM)
 	if err == pgx.ErrNoRows {
-		ss.logger.Info("sync: unknown sender", slog.String("sender_id", signed.SenderID))
+		ss.cacheUnknownSender(signed.SenderID)
+		ss.logger.Warn("sync: unknown sender, cached for 60s", slog.String("sender_id", signed.SenderID))
 		http.Error(w, "Unknown sender instance", http.StatusForbidden)
 		return
 	}

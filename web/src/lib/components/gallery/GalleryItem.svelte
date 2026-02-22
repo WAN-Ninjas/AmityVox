@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Attachment } from '$lib/types';
+	import { fileUrl as buildFileUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		attachment: Attachment;
@@ -10,7 +11,7 @@
 
 	const isVideo = $derived(attachment.content_type.startsWith('video/'));
 	const isImage = $derived(attachment.content_type.startsWith('image/'));
-	const fileUrl = $derived(`/api/v1/files/${attachment.id}`);
+	const fileUrl = $derived(buildFileUrl(attachment.id, attachment.instance_id || undefined));
 </script>
 
 <button

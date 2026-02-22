@@ -926,7 +926,7 @@
 						{#each [...voiceUsers.values()] as participant (participant.userId)}
 							<div class="flex items-center gap-1.5 py-0.5">
 								<div class="relative">
-									<Avatar name={participant.displayName ?? participant.username} src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null} size="sm" />
+									<Avatar name={participant.displayName ?? participant.username} src={avatarUrl(participant.avatarId, participant.instanceId || undefined)} size="sm" />
 									{#if participant.speaking && $voiceChannelId === channel.id}
 										<div class="pointer-events-none absolute -inset-0.5 z-10 rounded-full border-2 border-green-500 shadow-[0_0_8px_rgba(34,197,94,0.35)]"></div>
 									{/if}
@@ -1117,7 +1117,7 @@
 					onclick={(e) => { e.stopPropagation(); showStatusPicker = !showStatusPicker; }}
 					title="Set status"
 				>
-					<Avatar name={$currentUser.display_name ?? $currentUser.username} src={$currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null} size="sm" status={myStatus} />
+					<Avatar name={$currentUser.display_name ?? $currentUser.username} src={avatarUrl($currentUser.avatar_id)} size="sm" status={myStatus} />
 					<div class="min-w-0 flex-1 text-left">
 						<p class="truncate text-sm font-medium text-text-primary">
 							{$currentUser.display_name ?? $currentUser.username}

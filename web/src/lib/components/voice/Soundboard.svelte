@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, ApiRequestError } from '$lib/api/client';
+	import { fileUrl } from '$lib/utils/avatar';
 
 	let {
 		guildId,
@@ -58,7 +59,7 @@
 			await api.playSoundboardSound(guildId, sound.id);
 
 			// Play the sound locally as preview
-			const audio = new Audio(`/api/v1/files/${sound.file_url}`);
+			const audio = new Audio(fileUrl(sound.file_url));
 			audio.volume = Math.min(sound.volume, 1.0);
 			audio.play().catch(() => {});
 

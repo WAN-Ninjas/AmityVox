@@ -14,6 +14,7 @@
 	import { dismissIncomingCall } from '$lib/stores/callRing';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$components/common/Avatar.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
@@ -177,7 +178,7 @@
 			>
 				<Avatar
 					name={recipientName}
-					src={recipient.avatar_id ? `/api/v1/files/${recipient.avatar_id}` : null}
+					src={avatarUrl(recipient.avatar_id, recipient.instance_id || undefined)}
 					size="sm"
 					status={recipientStatus}
 				/>

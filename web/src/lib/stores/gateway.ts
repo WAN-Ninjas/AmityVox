@@ -249,6 +249,7 @@ export function connectGateway(token: string) {
 					username?: string;
 					display_name?: string | null;
 					avatar_id?: string | null;
+					instance_id?: string | null;
 					muted?: boolean;
 					deafened?: boolean;
 					action?: 'join' | 'leave' | 'update';
@@ -269,6 +270,7 @@ export function connectGateway(token: string) {
 					caller_name: string;
 					caller_display_name?: string | null;
 					caller_avatar_id?: string | null;
+					caller_instance_id?: string | null;
 					channel_type: 'dm' | 'group';
 				};
 				addIncomingCall({
@@ -277,6 +279,7 @@ export function connectGateway(token: string) {
 					callerName: ring.caller_name,
 					callerDisplayName: ring.caller_display_name,
 					callerAvatarId: ring.caller_avatar_id,
+					callerInstanceId: ring.caller_instance_id,
 					channelType: ring.channel_type,
 					timestamp: Date.now()
 				});

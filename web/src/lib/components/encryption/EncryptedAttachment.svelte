@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fileUrl } from '$lib/utils/avatar';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import AudioPlayer from '$components/chat/AudioPlayer.svelte';
 	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
@@ -12,6 +13,7 @@
 			width?: number | null;
 			height?: number | null;
 			alt_text?: string | null;
+			instance_id?: string | null;
 		};
 		channelId: string;
 		onlightbox?: (src: string) => void;
@@ -70,7 +72,7 @@
 
 	async function fetchAndDecrypt(attachmentId: string, ch: string, signal: AbortSignal) {
 		try {
-			const res = await fetch(`/api/v1/files/${attachmentId}`, { signal });
+			const res = await fetch(fileUrl(attachmentId, attachment.instance_id || undefined), { signal });
 			if (!res.ok) throw new Error('fetch failed');
 			const encrypted = await res.arrayBuffer();
 			if (signal.aborted) return;

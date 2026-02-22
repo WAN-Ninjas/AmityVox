@@ -5,6 +5,7 @@
 	import { playNotificationSound } from '$lib/utils/sounds';
 	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from './Avatar.svelte';
 
 	let accepting = $state(false);
@@ -81,7 +82,7 @@
 				<div class="ring-pulse pointer-events-none absolute -inset-2 rounded-full"></div>
 				<Avatar
 					name={call.callerDisplayName ?? call.callerName}
-					src={call.callerAvatarId ? `/api/v1/files/${call.callerAvatarId}` : null}
+					src={avatarUrl(call.callerAvatarId, call.callerInstanceId || undefined)}
 					size="xl"
 				/>
 			</div>

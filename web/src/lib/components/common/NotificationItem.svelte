@@ -3,6 +3,7 @@
 	import type { ServerNotification } from '$lib/types';
 	import { getNotificationDisplay, formatNotificationTimestamp, isActionableType } from '$lib/utils/notificationHelpers';
 	import { markNotificationRead, deleteNotification } from '$lib/stores/notifications';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from './Avatar.svelte';
 
 	interface Props {
@@ -52,7 +53,7 @@
 	<!-- Type icon circle -->
 	<div class="mt-0.5 flex {compact ? 'h-7 w-7' : 'h-8 w-8'} shrink-0 items-center justify-center rounded-full {notification.read ? 'bg-bg-tertiary text-text-muted' : 'bg-brand-500/15'} {display.colorClass}">
 		{#if notification.actor_avatar_id}
-			<Avatar userId={notification.actor_id} avatarId={notification.actor_avatar_id} displayName={notification.actor_name} size={compact ? 28 : 32} />
+			<Avatar src={avatarUrl(notification.actor_avatar_id, notification.actor_instance_id)} name={notification.actor_name ?? '?'} size={compact ? 'sm' : 'md'} />
 		{:else}
 			<span class="{compact ? 'text-xs' : 'text-sm'} font-bold">{display.icon}</span>
 		{/if}

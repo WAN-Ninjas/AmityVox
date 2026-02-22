@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { StickerPack, Sticker } from '$lib/types';
+	import { fileUrl } from '$lib/utils/avatar';
 	import { api } from '$lib/api/client';
 	import { currentGuildId } from '$lib/stores/guilds';
 
@@ -155,7 +156,7 @@
 						title={sticker.name}
 					>
 						<img
-							src="/api/v1/files/{sticker.file_id}"
+							src={fileUrl(sticker.file_id)}
 							alt={sticker.name}
 							class="h-14 w-14 object-contain"
 							loading="lazy"

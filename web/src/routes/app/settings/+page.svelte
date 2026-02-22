@@ -3,6 +3,7 @@
 	import { currentUser, logout } from '$lib/stores/auth';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
+	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { getMutedChannels, getMutedGuilds, unmuteChannel, unmuteGuild } from '$lib/stores/muting';
@@ -1429,7 +1430,7 @@
 							{#if bannerPreview}
 								<img class="h-full w-full object-cover" src={bannerPreview} alt="Banner preview" />
 							{:else if $currentUser.banner_id}
-								<img class="h-full w-full object-cover" src="/api/v1/files/{$currentUser.banner_id}" alt="Profile banner" />
+								<img class="h-full w-full object-cover" src={fileUrl($currentUser.banner_id)} alt="Profile banner" />
 							{:else}
 								<div class="h-full w-full" style="background-color: {accentColor}"></div>
 							{/if}
@@ -1452,7 +1453,7 @@
 									<div class="rounded-xl bg-bg-secondary p-1">
 										<Avatar
 											name={$currentUser.display_name ?? $currentUser.username}
-											src={avatarPreview ?? ($currentUser.avatar_id ? `/api/v1/files/${$currentUser.avatar_id}` : null)}
+											src={avatarPreview ?? avatarUrl($currentUser.avatar_id)}
 											size="lg"
 											status={$currentUser.status_presence}
 										/>
@@ -2126,7 +2127,7 @@
 									<div class="flex items-center gap-3 rounded-md bg-bg-primary px-3 py-2">
 										<Avatar
 											name={blocked.user?.display_name ?? blocked.user?.username ?? 'Unknown'}
-											src={blocked.user?.avatar_id ? `/api/v1/files/${blocked.user.avatar_id}` : null}
+											src={avatarUrl(blocked.user?.avatar_id, blocked.user?.instance_id || undefined)}
 											size="sm"
 										/>
 										<div class="min-w-0 flex-1">

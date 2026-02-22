@@ -15,6 +15,7 @@
 	import GuildInsights from '$lib/components/guild/GuildInsights.svelte';
 	import GuildTemplates from '$lib/components/guild/GuildTemplates.svelte';
 	import GuildRetentionSettings from '$lib/components/guild/GuildRetentionSettings.svelte';
+	import { fileUrl } from '$lib/utils/avatar';
 	import { canManageGuild, canManageRoles, canBanMembers, canKickMembers, canViewAuditLog } from '$lib/stores/permissions';
 	import RoleEditor from '$components/guild/RoleEditor.svelte';
 	import MembersPanel from '$components/guild/MembersPanel.svelte';
@@ -1476,7 +1477,7 @@
 					<div class="relative">
 						<Avatar
 							name={$currentGuild?.name ?? '?'}
-							src={iconPreview ?? ($currentGuild?.icon_id ? `/api/v1/files/${$currentGuild.icon_id}` : null)}
+							src={iconPreview ?? ($currentGuild?.icon_id ? fileUrl($currentGuild.icon_id, $currentGuild.instance_id || undefined) : null)}
 							size="lg"
 						/>
 						<label class="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity hover:opacity-100">
@@ -1792,7 +1793,7 @@
 					<div class="grid grid-cols-4 gap-3">
 						{#each emoji as e (e.id)}
 							<div class="flex flex-col items-center gap-1 rounded-lg bg-bg-secondary p-3">
-								<img src="/api/v1/files/{e.id}" alt={e.name} class="h-8 w-8" />
+								<img src={fileUrl(e.id, $currentGuild?.instance_id || undefined)} alt={e.name} class="h-8 w-8" />
 								<span class="text-xs text-text-muted">:{e.name}:</span>
 								<button
 									class="text-2xs text-red-400 hover:text-red-300"
@@ -1898,7 +1899,7 @@
 													{#each packStickers as sticker (sticker.id)}
 														<div class="flex flex-col items-center gap-1 rounded-lg bg-bg-primary p-3">
 															<img
-																src="/api/v1/files/{sticker.file_id}"
+																src={fileUrl(sticker.file_id, $currentGuild?.instance_id || undefined)}
 																alt={sticker.name}
 																class="h-12 w-12 object-contain"
 																loading="lazy"
