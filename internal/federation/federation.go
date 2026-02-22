@@ -175,6 +175,8 @@ func New(cfg Config) *Service {
 		`SELECT federation_mode FROM instances WHERE id = $1`, cfg.InstanceID,
 	).Scan(&mode); err == nil {
 		s.fedModeCache.Set("__local__", mode)
+	} else {
+		cfg.Logger.Debug("could not pre-load federation mode cache", slog.String("error", err.Error()))
 	}
 
 	return s
@@ -466,11 +468,6 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 		s.allowedCache.Invalidate(disc.InstanceID)
 		s.pubKeyCache.Invalidate(existingID)
 		s.pubKeyCache.Invalidate(disc.InstanceID)
-
-		if s.onInstanceRegistered != nil {
-			s.onInstanceRegistered(disc.InstanceID)
-			s.onInstanceRegistered(existingID)
-		}
 	}
 
 	_, err = s.pool.Exec(ctx,
@@ -495,8 +492,11 @@ func (s *Service) RegisterRemoteInstance(ctx context.Context, disc *DiscoveryRes
 		return fmt.Errorf("registering remote instance %s: %w", disc.Domain, err)
 	}
 
-	if !migrated && s.onInstanceRegistered != nil {
+	if s.onInstanceRegistered != nil {
 		s.onInstanceRegistered(disc.InstanceID)
+		if migrated {
+			s.onInstanceRegistered(existingID)
+		}
 	}
 	return nil
 }
@@ -1050,6 +1050,7 @@ func (s *Service) flushCounters(ctx context.Context) {
 	}
 	defer tx.Rollback(ctx)
 
+	var failedEntries map[string]*counterEntry
 	for peerID, entry := range batch {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO federation_peer_status (peer_id, instance_id, events_sent, events_received, updated_at)
@@ -1061,14 +1062,33 @@ func (s *Service) flushCounters(ctx context.Context) {
 			entry.sent, entry.received, peerID, s.instanceID); err != nil {
 			s.logger.Warn("counter flush: failed to update peer",
 				slog.String("peer_id", peerID), slog.String("error", err.Error()))
+			if failedEntries == nil {
+				failedEntries = make(map[string]*counterEntry)
+			}
+			failedEntries[peerID] = entry
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		s.logger.Error("counter flush: failed to commit", slog.String("error", err.Error()))
-		// Re-add counters so they're not lost.
+		// Re-add all counters so they're not lost.
 		s.counterMu.Lock()
 		for peerID, entry := range batch {
+			if existing, ok := s.pendingCounters[peerID]; ok {
+				existing.sent += entry.sent
+				existing.received += entry.received
+			} else {
+				s.pendingCounters[peerID] = entry
+			}
+		}
+		s.counterMu.Unlock()
+		return
+	}
+
+	// Re-queue entries that failed during exec (commit succeeded for the rest).
+	if len(failedEntries) > 0 {
+		s.counterMu.Lock()
+		for peerID, entry := range failedEntries {
 			if existing, ok := s.pendingCounters[peerID]; ok {
 				existing.sent += entry.sent
 				existing.received += entry.received
