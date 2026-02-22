@@ -167,6 +167,7 @@ type WebAuthnCredential struct {
 type Guild struct {
 	ID                   string    `json:"id"`
 	InstanceID           string    `json:"instance_id"`
+	InstanceDomain       string    `json:"instance_domain,omitempty"`
 	OwnerID              string    `json:"owner_id"`
 	Name                 string    `json:"name"`
 	Description          *string   `json:"description,omitempty"`

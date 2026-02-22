@@ -44,6 +44,7 @@ export interface MutualGuild {
 export interface Guild {
 	id: string;
 	instance_id: string | null;
+	instance_domain?: string;
 	owner_id: string;
 	name: string;
 	description: string | null;
