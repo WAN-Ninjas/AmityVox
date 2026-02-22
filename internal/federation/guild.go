@@ -21,6 +21,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // --- Request/Response types ---
@@ -492,6 +493,12 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 	}
 	if !isMember {
 		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+
+	// Check ViewChannel + ReadHistory permissions for the requesting user.
+	if !ss.hasChannelPermission(ctx, guildID, channelID, req.UserID, permissions.ViewChannel|permissions.ReadHistory) {
+		http.Error(w, "Missing ViewChannel or ReadHistory permission", http.StatusForbidden)
 		return
 	}
 
@@ -2143,6 +2150,34 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 		return
 	}
 
+	// Build domain → instance_id map for avatar proxy URLs.
+	domainSet := map[string]bool{}
+	for _, m := range remoteResp.Data {
+		domain := m.InstanceDomain
+		if domain == "" {
+			domain = instanceDomain
+		}
+		domainSet[domain] = true
+	}
+	domains := make([]string, 0, len(domainSet))
+	for d := range domainSet {
+		domains = append(domains, d)
+	}
+	domainToID := map[string]string{}
+	if len(domains) > 0 {
+		rows, err := ss.fed.pool.Query(ctx,
+			`SELECT domain, id FROM instances WHERE domain = ANY($1)`, domains)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var d, id string
+				if rows.Scan(&d, &id) == nil {
+					domainToID[d] = id
+				}
+			}
+		}
+	}
+
 	members := make([]map[string]interface{}, 0, len(remoteResp.Data))
 	for _, m := range remoteResp.Data {
 		// Parse role_ids array.
@@ -2161,6 +2196,16 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 			domain = instanceDomain
 		}
 
+		user := map[string]interface{}{
+			"id":              m.UserID,
+			"username":        m.Username,
+			"display_name":    m.DisplayName,
+			"avatar_id":       m.AvatarID,
+			"instance_domain": domain,
+		}
+		if id := domainToID[domain]; id != "" {
+			user["instance_id"] = id
+		}
 		members = append(members, map[string]interface{}{
 			"guild_id":  guildID,
 			"user_id":   m.UserID,
@@ -2168,13 +2213,7 @@ func (ss *SyncService) HandleProxyGetFederatedGuildMembers(w http.ResponseWriter
 			"avatar_id": nil,
 			"joined_at": m.JoinedAt,
 			"roles":     roles,
-			"user": map[string]interface{}{
-				"id":              m.UserID,
-				"username":        m.Username,
-				"display_name":    m.DisplayName,
-				"avatar_id":       m.AvatarID,
-				"instance_domain": domain,
-			},
+			"user":      user,
 		})
 	}
 
@@ -2282,6 +2321,105 @@ func (ss *SyncService) HandleProxyRemoveFederatedReaction(w http.ResponseWriter,
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	w.Write(respBody)
+}
+
+// hasChannelPermission computes a user's effective permissions for a channel
+// and checks whether the required permission bits are set. Used by federation
+// handlers to enforce ViewChannel/ReadHistory before serving content.
+func (ss *SyncService) hasChannelPermission(ctx context.Context, guildID, channelID, userID string, perm uint64) bool {
+	// Guild owner has all permissions.
+	var ownerID string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT owner_id FROM guilds WHERE id = $1`, guildID,
+	).Scan(&ownerID); err != nil {
+		return false
+	}
+	if userID == ownerID {
+		return true
+	}
+
+	// Start with guild default permissions.
+	var defaultPerms int64
+	ss.fed.pool.QueryRow(ctx,
+		`SELECT default_permissions FROM guilds WHERE id = $1`, guildID,
+	).Scan(&defaultPerms)
+	computed := uint64(defaultPerms)
+
+	// Apply role allow/deny.
+	rows, _ := ss.fed.pool.Query(ctx,
+		`SELECT r.permissions_allow, r.permissions_deny
+		 FROM roles r
+		 JOIN member_roles mr ON r.id = mr.role_id
+		 WHERE mr.guild_id = $1 AND mr.user_id = $2
+		 ORDER BY r.position DESC`,
+		guildID, userID,
+	)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var allow, deny int64
+			rows.Scan(&allow, &deny)
+			computed |= uint64(allow)
+			computed &^= uint64(deny)
+		}
+	}
+
+	// Administrator bypasses everything.
+	if computed&permissions.Administrator != 0 {
+		return true
+	}
+
+	// Apply channel-level permission overrides.
+	overrideRows, _ := ss.fed.pool.Query(ctx,
+		`SELECT target_type, target_id, allow_bits, deny_bits
+		 FROM channel_permission_overrides
+		 WHERE channel_id = $1`,
+		channelID,
+	)
+	if overrideRows != nil {
+		defer overrideRows.Close()
+
+		// Collect member role IDs for matching role overrides.
+		memberRoles := map[string]bool{}
+		roleRows, _ := ss.fed.pool.Query(ctx,
+			`SELECT role_id FROM member_roles WHERE guild_id = $1 AND user_id = $2`,
+			guildID, userID,
+		)
+		if roleRows != nil {
+			defer roleRows.Close()
+			for roleRows.Next() {
+				var rid string
+				roleRows.Scan(&rid)
+				memberRoles[rid] = true
+			}
+		}
+
+		var roleAllow, roleDeny uint64
+		var memberAllow, memberDeny uint64
+		for overrideRows.Next() {
+			var targetType, targetID string
+			var allow, deny int64
+			overrideRows.Scan(&targetType, &targetID, &allow, &deny)
+			if targetType == "role" && memberRoles[targetID] {
+				roleAllow |= uint64(allow)
+				roleDeny |= uint64(deny)
+			} else if targetType == "member" && targetID == userID {
+				memberAllow |= uint64(allow)
+				memberDeny |= uint64(deny)
+			}
+		}
+		computed |= roleAllow
+		computed &^= roleDeny
+		computed |= memberAllow
+		computed &^= memberDeny
+	}
+
+	// No ViewChannel means no permissions at all.
+	if computed&permissions.ViewChannel == 0 {
+		return false
+	}
+
+	return computed&perm == perm
 }
 
 // signAndPost signs a payload with the federation service and POSTs to a URL.

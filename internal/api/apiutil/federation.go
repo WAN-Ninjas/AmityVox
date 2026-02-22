@@ -18,4 +18,14 @@ type FederationProxy interface {
 		userID string,
 		data interface{},
 	) bool
+
+	// ProxyReadGuildMembers checks if the guild is federated and, if so,
+	// fetches the member list from the home instance. Returns true if proxied
+	// (handler should return), false if local (handler continues).
+	ProxyReadGuildMembers(w http.ResponseWriter, r *http.Request, guildID string) bool
+
+	// ProxyReadChannelMessages checks if the channel belongs to a federated
+	// guild and, if so, fetches messages from the home instance. Returns true
+	// if proxied (handler should return), false if local (handler continues).
+	ProxyReadChannelMessages(w http.ResponseWriter, r *http.Request, channelID string) bool
 }
