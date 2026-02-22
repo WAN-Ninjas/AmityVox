@@ -508,7 +508,7 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 	}
 
 	query := `SELECT m.id, m.channel_id, m.author_id, m.content, m.created_at,
-	                 u.username, u.display_name, u.avatar_id, COALESCE(i.domain, '')
+	                 u.username, u.display_name, u.avatar_id, u.instance_id, COALESCE(i.domain, '')
 	          FROM messages m
 	          JOIN users u ON u.id = m.author_id
 	          LEFT JOIN instances i ON i.id = u.instance_id
@@ -548,16 +548,19 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 		var content *string
 		var createdAt time.Time
 		var username string
-		var displayName, avatarID *string
+		var displayName, avatarID, instanceID *string
 		var instanceDomain string
 		if err := rows.Scan(&id, &chID, &authorID, &content, &createdAt,
-			&username, &displayName, &avatarID, &instanceDomain); err != nil {
+			&username, &displayName, &avatarID, &instanceID, &instanceDomain); err != nil {
 			ss.logger.Warn("failed to scan federated message row", slog.String("error", err.Error()))
 			continue
 		}
 		authorObj := map[string]interface{}{
 			"id": authorID, "username": username,
 			"display_name": displayName, "avatar_id": avatarID,
+		}
+		if instanceID != nil {
+			authorObj["instance_id"] = *instanceID
 		}
 		if instanceDomain != "" {
 			authorObj["instance_domain"] = instanceDomain
@@ -675,13 +678,13 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	// Fetch author data so the event includes the full author object.
 	// Without this, the frontend falls back to author_id (a ULID) as the display name.
 	var authorUsername string
-	var authorDisplayName, authorAvatarID *string
+	var authorDisplayName, authorAvatarID, authorInstanceID *string
 	var authorInstanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
-		`SELECT u.username, u.display_name, u.avatar_id, COALESCE(i.domain, '')
+		`SELECT u.username, u.display_name, u.avatar_id, u.instance_id, COALESCE(i.domain, '')
 		 FROM users u LEFT JOIN instances i ON i.id = u.instance_id
 		 WHERE u.id = $1`, req.UserID,
-	).Scan(&authorUsername, &authorDisplayName, &authorAvatarID, &authorInstanceDomain); err != nil {
+	).Scan(&authorUsername, &authorDisplayName, &authorAvatarID, &authorInstanceID, &authorInstanceDomain); err != nil {
 		ss.logger.Warn("failed to fetch author for federated message", slog.String("error", err.Error()))
 		authorUsername = req.UserID // fallback so the event isn't blank
 	}
@@ -689,6 +692,9 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	authorObj := map[string]interface{}{
 		"id": req.UserID, "username": authorUsername,
 		"display_name": authorDisplayName, "avatar_id": authorAvatarID,
+	}
+	if authorInstanceID != nil {
+		authorObj["instance_id"] = *authorInstanceID
 	}
 	if authorInstanceDomain != "" {
 		authorObj["instance_domain"] = authorInstanceDomain
