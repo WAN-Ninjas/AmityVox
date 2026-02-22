@@ -57,6 +57,12 @@ type peerTarget struct {
 	peerID string
 }
 
+// defaultPeerInboxLimit is the default maximum concurrent inbox requests per peer.
+const defaultPeerInboxLimit = 20
+
+// deliverySemSize is the global cap on concurrent outbound federation deliveries.
+const deliverySemSize = 50
+
 // SyncService handles federation message routing and delivery.
 type SyncService struct {
 	fed        *Service
@@ -71,6 +77,17 @@ type SyncService struct {
 	// instances table. Prevents repeated DB queries from unknown senders.
 	unknownCache   map[string]time.Time // sender_id → expiry
 	unknownCacheMu sync.Mutex
+
+	// Per-peer inbox concurrency limiter — prevents a single peer from
+	// monopolizing the DB pool. Lazy-created per sender ID.
+	peerSems       sync.Map     // senderID -> chan struct{}
+	peerInboxLimit int          // configurable, default 20
+	deliverySem    chan struct{} // global outbound delivery limiter
+
+	// Async timestamp tracking — flushed every 10s by StartTimestampFlusher.
+	touchMu          sync.Mutex
+	touchedInstances map[string]struct{}
+	touchedPeers     map[[2]string]struct{} // [instanceID, peerID]
 }
 
 // VoiceTokenGenerator is the subset of voice.Service that federation needs.
@@ -82,12 +99,16 @@ type VoiceTokenGenerator interface {
 // NewSyncService creates a new federation sync service.
 func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger) *SyncService {
 	return &SyncService{
-		fed:          fed,
-		bus:          bus,
-		hlc:          NewHLC(),
-		logger:       logger,
-		client:       &http.Client{Timeout: 15 * time.Second},
-		unknownCache: make(map[string]time.Time),
+		fed:              fed,
+		bus:              bus,
+		hlc:              NewHLC(),
+		logger:           logger,
+		client:           &http.Client{Timeout: 15 * time.Second},
+		unknownCache:     make(map[string]time.Time),
+		peerInboxLimit:   defaultPeerInboxLimit,
+		deliverySem:      make(chan struct{}, deliverySemSize),
+		touchedInstances: make(map[string]struct{}),
+		touchedPeers:     make(map[[2]string]struct{}),
 	}
 }
 
@@ -127,6 +148,117 @@ func (ss *SyncService) cacheUnknownSender(senderID string) {
 	ss.unknownCache[senderID] = time.Now().Add(unknownSenderTTL)
 }
 
+// ClearNegativeCache removes an instance ID from the negative cache, so the
+// next inbox request from that ID will re-query the database. Called when a
+// remote instance is registered or updated (e.g., rebuilt peer with new ID).
+func (ss *SyncService) ClearNegativeCache(instanceID string) {
+	ss.unknownCacheMu.Lock()
+	delete(ss.unknownCache, instanceID)
+	ss.unknownCacheMu.Unlock()
+}
+
+// acquirePeerSem tries to acquire a slot in the per-peer semaphore.
+// Returns true if acquired, false if the peer is at its concurrency limit.
+func (ss *SyncService) acquirePeerSem(senderID string) bool {
+	v, _ := ss.peerSems.LoadOrStore(senderID, make(chan struct{}, ss.peerInboxLimit))
+	sem := v.(chan struct{})
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// releasePeerSem releases a slot in the per-peer semaphore.
+func (ss *SyncService) releasePeerSem(senderID string) {
+	if v, ok := ss.peerSems.Load(senderID); ok {
+		<-v.(chan struct{})
+	}
+}
+
+// TouchInstance records that an instance was seen, for batched timestamp update.
+func (ss *SyncService) TouchInstance(instanceID string) {
+	ss.touchMu.Lock()
+	ss.touchedInstances[instanceID] = struct{}{}
+	ss.touchMu.Unlock()
+}
+
+// TouchPeer records that a federation peer was active, for batched timestamp update.
+func (ss *SyncService) TouchPeer(instanceID, peerID string) {
+	ss.touchMu.Lock()
+	ss.touchedPeers[[2]string{instanceID, peerID}] = struct{}{}
+	ss.touchMu.Unlock()
+}
+
+// StartTimestampFlusher starts a background goroutine that flushes accumulated
+// timestamp updates every 10 seconds. On context cancellation it performs a
+// final flush before returning.
+func (ss *SyncService) StartTimestampFlusher(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ss.flushTimestamps(context.Background())
+			case <-ctx.Done():
+				ss.flushTimestamps(context.Background())
+				return
+			}
+		}
+	}()
+}
+
+// flushTimestamps writes batched last_seen_at / last_synced_at updates.
+func (ss *SyncService) flushTimestamps(ctx context.Context) {
+	ss.touchMu.Lock()
+	instances := ss.touchedInstances
+	peers := ss.touchedPeers
+	ss.touchedInstances = make(map[string]struct{})
+	ss.touchedPeers = make(map[[2]string]struct{})
+	ss.touchMu.Unlock()
+
+	if len(instances) > 0 {
+		ids := make([]string, 0, len(instances))
+		for id := range instances {
+			ids = append(ids, id)
+		}
+		if _, err := ss.fed.pool.Exec(ctx,
+			`UPDATE instances SET last_seen_at = now() WHERE id = ANY($1)`, ids); err != nil {
+			ss.logger.Warn("timestamp flush: failed to update instances",
+				slog.String("error", err.Error()))
+			// Re-add so they're retried on next flush.
+			ss.touchMu.Lock()
+			for id := range instances {
+				ss.touchedInstances[id] = struct{}{}
+			}
+			ss.touchMu.Unlock()
+		}
+	}
+
+	if len(peers) > 0 {
+		var failedPeers [][2]string
+		for pair := range peers {
+			if _, err := ss.fed.pool.Exec(ctx,
+				`UPDATE federation_peers SET last_synced_at = now()
+				 WHERE instance_id = $1 AND peer_id = $2`,
+				pair[0], pair[1]); err != nil {
+				ss.logger.Warn("timestamp flush: failed to update peer",
+					slog.String("error", err.Error()))
+				failedPeers = append(failedPeers, pair)
+			}
+		}
+		if len(failedPeers) > 0 {
+			ss.touchMu.Lock()
+			for _, pair := range failedPeers {
+				ss.touchedPeers[pair] = struct{}{}
+			}
+			ss.touchMu.Unlock()
+		}
+	}
+}
+
 // SetVoiceService configures the voice service for federated voice token generation.
 func (ss *SyncService) SetVoiceService(voiceSvc VoiceTokenGenerator, liveKitPublicURL string) {
 	ss.voiceSvc = voiceSvc
@@ -155,23 +287,35 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up sender's public key.
-	var publicKeyPEM string
-	err = ss.fed.pool.QueryRow(r.Context(),
-		`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
-	).Scan(&publicKeyPEM)
-	if err == pgx.ErrNoRows {
-		ss.cacheUnknownSender(signed.SenderID)
-		ss.logger.Warn("unknown sender, cached for 60s",
-			slog.String("sender_id", signed.SenderID))
-		http.Error(w, "Unknown sender instance", http.StatusForbidden)
+	// Look up sender's public key — cache hit avoids DB query.
+	publicKeyPEM, cached := ss.fed.pubKeyCache.Get(signed.SenderID)
+	if !cached {
+		err = ss.fed.pool.QueryRow(r.Context(),
+			`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
+		).Scan(&publicKeyPEM)
+		if err == pgx.ErrNoRows {
+			ss.cacheUnknownSender(signed.SenderID)
+			ss.logger.Warn("unknown sender, cached for 60s",
+				slog.String("sender_id", signed.SenderID))
+			http.Error(w, "Unknown sender instance", http.StatusForbidden)
+			return
+		}
+		if err != nil {
+			ss.logger.Error("failed to look up sender", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		ss.fed.pubKeyCache.Set(signed.SenderID, publicKeyPEM)
+	}
+
+	// Per-peer concurrency limiter — only after sender is validated to prevent
+	// unbounded semaphore growth from unknown SenderIDs.
+	if !ss.acquirePeerSem(signed.SenderID) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Too many concurrent requests", http.StatusTooManyRequests)
 		return
 	}
-	if err != nil {
-		ss.logger.Error("failed to look up sender", slog.String("error", err.Error()))
-		http.Error(w, "Internal error", http.StatusInternalServerError)
-		return
-	}
+	defer ss.releasePeerSem(signed.SenderID)
 
 	// Verify signature.
 	valid, err := VerifySignature(publicKeyPEM, signed.Payload, signed.Signature)
@@ -231,15 +375,9 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 	// Update HLC with remote timestamp.
 	ss.hlc.Update(msg.Timestamp)
 
-	// Update last_seen_at for the remote instance.
-	ss.fed.pool.Exec(r.Context(),
-		`UPDATE instances SET last_seen_at = now() WHERE id = $1`, signed.SenderID)
-
-	// Update last_synced_at for the federation peer.
-	ss.fed.pool.Exec(r.Context(),
-		`UPDATE federation_peers SET last_synced_at = now()
-		 WHERE instance_id = $1 AND peer_id = $2`,
-		ss.fed.instanceID, signed.SenderID)
+	// Record instance/peer activity for batched async timestamp updates.
+	ss.TouchInstance(signed.SenderID)
+	ss.TouchPeer(ss.fed.instanceID, signed.SenderID)
 
 	// Persist inbound message events to the local database.
 	if msg.ChannelID != "" {
@@ -546,7 +684,12 @@ func (ss *SyncService) DeliverToAllPeers(ctx context.Context, msg FederatedMessa
 	}
 
 	for _, peer := range peers {
-		go ss.deliverToPeer(ctx, peer.domain, peer.peerID, signed)
+		p := peer
+		go func() {
+			ss.deliverySem <- struct{}{}
+			defer func() { <-ss.deliverySem }()
+			ss.deliverToPeer(ctx, p.domain, p.peerID, signed)
+		}()
 	}
 }
 
@@ -602,7 +745,12 @@ func (ss *SyncService) DeliverToChannelPeers(ctx context.Context, msg FederatedM
 	}
 
 	for _, peer := range peers {
-		go ss.deliverToPeer(ctx, peer.domain, peer.peerID, signed)
+		p := peer
+		go func() {
+			ss.deliverySem <- struct{}{}
+			defer func() { <-ss.deliverySem }()
+			ss.deliverToPeer(ctx, p.domain, p.peerID, signed)
+		}()
 	}
 }
 
@@ -1077,21 +1225,24 @@ func (ss *SyncService) HandleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up sender's public key.
-	var publicKeyPEM string
-	err = ss.fed.pool.QueryRow(r.Context(),
-		`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
-	).Scan(&publicKeyPEM)
-	if err == pgx.ErrNoRows {
-		ss.cacheUnknownSender(signed.SenderID)
-		ss.logger.Warn("sync: unknown sender, cached for 60s", slog.String("sender_id", signed.SenderID))
-		http.Error(w, "Unknown sender instance", http.StatusForbidden)
-		return
-	}
-	if err != nil {
-		ss.logger.Error("sync: failed to look up sender", slog.String("error", err.Error()))
-		http.Error(w, "Internal error", http.StatusInternalServerError)
-		return
+	// Look up sender's public key — cache hit avoids DB query.
+	publicKeyPEM, cached := ss.fed.pubKeyCache.Get(signed.SenderID)
+	if !cached {
+		err = ss.fed.pool.QueryRow(r.Context(),
+			`SELECT public_key FROM instances WHERE id = $1`, signed.SenderID,
+		).Scan(&publicKeyPEM)
+		if err == pgx.ErrNoRows {
+			ss.cacheUnknownSender(signed.SenderID)
+			ss.logger.Warn("sync: unknown sender, cached for 60s", slog.String("sender_id", signed.SenderID))
+			http.Error(w, "Unknown sender instance", http.StatusForbidden)
+			return
+		}
+		if err != nil {
+			ss.logger.Error("sync: failed to look up sender", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		ss.fed.pubKeyCache.Set(signed.SenderID, publicKeyPEM)
 	}
 
 	// Verify signature.
