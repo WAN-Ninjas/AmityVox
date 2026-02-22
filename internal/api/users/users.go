@@ -1283,9 +1283,11 @@ func (h *Handler) loadChannelRecipients(ctx context.Context, channelIDs []string
 		`SELECT cr.channel_id, u.id, u.instance_id, u.username, u.display_name, u.avatar_id,
 		        u.status_text, u.status_emoji, u.status_presence, u.status_expires_at,
 		        u.bio, u.banner_id, u.accent_color, u.pronouns,
-		        u.bot_owner_id, u.flags, u.created_at
+		        u.bot_owner_id, u.flags, u.created_at,
+		        COALESCE(i.domain, '')
 		 FROM channel_recipients cr
 		 JOIN users u ON u.id = cr.user_id
+		 LEFT JOIN instances i ON i.id = u.instance_id
 		 WHERE cr.channel_id = ANY($1)`,
 		channelIDs,
 	)
@@ -1297,14 +1299,19 @@ func (h *Handler) loadChannelRecipients(ctx context.Context, channelIDs []string
 	for rows.Next() {
 		var channelID string
 		var u models.User
+		var instanceDomain string
 		if err := rows.Scan(
 			&channelID,
 			&u.ID, &u.InstanceID, &u.Username, &u.DisplayName, &u.AvatarID,
 			&u.StatusText, &u.StatusEmoji, &u.StatusPresence, &u.StatusExpiresAt,
 			&u.Bio, &u.BannerID, &u.AccentColor, &u.Pronouns,
 			&u.BotOwnerID, &u.Flags, &u.CreatedAt,
+			&instanceDomain,
 		); err != nil {
 			return nil, err
+		}
+		if instanceDomain != "" {
+			u.InstanceDomain = &instanceDomain
 		}
 		result[channelID] = append(result[channelID], u)
 	}
