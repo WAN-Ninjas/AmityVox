@@ -693,7 +693,7 @@
 			<div class="flex min-w-0 items-center gap-1.5">
 				<h2 class="truncate text-sm font-semibold text-text-primary">{$currentGuild.name}</h2>
 				{#if $currentGuild.instance_id && $currentUser && $currentGuild.instance_id !== $currentUser.instance_id}
-					<FederationBadge domain={$currentGuild.instance_id} compact />
+					<FederationBadge domain={$currentGuild.instance_domain || $currentGuild.instance_id} compact />
 				{/if}
 			</div>
 			<div class="flex items-center gap-1">
