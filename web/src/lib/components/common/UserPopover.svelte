@@ -14,7 +14,7 @@
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import { clientNicknames, setClientNickname } from '$lib/stores/nicknames';
 	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
-	import { avatarUrl } from '$lib/utils/avatar';
+	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		userId: string;
@@ -222,7 +222,7 @@
 	{:else if user}
 		<!-- Banner area — use accent color if set, banner image if available -->
 		{#if user.banner_id}
-			<img class="w-full object-cover" style="aspect-ratio: 3/1;" src="/api/v1/files/{user.banner_id}" alt="" />
+			<img class="w-full object-cover" style="aspect-ratio: 3/1;" src={fileUrl(user.banner_id, user.instance_id || undefined)} alt="" />
 		{:else}
 			<div class="h-16" style="background: {user.accent_color ?? 'var(--brand-600)'}"></div>
 		{/if}
@@ -299,7 +299,7 @@
 								title={guild.name}
 							>
 								{#if guild.icon_id}
-									<img class="h-4 w-4 rounded object-cover" src="/api/v1/files/{guild.icon_id}" alt="" />
+									<img class="h-4 w-4 rounded object-cover" src={fileUrl(guild.icon_id, guild.instance_id || undefined)} alt="" />
 								{:else}
 									<span class="flex h-4 w-4 items-center justify-center rounded bg-brand-600 text-2xs font-bold text-white">
 										{guild.name[0]?.toUpperCase() ?? '?'}
@@ -326,7 +326,7 @@
 							<div class="flex items-center gap-1.5 rounded-md bg-bg-primary px-2 py-1 text-xs text-text-secondary" title={friend.display_name ?? friend.username}>
 								<Avatar
 									name={friend.display_name ?? friend.username}
-									src={friend.avatar_id ? `/api/v1/files/${friend.avatar_id}` : null}
+									src={avatarUrl(friend.avatar_id, friend.instance_id || undefined)}
 									size="sm"
 								/>
 								<span class="max-w-16 truncate">{friend.display_name ?? friend.username}</span>

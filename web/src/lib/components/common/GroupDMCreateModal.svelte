@@ -5,6 +5,7 @@
 	import { relationships } from '$lib/stores/relationships';
 	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from './Avatar.svelte';
 	import Modal from './Modal.svelte';
 
@@ -22,14 +23,15 @@
 
 	// Build friend list from relationships store.
 	const friends = $derived.by(() => {
-		const list: Array<{ id: string; username: string; displayName: string | null; avatarId: string | null }> = [];
+		const list: Array<{ id: string; username: string; displayName: string | null; avatarId: string | null; instanceId: string | null }> = [];
 		for (const [targetId, rel] of $relationships) {
 			if (rel.type !== 'friend') continue;
 			list.push({
 				id: targetId,
 				username: rel.user?.username ?? targetId,
 				displayName: rel.user?.display_name ?? null,
-				avatarId: rel.user?.avatar_id ?? null
+				avatarId: rel.user?.avatar_id ?? null,
+				instanceId: rel.user?.instance_id ?? null
 			});
 		}
 		return list.sort((a, b) => (a.displayName ?? a.username).localeCompare(b.displayName ?? b.username));
@@ -136,7 +138,7 @@
 					>
 						<Avatar
 							name={friend.displayName ?? friend.username}
-							src={friend.avatarId ? `/api/v1/files/${friend.avatarId}` : null}
+							src={avatarUrl(friend.avatarId, friend.instanceId || undefined)}
 							size="sm"
 						/>
 						<span class="flex-1 truncate text-sm text-text-secondary">

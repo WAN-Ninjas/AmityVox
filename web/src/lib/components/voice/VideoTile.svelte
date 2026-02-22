@@ -1,6 +1,7 @@
 <!-- VideoTile.svelte — Reusable tile rendering a video stream or avatar fallback with speaking indicator. -->
 <script lang="ts">
 	import type { VideoTrackInfo, VoiceParticipant } from '$lib/stores/voice';
+	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$components/common/Avatar.svelte';
 	import ParticipantContextMenu from './ParticipantContextMenu.svelte';
 	import { currentUser } from '$lib/stores/auth';
@@ -72,7 +73,7 @@
 		<div class="flex items-center justify-center">
 			<Avatar
 				name={participant.displayName ?? participant.username}
-				src={participant.avatarId ? `/api/v1/files/${participant.avatarId}` : null}
+				src={avatarUrl(participant.avatarId, participant.instanceId || undefined)}
 				size="lg"
 			/>
 		</div>
