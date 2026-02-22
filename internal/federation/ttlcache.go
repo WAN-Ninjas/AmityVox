@@ -23,6 +23,9 @@ type TTLCache[V any] struct {
 
 // NewTTLCache creates a TTLCache with the given default TTL and max capacity.
 func NewTTLCache[V any](ttl time.Duration, maxSize int) *TTLCache[V] {
+	if maxSize <= 0 {
+		maxSize = 1
+	}
 	return &TTLCache[V]{
 		entries: make(map[string]ttlEntry[V], maxSize),
 		ttl:     ttl,

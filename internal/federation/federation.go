@@ -521,10 +521,7 @@ func (s *Service) migrateInstanceID(ctx context.Context, oldID, newID string) er
 		`UPDATE federation_channel_mirrors SET remote_instance_id = $1 WHERE remote_instance_id = $2`,
 		`UPDATE federation_events SET instance_id = $1 WHERE instance_id = $2`,
 		`UPDATE guilds SET instance_id = $1 WHERE instance_id = $2`,
-		`UPDATE channels SET instance_id = $1 WHERE instance_id = $2`,
 		`UPDATE users SET instance_id = $1 WHERE instance_id = $2`,
-		`UPDATE messages SET instance_id = $1 WHERE instance_id = $2`,
-		`UPDATE roles SET instance_id = $1 WHERE instance_id = $2`,
 		`UPDATE federation_key_audit SET instance_id = $1 WHERE instance_id = $2`,
 	}
 	for _, q := range fkUpdates {

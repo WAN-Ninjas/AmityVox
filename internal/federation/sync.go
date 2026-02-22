@@ -287,14 +287,6 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-peer concurrency limiter — prevents a single peer from monopolizing resources.
-	if !ss.acquirePeerSem(signed.SenderID) {
-		w.Header().Set("Retry-After", "1")
-		http.Error(w, "Too many concurrent requests", http.StatusTooManyRequests)
-		return
-	}
-	defer ss.releasePeerSem(signed.SenderID)
-
 	// Look up sender's public key — cache hit avoids DB query.
 	publicKeyPEM, cached := ss.fed.pubKeyCache.Get(signed.SenderID)
 	if !cached {
@@ -315,6 +307,15 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		}
 		ss.fed.pubKeyCache.Set(signed.SenderID, publicKeyPEM)
 	}
+
+	// Per-peer concurrency limiter — only after sender is validated to prevent
+	// unbounded semaphore growth from unknown SenderIDs.
+	if !ss.acquirePeerSem(signed.SenderID) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Too many concurrent requests", http.StatusTooManyRequests)
+		return
+	}
+	defer ss.releasePeerSem(signed.SenderID)
 
 	// Verify signature.
 	valid, err := VerifySignature(publicKeyPEM, signed.Payload, signed.Signature)
