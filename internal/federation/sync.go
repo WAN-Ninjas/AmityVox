@@ -80,9 +80,10 @@ type SyncService struct {
 
 	// Per-peer inbox concurrency limiter — prevents a single peer from
 	// monopolizing the DB pool. Lazy-created per sender ID.
-	peerSems       sync.Map     // senderID -> chan struct{}
-	peerInboxLimit int          // configurable, default 20
-	deliverySem    chan struct{} // global outbound delivery limiter
+	peerSems           sync.Map     // senderID -> chan struct{}
+	peerInboxLimit     int          // configurable, default 20
+	deliverySem        chan struct{} // global outbound delivery limiter
+	backfillWindowDays int          // configurable, default 7
 
 	// Async timestamp tracking — flushed every 10s by StartTimestampFlusher.
 	touchMu          sync.Mutex
@@ -96,19 +97,39 @@ type VoiceTokenGenerator interface {
 	EnsureRoom(ctx context.Context, channelID string) error
 }
 
+// SyncConfig holds tunable federation sync parameters.
+type SyncConfig struct {
+	PeerInboxLimit      int
+	DeliveryConcurrency int
+	BackfillWindowDays  int
+}
+
 // NewSyncService creates a new federation sync service.
-func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger) *SyncService {
+func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger, cfg SyncConfig) *SyncService {
+	peerLimit := cfg.PeerInboxLimit
+	if peerLimit < 1 {
+		peerLimit = defaultPeerInboxLimit
+	}
+	deliveryConcurrency := cfg.DeliveryConcurrency
+	if deliveryConcurrency < 1 {
+		deliveryConcurrency = deliverySemSize
+	}
+	backfillDays := cfg.BackfillWindowDays
+	if backfillDays < 1 {
+		backfillDays = 7
+	}
 	return &SyncService{
-		fed:              fed,
-		bus:              bus,
-		hlc:              NewHLC(),
-		logger:           logger,
-		client:           &http.Client{Timeout: 15 * time.Second},
-		unknownCache:     make(map[string]time.Time),
-		peerInboxLimit:   defaultPeerInboxLimit,
-		deliverySem:      make(chan struct{}, deliverySemSize),
-		touchedInstances: make(map[string]struct{}),
-		touchedPeers:     make(map[[2]string]struct{}),
+		fed:                fed,
+		bus:                bus,
+		hlc:                NewHLC(),
+		logger:             logger,
+		client:             &http.Client{Timeout: 15 * time.Second},
+		unknownCache:       make(map[string]time.Time),
+		peerInboxLimit:     peerLimit,
+		deliverySem:        make(chan struct{}, deliveryConcurrency),
+		backfillWindowDays: backfillDays,
+		touchedInstances:   make(map[string]struct{}),
+		touchedPeers:       make(map[[2]string]struct{}),
 	}
 }
 
@@ -455,7 +476,7 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 // persistInboundMessage writes inbound federated message events to the local
 // database. Guild channels are now stored in the real channels table with the
 // same IDs as the remote instance, so we check for direct existence first.
-// DM channels still use federation_channel_mirrors for ID mapping.
+// DM channels still use federation_dm_channel_map for ID mapping.
 func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstanceID, eventType, guildID, remoteChannelID string, data json.RawMessage) {
 	channelID := remoteChannelID // Start with the channel ID as-is
 
@@ -474,7 +495,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 	if !exists {
 		// Fall back to DM mirror lookup.
 		err = ss.fed.pool.QueryRow(ctx,
-			`SELECT local_channel_id FROM federation_channel_mirrors
+			`SELECT local_channel_id FROM federation_dm_channel_map
 			 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
 			remoteChannelID, remoteInstanceID,
 		).Scan(&channelID)
@@ -607,12 +628,15 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 	if json.Unmarshal(data, &tsExtract) == nil && tsExtract.CreatedAt != nil {
 		hlcWallMs = tsExtract.CreatedAt.UnixMilli()
 	}
-	ss.fed.pool.Exec(ctx,
+	if _, err := ss.fed.pool.Exec(ctx,
 		`INSERT INTO federation_events (id, instance_id, event_type, guild_id, channel_id, hlc_wall_ms, hlc_counter, payload)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 ON CONFLICT (id) DO NOTHING`,
 		models.NewULID().String(), remoteInstanceID, eventType, guildID, channelID,
-		hlcWallMs, 0, data)
+		hlcWallMs, 0, data); err != nil {
+		ss.logger.Warn("failed to store federation event for backfill",
+			slog.String("event_type", eventType), slog.String("instance_id", remoteInstanceID), slog.String("error", err.Error()))
+	}
 }
 
 // persistInboundPresence updates the local user stub's presence when a
@@ -1336,8 +1360,20 @@ func (ss *SyncService) HandleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce backfill window — clamp HLC to configured window floor.
+	// When clamped, set to floor-1 so all events at the floor are included.
+	windowMs := int64(ss.backfillWindowDays) * 24 * 60 * 60 * 1000
+	windowFloor := time.Now().UnixMilli() - windowMs
+	requestedMs := req.LastSeenHLC.WallMs
+	requestedCounter := req.LastSeenHLC.Counter
+	if requestedMs < windowFloor {
+		// Set to floor-1 so the "hlc_wall_ms > $1" condition catches all events at the floor.
+		requestedMs = windowFloor - 1
+		requestedCounter = 0
+	}
+
 	// Query federation_events for events after the given HLC timestamp
-	// that belong to the authorized guilds.
+	// that belong to the authorized guilds, bounded by the backfill window.
 	rows, err := ss.fed.pool.Query(r.Context(),
 		`SELECT id, event_type, guild_id, channel_id, hlc_wall_ms, hlc_counter, payload
 		 FROM federation_events
@@ -1345,7 +1381,7 @@ func (ss *SyncService) HandleSync(w http.ResponseWriter, r *http.Request) {
 		   AND guild_id = ANY($3)
 		 ORDER BY hlc_wall_ms, hlc_counter
 		 LIMIT $4`,
-		req.LastSeenHLC.WallMs, req.LastSeenHLC.Counter, authorizedGuildIDs, maxSyncEvents+1)
+		requestedMs, requestedCounter, authorizedGuildIDs, maxSyncEvents+1)
 	if err != nil {
 		ss.logger.Error("sync: failed to query federation events",
 			slog.String("sender_id", signed.SenderID),

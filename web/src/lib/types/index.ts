@@ -67,6 +67,7 @@ export interface Guild {
 export interface Channel {
 	id: string;
 	guild_id: string | null;
+	instance_id: string | null;
 	category_id: string | null;
 	channel_type: ChannelType;
 	name: string | null;
@@ -105,6 +106,7 @@ export interface Message {
 	id: string;
 	channel_id: string;
 	author_id: string;
+	instance_id: string | null;
 	content: string | null;
 	nonce: string | null;
 	message_type: MessageType;

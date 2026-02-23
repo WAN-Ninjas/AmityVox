@@ -92,6 +92,9 @@ func (m *Manager) Start(ctx context.Context) {
 	// Periodic data retention cleanup (every 15 minutes).
 	m.startPeriodic(ctx, "retention-cleanup", 15*time.Minute, m.runRetentionPolicies)
 
+	// Federation events retention — prune events older than 7-day backfill window.
+	m.startPeriodic(ctx, "federation-events-cleanup", 1*time.Hour, m.cleanFederationEvents)
+
 	// Periodic ban expiry cleanup.
 	m.startPeriodic(ctx, "ban-expiry", 1*time.Minute, m.cleanExpiredBans)
 
@@ -198,6 +201,22 @@ func (m *Manager) cleanExpiredInvites(ctx context.Context) error {
 	}
 	if tag.RowsAffected() > 0 {
 		m.logger.Info("cleaned expired invites",
+			slog.Int64("deleted", tag.RowsAffected()))
+	}
+	return nil
+}
+
+// cleanFederationEvents prunes federation events older than 7 days.
+// This matches the default backfill_window_days in federation config.
+// If backfill_window_days is increased, update this interval to match.
+func (m *Manager) cleanFederationEvents(ctx context.Context) error {
+	tag, err := m.pool.Exec(ctx,
+		`DELETE FROM federation_events WHERE created_at < NOW() - INTERVAL '7 days'`)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		m.logger.Info("cleaned old federation events",
 			slog.Int64("deleted", tag.RowsAffected()))
 	}
 	return nil

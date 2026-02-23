@@ -316,10 +316,13 @@ func (ss *SyncService) HandleFederatedGuildLeave(w http.ResponseWriter, r *http.
 		ss.logger.Warn("failed to count remaining members from instance, skipping peer cleanup",
 			slog.String("error", err.Error()))
 	} else if remainingCount == 0 {
-		ss.fed.pool.Exec(ctx,
+		if _, err := ss.fed.pool.Exec(ctx,
 			`DELETE FROM federation_channel_peers
 			 WHERE instance_id = $1 AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)`,
-			senderID, guildID)
+			senderID, guildID); err != nil {
+			ss.logger.Warn("failed to clean up federation channel peers",
+				slog.String("instance_id", senderID), slog.String("guild_id", guildID), slog.String("error", err.Error()))
+		}
 	}
 
 	ss.bus.PublishGuildEvent(ctx, events.SubjectGuildMemberRemove, "GUILD_MEMBER_REMOVE", guildID, map[string]interface{}{
@@ -1414,7 +1417,10 @@ func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, sender
 				query := fmt.Sprintf("UPDATE guild_categories SET %s WHERE id = $%d",
 					strings.Join(setClauses, ", "), argN)
 				args = append(args, ch.ID)
-				ss.fed.pool.Exec(ctx, query, args...)
+				if _, err := ss.fed.pool.Exec(ctx, query, args...); err != nil {
+					ss.logger.Warn("failed to update guild category via federation",
+						slog.String("category_id", ch.ID), slog.String("error", err.Error()))
+				}
 			}
 		} else {
 			setClauses := []string{}
@@ -1454,7 +1460,10 @@ func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, sender
 				query := fmt.Sprintf("UPDATE channels SET %s WHERE id = $%d",
 					strings.Join(setClauses, ", "), argN)
 				args = append(args, ch.ID)
-				ss.fed.pool.Exec(ctx, query, args...)
+				if _, err := ss.fed.pool.Exec(ctx, query, args...); err != nil {
+					ss.logger.Warn("failed to update channel via federation",
+						slog.String("channel_id", ch.ID), slog.String("error", err.Error()))
+				}
 			}
 		}
 
@@ -1467,9 +1476,15 @@ func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, sender
 			return
 		}
 		if ch.ChannelType == "category" {
-			ss.fed.pool.Exec(ctx, `DELETE FROM guild_categories WHERE id = $1`, ch.ID)
+			if _, err := ss.fed.pool.Exec(ctx, `DELETE FROM guild_categories WHERE id = $1`, ch.ID); err != nil {
+				ss.logger.Warn("failed to delete guild category via federation",
+					slog.String("category_id", ch.ID), slog.String("error", err.Error()))
+			}
 		} else {
-			ss.fed.pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, ch.ID)
+			if _, err := ss.fed.pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, ch.ID); err != nil {
+				ss.logger.Warn("failed to delete channel via federation",
+					slog.String("channel_id", ch.ID), slog.String("error", err.Error()))
+			}
 		}
 
 	case "GUILD_MEMBER_ADD":
