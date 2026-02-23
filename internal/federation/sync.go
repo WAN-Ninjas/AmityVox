@@ -1055,14 +1055,14 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	}
 
 	// Only the home instance should forward guild events to peers. If this
-	// guild is federated (instance_id is non-NULL), the event originated from
-	// a remote instance via HandleInbox — re-forwarding it would create an
+	// guild is owned by a different instance, the event originated from a
+	// remote instance via HandleInbox — re-forwarding it would create an
 	// infinite loop between instances.
 	if guildID != "" {
 		var guildInstanceID *string
 		if err := ss.fed.pool.QueryRow(ctx,
 			`SELECT instance_id FROM guilds WHERE id = $1`, guildID,
-		).Scan(&guildInstanceID); err == nil && guildInstanceID != nil {
+		).Scan(&guildInstanceID); err == nil && guildInstanceID != nil && *guildInstanceID != ss.fed.instanceID {
 			return // Remote guild — don't re-forward
 		}
 	}

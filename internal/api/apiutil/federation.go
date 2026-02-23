@@ -28,4 +28,9 @@ type FederationProxy interface {
 	// guild and, if so, fetches messages from the home instance. Returns true
 	// if proxied (handler should return), false if local (handler continues).
 	ProxyReadChannelMessages(w http.ResponseWriter, r *http.Request, channelID string) bool
+
+	// ProxyCreateChannelMessage checks if the channel belongs to a federated
+	// guild and, if so, forwards message creation to the home instance.
+	// Returns true if proxied (handler should return), false if local.
+	ProxyCreateChannelMessage(w http.ResponseWriter, r *http.Request, channelID string, userID string, content string, opts map[string]interface{}) bool
 }
