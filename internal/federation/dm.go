@@ -166,7 +166,7 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 
 	// Store channel mirror mapping.
 	_, err = tx.Exec(ctx,
-		`INSERT INTO federation_channel_mirrors (local_channel_id, remote_channel_id, remote_instance_id, created_at)
+		`INSERT INTO federation_dm_channel_map (local_channel_id, remote_channel_id, remote_instance_id, created_at)
 		 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
 		localChannelID, req.ChannelID, senderID, now,
 	)
@@ -232,7 +232,7 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	// Look up the local channel via mirror mapping.
 	var localChannelID string
 	err := ss.fed.pool.QueryRow(ctx,
-		`SELECT local_channel_id FROM federation_channel_mirrors
+		`SELECT local_channel_id FROM federation_dm_channel_map
 		 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
 		req.RemoteChannelID, senderID,
 	).Scan(&localChannelID)
@@ -336,7 +336,7 @@ func (ss *SyncService) HandleFederatedDMRecipientAdd(w http.ResponseWriter, r *h
 	// Look up the local channel.
 	var localChannelID string
 	err := ss.fed.pool.QueryRow(ctx,
-		`SELECT local_channel_id FROM federation_channel_mirrors
+		`SELECT local_channel_id FROM federation_dm_channel_map
 		 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
 		req.RemoteChannelID, senderID,
 	).Scan(&localChannelID)
@@ -403,7 +403,7 @@ func (ss *SyncService) HandleFederatedDMRecipientRemove(w http.ResponseWriter, r
 	// Look up the local channel.
 	var localChannelID string
 	err := ss.fed.pool.QueryRow(ctx,
-		`SELECT local_channel_id FROM federation_channel_mirrors
+		`SELECT local_channel_id FROM federation_dm_channel_map
 		 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
 		req.RemoteChannelID, senderID,
 	).Scan(&localChannelID)
@@ -628,7 +628,7 @@ func (ss *SyncService) NotifyFederatedDM(ctx context.Context, remoteDomain, loca
 
 		if remoteInstanceID != "" {
 			if _, err := ss.fed.pool.Exec(ctx,
-				`INSERT INTO federation_channel_mirrors (local_channel_id, remote_channel_id, remote_instance_id, created_at)
+				`INSERT INTO federation_dm_channel_map (local_channel_id, remote_channel_id, remote_instance_id, created_at)
 				 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
 				localChannelID, result.ChannelID, remoteInstanceID,
 			); err != nil {

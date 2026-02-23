@@ -34,11 +34,16 @@ type Config struct {
 	Federation FederationConfig `toml:"federation"`
 }
 
-// FederationConfig defines federation security settings.
+// FederationConfig defines federation security and tuning settings.
 type FederationConfig struct {
-	EnforceIPCheck bool   `toml:"enforce_ip_check"`
-	Shorthand      string `toml:"shorthand"`
-	VoiceMode      string `toml:"voice_mode"`
+	EnforceIPCheck      bool   `toml:"enforce_ip_check"`
+	Shorthand           string `toml:"shorthand"`
+	VoiceMode           string `toml:"voice_mode"`
+	PeerInboxLimit      int    `toml:"peer_inbox_limit"`
+	DeliveryConcurrency int    `toml:"delivery_concurrency"`
+	MediaCacheDir       string `toml:"media_cache_dir"`
+	MediaCacheMaxSizeMB int    `toml:"media_cache_max_size_mb"`
+	BackfillWindowDays  int    `toml:"backfill_window_days"`
 }
 
 // GiphyConfig defines Giphy API integration settings.
@@ -268,7 +273,12 @@ func defaults() Config {
 			Listen:  "0.0.0.0:9090",
 		},
 		Federation: FederationConfig{
-			VoiceMode: "direct",
+			VoiceMode:           "direct",
+			PeerInboxLimit:      20,
+			DeliveryConcurrency: 50,
+			MediaCacheDir:       "/tmp/amityvox-media-cache",
+			MediaCacheMaxSizeMB: 1024,
+			BackfillWindowDays:  7,
 		},
 	}
 }
@@ -473,6 +483,29 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("AMITYVOX_FEDERATION_VOICE_MODE"); v != "" {
 		cfg.Federation.VoiceMode = v
 	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_PEER_INBOX_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.PeerInboxLimit = n
+		}
+	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_DELIVERY_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.DeliveryConcurrency = n
+		}
+	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_MEDIA_CACHE_DIR"); v != "" {
+		cfg.Federation.MediaCacheDir = v
+	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_MEDIA_CACHE_MAX_SIZE_MB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.MediaCacheMaxSizeMB = n
+		}
+	}
+	if v := os.Getenv("AMITYVOX_FEDERATION_BACKFILL_WINDOW_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.BackfillWindowDays = n
+		}
+	}
 
 	// Giphy
 	if v := os.Getenv("AMITYVOX_GIPHY_ENABLED"); v != "" {
@@ -546,6 +579,16 @@ func validate(cfg *Config) error {
 	validVoiceModes := map[string]bool{"direct": true, "relay": true}
 	if !validVoiceModes[cfg.Federation.VoiceMode] {
 		return fmt.Errorf("config: federation.voice_mode must be one of: direct, relay (got %q)", cfg.Federation.VoiceMode)
+	}
+
+	if cfg.Federation.PeerInboxLimit < 1 {
+		return fmt.Errorf("config: federation.peer_inbox_limit must be at least 1 (got %d)", cfg.Federation.PeerInboxLimit)
+	}
+	if cfg.Federation.DeliveryConcurrency < 1 {
+		return fmt.Errorf("config: federation.delivery_concurrency must be at least 1 (got %d)", cfg.Federation.DeliveryConcurrency)
+	}
+	if cfg.Federation.BackfillWindowDays < 1 {
+		return fmt.Errorf("config: federation.backfill_window_days must be at least 1 (got %d)", cfg.Federation.BackfillWindowDays)
 	}
 
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

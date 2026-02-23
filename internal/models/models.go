@@ -208,6 +208,7 @@ type GuildCategory struct {
 type Channel struct {
 	ID                 string    `json:"id"`
 	GuildID            *string   `json:"guild_id,omitempty"`
+	InstanceID         *string   `json:"instance_id,omitempty"`
 	CategoryID         *string   `json:"category_id,omitempty"`
 	ChannelType        string    `json:"channel_type"`
 	Name               *string   `json:"name,omitempty"`
@@ -267,6 +268,7 @@ type ChannelRecipient struct {
 type Role struct {
 	ID               string    `json:"id"`
 	GuildID          string    `json:"guild_id"`
+	InstanceID       *string   `json:"instance_id,omitempty"`
 	Name             string    `json:"name"`
 	Color            *string   `json:"color,omitempty"`
 	Hoist            bool      `json:"hoist"`
@@ -282,6 +284,7 @@ type Role struct {
 type GuildMember struct {
 	GuildID      string     `json:"guild_id"`
 	UserID       string     `json:"user_id"`
+	InstanceID   *string    `json:"instance_id,omitempty"`
 	Nickname     *string    `json:"nickname,omitempty"`
 	AvatarID     *string    `json:"avatar_id,omitempty"`
 	JoinedAt     time.Time  `json:"joined_at"`
@@ -327,6 +330,7 @@ type Message struct {
 	ID                  string     `json:"id"`
 	ChannelID           string     `json:"channel_id"`
 	AuthorID            string     `json:"author_id"`
+	InstanceID          *string    `json:"instance_id,omitempty"`
 	Content             *string    `json:"content,omitempty"`
 	Nonce               *string    `json:"nonce,omitempty"`
 	MessageType         string     `json:"message_type"`
@@ -433,6 +437,7 @@ type AttachmentTag struct {
 type Embed struct {
 	ID          string    `json:"id"`
 	MessageID   string    `json:"message_id"`
+	InstanceID  *string   `json:"instance_id,omitempty"`
 	EmbedType   string    `json:"embed_type"`
 	URL         *string   `json:"url,omitempty"`
 	Title       *string   `json:"title,omitempty"`
@@ -461,17 +466,19 @@ const (
 // Reaction represents a user's emoji reaction to a message. Corresponds to the
 // reactions table.
 type Reaction struct {
-	MessageID string    `json:"message_id"`
-	UserID    string    `json:"user_id"`
+	MessageID  string    `json:"message_id"`
+	UserID     string    `json:"user_id"`
+	InstanceID *string   `json:"instance_id,omitempty"`
 	Emoji     string    `json:"emoji"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // Pin represents a pinned message in a channel. Corresponds to the pins table.
 type Pin struct {
-	ChannelID string    `json:"channel_id"`
-	MessageID string    `json:"message_id"`
-	PinnedBy  string    `json:"pinned_by"`
+	ChannelID  string    `json:"channel_id"`
+	MessageID  string    `json:"message_id"`
+	InstanceID *string   `json:"instance_id,omitempty"`
+	PinnedBy   string    `json:"pinned_by"`
 	PinnedAt  time.Time `json:"pinned_at"`
 }
 
@@ -528,6 +535,7 @@ type Webhook struct {
 	ID          string    `json:"id"`
 	GuildID     string    `json:"guild_id"`
 	ChannelID   string    `json:"channel_id"`
+	InstanceID  *string   `json:"instance_id,omitempty"`
 	CreatorID   *string   `json:"creator_id,omitempty"`
 	Name        string    `json:"name"`
 	AvatarID    *string   `json:"avatar_id,omitempty"`

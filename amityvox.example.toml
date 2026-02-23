@@ -99,3 +99,17 @@ shorthand = ""
 # "direct" = clients connect directly to the remote instance's LiveKit server.
 # "relay"  = voice traffic is proxied through the local instance (adds latency, preserves privacy).
 voice_mode = "direct"
+# peer_inbox_limit is the maximum number of queued inbound federation messages processed per peer
+# before yielding. Lower values reduce memory pressure on small instances.
+peer_inbox_limit = 20
+# delivery_concurrency is the number of parallel goroutines used for outbound event delivery.
+delivery_concurrency = 50
+# media_cache_dir is the directory used to cache federated media files larger than 1 MB.
+# The directory is created automatically if it does not exist.
+media_cache_dir = "/tmp/amityvox-media-cache"
+# media_cache_max_size_mb is the maximum total disk usage (in MB) for the on-disk media cache.
+# When the limit is reached, the least-recently-used files are evicted.
+media_cache_max_size_mb = 1024
+# backfill_window_days is the maximum number of days of federation events replayed during a
+# backfill sync. Events older than this window require a full re-sync (leave + rejoin).
+backfill_window_days = 7

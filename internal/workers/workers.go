@@ -22,38 +22,45 @@ import (
 
 // Manager coordinates background workers and periodic jobs.
 type Manager struct {
-	pool          *pgxpool.Pool
-	bus           *events.Bus
-	search        *search.Service
-	media         *media.Service
-	automod       *automod.Service
-	notifications *notifications.Service
-	logger        *slog.Logger
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	pool               *pgxpool.Pool
+	bus                *events.Bus
+	search             *search.Service
+	media              *media.Service
+	automod            *automod.Service
+	notifications      *notifications.Service
+	backfillWindowDays int
+	logger             *slog.Logger
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
 }
 
 // Config holds the configuration for the worker manager.
 type Config struct {
-	Pool          *pgxpool.Pool
-	Bus           *events.Bus
-	Search        *search.Service        // nil if search is disabled
-	Media         *media.Service         // nil if media/S3 is disabled
-	AutoMod       *automod.Service       // nil if automod is disabled
-	Notifications *notifications.Service // nil if push is disabled
-	Logger        *slog.Logger
+	Pool               *pgxpool.Pool
+	Bus                *events.Bus
+	Search             *search.Service        // nil if search is disabled
+	Media              *media.Service         // nil if media/S3 is disabled
+	AutoMod            *automod.Service       // nil if automod is disabled
+	Notifications      *notifications.Service // nil if push is disabled
+	BackfillWindowDays int                    // federation event retention (default 7)
+	Logger             *slog.Logger
 }
 
 // New creates a new worker manager.
 func New(cfg Config) *Manager {
+	bwd := cfg.BackfillWindowDays
+	if bwd < 1 {
+		bwd = 7
+	}
 	return &Manager{
-		pool:          cfg.Pool,
-		bus:           cfg.Bus,
-		search:        cfg.Search,
-		media:         cfg.Media,
-		automod:       cfg.AutoMod,
-		notifications: cfg.Notifications,
-		logger:        cfg.Logger,
+		pool:               cfg.Pool,
+		bus:                cfg.Bus,
+		search:             cfg.Search,
+		media:              cfg.Media,
+		automod:            cfg.AutoMod,
+		notifications:      cfg.Notifications,
+		backfillWindowDays: bwd,
+		logger:             cfg.Logger,
 	}
 }
 
@@ -91,6 +98,9 @@ func (m *Manager) Start(ctx context.Context) {
 
 	// Periodic data retention cleanup (every 15 minutes).
 	m.startPeriodic(ctx, "retention-cleanup", 15*time.Minute, m.runRetentionPolicies)
+
+	// Federation events retention — prune events older than backfill window.
+	m.startPeriodic(ctx, "federation-events-cleanup", 1*time.Hour, m.cleanFederationEvents)
 
 	// Periodic ban expiry cleanup.
 	m.startPeriodic(ctx, "ban-expiry", 1*time.Minute, m.cleanExpiredBans)
@@ -199,6 +209,22 @@ func (m *Manager) cleanExpiredInvites(ctx context.Context) error {
 	if tag.RowsAffected() > 0 {
 		m.logger.Info("cleaned expired invites",
 			slog.Int64("deleted", tag.RowsAffected()))
+	}
+	return nil
+}
+
+// cleanFederationEvents prunes federation events older than the configured backfill window.
+func (m *Manager) cleanFederationEvents(ctx context.Context) error {
+	tag, err := m.pool.Exec(ctx,
+		`DELETE FROM federation_events WHERE created_at < NOW() - make_interval(days => $1)`,
+		m.backfillWindowDays)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		m.logger.Info("cleaned old federation events",
+			slog.Int64("deleted", tag.RowsAffected()),
+			slog.Int("retention_days", m.backfillWindowDays))
 	}
 	return nil
 }
