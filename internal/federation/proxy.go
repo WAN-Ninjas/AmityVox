@@ -397,12 +397,24 @@ func (ss *SyncService) ProxyCreateChannelMessage(
 		return false // local guild
 	}
 
-	// Look up the home instance domain.
+	// Look up the home instance domain. Fail closed — if we can't resolve the
+	// domain, return 502 rather than falling through to a local write.
 	var instanceDomain string
 	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT domain FROM instances WHERE id = $1`, *instanceID,
 	).Scan(&instanceDomain); err != nil {
-		return false
+		ss.logger.Error("failed to resolve home instance domain for message proxy",
+			slog.String("instance_id", *instanceID),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to resolve home instance",
+			},
+		})
+		return true
 	}
 
 	// Build the federation message create payload.
