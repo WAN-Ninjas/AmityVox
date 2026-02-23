@@ -1114,6 +1114,20 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 		}
 	}
 
+	// Stamp instance_id on attachments so remote instances can route through
+	// the media proxy instead of requesting files from local storage (404).
+	if event.Type == "MESSAGE_CREATE" || event.Type == "MESSAGE_UPDATE" {
+		if dataMap, ok := data.(map[string]interface{}); ok {
+			if atts, ok := dataMap["attachments"].([]interface{}); ok {
+				for _, att := range atts {
+					if attMap, ok := att.(map[string]interface{}); ok {
+						attMap["instance_id"] = ss.fed.instanceID
+					}
+				}
+			}
+		}
+	}
+
 	msg := FederatedMessage{
 		Type:      event.Type,
 		GuildID:   guildID,

@@ -572,6 +572,57 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 		})
 	}
 
+	// Batch-load attachments for the returned messages and stamp instance_id
+	// so remote instances route through the media proxy.
+	if len(messages) > 0 {
+		msgIDs := make([]string, len(messages))
+		for i, m := range messages {
+			msgIDs[i] = m["id"].(string)
+		}
+		attRows, err := ss.fed.pool.Query(ctx,
+			`SELECT id, message_id, filename, content_type, size_bytes,
+			        width, height, duration_seconds, blurhash, alt_text, created_at
+			 FROM attachments WHERE message_id = ANY($1)
+			 ORDER BY created_at`, msgIDs)
+		if err != nil {
+			ss.logger.Warn("failed to query attachments for federated messages",
+				slog.String("error", err.Error()))
+		} else {
+			defer attRows.Close()
+			attMap := make(map[string][]map[string]interface{})
+			for attRows.Next() {
+				var aID string
+				var aMsgID *string
+				var aFilename, aContentType string
+				var aSize int64
+				var aWidth, aHeight *int
+				var aDuration *float32
+				var aBlurhash, aAltText *string
+				var aCreatedAt time.Time
+				if err := attRows.Scan(&aID, &aMsgID, &aFilename, &aContentType, &aSize,
+					&aWidth, &aHeight, &aDuration, &aBlurhash, &aAltText, &aCreatedAt); err != nil {
+					continue
+				}
+				att := map[string]interface{}{
+					"id": aID, "filename": aFilename, "content_type": aContentType,
+					"size_bytes": aSize, "width": aWidth, "height": aHeight,
+					"duration_seconds": aDuration, "blurhash": aBlurhash,
+					"alt_text": aAltText, "created_at": aCreatedAt,
+					"instance_id": ss.fed.instanceID,
+				}
+				if aMsgID != nil {
+					attMap[*aMsgID] = append(attMap[*aMsgID], att)
+				}
+			}
+			for i := range messages {
+				id := messages[i]["id"].(string)
+				if atts, ok := attMap[id]; ok {
+					messages[i]["attachments"] = atts
+				}
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": messages})
 }
