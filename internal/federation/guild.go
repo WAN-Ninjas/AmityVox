@@ -584,7 +584,10 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 			        width, height, duration_seconds, blurhash, alt_text, created_at
 			 FROM attachments WHERE message_id = ANY($1)
 			 ORDER BY created_at`, msgIDs)
-		if err == nil {
+		if err != nil {
+			ss.logger.Warn("failed to query attachments for federated messages",
+				slog.String("error", err.Error()))
+		} else {
 			defer attRows.Close()
 			attMap := make(map[string][]map[string]interface{})
 			for attRows.Next() {
