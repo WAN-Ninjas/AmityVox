@@ -409,6 +409,7 @@ type Attachment struct {
 	AltText         *string   `json:"alt_text,omitempty"`
 	NSFW            bool      `json:"nsfw"`
 	Description     *string   `json:"description,omitempty"`
+	InstanceID      *string   `json:"instance_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 
