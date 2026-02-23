@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -300,33 +301,34 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for existing DM.
-	var channelID string
-	err = h.Pool.QueryRow(r.Context(),
-		`SELECT c.id FROM channels c
-		 JOIN channel_recipients cr1 ON c.id = cr1.channel_id AND cr1.user_id = $1
-		 JOIN channel_recipients cr2 ON c.id = cr2.channel_id AND cr2.user_id = $2
-		 WHERE c.channel_type = 'dm'
-		 LIMIT 1`,
-		userID, targetID,
-	).Scan(&channelID)
-
-	if err == nil {
-		// Existing DM found — return it.
-		channel, err := h.getChannel(r.Context(), channelID)
-		if err != nil {
-			apiutil.InternalError(w, h.Logger, "Failed to get DM", err)
-			return
-		}
-		apiutil.WriteJSON(w, http.StatusOK, channel)
-		return
-	}
-
-	// Create new DM channel.
+	// Check-and-create inside a single transaction to prevent duplicate DMs.
 	newID := models.NewULID().String()
 	now := time.Now()
+	var channelID string
+	created := false
 
 	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		// Lock-aware check: use FOR UPDATE on the channel row (via channel_recipients)
+		// to serialize concurrent DM creation for the same user pair.
+		e := tx.QueryRow(r.Context(),
+			`SELECT c.id FROM channels c
+			 JOIN channel_recipients cr1 ON c.id = cr1.channel_id AND cr1.user_id = $1
+			 JOIN channel_recipients cr2 ON c.id = cr2.channel_id AND cr2.user_id = $2
+			 WHERE c.channel_type = 'dm'
+			 LIMIT 1
+			 FOR UPDATE OF c`,
+			userID, targetID,
+		).Scan(&channelID)
+		if e == nil {
+			return nil // existing DM found
+		}
+		if e != pgx.ErrNoRows {
+			return fmt.Errorf("checking existing DM: %w", e)
+		}
+
+		// No existing DM — create one.
+		channelID = newID
+		created = true
 		if _, err := tx.Exec(r.Context(),
 			`INSERT INTO channels (id, channel_type, created_at) VALUES ($1, 'dm', $2)`,
 			newID, now,
@@ -344,7 +346,16 @@ func (h *Handler) HandleCreateDM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel, _ := h.getChannel(r.Context(), newID)
+	channel, err := h.getChannel(r.Context(), channelID)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to get DM", err)
+		return
+	}
+
+	if !created {
+		apiutil.WriteJSON(w, http.StatusOK, channel)
+		return
+	}
 
 	h.EventBus.PublishUserEvent(r.Context(), events.SubjectChannelCreate, "CHANNEL_CREATE", targetID, channel)
 

@@ -119,9 +119,10 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 		ss.ensureRemoteUserStub(ctx, instanceID, u)
 	}
 
-	// Create the local mirror channel.
+	// Create the local mirror channel inside a transaction with duplicate check.
 	localChannelID := models.NewULID().String()
 	now := time.Now()
+	created := false
 
 	tx, err := ss.fed.pool.Begin(ctx)
 	if err != nil {
@@ -130,6 +131,73 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback(ctx)
+
+	// Check if we already have a local mirror for this remote channel.
+	var existingLocalID string
+	err = tx.QueryRow(ctx,
+		`SELECT local_channel_id FROM federation_dm_channel_map
+		 WHERE remote_channel_id = $1 AND remote_instance_id = $2
+		 FOR UPDATE`,
+		req.ChannelID, senderID,
+	).Scan(&existingLocalID)
+	if err == nil {
+		// Already mirrored — return existing channel.
+		if err := tx.Commit(ctx); err != nil {
+			ss.logger.Error("failed to commit (mirror lookup)", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"channel_id": existingLocalID})
+		return
+	}
+	if err != pgx.ErrNoRows {
+		ss.logger.Error("failed to check DM mirror", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// For 1:1 DMs, also check if a DM already exists between the same pair.
+	if req.ChannelType == "dm" && len(req.RecipientIDs) > 0 {
+		var existingDM string
+		err = tx.QueryRow(ctx,
+			`SELECT c.id FROM channels c
+			 JOIN channel_recipients cr1 ON c.id = cr1.channel_id AND cr1.user_id = $1
+			 JOIN channel_recipients cr2 ON c.id = cr2.channel_id AND cr2.user_id = $2
+			 WHERE c.channel_type = 'dm'
+			 LIMIT 1
+			 FOR UPDATE OF c`,
+			req.Creator.ID, req.RecipientIDs[0],
+		).Scan(&existingDM)
+		if err == nil {
+			// DM already exists — map the remote channel to this local one and register peer.
+			tx.Exec(ctx,
+				`INSERT INTO federation_dm_channel_map (local_channel_id, remote_channel_id, remote_instance_id, created_at)
+				 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+				existingDM, req.ChannelID, senderID, now,
+			)
+			tx.Exec(ctx,
+				`INSERT INTO federation_channel_peers (channel_id, instance_id)
+				 VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+				existingDM, senderID,
+			)
+			if err := tx.Commit(ctx); err != nil {
+				ss.logger.Error("failed to commit (DM pair reuse)", slog.String("error", err.Error()))
+				http.Error(w, "Internal error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"channel_id": existingDM})
+			return
+		}
+		if err != pgx.ErrNoRows {
+			ss.logger.Error("failed to check existing DM pair", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	if req.ChannelType == "group" {
 		_, err = tx.Exec(ctx,
@@ -147,6 +215,7 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
+	created = true
 
 	// Add all participants as channel recipients.
 	allIDs := append([]string{req.Creator.ID}, req.RecipientIDs...)
@@ -194,14 +263,16 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Publish CHANNEL_CREATE for local WebSocket clients.
-	channel := map[string]interface{}{
-		"id":           localChannelID,
-		"channel_type": req.ChannelType,
-		"name":         req.GroupName,
-		"created_at":   now,
+	if created {
+		// Publish CHANNEL_CREATE for local WebSocket clients.
+		channel := map[string]interface{}{
+			"id":           localChannelID,
+			"channel_type": req.ChannelType,
+			"name":         req.GroupName,
+			"created_at":   now,
+		}
+		ss.bus.PublishChannelEvent(ctx, events.SubjectChannelCreate, "CHANNEL_CREATE", localChannelID, channel)
 	}
-	ss.bus.PublishChannelEvent(ctx, events.SubjectChannelCreate, "CHANNEL_CREATE", localChannelID, channel)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
