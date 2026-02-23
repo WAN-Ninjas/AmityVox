@@ -520,7 +520,7 @@ func (s *Service) migrateInstanceID(ctx context.Context, oldID, newID string) er
 		`UPDATE federation_peer_controls SET peer_id = $1 WHERE peer_id = $2`,
 		`UPDATE federation_peer_controls SET instance_id = $1 WHERE instance_id = $2`,
 		`UPDATE federation_channel_peers SET instance_id = $1 WHERE instance_id = $2`,
-		`UPDATE federation_channel_mirrors SET remote_instance_id = $1 WHERE remote_instance_id = $2`,
+		`UPDATE federation_dm_channel_map SET remote_instance_id = $1 WHERE remote_instance_id = $2`,
 		`UPDATE federation_events SET instance_id = $1 WHERE instance_id = $2`,
 		`UPDATE guilds SET instance_id = $1 WHERE instance_id = $2`,
 		`UPDATE users SET instance_id = $1 WHERE instance_id = $2`,

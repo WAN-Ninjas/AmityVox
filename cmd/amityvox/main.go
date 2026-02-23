@@ -269,13 +269,14 @@ func runServe() error {
 
 	// Start background workers.
 	workerMgr := workers.New(workers.Config{
-		Pool:          db.Pool,
-		Bus:           bus,
-		Search:        searchSvc,
-		Media:         mediaSvc,
-		AutoMod:       automodSvc,
-		Notifications: notifSvc,
-		Logger:        logger,
+		Pool:               db.Pool,
+		Bus:                bus,
+		Search:             searchSvc,
+		Media:              mediaSvc,
+		AutoMod:            automodSvc,
+		Notifications:      notifSvc,
+		BackfillWindowDays: cfg.Federation.BackfillWindowDays,
+		Logger:             logger,
 	})
 	workerMgr.Start(ctx)
 
@@ -305,7 +306,11 @@ func runServe() error {
 
 	// Create federation sync service (message routing between instances).
 	// Created before the API server so handlers can use it for write-routing.
-	syncSvc := federation.NewSyncService(fedSvc, bus, logger)
+	syncSvc := federation.NewSyncService(fedSvc, bus, logger, federation.SyncConfig{
+		PeerInboxLimit:      cfg.Federation.PeerInboxLimit,
+		DeliveryConcurrency: cfg.Federation.DeliveryConcurrency,
+		BackfillWindowDays:  cfg.Federation.BackfillWindowDays,
+	})
 
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)
