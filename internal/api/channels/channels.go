@@ -626,12 +626,9 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Federation proxy: if channel belongs to a remote guild, forward to home instance.
-	// Trigger for both text and attachment-only messages to prevent local divergence.
-	if h.FedProxy != nil {
-		content := ""
-		if hasContent {
-			content = *req.Content
-		}
+	// Note: attachment-only messages are not yet supported by the federation protocol
+	// (federatedGuildPostMessageRequest only carries content/nonce/reply_to_ids).
+	if h.FedProxy != nil && hasContent {
 		opts := map[string]interface{}{}
 		if req.Nonce != nil && *req.Nonce != "" {
 			opts["nonce"] = *req.Nonce
@@ -639,7 +636,7 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		if len(req.ReplyToIDs) > 0 {
 			opts["reply_to_ids"] = req.ReplyToIDs
 		}
-		if h.FedProxy.ProxyCreateChannelMessage(w, r, channelID, userID, content, opts) {
+		if h.FedProxy.ProxyCreateChannelMessage(w, r, channelID, userID, *req.Content, opts) {
 			return
 		}
 	}
