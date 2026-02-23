@@ -269,13 +269,14 @@ func runServe() error {
 
 	// Start background workers.
 	workerMgr := workers.New(workers.Config{
-		Pool:          db.Pool,
-		Bus:           bus,
-		Search:        searchSvc,
-		Media:         mediaSvc,
-		AutoMod:       automodSvc,
-		Notifications: notifSvc,
-		Logger:        logger,
+		Pool:               db.Pool,
+		Bus:                bus,
+		Search:             searchSvc,
+		Media:              mediaSvc,
+		AutoMod:            automodSvc,
+		Notifications:      notifSvc,
+		BackfillWindowDays: cfg.Federation.BackfillWindowDays,
+		Logger:             logger,
 	})
 	workerMgr.Start(ctx)
 

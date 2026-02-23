@@ -67,3 +67,16 @@ WHERE p.channel_id = c.id AND g.instance_id IS NOT NULL AND p.instance_id IS NUL
 -- Webhooks inherit from their guild.
 UPDATE webhooks w SET instance_id = g.instance_id
 FROM guilds g WHERE w.guild_id = g.id AND g.instance_id IS NOT NULL AND w.instance_id IS NULL;
+
+-- DM channels inherit from federation DM map (for existing federated DMs).
+UPDATE channels c SET instance_id = f.remote_instance_id
+FROM federation_dm_channel_map f
+WHERE f.local_channel_id = c.id AND c.guild_id IS NULL AND c.instance_id IS NULL;
+
+-- Messages in DM channels inherit from their channel.
+UPDATE messages m SET instance_id = c.instance_id
+FROM channels c
+WHERE m.channel_id = c.id AND c.guild_id IS NULL AND c.instance_id IS NOT NULL AND m.instance_id IS NULL;
+
+-- Attachments/embeds/reactions in DMs are already covered by the message-based
+-- backfill above (they join on messages.instance_id which is now populated).
