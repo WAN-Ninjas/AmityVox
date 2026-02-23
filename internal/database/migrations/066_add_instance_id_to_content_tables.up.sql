@@ -78,5 +78,18 @@ UPDATE messages m SET instance_id = c.instance_id
 FROM channels c
 WHERE m.channel_id = c.id AND c.guild_id IS NULL AND c.instance_id IS NOT NULL AND m.instance_id IS NULL;
 
--- Attachments/embeds/reactions in DMs are already covered by the message-based
--- backfill above (they join on messages.instance_id which is now populated).
+-- DM attachments/embeds/reactions: the guild-based backfills above ran before
+-- DM messages got their instance_id, so run a second pass for DM content.
+UPDATE attachments a SET instance_id = m.instance_id
+FROM messages m WHERE a.message_id = m.id AND m.instance_id IS NOT NULL AND a.instance_id IS NULL;
+
+UPDATE embeds e SET instance_id = m.instance_id
+FROM messages m WHERE e.message_id = m.id AND m.instance_id IS NOT NULL AND e.instance_id IS NULL;
+
+UPDATE reactions r SET instance_id = m.instance_id
+FROM messages m WHERE r.message_id = m.id AND m.instance_id IS NOT NULL AND r.instance_id IS NULL;
+
+-- DM pins inherit from their channel (not guild).
+UPDATE pins p SET instance_id = c.instance_id
+FROM channels c
+WHERE p.channel_id = c.id AND c.guild_id IS NULL AND c.instance_id IS NOT NULL AND p.instance_id IS NULL;
