@@ -100,8 +100,8 @@ func (ss *SyncService) HandleManage(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Only process if guild is local (instance_id IS NULL).
-	if ownerInstanceID != nil {
+	// Only process if guild is local (instance_id IS NULL or matches this instance).
+	if ownerInstanceID != nil && *ownerInstanceID != ss.fed.instanceID {
 		http.Error(w, "Guild is not owned by this instance", http.StatusForbidden)
 		return
 	}
