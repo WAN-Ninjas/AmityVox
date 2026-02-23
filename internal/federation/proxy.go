@@ -368,3 +368,89 @@ func (ss *SyncService) ProxyReadChannelMessages(w http.ResponseWriter, r *http.R
 	w.Write(respBody)
 	return true
 }
+
+// ProxyCreateChannelMessage checks if the channel belongs to a federated guild
+// and, if so, forwards message creation to the home instance. Returns true if
+// proxied (handler should return), false if local (handler continues).
+func (ss *SyncService) ProxyCreateChannelMessage(
+	w http.ResponseWriter,
+	r *http.Request,
+	channelID string,
+	userID string,
+	content string,
+	opts map[string]interface{},
+) bool {
+	ctx := r.Context()
+
+	// Check if the channel's guild is federated.
+	var guildID string
+	var instanceID *string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT g.id, g.instance_id
+		 FROM channels c JOIN guilds g ON g.id = c.guild_id
+		 WHERE c.id = $1`, channelID,
+	).Scan(&guildID, &instanceID)
+	if err != nil {
+		return false // channel not found or not in a guild
+	}
+	if instanceID == nil || *instanceID == ss.fed.instanceID {
+		return false // local guild
+	}
+
+	// Look up the home instance domain. Fail closed — if we can't resolve the
+	// domain, return 502 rather than falling through to a local write.
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT domain FROM instances WHERE id = $1`, *instanceID,
+	).Scan(&instanceDomain); err != nil {
+		ss.logger.Error("failed to resolve home instance domain for message proxy",
+			slog.String("instance_id", *instanceID),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to resolve home instance",
+			},
+		})
+		return true
+	}
+
+	// Build the federation message create payload.
+	payload := federatedGuildPostMessageRequest{
+		UserID:  userID,
+		Content: content,
+	}
+	if v, ok := opts["nonce"].(string); ok {
+		payload.Nonce = v
+	}
+	if v, ok := opts["reply_to_ids"].([]string); ok {
+		payload.ReplyToIDs = v
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/create",
+		instanceDomain, guildID, channelID)
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, payload)
+	if err != nil {
+		ss.logger.Error("failed to proxy message creation to home instance",
+			slog.String("channel_id", channelID),
+			slog.String("guild_id", guildID),
+			slog.String("domain", instanceDomain),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to send message to home instance",
+			},
+		})
+		return true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
+	return true
+}
