@@ -112,7 +112,7 @@ func (ss *SyncService) ProxyToHomeInstance(
 	data interface{},
 ) bool {
 	// Local guild — handler should continue with local logic.
-	if instanceID == nil {
+	if instanceID == nil || *instanceID == ss.fed.instanceID {
 		return false
 	}
 
@@ -179,7 +179,7 @@ func (ss *SyncService) ProxyReadGuildMembers(w http.ResponseWriter, r *http.Requ
 		// Guild not found or DB error — let the handler deal with it.
 		return false
 	}
-	if instanceID == nil {
+	if instanceID == nil || *instanceID == ss.fed.instanceID {
 		return false // local guild
 	}
 
@@ -316,7 +316,7 @@ func (ss *SyncService) ProxyReadChannelMessages(w http.ResponseWriter, r *http.R
 	if err != nil {
 		return false // channel not found or not in a guild — let handler deal with it
 	}
-	if instanceID == nil {
+	if instanceID == nil || *instanceID == ss.fed.instanceID {
 		return false // local guild
 	}
 
