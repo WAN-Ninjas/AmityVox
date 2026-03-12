@@ -862,9 +862,8 @@ EOF
 }
 
 # Generate the Caddy reverse proxy configuration for the chosen domain.
+# If the file already exists, updates the domain/site block in-place.
 generate_caddyfile() {
-    log "Generating Caddyfile for $DOMAIN..."
-
     mkdir -p deploy/caddy
 
     # Localhost uses HTTP only (no TLS). Public domains get automatic HTTPS via Caddy.
@@ -872,6 +871,21 @@ generate_caddyfile() {
     if [ "$DOMAIN" = "localhost" ]; then
         site_block=":80"
     fi
+
+    if [ -f "deploy/caddy/Caddyfile" ]; then
+        # File exists — update the site block (first non-global-block line that ends with {).
+        # Match lines like "example.com {", ":80 {", "old.domain.com {".
+        if grep -qE '^[^{]+\{' deploy/caddy/Caddyfile; then
+            sed -i "s|^[^{[:space:]][^{]*{|$site_block {|" deploy/caddy/Caddyfile
+            log "Updated existing Caddyfile domain to: $site_block"
+        else
+            warn "Caddyfile exists but has unexpected format — skipping update."
+            info "  Review deploy/caddy/Caddyfile and update the domain manually if needed."
+        fi
+        return
+    fi
+
+    log "Generating Caddyfile for $DOMAIN..."
 
     cat > deploy/caddy/Caddyfile <<CADDYEOF
 {
@@ -951,10 +965,8 @@ CADDYEOF
 }
 
 # Generate the Garage S3 configuration file.
-# The rpc_secret is read from .env if available, otherwise a new one is generated.
+# If the file already exists, updates the rpc_secret from .env if it differs.
 generate_garage_toml() {
-    log "Generating Garage S3 configuration..."
-
     mkdir -p deploy/garage
 
     # Use the RPC secret from .env if it exists, otherwise generate one.
@@ -963,6 +975,21 @@ generate_garage_toml() {
     if [ -z "$rpc_secret" ]; then
         rpc_secret="$(gen_hex 32)"
     fi
+
+    if [ -f "deploy/garage/garage.toml" ]; then
+        # File exists — sync the rpc_secret from .env into the toml if it differs.
+        local existing_secret
+        existing_secret=$(sed -n 's/^rpc_secret *= *"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' deploy/garage/garage.toml | head -1)
+        if [ "$existing_secret" != "$rpc_secret" ] && [ -n "$rpc_secret" ]; then
+            sed -i "s|^rpc_secret *=.*|rpc_secret = \"$rpc_secret\"|" deploy/garage/garage.toml
+            log "Updated rpc_secret in existing garage.toml"
+        else
+            log "Existing garage.toml is up to date — no changes needed."
+        fi
+        return
+    fi
+
+    log "Generating Garage S3 configuration..."
 
     cat > deploy/garage/garage.toml <<GARAGEEOF
 metadata_dir = "/var/lib/garage/meta"
@@ -992,10 +1019,8 @@ GARAGEEOF
 }
 
 # Generate the LiveKit configuration file.
-# Detects the server's public IP for WebRTC connectivity.
+# If the file already exists, updates the node_ip to the current server IP.
 generate_livekit_yaml() {
-    log "Generating LiveKit configuration..."
-
     mkdir -p deploy/livekit
 
     # Detect public IP for WebRTC. Falls back to private IP, then 0.0.0.0.
@@ -1009,6 +1034,21 @@ generate_livekit_yaml() {
     if [ -z "$node_ip" ]; then
         node_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "0.0.0.0")
     fi
+
+    if [ -f "deploy/livekit/livekit.yaml" ]; then
+        # File exists — update node_ip if it differs (server may have moved IPs).
+        local existing_ip
+        existing_ip=$(sed -n 's/^[[:space:]]*node_ip:[[:space:]]*//p' deploy/livekit/livekit.yaml | head -1)
+        if [ "$existing_ip" != "$node_ip" ] && [ "$node_ip" != "0.0.0.0" ]; then
+            sed -i "s|^\([[:space:]]*node_ip:\).*|\1 $node_ip|" deploy/livekit/livekit.yaml
+            log "Updated node_ip in existing livekit.yaml: $existing_ip -> $node_ip"
+        else
+            log "Existing livekit.yaml is up to date — no changes needed."
+        fi
+        return
+    fi
+
+    log "Generating LiveKit configuration..."
 
     cat > deploy/livekit/livekit.yaml <<LIVEKITEOF
 port: 7880
@@ -1324,16 +1364,11 @@ main() {
             # Read domain from existing .env for summary.
             DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
             DOMAIN="${DOMAIN:-localhost}"
-            # Ensure gitignored config files exist (they're not in the repo).
-            if [ ! -f "deploy/caddy/Caddyfile" ]; then
-                generate_caddyfile
-            fi
-            if [ ! -f "deploy/garage/garage.toml" ]; then
-                generate_garage_toml
-            fi
-            if [ ! -f "deploy/livekit/livekit.yaml" ]; then
-                generate_livekit_yaml
-            fi
+            # Ensure gitignored config files exist and are up to date.
+            # Each function handles existing files by updating values in-place.
+            generate_caddyfile
+            generate_garage_toml
+            generate_livekit_yaml
         fi
     else
         collect_config
