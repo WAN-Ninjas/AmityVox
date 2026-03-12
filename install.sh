@@ -853,6 +853,8 @@ AMITYVOX_LOGGING_LEVEL=info
 AMITYVOX_LOGGING_FORMAT=json
 EOF
 
+    # Restrict permissions — .env contains all secrets.
+    chmod 600 .env
     log "Configuration written to .env"
 
     # Generate config files that are .gitignored (domain/instance-specific).
@@ -1033,6 +1035,8 @@ index = "index.html"
 api_bind_addr = "[::]:3903"
 GARAGEEOF
 
+    # Restrict permissions — file contains rpc_secret.
+    chmod 600 deploy/garage/garage.toml
     log "Garage config written to deploy/garage/garage.toml"
 }
 
