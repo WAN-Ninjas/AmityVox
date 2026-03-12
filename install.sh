@@ -866,6 +866,18 @@ EOF
 generate_caddyfile() {
     mkdir -p deploy/caddy
 
+    # Docker leaves a directory at this path after a failed bind mount.
+    # Remove it so we can write the file.
+    if [ -d "deploy/caddy/Caddyfile" ]; then
+        warn "Removing stale deploy/caddy/Caddyfile directory left by a previous failed bind mount."
+        rm -rf deploy/caddy/Caddyfile
+    fi
+
+    # Resolve upload size: use current var, fall back to .env value, then default.
+    local upload_size
+    upload_size="${MAX_UPLOAD_SIZE:-$(sed -n 's/^AMITYVOX_MEDIA_MAX_UPLOAD_SIZE=//p' .env 2>/dev/null | head -1)}"
+    upload_size="${upload_size:-50MB}"
+
     # Localhost uses HTTP only (no TLS). Public domains get automatic HTTPS via Caddy.
     local site_block="$DOMAIN"
     if [ "$DOMAIN" = "localhost" ]; then
@@ -907,7 +919,7 @@ $site_block {
 	# Reverse proxy API requests to AmityVox core.
 	handle /api/* {
 		request_body {
-			max_size ${MAX_UPLOAD_SIZE:-50MB}
+			max_size $upload_size
 		}
 		reverse_proxy amityvox:8080
 	}
@@ -969,6 +981,12 @@ CADDYEOF
 generate_garage_toml() {
     mkdir -p deploy/garage
 
+    # Docker leaves a directory at this path after a failed bind mount.
+    if [ -d "deploy/garage/garage.toml" ]; then
+        warn "Removing stale deploy/garage/garage.toml directory left by a previous failed bind mount."
+        rm -rf deploy/garage/garage.toml
+    fi
+
     # Use the RPC secret from .env if it exists, otherwise generate one.
     local rpc_secret
     rpc_secret=$(sed -n 's/^GARAGE_RPC_SECRET=//p' .env 2>/dev/null | head -1)
@@ -1022,6 +1040,12 @@ GARAGEEOF
 # If the file already exists, updates the node_ip to the current server IP.
 generate_livekit_yaml() {
     mkdir -p deploy/livekit
+
+    # Docker leaves a directory at this path after a failed bind mount.
+    if [ -d "deploy/livekit/livekit.yaml" ]; then
+        warn "Removing stale deploy/livekit/livekit.yaml directory left by a previous failed bind mount."
+        rm -rf deploy/livekit/livekit.yaml
+    fi
 
     # Detect public IP for WebRTC. Falls back to private IP, then 0.0.0.0.
     local node_ip="0.0.0.0"
