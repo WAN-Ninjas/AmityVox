@@ -163,13 +163,13 @@ run_sudo() {
         return
     fi
 
-    echo
-    info "Elevated privileges needed: $reason"
-    echo -e "  ${DIM}Command: sudo $*${NC}"
-    echo
+    echo >/dev/tty
+    echo -e "${BLUE}[INFO]${NC}    Elevated privileges needed: $reason" >/dev/tty
+    echo -e "  ${DIM}Command: sudo $*${NC}" >/dev/tty
+    echo >/dev/tty
 
     if [ "$NONINTERACTIVE" != "1" ]; then
-        echo -en "${BOLD}Run this command with sudo?${NC} ${CYAN}[Y/n]${NC}: "
+        echo -en "${BOLD}Run this command with sudo?${NC} ${CYAN}[Y/n]${NC}: " >/dev/tty
         read -r confirm < /dev/tty
         confirm="${confirm:-y}"
         if [[ ! "$confirm" =~ ^[Yy] ]]; then
@@ -378,7 +378,7 @@ install_docker() {
     info "Codename:   $repo_codename"
     echo
 
-    if ! ask_yn "Install Docker now?"; then
+    if ! ask_yn "Install Docker now?" "y"; then
         err "Docker is required. Install it manually and re-run this script:"
         err "  https://docs.docker.com/engine/install/"
         return 1
@@ -471,31 +471,24 @@ fix_docker_permissions() {
 
     log "Added $current_user to the docker group."
 
-    # Check if newgrp can give us access without a full logout.
-    info "Applying group change to current session..."
-    if sg docker -c "docker info" >/dev/null 2>&1; then
-        info "Group change applied. Continuing with installation."
-        # Re-exec the rest of the script under the docker group.
-        DOCKER_VIA_SG=true
-        export DOCKER_VIA_SG
-    else
+    # Re-exec the entire script under the docker group so all docker/compose/exec
+    # calls work without individual wrappers.
+    if [ "${AMITYVOX_SG_REEXEC:-}" != "1" ]; then
+        info "Re-launching installer under the docker group..."
+        export AMITYVOX_SG_REEXEC=1
+        exec sg docker -c "bash $0 $*" || true
+    fi
+
+    # If re-exec failed or we're already in the re-exec, check again.
+    if ! docker info >/dev/null 2>&1; then
         echo
         warn "The group change requires a new login session to take effect."
         warn ""
         warn "Please do one of the following:"
         warn "  1. Log out and log back in, then re-run this script"
-        warn "  2. Run: newgrp docker && $0"
+        warn "  2. Run: newgrp docker && bash $0"
         warn "  3. Run this script with sudo (not recommended for daily use)"
         return 1
-    fi
-}
-
-# Wrapper: run docker commands through sg if needed.
-docker_cmd() {
-    if [ "${DOCKER_VIA_SG:-}" = "true" ]; then
-        sg docker -c "docker $*"
-    else
-        docker "$@"
     fi
 }
 
@@ -510,7 +503,7 @@ check_prerequisites() {
     # --- Git ---
     if ! command -v git >/dev/null 2>&1; then
         warn "git is not installed."
-        if ask_yn "Install git now?"; then
+        if ask_yn "Install git now?" "y"; then
             run_sudo "install git" apt-get install -y -qq git >/dev/null
             log "git installed."
         else
@@ -523,7 +516,7 @@ check_prerequisites() {
     # --- OpenSSL ---
     if ! command -v openssl >/dev/null 2>&1; then
         warn "openssl is not installed (needed for generating secrets)."
-        if ask_yn "Install openssl now?"; then
+        if ask_yn "Install openssl now?" "y"; then
             run_sudo "install openssl" apt-get install -y -qq openssl >/dev/null
             log "openssl installed."
         else
@@ -542,7 +535,7 @@ check_prerequisites() {
     fix_docker_permissions
 
     # --- Docker Compose v2 ---
-    if docker_cmd compose version >/dev/null 2>&1; then
+    if docker compose version >/dev/null 2>&1; then
         COMPOSE_CMD="docker compose"
     elif command -v docker-compose >/dev/null 2>&1; then
         COMPOSE_CMD="docker-compose"
@@ -556,20 +549,20 @@ check_prerequisites() {
     fi
 
     # --- Docker daemon running ---
-    if ! docker_cmd info >/dev/null 2>&1; then
+    if ! docker info >/dev/null 2>&1; then
         warn "Docker is installed but the daemon is not running."
-        if ask_yn "Start the Docker service now?"; then
+        if ask_yn "Start the Docker service now?" "y"; then
             run_sudo "start Docker daemon" systemctl start docker
             # Wait for it to come up.
             local attempts=0
             while [ $attempts -lt 10 ]; do
-                if docker_cmd info >/dev/null 2>&1; then
+                if docker info >/dev/null 2>&1; then
                     break
                 fi
                 attempts=$((attempts + 1))
                 sleep 1
             done
-            if ! docker_cmd info >/dev/null 2>&1; then
+            if ! docker info >/dev/null 2>&1; then
                 err "Docker daemon did not start. Check: sudo systemctl status docker"
                 exit 1
             fi
