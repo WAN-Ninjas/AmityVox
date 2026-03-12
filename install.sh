@@ -854,6 +854,176 @@ AMITYVOX_LOGGING_FORMAT=json
 EOF
 
     log "Configuration written to .env"
+
+    # Generate config files that are .gitignored (domain/instance-specific).
+    generate_caddyfile
+    generate_garage_toml
+    generate_livekit_yaml
+}
+
+# Generate the Caddy reverse proxy configuration for the chosen domain.
+generate_caddyfile() {
+    log "Generating Caddyfile for $DOMAIN..."
+
+    mkdir -p deploy/caddy
+
+    # Localhost uses HTTP only (no TLS). Public domains get automatic HTTPS via Caddy.
+    local site_block="$DOMAIN"
+    if [ "$DOMAIN" = "localhost" ]; then
+        site_block=":80"
+    fi
+
+    cat > deploy/caddy/Caddyfile <<CADDYEOF
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
+$site_block {
+	# Security headers applied to all responses.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+	}
+
+	# Reverse proxy API requests to AmityVox core.
+	handle /api/* {
+		request_body {
+			max_size ${MAX_UPLOAD_SIZE:-50MB}
+		}
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy health check endpoint.
+	handle /health {
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy WebSocket gateway.
+	handle /ws {
+		reverse_proxy amityvox:8081
+	}
+
+	# Reverse proxy LiveKit WebSocket (voice/video WebRTC signaling).
+	@rtc path /rtc /rtc/*
+	handle @rtc {
+		reverse_proxy livekit:7880
+	}
+
+	# Reverse proxy federation discovery endpoint.
+	handle /.well-known/amityvox {
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy federation inbox endpoint.
+	handle /federation/* {
+		reverse_proxy amityvox:8080
+	}
+
+	# Serve static web client files.
+	handle {
+		root * /srv
+
+		route {
+			# Service worker — must always revalidate so browsers detect updates.
+			@sw path /sw.js
+			header @sw Cache-Control "no-cache, no-store, must-revalidate"
+
+			# Immutable assets (content-hashed filenames) — cache forever.
+			@immutable path /_app/immutable/*
+			header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+			try_files {path} /index.html
+			file_server
+
+			# All other responses (HTML shell via try_files fallback) — always revalidate.
+			header Cache-Control "no-cache"
+		}
+	}
+}
+CADDYEOF
+
+    log "Caddyfile written to deploy/caddy/Caddyfile"
+}
+
+# Generate the Garage S3 configuration file.
+# The rpc_secret is read from .env if available, otherwise a new one is generated.
+generate_garage_toml() {
+    log "Generating Garage S3 configuration..."
+
+    mkdir -p deploy/garage
+
+    # Use the RPC secret from .env if it exists, otherwise generate one.
+    local rpc_secret
+    rpc_secret=$(sed -n 's/^GARAGE_RPC_SECRET=//p' .env 2>/dev/null | head -1)
+    if [ -z "$rpc_secret" ]; then
+        rpc_secret="$(gen_hex 32)"
+    fi
+
+    cat > deploy/garage/garage.toml <<GARAGEEOF
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+replication_factor = 1
+consistency_mode = "consistent"
+
+rpc_bind_addr = "[::]:3901"
+rpc_secret = "$rpc_secret"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+GARAGEEOF
+
+    log "Garage config written to deploy/garage/garage.toml"
+}
+
+# Generate the LiveKit configuration file.
+# Detects the server's public IP for WebRTC connectivity.
+generate_livekit_yaml() {
+    log "Generating LiveKit configuration..."
+
+    mkdir -p deploy/livekit
+
+    # Detect public IP for WebRTC. Falls back to private IP, then 0.0.0.0.
+    local node_ip="0.0.0.0"
+    if command -v curl >/dev/null 2>&1; then
+        node_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+    elif command -v wget >/dev/null 2>&1; then
+        node_ip=$(wget -qO- --timeout=5 https://api.ipify.org 2>/dev/null || true)
+    fi
+    # Fallback to local interface IP if public IP detection failed.
+    if [ -z "$node_ip" ]; then
+        node_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "0.0.0.0")
+    fi
+
+    cat > deploy/livekit/livekit.yaml <<LIVEKITEOF
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+  node_ip: $node_ip
+turn:
+  enabled: true
+  udp_port: 443
+LIVEKITEOF
+
+    log "LiveKit config written to deploy/livekit/livekit.yaml (node_ip: $node_ip)"
 }
 
 # ============================================================
@@ -1154,6 +1324,16 @@ main() {
             # Read domain from existing .env for summary.
             DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
             DOMAIN="${DOMAIN:-localhost}"
+            # Ensure gitignored config files exist (they're not in the repo).
+            if [ ! -f "deploy/caddy/Caddyfile" ]; then
+                generate_caddyfile
+            fi
+            if [ ! -f "deploy/garage/garage.toml" ]; then
+                generate_garage_toml
+            fi
+            if [ ! -f "deploy/livekit/livekit.yaml" ]; then
+                generate_livekit_yaml
+            fi
         fi
     else
         collect_config
