@@ -114,6 +114,8 @@ func (s *Service) flushMessages() {
 			slog.Int("count", len(batch)),
 			slog.String("error", err.Error()),
 		)
+		// Batch is discarded on failure; the periodic safety-net sync
+		// (SyncMessages) will recover missed documents from the database.
 		return
 	}
 	s.logger.Debug("flushed message batch to search index", slog.Int("count", len(batch)))
