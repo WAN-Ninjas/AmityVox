@@ -40,6 +40,7 @@ type Service struct {
 	msgBuf   []MessageDoc
 	msgMu    sync.Mutex
 	flushNow chan struct{}
+	closing  bool
 }
 
 // Config holds the configuration for the search service.
@@ -71,6 +72,9 @@ func (s *Service) StartBatchWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.msgMu.Lock()
+			s.closing = true
+			s.msgMu.Unlock()
 			s.flushMessages()
 			return
 		case <-ticker.C:
@@ -83,8 +87,13 @@ func (s *Service) StartBatchWorker(ctx context.Context) {
 
 // EnqueueMessage adds a message to the batch buffer. It will be flushed to
 // Meilisearch within batchFlushInterval or when batchMaxSize is reached.
+// After shutdown begins, new messages are dropped (the periodic sync recovers them).
 func (s *Service) EnqueueMessage(doc MessageDoc) {
 	s.msgMu.Lock()
+	if s.closing {
+		s.msgMu.Unlock()
+		return
+	}
 	s.msgBuf = append(s.msgBuf, doc)
 	shouldFlush := len(s.msgBuf) >= batchMaxSize
 	s.msgMu.Unlock()
@@ -212,16 +221,6 @@ type MessageDoc struct {
 	AuthorID  string `json:"author_id"`
 	Content   string `json:"content"`
 	CreatedAt int64  `json:"created_at"`
-}
-
-// IndexMessage adds or updates a message in the search index.
-func (s *Service) IndexMessage(ctx context.Context, doc MessageDoc) error {
-	index := (*s.client).Index(IndexMessages)
-	_, err := index.AddDocuments([]MessageDoc{doc}, docOpts())
-	if err != nil {
-		return fmt.Errorf("indexing message %s: %w", doc.ID, err)
-	}
-	return nil
 }
 
 // DeleteMessage removes a message from the search index.
