@@ -163,12 +163,11 @@ run_sudo() {
         return
     fi
 
-    echo >/dev/tty
-    echo -e "${BLUE}[INFO]${NC}    Elevated privileges needed: $reason" >/dev/tty
-    echo -e "  ${DIM}Command: sudo $*${NC}" >/dev/tty
-    echo >/dev/tty
-
-    if [ "$NONINTERACTIVE" != "1" ]; then
+    if [ "$NONINTERACTIVE" != "1" ] && [ -e /dev/tty ]; then
+        echo >/dev/tty
+        echo -e "${BLUE}[INFO]${NC}    Elevated privileges needed: $reason" >/dev/tty
+        echo -e "  ${DIM}Command: sudo $*${NC}" >/dev/tty
+        echo >/dev/tty
         echo -en "${BOLD}Run this command with sudo?${NC} ${CYAN}[Y/n]${NC}: " >/dev/tty
         read -r confirm < /dev/tty
         confirm="${confirm:-y}"
@@ -177,6 +176,8 @@ run_sudo() {
             warn "  sudo $*"
             return 1
         fi
+    else
+        info "Running: sudo $*"
     fi
 
     sudo "$@"
@@ -254,7 +255,7 @@ ask_pass() {
 
     if [ "$NONINTERACTIVE" = "1" ]; then
         REPLY="$(gen_alnum 16)"
-        warn "Generated random password (no $varname set): $REPLY"
+        warn "Generated random password for $varname (saved to .env, not shown)"
         return
     fi
 
@@ -471,22 +472,22 @@ fix_docker_permissions() {
 
     log "Added $current_user to the docker group."
 
-    # Re-exec the entire script under the docker group so all docker/compose/exec
-    # calls work without individual wrappers.
-    if [ "${AMITYVOX_SG_REEXEC:-}" != "1" ]; then
+    # Re-exec the script under the docker group so all docker/compose/exec calls work.
+    # Only possible for local file runs — piped installs ($0 = bash) can't re-exec.
+    if [ "$SCRIPT_IS_PIPED" = "false" ] && [ "${AMITYVOX_SG_REEXEC:-}" != "1" ]; then
         info "Re-launching installer under the docker group..."
         export AMITYVOX_SG_REEXEC=1
-        exec sg docker -c "bash $0 $*" || true
+        exec sg docker -c "bash '$SCRIPT_DIR/install.sh' $*"
     fi
 
-    # If re-exec failed or we're already in the re-exec, check again.
+    # If re-exec is not possible (piped) or failed, check again.
     if ! docker info >/dev/null 2>&1; then
         echo
         warn "The group change requires a new login session to take effect."
         warn ""
         warn "Please do one of the following:"
         warn "  1. Log out and log back in, then re-run this script"
-        warn "  2. Run: newgrp docker && bash $0"
+        warn "  2. Run: newgrp docker && bash install.sh"
         warn "  3. Run this script with sudo (not recommended for daily use)"
         return 1
     fi
