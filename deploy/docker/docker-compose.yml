@@ -152,7 +152,7 @@ services:
     volumes:
       - meili_data:/meili_data
     environment:
-      MEILI_ENV: development
+      MEILI_ENV: production
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7700/health"]

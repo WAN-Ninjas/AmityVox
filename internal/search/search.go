@@ -8,10 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/meilisearch/meilisearch-go"
+)
+
+const (
+	// batchFlushInterval is how often the batch buffer flushes to Meilisearch.
+	batchFlushInterval = 2 * time.Second
+	// batchMaxSize triggers an immediate flush when the buffer reaches this count.
+	batchMaxSize = 100
 )
 
 // Index names for the Meilisearch collections.
@@ -27,6 +35,11 @@ type Service struct {
 	client *meilisearch.ServiceManager
 	pool   *pgxpool.Pool
 	logger *slog.Logger
+
+	// Batch indexing buffer for messages.
+	msgBuf   []MessageDoc
+	msgMu    sync.Mutex
+	flushNow chan struct{}
 }
 
 // Config holds the configuration for the search service.
@@ -41,10 +54,69 @@ type Config struct {
 func New(cfg Config) (*Service, error) {
 	client := meilisearch.New(cfg.URL, meilisearch.WithAPIKey(cfg.APIKey))
 	return &Service{
-		client: &client,
-		pool:   cfg.Pool,
-		logger: cfg.Logger,
+		client:   &client,
+		pool:     cfg.Pool,
+		logger:   cfg.Logger,
+		flushNow: make(chan struct{}, 1),
 	}, nil
+}
+
+// StartBatchWorker runs the background batch flush loop. Call this once at startup.
+// It flushes buffered messages to Meilisearch every batchFlushInterval or when
+// the buffer reaches batchMaxSize.
+func (s *Service) StartBatchWorker(ctx context.Context) {
+	ticker := time.NewTicker(batchFlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.flushMessages()
+			return
+		case <-ticker.C:
+			s.flushMessages()
+		case <-s.flushNow:
+			s.flushMessages()
+		}
+	}
+}
+
+// EnqueueMessage adds a message to the batch buffer. It will be flushed to
+// Meilisearch within batchFlushInterval or when batchMaxSize is reached.
+func (s *Service) EnqueueMessage(doc MessageDoc) {
+	s.msgMu.Lock()
+	s.msgBuf = append(s.msgBuf, doc)
+	shouldFlush := len(s.msgBuf) >= batchMaxSize
+	s.msgMu.Unlock()
+
+	if shouldFlush {
+		select {
+		case s.flushNow <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// flushMessages sends all buffered messages to Meilisearch in a single batch call.
+func (s *Service) flushMessages() {
+	s.msgMu.Lock()
+	if len(s.msgBuf) == 0 {
+		s.msgMu.Unlock()
+		return
+	}
+	batch := s.msgBuf
+	s.msgBuf = nil
+	s.msgMu.Unlock()
+
+	index := (*s.client).Index(IndexMessages)
+	if _, err := index.AddDocuments(batch, docOpts()); err != nil {
+		s.logger.Error("batch index flush failed",
+			slog.Int("count", len(batch)),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	s.logger.Debug("flushed message batch to search index", slog.Int("count", len(batch)))
 }
 
 // docOpts returns DocumentOptions with primary key "id".

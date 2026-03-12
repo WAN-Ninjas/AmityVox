@@ -87,7 +87,7 @@ ask() {
         echo -en " ${CYAN}[$default]${NC}"
     fi
     echo -n ": "
-    read -r REPLY
+    read -r REPLY < /dev/tty
     REPLY="${REPLY:-$default}"
 }
 
@@ -104,7 +104,7 @@ ask_yn() {
     [ "$default" = "y" ] && hint="Y/n"
 
     echo -en "${BOLD}$prompt${NC} ${CYAN}[$hint]${NC}: "
-    read -r REPLY
+    read -r REPLY < /dev/tty
     REPLY="${REPLY:-$default}"
     [[ "$REPLY" =~ ^[Yy] ]]
 }
@@ -132,14 +132,14 @@ ask_pass() {
 
     while true; do
         echo -en "${BOLD}$prompt${NC}: "
-        read -rs REPLY
+        read -rs REPLY < /dev/tty
         echo
         if [ ${#REPLY} -lt 8 ]; then
             warn "Password must be at least 8 characters. Try again."
             continue
         fi
         echo -en "${BOLD}Confirm password${NC}: "
-        read -rs REPLY2
+        read -rs REPLY2 < /dev/tty
         echo
         if [ "$REPLY" != "$REPLY2" ]; then
             warn "Passwords don't match. Try again."
@@ -166,7 +166,7 @@ ask_choice() {
         echo -e "  ${CYAN}$((i+1)))${NC} ${options[$i]}"
     done
     echo -n "Choice [1]: "
-    read -r choice
+    read -r choice < /dev/tty
     choice="${choice:-$default}"
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#options[@]} ]; then
         REPLY="${options[$((choice-1))]}"
@@ -540,7 +540,7 @@ setup_garage() {
 
     # Get node ID.
     local node_id
-    node_id=$(docker exec amityvox-garage /garage status 2>&1 | grep -oP '[a-f0-9]{64}' | head -1 || true)
+    node_id=$(docker exec amityvox-garage /garage status 2>&1 | grep -oE '[a-f0-9]{64}' | head -1 || true)
     if [ -z "$node_id" ]; then
         warn "Could not determine Garage node ID. Manual S3 setup required."
         return 1
@@ -551,7 +551,8 @@ setup_garage() {
 
     # Get current layout version and apply next.
     local layout_version
-    layout_version=$(docker exec amityvox-garage /garage layout show 2>&1 | grep -oP 'version \K[0-9]+' | head -1 || echo "0")
+    layout_version=$(docker exec amityvox-garage /garage layout show 2>&1 | sed -n 's/.*version \([0-9]\{1,\}\).*/\1/p' | head -1)
+    layout_version="${layout_version:-0}"
     local next_version=$((layout_version + 1))
     docker exec amityvox-garage /garage layout apply --version "$next_version" >/dev/null 2>&1 || true
 
@@ -568,9 +569,9 @@ setup_garage() {
     local key_info
     key_info=$(docker exec amityvox-garage /garage key info amityvox-key 2>&1)
     local access_key
-    access_key=$(echo "$key_info" | grep -oP 'Key ID: \K\S+' || echo "")
+    access_key=$(echo "$key_info" | sed -n 's/.*Key ID: \(\S\{1,\}\).*/\1/p' | head -1)
     local secret_key
-    secret_key=$(echo "$key_info" | grep -oP 'Secret key: \K\S+' || echo "")
+    secret_key=$(echo "$key_info" | sed -n 's/.*Secret key: \(\S\{1,\}\).*/\1/p' | head -1)
 
     if [ -n "$access_key" ] && [ -n "$secret_key" ]; then
         # Update .env with the real credentials.
@@ -697,7 +698,8 @@ main() {
                 ADMIN_PASS="$REPLY"
             fi
             # Read domain from existing .env for summary.
-            DOMAIN=$(grep -oP '^AMITYVOX_INSTANCE_DOMAIN=\K.*' .env 2>/dev/null || echo "localhost")
+            DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
+            DOMAIN="${DOMAIN:-localhost}"
         fi
     else
         collect_config
