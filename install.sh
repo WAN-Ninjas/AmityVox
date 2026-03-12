@@ -853,7 +853,245 @@ AMITYVOX_LOGGING_LEVEL=info
 AMITYVOX_LOGGING_FORMAT=json
 EOF
 
+    # Restrict permissions — .env contains all secrets.
+    chmod 600 .env
     log "Configuration written to .env"
+
+    # Generate config files that are .gitignored (domain/instance-specific).
+    generate_caddyfile
+    generate_garage_toml
+    generate_livekit_yaml
+}
+
+# Generate the Caddy reverse proxy configuration for the chosen domain.
+# If the file already exists, updates the domain/site block in-place.
+generate_caddyfile() {
+    mkdir -p deploy/caddy
+
+    # Docker leaves a directory at this path after a failed bind mount.
+    # Remove it so we can write the file.
+    if [ -d "deploy/caddy/Caddyfile" ]; then
+        warn "Removing stale deploy/caddy/Caddyfile directory left by a previous failed bind mount."
+        rm -rf deploy/caddy/Caddyfile
+    fi
+
+    # Resolve upload size: use current var, fall back to .env value, then default.
+    local upload_size
+    upload_size="${MAX_UPLOAD_SIZE:-$(sed -n 's/^AMITYVOX_MEDIA_MAX_UPLOAD_SIZE=//p' .env 2>/dev/null | head -1)}"
+    upload_size="${upload_size:-50MB}"
+
+    # Localhost uses HTTP only (no TLS). Public domains get automatic HTTPS via Caddy.
+    local site_block="$DOMAIN"
+    if [ "$DOMAIN" = "localhost" ]; then
+        site_block=":80"
+    fi
+
+    if [ -f "deploy/caddy/Caddyfile" ]; then
+        # File exists — update the site block (first non-global-block line that ends with {).
+        # Match lines like "example.com {", ":80 {", "old.domain.com {".
+        if grep -qE '^[^{]+\{' deploy/caddy/Caddyfile; then
+            sed -i "s|^[^{[:space:]][^{]*{|$site_block {|" deploy/caddy/Caddyfile
+            log "Updated existing Caddyfile domain to: $site_block"
+        else
+            warn "Caddyfile exists but has unexpected format — skipping update."
+            info "  Review deploy/caddy/Caddyfile and update the domain manually if needed."
+        fi
+        return
+    fi
+
+    log "Generating Caddyfile for $DOMAIN..."
+
+    cat > deploy/caddy/Caddyfile <<CADDYEOF
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
+$site_block {
+	# Security headers applied to all responses.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+	}
+
+	# Reverse proxy API requests to AmityVox core.
+	handle /api/* {
+		request_body {
+			max_size $upload_size
+		}
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy health check endpoint.
+	handle /health {
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy WebSocket gateway.
+	handle /ws {
+		reverse_proxy amityvox:8081
+	}
+
+	# Reverse proxy LiveKit WebSocket (voice/video WebRTC signaling).
+	@rtc path /rtc /rtc/*
+	handle @rtc {
+		reverse_proxy livekit:7880
+	}
+
+	# Reverse proxy federation discovery endpoint.
+	handle /.well-known/amityvox {
+		reverse_proxy amityvox:8080
+	}
+
+	# Reverse proxy federation inbox endpoint.
+	handle /federation/* {
+		reverse_proxy amityvox:8080
+	}
+
+	# Serve static web client files.
+	handle {
+		root * /srv
+
+		route {
+			# Service worker — must always revalidate so browsers detect updates.
+			@sw path /sw.js
+			header @sw Cache-Control "no-cache, no-store, must-revalidate"
+
+			# Immutable assets (content-hashed filenames) — cache forever.
+			@immutable path /_app/immutable/*
+			header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+			try_files {path} /index.html
+			file_server
+
+			# All other responses (HTML shell via try_files fallback) — always revalidate.
+			header Cache-Control "no-cache"
+		}
+	}
+}
+CADDYEOF
+
+    log "Caddyfile written to deploy/caddy/Caddyfile"
+}
+
+# Generate the Garage S3 configuration file.
+# If the file already exists, updates the rpc_secret from .env if it differs.
+generate_garage_toml() {
+    mkdir -p deploy/garage
+
+    # Docker leaves a directory at this path after a failed bind mount.
+    if [ -d "deploy/garage/garage.toml" ]; then
+        warn "Removing stale deploy/garage/garage.toml directory left by a previous failed bind mount."
+        rm -rf deploy/garage/garage.toml
+    fi
+
+    # Use the RPC secret from .env if it exists, otherwise generate one.
+    local rpc_secret
+    rpc_secret=$(sed -n 's/^GARAGE_RPC_SECRET=//p' .env 2>/dev/null | head -1)
+    if [ -z "$rpc_secret" ]; then
+        rpc_secret="$(gen_hex 32)"
+    fi
+
+    if [ -f "deploy/garage/garage.toml" ]; then
+        # File exists — sync the rpc_secret from .env into the toml if it differs.
+        local existing_secret
+        existing_secret=$(sed -n 's/^rpc_secret *= *"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' deploy/garage/garage.toml | head -1)
+        if [ "$existing_secret" != "$rpc_secret" ] && [ -n "$rpc_secret" ]; then
+            sed -i "s|^rpc_secret *=.*|rpc_secret = \"$rpc_secret\"|" deploy/garage/garage.toml
+            log "Updated rpc_secret in existing garage.toml"
+        else
+            log "Existing garage.toml is up to date — no changes needed."
+        fi
+        return
+    fi
+
+    log "Generating Garage S3 configuration..."
+
+    cat > deploy/garage/garage.toml <<GARAGEEOF
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+replication_factor = 1
+consistency_mode = "consistent"
+
+rpc_bind_addr = "[::]:3901"
+rpc_secret = "$rpc_secret"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+GARAGEEOF
+
+    # Restrict permissions — file contains rpc_secret.
+    chmod 600 deploy/garage/garage.toml
+    log "Garage config written to deploy/garage/garage.toml"
+}
+
+# Generate the LiveKit configuration file.
+# If the file already exists, updates the node_ip to the current server IP.
+generate_livekit_yaml() {
+    mkdir -p deploy/livekit
+
+    # Docker leaves a directory at this path after a failed bind mount.
+    if [ -d "deploy/livekit/livekit.yaml" ]; then
+        warn "Removing stale deploy/livekit/livekit.yaml directory left by a previous failed bind mount."
+        rm -rf deploy/livekit/livekit.yaml
+    fi
+
+    # Detect public IP for WebRTC. Falls back to private IP, then 0.0.0.0.
+    local node_ip="0.0.0.0"
+    if command -v curl >/dev/null 2>&1; then
+        node_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+    elif command -v wget >/dev/null 2>&1; then
+        node_ip=$(wget -qO- --timeout=5 https://api.ipify.org 2>/dev/null || true)
+    fi
+    # Fallback to local interface IP if public IP detection failed.
+    if [ -z "$node_ip" ]; then
+        node_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "0.0.0.0")
+    fi
+
+    if [ -f "deploy/livekit/livekit.yaml" ]; then
+        # File exists — update node_ip if it differs (server may have moved IPs).
+        local existing_ip
+        existing_ip=$(sed -n 's/^[[:space:]]*node_ip:[[:space:]]*//p' deploy/livekit/livekit.yaml | head -1)
+        if [ "$existing_ip" != "$node_ip" ] && [ "$node_ip" != "0.0.0.0" ]; then
+            sed -i "s|^\([[:space:]]*node_ip:\).*|\1 $node_ip|" deploy/livekit/livekit.yaml
+            log "Updated node_ip in existing livekit.yaml: $existing_ip -> $node_ip"
+        else
+            log "Existing livekit.yaml is up to date — no changes needed."
+        fi
+        return
+    fi
+
+    log "Generating LiveKit configuration..."
+
+    cat > deploy/livekit/livekit.yaml <<LIVEKITEOF
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+  node_ip: $node_ip
+turn:
+  enabled: true
+  udp_port: 443
+LIVEKITEOF
+
+    log "LiveKit config written to deploy/livekit/livekit.yaml (node_ip: $node_ip)"
 }
 
 # ============================================================
@@ -1154,6 +1392,11 @@ main() {
             # Read domain from existing .env for summary.
             DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
             DOMAIN="${DOMAIN:-localhost}"
+            # Ensure gitignored config files exist and are up to date.
+            # Each function handles existing files by updating values in-place.
+            generate_caddyfile
+            generate_garage_toml
+            generate_livekit_yaml
         fi
     else
         collect_config
