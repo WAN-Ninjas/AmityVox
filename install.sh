@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # AmityVox Interactive Setup
 # Usage: curl -fsSL https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/install.sh | bash
+#   or:  ./install.sh              (from the repo directory)
+#   or:  /path/to/install.sh       (from anywhere — operates in the script's directory)
 #
 # This script:
-#   1. Checks prerequisites (Docker, Docker Compose, git, openssl)
-#   2. Clones the repository
-#   3. Walks you through configuration questions
-#   4. Generates secure passwords and fills out .env
-#   5. Builds and starts all services
-#   6. Bootstraps Garage S3 storage (bucket + key)
-#   7. Creates your admin account
+#   1. Detects your OS and architecture
+#   2. Installs Docker if missing (Debian, Ubuntu, Raspberry Pi OS, Armbian)
+#   3. Fixes permissions if needed (docker group, systemd)
+#   4. Clones the repository (if run via curl) or uses the existing checkout
+#   5. Walks you through configuration questions
+#   6. Generates secure passwords and fills out .env
+#   7. Builds and starts all services
+#   8. Bootstraps Garage S3 storage (bucket + key)
+#   9. Creates your admin account
 #
 # Non-interactive mode (for automation):
 #   AMITYVOX_NONINTERACTIVE=1 \
@@ -23,6 +27,19 @@
 set -euo pipefail
 
 # ============================================================
+# Resolve Script Directory
+# ============================================================
+# If run from a local file (not piped), operate from the script's own directory.
+# This ensures the script works regardless of the caller's CWD.
+SCRIPT_IS_PIPED=false
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "-" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_IS_PIPED=true
+    SCRIPT_DIR=""
+fi
+
+# ============================================================
 # Configuration & Defaults
 # ============================================================
 REPO_URL="${AMITYVOX_REPO:-https://github.com/WAN-Ninjas/AmityVox.git}"
@@ -34,19 +51,136 @@ NONINTERACTIVE="${AMITYVOX_NONINTERACTIVE:-0}"
 # ============================================================
 # Colors & Output Helpers
 # ============================================================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Disable colors if stdout is not a terminal.
+if [ -t 1 ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    NC='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
+fi
 
-log()  { echo -e "${GREEN}[AmityVox]${NC} $*"; }
-warn() { echo -e "${YELLOW}[AmityVox]${NC} $*"; }
-err()  { echo -e "${RED}[AmityVox]${NC} $*" >&2; }
-info() { echo -e "${BLUE}[AmityVox]${NC} $*"; }
-hr()   { echo -e "${CYAN}──────────────────────────────────────────────────${NC}"; }
+log()     { echo -e "${GREEN}[AmityVox]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[WARNING]${NC} $*"; }
+err()     { echo -e "${RED}[ERROR]${NC}   $*" >&2; }
+info()    { echo -e "${BLUE}[INFO]${NC}    $*"; }
+debug()   { echo -e "${DIM}[DEBUG]${NC}   $*"; }
+hr()      { echo -e "${CYAN}──────────────────────────────────────────────────${NC}"; }
+
+# Print a command before running it so the user sees exactly what happens.
+run_verbose() {
+    echo -e "  ${DIM}\$ $*${NC}"
+    "$@"
+}
+
+# ============================================================
+# Error Trap — verbose diagnostics on failure
+# ============================================================
+on_error() {
+    local exit_code=$?
+    local line_no=${1:-unknown}
+    echo
+    err "Installation failed at line $line_no (exit code $exit_code)."
+    err ""
+    err "Diagnostic information:"
+    err "  OS:           $(uname -srm)"
+    err "  Shell:        $BASH_VERSION"
+    err "  User:         $(whoami)"
+    err "  Working dir:  $(pwd)"
+    err "  Docker:       $(docker --version 2>/dev/null || echo 'not installed')"
+    err "  Compose:      $(docker compose version 2>/dev/null || echo 'not available')"
+    err "  Disk free:    $(df -h . 2>/dev/null | tail -1 | awk '{print $4}' || echo 'unknown')"
+    err "  Memory free:  $(free -h 2>/dev/null | awk '/^Mem:/{print $7}' || echo 'unknown')"
+    err ""
+    err "If services were partially started, check logs with:"
+    err "  docker compose -f deploy/docker/docker-compose.yml logs --tail=50"
+    err ""
+    err "For help, visit: https://github.com/WAN-Ninjas/AmityVox/issues"
+    exit "$exit_code"
+}
+trap 'on_error $LINENO' ERR
+
+# ============================================================
+# OS Detection
+# ============================================================
+detect_os() {
+    ARCH="$(uname -m)"
+    case "$ARCH" in
+        x86_64)  DOCKER_ARCH="amd64" ;;
+        aarch64) DOCKER_ARCH="arm64" ;;
+        armv7l)  DOCKER_ARCH="armhf" ;;
+        *)       DOCKER_ARCH="$ARCH" ;;
+    esac
+
+    DISTRO_ID=""
+    DISTRO_VERSION=""
+    DISTRO_CODENAME=""
+    DISTRO_LABEL="unknown"
+    IS_RASPBERRY_PI=false
+
+    if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
+        . /etc/os-release
+        DISTRO_ID="${ID:-unknown}"
+        DISTRO_VERSION="${VERSION_ID:-}"
+        DISTRO_CODENAME="${VERSION_CODENAME:-}"
+        DISTRO_LABEL="${PRETTY_NAME:-$DISTRO_ID $DISTRO_VERSION}"
+    fi
+
+    # Detect Raspberry Pi (RPi OS reports as "debian" with Raspberry Pi model).
+    if [ -f /proc/device-tree/model ] && grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
+        IS_RASPBERRY_PI=true
+    fi
+
+    # Armbian reports as its upstream (debian/ubuntu) but sets ID=armbian or
+    # includes "armbian" in ID_LIKE.
+    IS_ARMBIAN=false
+    if [ "$DISTRO_ID" = "armbian" ] || echo "${ID_LIKE:-}" | grep -qi armbian; then
+        IS_ARMBIAN=true
+    fi
+
+    info "Detected: $DISTRO_LABEL ($ARCH)"
+    $IS_RASPBERRY_PI && info "  Hardware: Raspberry Pi"
+    $IS_ARMBIAN && info "  Hardware: Armbian SBC"
+}
+
+# ============================================================
+# Sudo Helper — always prompts before elevating
+# ============================================================
+# Wraps sudo with an explanation of WHY and WHAT will be run.
+run_sudo() {
+    local reason="$1"
+    shift
+
+    if [ "$(id -u)" -eq 0 ]; then
+        # Already root — just run it.
+        "$@"
+        return
+    fi
+
+    echo
+    info "Elevated privileges needed: $reason"
+    echo -e "  ${DIM}Command: sudo $*${NC}"
+    echo
+
+    if [ "$NONINTERACTIVE" != "1" ]; then
+        echo -en "${BOLD}Run this command with sudo?${NC} ${CYAN}[Y/n]${NC}: "
+        read -r confirm < /dev/tty
+        confirm="${confirm:-y}"
+        if [[ ! "$confirm" =~ ^[Yy] ]]; then
+            warn "Skipped. You may need to run this manually:"
+            warn "  sudo $*"
+            return 1
+        fi
+    fi
+
+    sudo "$@"
+}
 
 # ============================================================
 # Utility Functions
@@ -71,7 +205,6 @@ ask() {
     local default="$2"
     local varname="${3:-}"
 
-    # Check if an environment variable override is set.
     if [ -n "$varname" ] && [ -n "${!varname:-}" ]; then
         REPLY="${!varname}"
         return
@@ -114,19 +247,14 @@ ask_pass() {
     local prompt="$1"
     local varname="${2:-}"
 
-    # Check environment variable override.
     if [ -n "$varname" ] && [ -n "${!varname:-}" ]; then
         REPLY="${!varname}"
         return
     fi
 
     if [ "$NONINTERACTIVE" = "1" ]; then
-        if [ -n "$varname" ] && [ -n "${!varname:-}" ]; then
-            REPLY="${!varname}"
-        else
-            REPLY="$(gen_alnum 16)"
-            warn "Generated random password (no $varname set): $REPLY"
-        fi
+        REPLY="$(gen_alnum 16)"
+        warn "Generated random password (no $varname set): $REPLY"
         return
     fi
 
@@ -176,7 +304,7 @@ ask_choice() {
 }
 
 # ============================================================
-# Step 1: Banner & Prerequisite Check
+# Step 1: Banner
 # ============================================================
 banner() {
     echo
@@ -194,66 +322,328 @@ banner() {
     hr
 }
 
-check_prerequisites() {
-    log "Checking prerequisites..."
-    local missing=()
+# ============================================================
+# Step 2: Install Docker if missing
+# ============================================================
+install_docker() {
+    # Determine the upstream repo distro (armbian/rpios use debian/ubuntu repos).
+    local repo_distro="$DISTRO_ID"
+    local repo_codename="$DISTRO_CODENAME"
 
-    command -v git    >/dev/null 2>&1 || missing+=(git)
-    command -v docker >/dev/null 2>&1 || missing+=(docker)
-    command -v openssl >/dev/null 2>&1 || missing+=("openssl (for generating secrets)")
+    # Armbian and Raspberry Pi OS are Debian or Ubuntu derivatives.
+    case "$DISTRO_ID" in
+        armbian)
+            # Armbian's ID_LIKE tells us the upstream.
+            if echo "${ID_LIKE:-}" | grep -qi ubuntu; then
+                repo_distro="ubuntu"
+            else
+                repo_distro="debian"
+            fi
+            ;;
+        raspbian)
+            repo_distro="debian"
+            ;;
+    esac
 
-    if [ ${#missing[@]} -gt 0 ]; then
-        err "Missing required tools:"
-        for tool in "${missing[@]}"; do
-            err "  - $tool"
-        done
-        echo
-        err "Install them and try again."
-        err "Docker: https://docs.docker.com/engine/install/"
-        exit 1
+    # Validate we're on a supported distro.
+    case "$repo_distro" in
+        debian|ubuntu) ;;
+        *)
+            err "Automatic Docker installation is only supported on Debian, Ubuntu,"
+            err "Raspberry Pi OS, and Armbian."
+            err ""
+            err "Your distro: $DISTRO_LABEL ($DISTRO_ID)"
+            err ""
+            err "Install Docker manually: https://docs.docker.com/engine/install/"
+            err "Then re-run this script."
+            return 1
+            ;;
+    esac
+
+    if [ -z "$repo_codename" ]; then
+        err "Could not determine distribution codename from /etc/os-release."
+        err "VERSION_CODENAME is empty. Install Docker manually:"
+        err "  https://docs.docker.com/engine/install/"
+        return 1
     fi
 
-    # Check Docker Compose v2.
-    if docker compose version >/dev/null 2>&1; then
+    echo
+    log "Docker is not installed. This script can install it for you."
+    info "This will:"
+    info "  1. Install prerequisite packages (ca-certificates, curl, gnupg)"
+    info "  2. Add Docker's official GPG key and APT repository"
+    info "  3. Install docker-ce, docker-ce-cli, containerd, and compose plugin"
+    info ""
+    info "Repository: https://download.docker.com/linux/$repo_distro"
+    info "Codename:   $repo_codename"
+    echo
+
+    if ! ask_yn "Install Docker now?"; then
+        err "Docker is required. Install it manually and re-run this script:"
+        err "  https://docs.docker.com/engine/install/"
+        return 1
+    fi
+
+    log "Installing Docker from official repository..."
+
+    # Step 1: Install prerequisites.
+    run_sudo "install prerequisite packages for Docker's APT repository" \
+        apt-get update -qq
+
+    run_sudo "install ca-certificates, curl, and gnupg" \
+        apt-get install -y -qq ca-certificates curl gnupg >/dev/null
+
+    # Step 2: Add Docker's GPG key.
+    run_sudo "create keyrings directory" \
+        install -m 0755 -d /etc/apt/keyrings
+
+    info "Downloading Docker GPG key..."
+    curl -fsSL "https://download.docker.com/linux/$repo_distro/gpg" | \
+        run_sudo "add Docker's official GPG signing key" \
+            tee /etc/apt/keyrings/docker.asc >/dev/null
+
+    run_sudo "set GPG key permissions" \
+        chmod a+r /etc/apt/keyrings/docker.asc
+
+    # Step 3: Add Docker APT repository.
+    local repo_line="deb [arch=$DOCKER_ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$repo_distro $repo_codename stable"
+    echo "$repo_line" | run_sudo "add Docker APT repository" \
+        tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+    info "Added repository: $repo_line"
+
+    # Step 4: Install Docker packages.
+    run_sudo "update package lists with Docker repository" \
+        apt-get update -qq
+
+    run_sudo "install Docker Engine, CLI, containerd, and Compose plugin" \
+        apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+            docker-buildx-plugin docker-compose-plugin >/dev/null
+
+    # Step 5: Start and enable Docker.
+    run_sudo "start Docker service" \
+        systemctl start docker
+
+    run_sudo "enable Docker to start on boot" \
+        systemctl enable docker >/dev/null 2>&1
+
+    log "Docker installed successfully: $(docker --version 2>/dev/null || echo 'unknown version')"
+}
+
+# ============================================================
+# Step 3: Check & fix Docker permissions
+# ============================================================
+fix_docker_permissions() {
+    # Already root — no permission issues.
+    if [ "$(id -u)" -eq 0 ]; then
+        return 0
+    fi
+
+    # Check if the current user can talk to the Docker socket.
+    if docker info >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Docker is installed but the user can't access it.
+    local current_user
+    current_user="$(whoami)"
+
+    echo
+    warn "Your user ($current_user) does not have permission to use Docker."
+    info ""
+    info "This usually means your user is not in the 'docker' group."
+    info "Without this, every Docker command would require 'sudo'."
+    info ""
+    info "The fix is:"
+    info "  1. Add $current_user to the 'docker' group"
+    info "  2. Log out and back in (or use 'newgrp docker')"
+    echo
+
+    if ! ask_yn "Add $current_user to the docker group now?"; then
+        err "Cannot continue without Docker access."
+        err "Fix manually: sudo usermod -aG docker $current_user"
+        err "Then log out and back in, and re-run this script."
+        return 1
+    fi
+
+    run_sudo "add $current_user to the docker group" \
+        usermod -aG docker "$current_user"
+
+    log "Added $current_user to the docker group."
+
+    # Check if newgrp can give us access without a full logout.
+    info "Applying group change to current session..."
+    if sg docker -c "docker info" >/dev/null 2>&1; then
+        info "Group change applied. Continuing with installation."
+        # Re-exec the rest of the script under the docker group.
+        DOCKER_VIA_SG=true
+        export DOCKER_VIA_SG
+    else
+        echo
+        warn "The group change requires a new login session to take effect."
+        warn ""
+        warn "Please do one of the following:"
+        warn "  1. Log out and log back in, then re-run this script"
+        warn "  2. Run: newgrp docker && $0"
+        warn "  3. Run this script with sudo (not recommended for daily use)"
+        return 1
+    fi
+}
+
+# Wrapper: run docker commands through sg if needed.
+docker_cmd() {
+    if [ "${DOCKER_VIA_SG:-}" = "true" ]; then
+        sg docker -c "docker $*"
+    else
+        docker "$@"
+    fi
+}
+
+# ============================================================
+# Step 4: Prerequisites Check
+# ============================================================
+check_prerequisites() {
+    log "Checking prerequisites..."
+
+    detect_os
+
+    # --- Git ---
+    if ! command -v git >/dev/null 2>&1; then
+        warn "git is not installed."
+        if ask_yn "Install git now?"; then
+            run_sudo "install git" apt-get install -y -qq git >/dev/null
+            log "git installed."
+        else
+            err "git is required to clone the AmityVox repository."
+            err "Install it: sudo apt-get install git"
+            exit 1
+        fi
+    fi
+
+    # --- OpenSSL ---
+    if ! command -v openssl >/dev/null 2>&1; then
+        warn "openssl is not installed (needed for generating secrets)."
+        if ask_yn "Install openssl now?"; then
+            run_sudo "install openssl" apt-get install -y -qq openssl >/dev/null
+            log "openssl installed."
+        else
+            err "openssl is required for generating secure passwords and keys."
+            err "Install it: sudo apt-get install openssl"
+            exit 1
+        fi
+    fi
+
+    # --- Docker ---
+    if ! command -v docker >/dev/null 2>&1; then
+        install_docker
+    fi
+
+    # --- Docker permissions ---
+    fix_docker_permissions
+
+    # --- Docker Compose v2 ---
+    if docker_cmd compose version >/dev/null 2>&1; then
         COMPOSE_CMD="docker compose"
     elif command -v docker-compose >/dev/null 2>&1; then
         COMPOSE_CMD="docker-compose"
     else
         err "Docker Compose v2 is required but not found."
-        err "Install it: https://docs.docker.com/compose/install/"
+        err ""
+        err "Docker Compose should have been installed as a plugin with Docker."
+        err "Try reinstalling Docker, or install the plugin manually:"
+        err "  sudo apt-get install docker-compose-plugin"
         exit 1
     fi
 
-    # Check Docker is running.
-    if ! docker info >/dev/null 2>&1; then
-        err "Docker is installed but not running. Start Docker and try again."
-        exit 1
+    # --- Docker daemon running ---
+    if ! docker_cmd info >/dev/null 2>&1; then
+        warn "Docker is installed but the daemon is not running."
+        if ask_yn "Start the Docker service now?"; then
+            run_sudo "start Docker daemon" systemctl start docker
+            # Wait for it to come up.
+            local attempts=0
+            while [ $attempts -lt 10 ]; do
+                if docker_cmd info >/dev/null 2>&1; then
+                    break
+                fi
+                attempts=$((attempts + 1))
+                sleep 1
+            done
+            if ! docker_cmd info >/dev/null 2>&1; then
+                err "Docker daemon did not start. Check: sudo systemctl status docker"
+                exit 1
+            fi
+            log "Docker daemon started."
+        else
+            err "Docker must be running. Start it with: sudo systemctl start docker"
+            exit 1
+        fi
     fi
 
+    # --- Disk space check (warn below 5GB) ---
+    local free_kb
+    free_kb=$(df --output=avail . 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
+    if [ "$free_kb" -lt 5242880 ] 2>/dev/null; then
+        local free_human
+        free_human=$(df -h --output=avail . 2>/dev/null | tail -1 | tr -d ' ' || echo "unknown")
+        warn "Low disk space: $free_human free. AmityVox needs at least 5 GB for"
+        warn "Docker images, database, and media storage."
+        if ! ask_yn "Continue anyway?" "n"; then
+            exit 1
+        fi
+    fi
+
+    # --- Memory check (warn below 2GB) ---
+    local mem_total_kb
+    mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo "0")
+    if [ "$mem_total_kb" -lt 2097152 ] 2>/dev/null; then
+        local mem_human
+        mem_human=$(awk '/^MemTotal:/{printf "%.0f MB", $2/1024}' /proc/meminfo 2>/dev/null || echo "unknown")
+        warn "Low memory: $mem_human total. AmityVox recommends at least 2 GB RAM."
+        warn "On Raspberry Pi, performance may be limited."
+        if ! ask_yn "Continue anyway?" "y"; then
+            exit 1
+        fi
+    fi
+
+    echo
     log "All prerequisites satisfied."
+    info "  Docker:   $(docker --version 2>/dev/null | sed 's/Docker version //')"
+    info "  Compose:  $($COMPOSE_CMD version 2>/dev/null | sed 's/Docker Compose version //')"
+    info "  Git:      $(git --version 2>/dev/null | sed 's/git version //')"
+    info "  Arch:     $ARCH ($DOCKER_ARCH)"
 }
 
 # ============================================================
-# Step 2: Clone Repository
+# Step 5: Clone or Locate Repository
 # ============================================================
 setup_repo() {
+    # If the script is run from inside a checkout (not piped), use that directory.
+    if [ "$SCRIPT_IS_PIPED" = "false" ] && [ -f "$SCRIPT_DIR/deploy/docker/docker-compose.yml" ]; then
+        INSTALL_DIR="$SCRIPT_DIR"
+        log "Using existing checkout at $INSTALL_DIR"
+        cd "$INSTALL_DIR"
+        return
+    fi
+
+    # Piped or run from outside a checkout — clone or update.
     if [ -d "$INSTALL_DIR/.git" ]; then
         log "Found existing installation at $INSTALL_DIR"
         if ask_yn "Update to the latest version?"; then
             cd "$INSTALL_DIR"
-            git pull origin "$BRANCH" 2>/dev/null || warn "Could not pull latest changes (continuing with existing)"
+            run_verbose git pull origin "$BRANCH" 2>/dev/null || warn "Could not pull latest changes (continuing with existing)"
         else
             cd "$INSTALL_DIR"
         fi
     else
         log "Cloning AmityVox to $INSTALL_DIR..."
-        git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+        run_verbose git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
 }
 
 # ============================================================
-# Step 3: Interactive Configuration
+# Step 6: Interactive Configuration
 # ============================================================
 collect_config() {
     hr
@@ -372,7 +762,7 @@ collect_config() {
 }
 
 # ============================================================
-# Step 4: Generate Secrets & Write .env
+# Step 7: Generate Secrets & Write .env
 # ============================================================
 generate_config() {
     log "Generating secure configuration..."
@@ -473,27 +863,50 @@ EOF
 }
 
 # ============================================================
-# Step 5: Build & Start Services
+# Step 8: Build & Start Services
 # ============================================================
 build_and_start() {
     log "Building AmityVox (this may take a few minutes on first run)..."
+    info "Architecture: $ARCH — building for $DOCKER_ARCH"
     echo
 
-    $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache 2>&1 | while IFS= read -r line; do
-        # Show progress and errors without flooding the terminal.
+    # Run build with full output so failures are visible.
+    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache 2>&1 | while IFS= read -r line; do
         case "$line" in
-            *"DONE"*|*"exporting"*|*"FINISHED"*|*"Successfully"*)
-                echo -e "  ${GREEN}$line${NC}"
-                ;;
             *"ERROR"*|*"error"*|*"FAILED"*|*"failed"*|*"CANCELED"*)
                 echo -e "  ${RED}$line${NC}"
                 ;;
+            *"DONE"*|*"exporting"*|*"FINISHED"*|*"Successfully"*|*"Built"*)
+                echo -e "  ${GREEN}$line${NC}"
+                ;;
+            *"#"*"RUN"*|*"#"*"COPY"*|*"#"*"FROM"*)
+                echo -e "  ${DIM}$line${NC}"
+                ;;
         esac
-    done
+    done; then
+        err "Docker build failed. See the output above for details."
+        err ""
+        err "Common causes:"
+        err "  - Not enough disk space (need ~5 GB free)"
+        err "  - Not enough RAM (need ~2 GB, 4 GB recommended)"
+        err "  - Network issues downloading base images"
+        err "  - On ARM devices, some images may take longer to build"
+        err ""
+        err "Retry with verbose output:"
+        err "  $COMPOSE_CMD -f $COMPOSE_FILE build --no-cache 2>&1 | tee build.log"
+        return 1
+    fi
 
     echo
     log "Starting services..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d
+    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1; then
+        err "Failed to start services."
+        err ""
+        err "Check what went wrong:"
+        err "  $COMPOSE_CMD -f $COMPOSE_FILE logs --tail=50"
+        err "  $COMPOSE_CMD -f $COMPOSE_FILE ps"
+        return 1
+    fi
 
     # Wait for the backend to become healthy.
     log "Waiting for AmityVox to become ready..."
@@ -504,12 +917,21 @@ build_and_start() {
             break
         fi
         attempts=$((attempts + 1))
+        # Show progress every 10 seconds.
+        if [ $((attempts % 5)) -eq 0 ]; then
+            info "  Still waiting... (${attempts}/${max_attempts})"
+        fi
         sleep 2
     done
 
     if [ $attempts -ge $max_attempts ]; then
-        warn "AmityVox is taking longer than expected to start."
-        warn "Check logs with: $COMPOSE_CMD -f $COMPOSE_FILE logs -f amityvox"
+        warn "AmityVox is taking longer than expected to start (waited 2 minutes)."
+        warn ""
+        warn "This is common on first run — the database may still be migrating."
+        warn "Check what's happening:"
+        warn "  $COMPOSE_CMD -f $COMPOSE_FILE logs -f amityvox"
+        warn "  $COMPOSE_CMD -f $COMPOSE_FILE ps"
+        warn ""
         warn "Continuing with setup — some steps may fail if services aren't ready."
     else
         log "AmityVox is running."
@@ -517,7 +939,7 @@ build_and_start() {
 }
 
 # ============================================================
-# Step 6: Bootstrap Garage S3 Storage
+# Step 9: Bootstrap Garage S3 Storage
 # ============================================================
 setup_garage() {
     log "Setting up S3 storage (Garage)..."
@@ -533,28 +955,48 @@ setup_garage() {
     done
 
     if [ $attempts -ge 30 ]; then
-        warn "Garage is not ready yet. You'll need to set up S3 storage manually."
-        warn "See the README for instructions."
+        warn "Garage is not ready after 60 seconds."
+        warn ""
+        warn "Check Garage status:"
+        warn "  docker logs amityvox-garage --tail=20"
+        warn "  docker exec amityvox-garage /garage status"
+        warn ""
+        warn "You'll need to set up S3 storage manually. See the README."
         return 1
     fi
 
     # Get node ID.
+    local garage_status
+    garage_status=$(docker exec amityvox-garage /garage status 2>&1)
     local node_id
-    node_id=$(docker exec amityvox-garage /garage status 2>&1 | grep -oE '[a-f0-9]{64}' | head -1 || true)
+    node_id=$(echo "$garage_status" | grep -oE '[a-f0-9]{64}' | head -1 || true)
     if [ -z "$node_id" ]; then
-        warn "Could not determine Garage node ID. Manual S3 setup required."
+        warn "Could not determine Garage node ID."
+        warn "Garage status output:"
+        warn "$garage_status"
+        warn ""
+        warn "Manual S3 setup required. See the README."
         return 1
     fi
 
+    debug "Garage node ID: ${node_id:0:16}..."
+
     # Assign layout and apply.
-    docker exec amityvox-garage /garage layout assign -z dc1 -c 1G "$node_id" >/dev/null 2>&1 || true
+    local assign_output
+    assign_output=$(docker exec amityvox-garage /garage layout assign -z dc1 -c 1G "$node_id" 2>&1) || true
+    debug "Layout assign: $assign_output"
 
     # Get current layout version and apply next.
+    local layout_output
+    layout_output=$(docker exec amityvox-garage /garage layout show 2>&1)
     local layout_version
-    layout_version=$(docker exec amityvox-garage /garage layout show 2>&1 | sed -n 's/.*version \([0-9]\{1,\}\).*/\1/p' | head -1)
+    layout_version=$(echo "$layout_output" | sed -n 's/.*version \([0-9]\{1,\}\).*/\1/p' | head -1)
     layout_version="${layout_version:-0}"
     local next_version=$((layout_version + 1))
-    docker exec amityvox-garage /garage layout apply --version "$next_version" >/dev/null 2>&1 || true
+
+    local apply_output
+    apply_output=$(docker exec amityvox-garage /garage layout apply --version "$next_version" 2>&1) || true
+    debug "Layout apply (v$next_version): $apply_output"
 
     # Create bucket.
     docker exec amityvox-garage /garage bucket create amityvox >/dev/null 2>&1 || true
@@ -583,14 +1025,17 @@ setup_garage() {
 
         log "S3 storage configured (key: ${access_key:0:8}...)"
     else
-        warn "Could not extract Garage credentials. Check manually with:"
+        warn "Could not extract Garage credentials from key info:"
+        warn "$key_info"
+        warn ""
+        warn "Check manually:"
         warn "  docker exec amityvox-garage /garage key info amityvox-key"
         return 1
     fi
 }
 
 # ============================================================
-# Step 7: Create Admin Account
+# Step 10: Create Admin Account
 # ============================================================
 create_admin() {
     log "Creating admin account..."
@@ -606,19 +1051,32 @@ create_admin() {
         sleep 2
     done
 
-    if docker exec amityvox amityvox admin create-user "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASS" >/dev/null 2>&1; then
+    if [ $attempts -ge 30 ]; then
+        warn "Backend did not become healthy after restart."
+        warn "Check logs: $COMPOSE_CMD -f $COMPOSE_FILE logs -f amityvox"
+        warn ""
+        warn "Create admin manually once the server is running:"
+        warn "  docker exec amityvox amityvox admin create-user $ADMIN_USER $ADMIN_EMAIL <password>"
+        warn "  docker exec amityvox amityvox admin set-admin $ADMIN_USER"
+        return 1
+    fi
+
+    local create_output
+    if create_output=$(docker exec amityvox amityvox admin create-user "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASS" 2>&1); then
         docker exec amityvox amityvox admin set-admin "$ADMIN_USER" >/dev/null 2>&1
         log "Admin account created: $ADMIN_USER ($ADMIN_EMAIL)"
     else
-        warn "Could not create admin account (user may already exist)."
-        warn "Create one manually with:"
+        warn "Could not create admin account."
+        warn "Output: $create_output"
+        warn ""
+        warn "The user may already exist. Create one manually with:"
         warn "  docker exec amityvox amityvox admin create-user <user> <email> <password>"
         warn "  docker exec amityvox amityvox admin set-admin <user>"
     fi
 }
 
 # ============================================================
-# Step 8: Print Summary
+# Step 11: Print Summary
 # ============================================================
 print_summary() {
     echo
@@ -632,7 +1090,9 @@ print_summary() {
     else
         echo -e "  ${BOLD}Open in browser:${NC}  https://$DOMAIN"
     fi
-    echo -e "  ${BOLD}Admin account:${NC}   $ADMIN_USER / $ADMIN_EMAIL"
+    if [ -n "${ADMIN_USER:-}" ]; then
+        echo -e "  ${BOLD}Admin account:${NC}   $ADMIN_USER / $ADMIN_EMAIL"
+    fi
     echo
 
     echo -e "  ${BOLD}Useful commands:${NC}"
@@ -654,13 +1114,13 @@ print_summary() {
         echo
     fi
 
-    if [ "$GIPHY_ENABLED" = "true" ] && [ -z "$GIPHY_API_KEY" ]; then
+    if [ "${GIPHY_ENABLED:-false}" = "true" ] && [ -z "${GIPHY_API_KEY:-}" ]; then
         warn "Giphy is enabled but no API key was set. Get one at https://developers.giphy.com/dashboard/"
         warn "Then add it to .env as AMITYVOX_GIPHY_API_KEY and restart."
         echo
     fi
 
-    if [ -z "$VAPID_PUBLIC" ]; then
+    if [ -z "${VAPID_PUBLIC:-}" ]; then
         info "Push notifications are not configured. To enable them later:"
         info "  npx web-push generate-vapid-keys"
         info "  Then add the keys to .env and restart."
@@ -710,7 +1170,7 @@ main() {
     build_and_start
     setup_garage || true
     if [ -n "${ADMIN_USER:-}" ]; then
-        create_admin
+        create_admin || true
     fi
     print_summary
 }
