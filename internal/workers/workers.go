@@ -72,9 +72,19 @@ func (m *Manager) Start(ctx context.Context) {
 	m.startPeriodic(ctx, "session-cleanup", 1*time.Hour, m.cleanExpiredSessions)
 	m.startPeriodic(ctx, "invite-cleanup", 6*time.Hour, m.cleanExpiredInvites)
 
-	// Start search sync worker if search is enabled.
+	// Start search workers if search is enabled.
 	if m.search != nil {
-		m.startPeriodic(ctx, "search-sync", 5*time.Minute, m.syncSearchIndex)
+		// Batch flush worker — collects individual index requests and sends them
+		// to Meilisearch in batches (every 2s or 100 docs) instead of one-by-one.
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.search.StartBatchWorker(ctx)
+		}()
+
+		// Periodic catch-up sync (every 15 min, last 20 min window) as a safety net
+		// for any messages missed by the event worker (e.g. during Meilisearch downtime).
+		m.startPeriodic(ctx, "search-sync", 15*time.Minute, m.syncSearchIndex)
 		m.startEventWorker(ctx)
 	}
 
@@ -233,7 +243,7 @@ func (m *Manager) syncSearchIndex(ctx context.Context) error {
 	if m.search == nil {
 		return nil
 	}
-	since := time.Now().Add(-10 * time.Minute)
+	since := time.Now().Add(-20 * time.Minute)
 	count, err := m.search.SyncMessages(ctx, since)
 	if err != nil {
 		return err
@@ -279,12 +289,7 @@ func (m *Manager) handleMessageCreate(ctx context.Context, event events.Event) {
 		CreatedAt: time.Now().Unix(),
 	}
 
-	if err := m.search.IndexMessage(ctx, doc); err != nil {
-		m.logger.Error("failed to index message",
-			slog.String("id", id),
-			slog.String("error", err.Error()),
-		)
-	}
+	m.search.EnqueueMessage(doc)
 }
 
 func (m *Manager) handleMessageUpdate(ctx context.Context, event events.Event) {
@@ -316,7 +321,7 @@ func (m *Manager) handleMessageUpdate(ctx context.Context, event events.Event) {
 			doc.ID = id
 			doc.Content = content
 			doc.CreatedAt = time.Now().Unix()
-			m.search.IndexMessage(ctx, doc)
+			m.search.EnqueueMessage(doc)
 		}
 		return
 	}
@@ -328,7 +333,7 @@ func (m *Manager) handleMessageUpdate(ctx context.Context, event events.Event) {
 		doc.Content = *msgContent
 	}
 	doc.CreatedAt = createdAt.Unix()
-	m.search.IndexMessage(ctx, doc)
+	m.search.EnqueueMessage(doc)
 }
 
 func (m *Manager) handleMessageDelete(ctx context.Context, event events.Event) {
