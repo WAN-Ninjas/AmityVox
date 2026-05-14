@@ -19,6 +19,7 @@ import (
 
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/presence"
 )
 
 // unknownSenderTTL is how long a negative-cache entry lasts before the next DB lookup.
@@ -75,6 +76,7 @@ type SyncService struct {
 	client     *http.Client
 	voiceSvc   VoiceTokenGenerator // optional, for federated voice
 	liveKitURL string              // public LiveKit URL for this instance
+	cache      presenceStore       // optional, mirrors inbound federated presence for READY payloads
 
 	// unknownCache is a negative cache for sender IDs that are not in the
 	// instances table. Prevents repeated DB queries from unknown senders.
@@ -92,6 +94,11 @@ type SyncService struct {
 	touchMu          sync.Mutex
 	touchedInstances map[string]struct{}
 	touchedPeers     map[[2]string]struct{} // [instanceID, peerID]
+}
+
+type presenceStore interface {
+	SetPresence(ctx context.Context, userID, status string, ttl time.Duration) error
+	RemovePresence(ctx context.Context, userID string) error
 }
 
 // VoiceTokenGenerator is the subset of voice.Service that federation needs.
@@ -134,6 +141,13 @@ func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger, cfg Sync
 		touchedInstances:   make(map[string]struct{}),
 		touchedPeers:       make(map[[2]string]struct{}),
 	}
+}
+
+// SetPresenceCache wires the local presence cache into federation sync. Inbound
+// federated presence is event-driven, so online states are cached without a TTL
+// and cleared when the peer sends offline/invisible.
+func (ss *SyncService) SetPresenceCache(cache presenceStore) {
+	ss.cache = cache
 }
 
 // isNegativelyCached returns true if the sender is in the negative cache and
@@ -838,13 +852,41 @@ func (ss *SyncService) persistInboundPresence(ctx context.Context, remoteInstanc
 	if !validPresenceStatuses[presData.Status] {
 		return
 	}
+	status := presData.Status
+	if status == presence.StatusInvisible {
+		status = presence.StatusOffline
+	}
 	// Only update user stubs belonging to the remote instance.
-	if _, err := ss.fed.pool.Exec(ctx,
+	tag, err := ss.fed.pool.Exec(ctx,
 		`UPDATE users SET status_presence = $1 WHERE id = $2 AND instance_id = $3`,
-		presData.Status, presData.UserID, remoteInstanceID,
-	); err != nil {
+		status, presData.UserID, remoteInstanceID,
+	)
+	if err != nil {
 		ss.logger.Warn("failed to persist inbound presence",
 			slog.String("user_id", presData.UserID),
+			slog.String("error", err.Error()))
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		return
+	}
+	ss.cacheInboundPresence(ctx, presData.UserID, status)
+}
+
+func (ss *SyncService) cacheInboundPresence(ctx context.Context, userID, status string) {
+	if ss.cache == nil {
+		return
+	}
+	var err error
+	if status == presence.StatusOffline || status == presence.StatusInvisible {
+		err = ss.cache.RemovePresence(ctx, userID)
+	} else {
+		err = ss.cache.SetPresence(ctx, userID, status, 0)
+	}
+	if err != nil {
+		ss.logger.Warn("failed to cache inbound presence",
+			slog.String("user_id", userID),
+			slog.String("status", status),
 			slog.String("error", err.Error()))
 	}
 }

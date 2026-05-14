@@ -311,6 +311,7 @@ func runServe() error {
 		DeliveryConcurrency: cfg.Federation.DeliveryConcurrency,
 		BackfillWindowDays:  cfg.Federation.BackfillWindowDays,
 	})
+	syncSvc.SetPresenceCache(cache)
 
 	// Create and start HTTP API server.
 	srv := api.NewServer(db, cfg, authSvc, bus, cache, mediaSvc, searchSvc, voiceSvc, instanceID, logger)

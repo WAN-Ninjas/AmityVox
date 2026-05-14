@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/json"
@@ -11,6 +12,28 @@ import (
 
 	"github.com/amityvox/amityvox/internal/events"
 )
+
+type fakePresenceCache struct {
+	statuses map[string]string
+	removed  map[string]bool
+}
+
+func (f *fakePresenceCache) SetPresence(_ context.Context, userID, status string, _ time.Duration) error {
+	if f.statuses == nil {
+		f.statuses = make(map[string]string)
+	}
+	f.statuses[userID] = status
+	return nil
+}
+
+func (f *fakePresenceCache) RemovePresence(_ context.Context, userID string) error {
+	if f.removed == nil {
+		f.removed = make(map[string]bool)
+	}
+	f.removed[userID] = true
+	delete(f.statuses, userID)
+	return nil
+}
 
 func TestSign_And_Verify(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -274,6 +297,49 @@ func TestRequiresFederationGuildID(t *testing.T) {
 				t.Fatalf("requiresFederationGuildID() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCacheInboundPresence_SetsOnlineStatuses(t *testing.T) {
+	cache := &fakePresenceCache{}
+	svc := &SyncService{
+		cache:  cache,
+		logger: slog.Default(),
+	}
+
+	svc.cacheInboundPresence(context.Background(), "remote-user", "online")
+
+	if got := cache.statuses["remote-user"]; got != "online" {
+		t.Fatalf("cached presence = %q, want online", got)
+	}
+	if cache.removed["remote-user"] {
+		t.Fatal("online presence should not remove the user")
+	}
+}
+
+func TestCacheInboundPresence_RemovesOfflineAndInvisible(t *testing.T) {
+	cache := &fakePresenceCache{
+		statuses: map[string]string{
+			"offline-user":   "online",
+			"invisible-user": "online",
+		},
+	}
+	svc := &SyncService{
+		cache:  cache,
+		logger: slog.Default(),
+	}
+
+	svc.cacheInboundPresence(context.Background(), "offline-user", "offline")
+	svc.cacheInboundPresence(context.Background(), "invisible-user", "invisible")
+
+	if _, ok := cache.statuses["offline-user"]; ok {
+		t.Fatal("offline presence should be removed from cache")
+	}
+	if _, ok := cache.statuses["invisible-user"]; ok {
+		t.Fatal("invisible presence should be removed from cache")
+	}
+	if !cache.removed["offline-user"] || !cache.removed["invisible-user"] {
+		t.Fatal("offline and invisible statuses should call RemovePresence")
 	}
 }
 
