@@ -1,35 +1,11 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type GuildInsights } from '$lib/api/client';
 
 	let { guildId }: { guildId: string } = $props();
 
-	interface DailyInsight {
-		date: string;
-		member_count: number;
-		members_joined: number;
-		members_left: number;
-		messages_sent: number;
-		reactions_added: number;
-		voice_minutes: number;
-		active_members: number;
-	}
-
-	interface HourlyInsight {
-		hour: number;
-		messages: number;
-	}
-
-	interface InsightsData {
-		daily: DailyInsight[];
-		peak_hours: HourlyInsight[];
-		total_members: number;
-		total_messages: number;
-		growth_rate: number;
-	}
-
 	let loading = $state(false);
 	let error = $state('');
-	let insights = $state<InsightsData | null>(null);
+	let insights = $state<GuildInsights | null>(null);
 	let days = $state(30);
 	let activeChart = $state<'members' | 'messages' | 'activity'>('members');
 
@@ -37,7 +13,7 @@
 		loading = true;
 		error = '';
 		try {
-			insights = await api.request<InsightsData>('GET', `/guilds/${guildId}/insights?days=${days}`);
+			insights = await api.getGuildInsights(guildId, days);
 		} catch (err: any) {
 			error = err.message || 'Failed to load insights';
 		} finally {

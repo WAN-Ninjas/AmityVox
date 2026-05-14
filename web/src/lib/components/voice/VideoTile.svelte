@@ -66,6 +66,7 @@
 	bind:this={tileElement}
 	class="video-tile group relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-bg-tertiary {participant.speaking ? 'ring-3 ring-green-500 ring-offset-2 ring-offset-bg-tertiary shadow-[0_0_12px_rgba(34,197,94,0.4)]' : ''}"
 	oncontextmenu={handleContextMenu}
+	role="group"
 >
 	{#if trackInfo}
 		<div bind:this={videoContainer} class="absolute inset-0 [&>video]:h-full [&>video]:w-full [&>video]:object-cover"></div>

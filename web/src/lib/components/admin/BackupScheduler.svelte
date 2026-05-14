@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	interface BackupSchedule {
 		id: string;
@@ -94,7 +95,7 @@
 	}
 
 	async function deleteSchedule(scheduleId: string) {
-		if (!confirm('Delete this backup schedule and all its history?')) return;
+		if (!(await confirmAction({ title: 'Delete Backup Schedule', message: 'Delete this backup schedule and all its history?', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteBackupSchedule(scheduleId);
 			schedules = schedules.filter(s => s.id !== scheduleId);

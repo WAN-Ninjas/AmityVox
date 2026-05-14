@@ -118,8 +118,9 @@
 	<h3 class="mb-3 text-sm font-semibold text-text-primary">Create Policy</h3>
 	<div class="space-y-3">
 		<div>
-			<label class="mb-1 block text-xs text-text-muted">Scope</label>
+			<label for="retention-scope" class="mb-1 block text-xs text-text-muted">Scope</label>
 			<select
+				id="retention-scope"
 				bind:value={newScope}
 				class="w-full rounded-md border border-bg-modifier bg-bg-tertiary px-3 py-2 text-sm text-text-primary"
 			>
@@ -130,8 +131,9 @@
 
 		{#if newScope === 'channel'}
 			<div>
-				<label class="mb-1 block text-xs text-text-muted">Channel</label>
+				<label for="retention-channel" class="mb-1 block text-xs text-text-muted">Channel</label>
 				<select
+					id="retention-channel"
 					bind:value={newChannelId}
 					class="w-full rounded-md border border-bg-modifier bg-bg-tertiary px-3 py-2 text-sm text-text-primary"
 				>
@@ -144,8 +146,9 @@
 		{/if}
 
 		<div>
-			<label class="mb-1 block text-xs text-text-muted">Delete messages older than (days)</label>
+			<label for="retention-max-age" class="mb-1 block text-xs text-text-muted">Delete messages older than (days)</label>
 			<input
+				id="retention-max-age"
 				type="number"
 				bind:value={newMaxAge}
 				min="1"

@@ -100,7 +100,7 @@ func (ss *SyncService) HandleManage(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Only process if guild is local (instance_id IS NULL or matches this instance).
+	// Only process if guild is local to this instance.
 	if ownerInstanceID != nil && *ownerInstanceID != ss.fed.instanceID {
 		http.Error(w, "Guild is not owned by this instance", http.StatusForbidden)
 		return
@@ -437,7 +437,9 @@ func (ss *SyncService) manageChannelUpdate(ctx context.Context, w http.ResponseW
 	// Use channel_id from data, or fall back to "id" field.
 	channelID := req.ChannelID
 	if channelID == "" {
-		var idFallback struct{ ID string `json:"id"` }
+		var idFallback struct {
+			ID string `json:"id"`
+		}
 		json.Unmarshal(data, &idFallback)
 		channelID = idFallback.ID
 	}
@@ -533,7 +535,9 @@ func (ss *SyncService) manageChannelDelete(ctx context.Context, w http.ResponseW
 		return
 	}
 	if req.ChannelID == "" {
-		var idFallback struct{ ID string `json:"id"` }
+		var idFallback struct {
+			ID string `json:"id"`
+		}
 		json.Unmarshal(data, &idFallback)
 		req.ChannelID = idFallback.ID
 	}
@@ -671,7 +675,9 @@ func (ss *SyncService) manageRoleUpdate(ctx context.Context, w http.ResponseWrit
 		return
 	}
 	if req.RoleID == "" {
-		var idFallback struct{ ID string `json:"id"` }
+		var idFallback struct {
+			ID string `json:"id"`
+		}
 		json.Unmarshal(data, &idFallback)
 		req.RoleID = idFallback.ID
 	}
@@ -1074,7 +1080,9 @@ func (ss *SyncService) manageCategoryUpdate(ctx context.Context, w http.Response
 		return
 	}
 	if req.CategoryID == "" {
-		var idFallback struct{ ID string `json:"id"` }
+		var idFallback struct {
+			ID string `json:"id"`
+		}
 		json.Unmarshal(data, &idFallback)
 		req.CategoryID = idFallback.ID
 	}

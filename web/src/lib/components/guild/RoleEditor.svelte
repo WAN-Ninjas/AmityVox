@@ -2,6 +2,7 @@
 	import type { Role } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	let {
 		guildId,
@@ -318,7 +319,7 @@
 	}
 
 	async function handleDelete() {
-		if (!selectedRoleId || !confirm('Delete this role? This cannot be undone.')) return;
+		if (!selectedRoleId || !(await confirmAction({ title: 'Delete Role', message: 'Delete this role? This cannot be undone.', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteRole(guildId, selectedRoleId);
 			roles = roles.filter((r) => r.id !== selectedRoleId);
@@ -454,18 +455,18 @@
 					<h3 class="mb-3 text-sm font-semibold text-text-primary">Role Settings</h3>
 					<div class="grid grid-cols-2 gap-4">
 						<div>
-							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="role-name">Name</label>
 							{#if isEveryone}
-								<input type="text" class="input w-full cursor-not-allowed opacity-60" value="@everyone" disabled />
+								<input id="role-name" type="text" class="input w-full cursor-not-allowed opacity-60" value="@everyone" disabled />
 							{:else}
-								<input type="text" class="input w-full" bind:value={editName} maxlength="100" />
+								<input id="role-name" type="text" class="input w-full" bind:value={editName} maxlength="100" />
 							{/if}
 						</div>
 						<div>
-							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Color</label>
+							<div class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Color</div>
 							<div class="flex items-center gap-2">
-								<input type="color" class="h-9 w-9 cursor-pointer rounded border border-border-primary bg-bg-secondary" bind:value={editColor} />
-								<input type="text" class="input flex-1 font-mono text-xs" bind:value={editColor} maxlength="7" />
+								<input type="color" class="h-9 w-9 cursor-pointer rounded border border-border-primary bg-bg-secondary" bind:value={editColor} aria-label="Role color picker" />
+								<input type="text" class="input flex-1 font-mono text-xs" bind:value={editColor} maxlength="7" aria-label="Role color hex" />
 							</div>
 						</div>
 					</div>

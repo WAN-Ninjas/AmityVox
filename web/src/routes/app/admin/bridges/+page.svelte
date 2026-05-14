@@ -1,101 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api/client';
+	import {
+		api,
+		type AdminBridgeChannelMapping,
+		type AdminBridgeConfig,
+		type AdminBridgeVirtualUser
+	} from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-
-	// Typed fetch helpers using the existing api client's token.
-	async function adminGet<T>(path: string): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function adminPost<T>(path: string, body?: unknown): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function adminPatch<T>(path: string, body?: unknown): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function adminDel(path: string): Promise<void> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'DELETE',
-			headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
-		});
-		if (!res.ok && res.status !== 204) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-	}
-
-	// --- Types ---
-	interface BridgeConfig {
-		id: string;
-		bridge_type: string;
-		enabled: boolean;
-		display_name: string;
-		config: Record<string, unknown>;
-		status: string;
-		last_sync_at: string | null;
-		error_message: string | null;
-		channel_count: number;
-		virtual_user_count: number;
-		created_at: string;
-		updated_at: string;
-	}
-
-	interface ChannelMapping {
-		id: string;
-		local_channel_id: string;
-		local_channel_name: string | null;
-		remote_channel_id: string;
-		remote_channel_name: string | null;
-		direction: string;
-		active: boolean;
-		last_message_at: string | null;
-		message_count: number;
-		created_at: string;
-	}
-
-	interface VirtualUser {
-		id: string;
-		remote_user_id: string;
-		remote_username: string;
-		remote_avatar: string | null;
-		platform: string;
-		last_active_at: string | null;
-		created_at: string;
-	}
+	import { confirmAction } from '$lib/stores/confirm';
 
 	const BRIDGE_TYPES = [
 		{ id: 'matrix', name: 'Matrix', icon: 'M', description: 'Bridge to Matrix/Element rooms via Appservice' },
@@ -107,13 +19,13 @@
 	];
 
 	// --- State ---
-	let bridges = $state<BridgeConfig[]>([]);
+	let bridges = $state<AdminBridgeConfig[]>([]);
 	let loading = $state(true);
 	let error = $state('');
 
-	let selectedBridge = $state<BridgeConfig | null>(null);
-	let channelMappings = $state<ChannelMapping[]>([]);
-	let virtualUsers = $state<VirtualUser[]>([]);
+	let selectedBridge = $state<AdminBridgeConfig | null>(null);
+	let channelMappings = $state<AdminBridgeChannelMapping[]>([]);
+	let virtualUsers = $state<AdminBridgeVirtualUser[]>([]);
 	let loadingMappings = $state(false);
 	let loadingUsers = $state(false);
 
@@ -136,7 +48,7 @@
 		loading = true;
 		error = '';
 		try {
-			bridges = await adminGet<BridgeConfig[]>('/admin/bridges');
+			bridges = await api.getAdminBridges();
 		} catch (e: any) {
 			error = e.message || 'Failed to load bridges';
 		} finally {
@@ -144,13 +56,13 @@
 		}
 	}
 
-	async function loadBridgeDetails(bridge: BridgeConfig) {
+	async function loadBridgeDetails(bridge: AdminBridgeConfig) {
 		selectedBridge = bridge;
 		loadingMappings = true;
 		loadingUsers = true;
 
 		try {
-			channelMappings = await adminGet<ChannelMapping[]>(`/admin/bridges/${bridge.id}/mappings`);
+			channelMappings = await api.getAdminBridgeMappings(bridge.id);
 		} catch {
 			channelMappings = [];
 		} finally {
@@ -158,7 +70,7 @@
 		}
 
 		try {
-			virtualUsers = await adminGet<VirtualUser[]>(`/admin/bridges/${bridge.id}/virtual-users`);
+			virtualUsers = await api.getAdminBridgeVirtualUsers(bridge.id);
 		} catch {
 			virtualUsers = [];
 		} finally {
@@ -170,7 +82,7 @@
 	async function createBridge() {
 		creating = true;
 		try {
-			await adminPost('/admin/bridges', {
+			await api.createAdminBridge({
 				bridge_type: newBridgeType,
 				display_name: newBridgeName || newBridgeType,
 			});
@@ -185,9 +97,9 @@
 		}
 	}
 
-	async function toggleBridge(bridge: BridgeConfig) {
+	async function toggleBridge(bridge: AdminBridgeConfig) {
 		try {
-			await adminPatch(`/admin/bridges/${bridge.id}`, { enabled: !bridge.enabled });
+			await api.updateAdminBridge(bridge.id, { enabled: !bridge.enabled });
 			addToast(`Bridge ${bridge.enabled ? 'disabled' : 'enabled'}`, 'success');
 			await loadBridges();
 			if (selectedBridge?.id === bridge.id) {
@@ -199,9 +111,9 @@
 	}
 
 	async function deleteBridge(bridgeId: string) {
-		if (!confirm('Are you sure? This will remove all channel mappings and virtual users.')) return;
+		if (!(await confirmAction({ title: 'Delete Bridge', message: 'Are you sure? This will remove all channel mappings and virtual users.', confirmLabel: 'Delete Bridge' }))) return;
 		try {
-			await adminDel(`/admin/bridges/${bridgeId}`);
+			await api.deleteAdminBridge(bridgeId);
 			addToast('Bridge deleted', 'success');
 			if (selectedBridge?.id === bridgeId) selectedBridge = null;
 			await loadBridges();
@@ -214,7 +126,7 @@
 		if (!selectedBridge || !newLocalChannel || !newRemoteChannel) return;
 		addingMapping = true;
 		try {
-			await adminPost(`/admin/bridges/${selectedBridge.id}/mappings`, {
+			await api.createAdminBridgeMapping(selectedBridge.id, {
 				local_channel_id: newLocalChannel,
 				remote_channel_id: newRemoteChannel,
 				remote_channel_name: newRemoteName || undefined,
@@ -236,7 +148,7 @@
 	async function deleteMapping(mappingId: string) {
 		if (!selectedBridge) return;
 		try {
-			await adminDel(`/admin/bridges/${selectedBridge.id}/mappings/${mappingId}`);
+			await api.deleteAdminBridgeMapping(selectedBridge.id, mappingId);
 			addToast('Mapping removed', 'success');
 			await loadBridgeDetails(selectedBridge);
 		} catch (e: any) {
@@ -320,8 +232,9 @@
 				</div>
 				<div class="flex items-end gap-4">
 					<div class="flex-1">
-						<label class="block text-sm text-text-muted mb-1">Display Name</label>
+						<label for="bridge-display-name" class="block text-sm text-text-muted mb-1">Display Name</label>
 						<input
+							id="bridge-display-name"
 							type="text"
 							class="input w-full"
 							placeholder={`My ${BRIDGE_TYPES.find(b => b.id === newBridgeType)?.name} Bridge`}
@@ -460,22 +373,22 @@
 									<div class="bg-bg-tertiary p-4 rounded mb-4 space-y-3">
 										<div class="grid grid-cols-2 gap-3">
 											<div>
-												<label class="block text-xs text-text-muted mb-1">Local Channel ID</label>
-												<input type="text" class="input w-full text-sm" placeholder="Channel ULID" bind:value={newLocalChannel} />
+												<label for="mapping-local-channel" class="block text-xs text-text-muted mb-1">Local Channel ID</label>
+												<input id="mapping-local-channel" type="text" class="input w-full text-sm" placeholder="Channel ULID" bind:value={newLocalChannel} />
 											</div>
 											<div>
-												<label class="block text-xs text-text-muted mb-1">Remote Channel ID</label>
-												<input type="text" class="input w-full text-sm" placeholder="e.g. !room:matrix.org" bind:value={newRemoteChannel} />
+												<label for="mapping-remote-channel" class="block text-xs text-text-muted mb-1">Remote Channel ID</label>
+												<input id="mapping-remote-channel" type="text" class="input w-full text-sm" placeholder="e.g. !room:matrix.org" bind:value={newRemoteChannel} />
 											</div>
 										</div>
 										<div class="grid grid-cols-2 gap-3">
 											<div>
-												<label class="block text-xs text-text-muted mb-1">Remote Channel Name</label>
-												<input type="text" class="input w-full text-sm" placeholder="Optional display name" bind:value={newRemoteName} />
+												<label for="mapping-remote-name" class="block text-xs text-text-muted mb-1">Remote Channel Name</label>
+												<input id="mapping-remote-name" type="text" class="input w-full text-sm" placeholder="Optional display name" bind:value={newRemoteName} />
 											</div>
 											<div>
-												<label class="block text-xs text-text-muted mb-1">Direction</label>
-												<select class="input w-full text-sm" bind:value={newDirection}>
+												<label for="mapping-direction" class="block text-xs text-text-muted mb-1">Direction</label>
+												<select id="mapping-direction" class="input w-full text-sm" bind:value={newDirection}>
 													<option value="bidirectional">Bidirectional</option>
 													<option value="inbound">Inbound Only</option>
 													<option value="outbound">Outbound Only</option>

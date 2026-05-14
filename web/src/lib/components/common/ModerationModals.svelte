@@ -107,8 +107,9 @@
 	<p class="mb-3 text-sm text-text-muted">
 		Kick <strong class="text-text-primary">{$kickModalTarget?.displayName}</strong> from this server. They can rejoin with a new invite.
 	</p>
-	<label class="mb-1 block text-xs font-medium text-text-muted">Reason</label>
+	<label class="mb-1 block text-xs font-medium text-text-muted" for="kick-reason">Reason</label>
 	<textarea
+		id="kick-reason"
 		class="mb-4 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
 		placeholder="Why is this member being kicked?"
 		rows="3"
@@ -133,16 +134,18 @@
 		Ban <strong class="text-text-primary">{$banModalTarget?.displayName}</strong> from this server.
 	</p>
 
-	<label class="mb-1 block text-xs font-medium text-text-muted">Reason</label>
+	<label class="mb-1 block text-xs font-medium text-text-muted" for="ban-reason">Reason</label>
 	<textarea
+		id="ban-reason"
 		class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
 		placeholder="Why is this user being banned?"
 		rows="3"
 		bind:value={banReason}
 	></textarea>
 
-	<label class="mb-1 block text-xs font-medium text-text-muted">Ban Duration</label>
+	<label class="mb-1 block text-xs font-medium text-text-muted" for="ban-duration">Ban Duration</label>
 	<select
+		id="ban-duration"
 		class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary focus:border-brand-500 focus:outline-none"
 		bind:value={banDuration}
 	>
@@ -152,8 +155,9 @@
 	</select>
 
 	{#if banDuration === 'custom'}
-		<label class="mb-1 block text-xs font-medium text-text-muted">Duration (minutes)</label>
+		<label class="mb-1 block text-xs font-medium text-text-muted" for="ban-custom-minutes">Duration (minutes)</label>
 		<input
+			id="ban-custom-minutes"
 			type="number"
 			min="1"
 			class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
@@ -162,8 +166,9 @@
 		/>
 	{/if}
 
-	<label class="mb-1 block text-xs font-medium text-text-muted">Message Cleanup</label>
+	<label class="mb-1 block text-xs font-medium text-text-muted" for="ban-message-cleanup">Message Cleanup</label>
 	<select
+		id="ban-message-cleanup"
 		class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary focus:border-brand-500 focus:outline-none"
 		bind:value={banCleanup}
 	>

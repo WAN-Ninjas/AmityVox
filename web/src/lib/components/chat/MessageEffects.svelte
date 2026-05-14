@@ -1,24 +1,6 @@
 <!-- MessageEffects.svelte — Renders confetti, fireworks, hearts, snow, and super reactions with particle effects. -->
 <script lang="ts">
-	import { api } from '$lib/api/client';
-
-	interface EffectEvent {
-		id: string;
-		message_id: string;
-		channel_id: string;
-		user_id: string;
-		effect_type: string;
-		config: Record<string, unknown>;
-	}
-
-	interface SuperReaction {
-		id: string;
-		message_id: string;
-		user_id: string;
-		emoji: string;
-		intensity: number;
-		username: string;
-	}
+	import { api, type EffectEvent, type SuperReaction } from '$lib/api/client';
 
 	interface Props {
 		messageId: string;
@@ -51,11 +33,7 @@
 		sending = true;
 		showEffectMenu = false;
 		try {
-			const result = await api.request<EffectEvent>(
-				'POST',
-				`/channels/${channelId}/messages/${messageId}/effects`,
-				{ effect_type: effectType, config: {} }
-			);
+			const result = await api.createMessageEffect(channelId, messageId, { effect_type: effectType, config: {} });
 			if (result) {
 				triggerEffect(result);
 			}
@@ -68,11 +46,7 @@
 
 	async function addSuperReaction(emoji: string, intensity: number = 1) {
 		try {
-			await api.request<SuperReaction>(
-				'POST',
-				`/channels/${channelId}/messages/${messageId}/super-reactions`,
-				{ emoji, intensity }
-			);
+			await api.addSuperReaction(channelId, messageId, { emoji, intensity });
 			await loadSuperReactions();
 		} catch {
 			// Silently handle.
@@ -81,10 +55,7 @@
 
 	async function loadSuperReactions() {
 		try {
-			const data = await api.request<SuperReaction[]>(
-				'GET',
-				`/channels/${channelId}/messages/${messageId}/super-reactions`
-			);
+			const data = await api.getSuperReactions(channelId, messageId);
 			superReactions = data ?? [];
 		} catch {
 			// Ignore.
@@ -324,7 +295,7 @@
 	{/if}
 </div>
 
-<script lang="ts" context="module">
+<script module lang="ts">
 	function groupSuperReactions(reactions: Array<{ emoji: string; intensity: number; username: string }>) {
 		const groups = new Map<string, { emoji: string; count: number; maxIntensity: number; users: string[] }>();
 		for (const r of reactions) {

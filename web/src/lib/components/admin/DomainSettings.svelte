@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	interface CustomDomain {
 		id: string;
@@ -70,7 +71,7 @@
 	}
 
 	async function deleteDomain(domainId: string) {
-		if (!confirm('Remove this custom domain?')) return;
+		if (!(await confirmAction({ title: 'Remove Custom Domain', message: 'Remove this custom domain?', confirmLabel: 'Remove' }))) return;
 		try {
 			await api.deleteAdminDomain(domainId);
 			domains = domains.filter(d => d.id !== domainId);

@@ -29,6 +29,7 @@ function createMockMessage(overrides?: Partial<Message>): Message {
 		masquerade_avatar: null,
 		masquerade_color: null,
 		encrypted: false,
+		encryption_session_id: null,
 		attachments: [],
 		embeds: [],
 		reactions: [],

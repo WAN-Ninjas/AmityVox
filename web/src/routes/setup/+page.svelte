@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-
-	const API_BASE = '/api/v1';
+	import { api, ApiRequestError } from '$lib/api/client';
 
 	let step = $state(1);
 	let totalSteps = 4;
@@ -30,13 +29,12 @@
 
 	onMount(async () => {
 		try {
-			const res = await fetch(`${API_BASE}/admin/setup/status`);
-			const json = await res.json();
-			if (json.data?.completed) {
+			const status = await api.getSetupStatus();
+			if (status.completed) {
 				alreadyCompleted = true;
 			}
-			if (json.data?.instance_name) {
-				instanceName = json.data.instance_name;
+			if (status.instance_name) {
+				instanceName = status.instance_name;
 			}
 		} catch {
 			// Setup endpoint may not require auth
@@ -80,85 +78,28 @@
 		try {
 			// Step 1: Register admin account if credentials provided.
 			if (adminUsername && adminEmail && adminPassword) {
-				const regRes = await fetch(`${API_BASE}/auth/register`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						username: adminUsername,
-						email: adminEmail,
-						password: adminPassword
-					})
-				});
-				const regJson = await regRes.json();
-				if (!regRes.ok) {
-					// If user already exists, try login instead.
-					if (regJson.error?.code !== 'username_taken' && regJson.error?.code !== 'email_taken') {
-						error = regJson.error?.message || 'Failed to create admin account.';
-						submitting = false;
-						return;
-					}
-				}
-
-				// Get token from register or login.
-				let token = regJson.data?.token;
-				if (!token) {
-					const loginRes = await fetch(`${API_BASE}/auth/login`, {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ username: adminUsername, password: adminPassword })
-					});
-					const loginJson = await loginRes.json();
-					token = loginJson.data?.token;
-				}
-
-				if (token) {
-					localStorage.setItem('token', token);
-
-					// Promote to admin.
-					const meRes = await fetch(`${API_BASE}/users/@me`, {
-						headers: { 'Authorization': `Bearer ${token}` }
-					});
-					const meJson = await meRes.json();
-					const userId = meJson.data?.id;
-
-					if (userId) {
-						await fetch(`${API_BASE}/admin/users/${userId}/set-admin`, {
-							method: 'POST',
-							headers: {
-								'Content-Type': 'application/json',
-								'Authorization': `Bearer ${token}`
-							},
-							body: JSON.stringify({ admin: true })
-						});
+				try {
+					await api.register(adminUsername, adminEmail, adminPassword);
+				} catch (err) {
+					if (err instanceof ApiRequestError && (err.code === 'username_taken' || err.code === 'email_taken')) {
+						await api.login(adminUsername, adminPassword);
+					} else {
+						throw err;
 					}
 				}
 			}
 
 			// Step 2: Complete setup.
-			const token = localStorage.getItem('token');
-			const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-			if (token) headers['Authorization'] = `Bearer ${token}`;
-
-			const setupRes = await fetch(`${API_BASE}/admin/setup/complete`, {
-				method: 'POST',
-				headers,
-				body: JSON.stringify({
-					instance_name: instanceName,
-					description,
-					domain,
-					federation_mode: federationMode,
-					registration_mode: registrationMode,
-					admin_username: adminUsername,
-					admin_email: adminEmail
-				})
+			await api.completeSetup({
+				instance_name: instanceName,
+				description,
+				domain,
+				federation_mode: federationMode,
+				registration_mode: registrationMode,
+				admin_username: adminUsername,
+				admin_email: adminEmail,
+				admin_password: adminPassword
 			});
-
-			const setupJson = await setupRes.json();
-			if (!setupRes.ok) {
-				error = setupJson.error?.message || 'Setup failed.';
-				submitting = false;
-				return;
-			}
 
 			setupComplete = true;
 		} catch (e: unknown) {
@@ -320,7 +261,7 @@
 
 					<div class="space-y-6">
 						<div>
-							<label class="block text-sm font-medium text-text-secondary mb-2">Federation Mode</label>
+							<div class="block text-sm font-medium text-text-secondary mb-2">Federation Mode</div>
 							<div class="space-y-2">
 								<label class="flex items-start gap-3 p-3 rounded-lg bg-bg-tertiary cursor-pointer hover:bg-bg-modifier transition-colors">
 									<input type="radio" bind:group={federationMode} value="closed" class="mt-0.5" />
@@ -347,7 +288,7 @@
 						</div>
 
 						<div>
-							<label class="block text-sm font-medium text-text-secondary mb-2">Registration Mode</label>
+							<div class="block text-sm font-medium text-text-secondary mb-2">Registration Mode</div>
 							<div class="space-y-2">
 								<label class="flex items-start gap-3 p-3 rounded-lg bg-bg-tertiary cursor-pointer hover:bg-bg-modifier transition-colors">
 									<input type="radio" bind:group={registrationMode} value="open" class="mt-0.5" />

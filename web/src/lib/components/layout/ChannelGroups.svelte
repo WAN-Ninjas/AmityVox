@@ -9,6 +9,7 @@
 	import type { Channel } from '$lib/types';
 	import { goto } from '$app/navigation';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 	import { unlockedChannels } from '$lib/encryption/e2eeManager';
 	import { canManageChannels } from '$lib/stores/permissions';
 
@@ -138,7 +139,7 @@
 
 	async function deleteGroup(groupId: string) {
 		const guildId = $currentGuildId;
-		if (!confirm('Delete this channel group?') || !guildId) return;
+		if (!guildId || !(await confirmAction({ title: 'Delete Channel Group', message: 'Delete this channel group?', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteChannelGroup(guildId, groupId);
 			groups = groups.filter(g => g.id !== groupId);
@@ -188,7 +189,7 @@
 	}
 
 	const channelsMap = $derived.by(() => {
-		const map = new Map<string, { id: string; name: string; channel_type: string; encrypted?: boolean }>();
+		const map = new Map<string, { id: string; name: string | null; channel_type: string; encrypted?: boolean }>();
 		for (const ch of $textChannels) map.set(ch.id, ch);
 		for (const ch of $voiceChannels) map.set(ch.id, ch);
 		for (const ch of $forumChannels) map.set(ch.id, ch);
@@ -722,19 +723,20 @@
 						{@const mentions = $mentionCounts.get(channelId) ?? 0}
 						{@const channelType = getChannelType(channelId)}
 						{@const encrypted = isChannelEncrypted(channelId)}
-						<div
-							class="group/item flex items-center"
-							data-channel-id={channelId}
-							onpointerdown={(e) => handleChPointerDown(e, channelId, group.id)}
-						>
+							<div
+								class="group/item flex items-center"
+								data-channel-id={channelId}
+								onpointerdown={(e) => handleChPointerDown(e, channelId, group.id)}
+								role="listitem"
+							>
 							{#if $canManageChannels}<DragHandle />{/if}
 							<button
 								class="mb-0.5 flex flex-1 items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm transition-colors {$currentChannelId === channelId ? 'bg-bg-modifier text-text-primary' : unread > 0 ? 'text-text-primary font-semibold hover:bg-bg-modifier' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
 								onclick={() => handleChannelClick(channelId)}
-								oncontextmenu={(e) => {
-									const ch = channelsMap.get(channelId);
-									if (ch) onChannelContextMenu?.(e, { id: ch.id, name: ch.name, archived: false });
-								}}
+									oncontextmenu={(e) => {
+										const ch = channelsMap.get(channelId);
+										if (ch) onChannelContextMenu?.(e, { id: ch.id, name: ch.name ?? 'Unknown Channel', archived: false });
+									}}
 							>
 								{#if channelType === 'voice' || channelType === 'stage'}
 									<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -754,9 +756,10 @@
 								{:else}
 									<span class="text-lg leading-none text-brand-500 font-mono">#</span>
 								{/if}
-								{#if encrypted}
-									{@const unlocked = $unlockedChannels.has(channelId)}
-									<svg class="h-3 w-3 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title={unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}>
+									{#if encrypted}
+										{@const unlocked = $unlockedChannels.has(channelId)}
+										<svg class="h-3 w-3 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<title>{unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}</title>
 										{#if unlocked}
 											<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
 										{:else}
@@ -846,11 +849,14 @@
 		aria-modal="true"
 		tabindex="-1"
 	>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div
-			class="w-full max-w-sm rounded-lg bg-bg-floating p-5 shadow-xl"
-			onclick={(e) => e.stopPropagation()}
-		>
+		<!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_element_interactions -->
+			<div
+				class="w-full max-w-sm rounded-lg bg-bg-floating p-5 shadow-xl"
+				onclick={(e) => e.stopPropagation()}
+				onkeydown={(e) => e.stopPropagation()}
+				role="document"
+				tabindex="-1"
+			>
 			<h3 class="mb-4 text-base font-semibold text-text-primary">Create Channel Group</h3>
 
 			<div class="mb-3">

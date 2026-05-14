@@ -255,6 +255,66 @@ func TestFederatedMessage_JSON(t *testing.T) {
 	}
 }
 
+func TestRequiresFederationGuildID(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		channelID string
+		want      bool
+	}{
+		{"channel event", "TYPING_START", "channel-1", true},
+		{"guild event", "GUILD_UPDATE", "", true},
+		{"message event", "MESSAGE_DELETE", "", true},
+		{"reaction event", "REACTION_ADD", "", true},
+		{"presence event", "PRESENCE_UPDATE", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresFederationGuildID(tt.eventType, tt.channelID); got != tt.want {
+				t.Fatalf("requiresFederationGuildID() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStableFederationEventID(t *testing.T) {
+	ts := HLCTimestamp{WallMs: 1234, Counter: 2}
+	payload := json.RawMessage(`{"id":"msg-1","content":"hello"}`)
+
+	first := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, payload)
+	second := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, payload)
+	if first == "" {
+		t.Fatal("stable event ID should not be empty")
+	}
+	if first != second {
+		t.Fatalf("stable event ID changed: %q != %q", first, second)
+	}
+
+	changed := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, json.RawMessage(`{"id":"msg-2"}`))
+	if first == changed {
+		t.Fatal("stable event ID should change when payload changes")
+	}
+}
+
+func TestStableFederatedEmbedID(t *testing.T) {
+	embed := federatedEmbed{URL: testPtr("https://example.test"), Title: testPtr("Example")}
+	first := stableFederatedEmbedID("msg-1", 0, embed)
+	second := stableFederatedEmbedID("msg-1", 0, embed)
+	if first == "" {
+		t.Fatal("stable embed ID should not be empty")
+	}
+	if first != second {
+		t.Fatalf("stable embed ID changed: %q != %q", first, second)
+	}
+	if first == stableFederatedEmbedID("msg-1", 1, embed) {
+		t.Fatal("stable embed ID should include embed index")
+	}
+}
+
+func testPtr[T any](value T) *T {
+	return &value
+}
+
 func TestEventTypeToSubject(t *testing.T) {
 	tests := []struct {
 		eventType string

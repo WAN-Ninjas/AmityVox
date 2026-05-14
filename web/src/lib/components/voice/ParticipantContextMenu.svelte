@@ -13,8 +13,13 @@
 
 	let { userId, displayName, x, y, onclose }: Props = $props();
 
-	let volume = $state(getUserVolume(userId));
-	let noiseEnabled = $state(isNoiseReductionEnabled(userId));
+	let volume = $state(100);
+	let noiseEnabled = $state(false);
+
+	$effect(() => {
+		volume = getUserVolume(userId);
+		noiseEnabled = isNoiseReductionEnabled(userId);
+	});
 
 	function handleVolumeChange(e: Event) {
 		const val = parseInt((e.target as HTMLInputElement).value, 10);

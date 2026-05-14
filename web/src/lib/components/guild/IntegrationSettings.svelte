@@ -1,38 +1,10 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type BridgeConnection, type Integration, type IntegrationLogEntry } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	let { guildId, channels = [] }: { guildId: string; channels: Channel[] } = $props();
-
-	// --- Types ---
-	interface Integration {
-		id: string;
-		guild_id: string;
-		integration_type: string;
-		channel_id: string;
-		name: string;
-		enabled: boolean;
-		config: Record<string, unknown>;
-		created_by: string;
-		created_at: string;
-		updated_at: string;
-	}
-
-	interface BridgeConnection {
-		id: string;
-		guild_id: string;
-		bridge_type: string;
-		channel_id: string;
-		remote_id: string;
-		enabled: boolean;
-		config: Record<string, unknown>;
-		status: string;
-		last_error: string | null;
-		created_by: string;
-		created_at: string;
-		updated_at: string;
-	}
 
 	// --- State ---
 	let integrations = $state<Integration[]>([]);
@@ -61,18 +33,7 @@
 	let selectedTab = $state<'integrations' | 'bridges' | 'log'>('integrations');
 
 	// Log.
-	let logEntries = $state<Array<{
-		id: string;
-		integration_id: string | null;
-		bridge_connection_id: string | null;
-		direction: string;
-		source_id: string | null;
-		amityvox_message_id: string | null;
-		channel_id: string;
-		status: string;
-		error_message: string | null;
-		created_at: string;
-	}>>([]);
+	let logEntries = $state<IntegrationLogEntry[]>([]);
 	let loadLogOp = $state(createAsyncOp());
 
 	const integrationTypes = [
@@ -89,7 +50,7 @@
 	async function loadIntegrations() {
 		error = '';
 		const result = await loadIntegrationsOp.run(
-			() => api.request('GET', `/guilds/${guildId}/integrations`)
+			() => api.getIntegrations(guildId)
 		);
 		if (loadIntegrationsOp.error) {
 			error = loadIntegrationsOp.error;
@@ -101,7 +62,7 @@
 	async function loadBridges() {
 		error = '';
 		const result = await loadBridgesOp.run(
-			() => api.request('GET', `/guilds/${guildId}/bridge-connections`)
+			() => api.getBridgeConnections(guildId)
 		);
 		if (loadBridgesOp.error) {
 			error = loadBridgesOp.error;
@@ -112,7 +73,7 @@
 
 	async function loadLog() {
 		const result = await loadLogOp.run(
-			() => api.request('GET', `/guilds/${guildId}/integrations/log`)
+			() => api.getIntegrationLog(guildId)
 		);
 		if (result) {
 			logEntries = result as typeof logEntries;
@@ -124,7 +85,7 @@
 		if (!newName.trim() || !newChannelId) return;
 		error = '';
 		const integration = await createIntegrationOp.run(
-			() => api.request<Integration>('POST', `/guilds/${guildId}/integrations`, {
+			() => api.createIntegration(guildId, {
 				integration_type: newType,
 				channel_id: newChannelId,
 				name: newName.trim(),
@@ -145,7 +106,7 @@
 
 	async function toggleIntegration(integration: Integration) {
 		try {
-			const updated: Integration = await api.request('PATCH', `/guilds/${guildId}/integrations/${integration.id}`, {
+			const updated = await api.updateIntegration(guildId, integration.id, {
 				enabled: !integration.enabled,
 			});
 			integrations = integrations.map(i => i.id === updated.id ? updated : i);
@@ -155,9 +116,9 @@
 	}
 
 	async function deleteIntegration(id: string) {
-		if (!confirm('Delete this integration? All associated feeds, connections, and settings will be removed.')) return;
+		if (!(await confirmAction({ title: 'Delete Integration', message: 'Delete this integration? All associated feeds, connections, and settings will be removed.', confirmLabel: 'Delete' }))) return;
 		try {
-			await api.request('DELETE', `/guilds/${guildId}/integrations/${id}`);
+			await api.deleteIntegration(guildId, id);
 			integrations = integrations.filter(i => i.id !== id);
 			if (selectedIntegration?.id === id) selectedIntegration = null;
 			success = 'Integration deleted';
@@ -172,7 +133,7 @@
 		if (!newBridgeChannelId || !newRemoteId.trim()) return;
 		error = '';
 		const bridge = await createBridgeOp.run(
-			() => api.request<BridgeConnection>('POST', `/guilds/${guildId}/bridge-connections`, {
+			() => api.createBridgeConnection(guildId, {
 				bridge_type: newBridgeType,
 				channel_id: newBridgeChannelId,
 				remote_id: newRemoteId.trim(),
@@ -193,7 +154,7 @@
 
 	async function toggleBridge(bridge: BridgeConnection) {
 		try {
-			const updated: BridgeConnection = await api.request('PATCH', `/guilds/${guildId}/bridge-connections/${bridge.id}`, {
+			const updated = await api.updateBridgeConnection(guildId, bridge.id, {
 				enabled: !bridge.enabled,
 			});
 			bridges = bridges.map(b => b.id === updated.id ? updated : b);
@@ -203,9 +164,9 @@
 	}
 
 	async function deleteBridge(id: string) {
-		if (!confirm('Delete this bridge connection?')) return;
+		if (!(await confirmAction({ title: 'Delete Bridge Connection', message: 'Delete this bridge connection?', confirmLabel: 'Delete' }))) return;
 		try {
-			await api.request('DELETE', `/guilds/${guildId}/bridge-connections/${id}`);
+			await api.deleteBridgeConnection(guildId, id);
 			bridges = bridges.filter(b => b.id !== id);
 			success = 'Bridge connection deleted';
 			setTimeout(() => success = '', 3000);
@@ -327,20 +288,20 @@
 			{#if showCreateForm}
 				<div class="bg-bg-secondary rounded-lg p-4 space-y-3">
 					<div>
-						<label class="block text-sm text-text-secondary mb-1">Type</label>
-						<select class="input w-full" bind:value={newType}>
+						<label for="integration-type" class="block text-sm text-text-secondary mb-1">Type</label>
+						<select id="integration-type" class="input w-full" bind:value={newType}>
 							{#each integrationTypes as t}
 								<option value={t.value}>{t.label}</option>
 							{/each}
 						</select>
 					</div>
 					<div>
-						<label class="block text-sm text-text-secondary mb-1">Name</label>
-						<input class="input w-full" bind:value={newName} placeholder="My RSS Feed" maxlength="100" />
+						<label for="integration-name" class="block text-sm text-text-secondary mb-1">Name</label>
+						<input id="integration-name" class="input w-full" bind:value={newName} placeholder="My RSS Feed" maxlength="100" />
 					</div>
 					<div>
-						<label class="block text-sm text-text-secondary mb-1">Channel</label>
-						<select class="input w-full" bind:value={newChannelId}>
+						<label for="integration-channel" class="block text-sm text-text-secondary mb-1">Channel</label>
+						<select id="integration-channel" class="input w-full" bind:value={newChannelId}>
 							<option value="">Select a channel</option>
 							{#each channels.filter(c => c.channel_type === 'text') as ch}
 								<option value={ch.id}>#{ch.name}</option>
@@ -411,16 +372,16 @@
 		{#if showBridgeForm}
 			<div class="bg-bg-secondary rounded-lg p-4 space-y-3">
 				<div>
-					<label class="block text-sm text-text-secondary mb-1">Bridge Type</label>
-					<select class="input w-full" bind:value={newBridgeType}>
+					<label for="bridge-type" class="block text-sm text-text-secondary mb-1">Bridge Type</label>
+					<select id="bridge-type" class="input w-full" bind:value={newBridgeType}>
 						{#each bridgeTypes as t}
 							<option value={t.value}>{t.label}</option>
 						{/each}
 					</select>
 				</div>
 				<div>
-					<label class="block text-sm text-text-secondary mb-1">AmityVox Channel</label>
-					<select class="input w-full" bind:value={newBridgeChannelId}>
+					<label for="bridge-channel" class="block text-sm text-text-secondary mb-1">AmityVox Channel</label>
+					<select id="bridge-channel" class="input w-full" bind:value={newBridgeChannelId}>
 						<option value="">Select a channel</option>
 						{#each channels.filter(c => c.channel_type === 'text') as ch}
 							<option value={ch.id}>#{ch.name}</option>
@@ -428,7 +389,7 @@
 					</select>
 				</div>
 				<div>
-					<label class="block text-sm text-text-secondary mb-1">
+					<label for="bridge-remote-id" class="block text-sm text-text-secondary mb-1">
 						{#if newBridgeType === 'telegram'}
 							Telegram Chat ID
 						{:else if newBridgeType === 'slack'}
@@ -438,6 +399,7 @@
 						{/if}
 					</label>
 					<input
+						id="bridge-remote-id"
 						class="input w-full"
 						bind:value={newRemoteId}
 						placeholder={newBridgeType === 'irc' ? '#channel' : 'Channel or Chat ID'}

@@ -542,10 +542,14 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		}
 
 		// 5. Link attachments.
-		if _, err := tx.Exec(r.Context(),
+		tag, err := tx.Exec(r.Context(),
 			`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
-			msgID, req.AttachmentIDs, userID); err != nil {
+			msgID, req.AttachmentIDs, userID)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			return errInvalidAttachments
 		}
 
 		// 6. Update gallery channel's last_activity_at.
@@ -557,6 +561,10 @@ func (h *Handler) HandleCreateGalleryPost(w http.ResponseWriter, r *http.Request
 		return nil
 	})
 	if err != nil {
+		if err == errInvalidAttachments {
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_attachments", "All attachments must be images or videos that you uploaded")
+			return
+		}
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to create post")
 		return
 	}

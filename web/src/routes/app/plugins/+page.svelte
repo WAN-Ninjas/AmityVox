@@ -1,54 +1,16 @@
 <script lang="ts">
-	import { api, ApiRequestError } from '$lib/api/client';
+	import { api, type PluginListing } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { currentGuildId } from '$lib/stores/guilds';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
-	const API_BASE = '/api/v1';
-
-	async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		const token = api.getToken();
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-		const res = await fetch(`${API_BASE}${path}`, {
-			method,
-			headers,
-			body: body ? JSON.stringify(body) : undefined
-		});
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		if (!res.ok) {
-			const err = json as { error?: { message?: string; code?: string } };
-			throw new ApiRequestError(
-				err.error?.message || res.statusText,
-				err.error?.code || 'unknown',
-				res.status
-			);
-		}
-		return (json as { data: T }).data;
-	}
-
-	interface Plugin {
-		id: string;
-		name: string;
-		description: string | null;
-		author: string;
-		version: string;
-		homepage_url: string | null;
-		icon_url: string | null;
-		category: string;
-		public: boolean;
-		verified: boolean;
-		install_count: number;
-		created_at: string;
-		updated_at: string;
-	}
-
-	let plugins = $state<Plugin[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let plugins = $state<PluginListing[]>([]);
+	let loadOp = $state(createAsyncOp());
 	let search = $state('');
 	let selectedCategory = $state('');
 	let installing = $state<string | null>(null);
+	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	const categories = [
 		{ value: '', label: 'All Categories' },
@@ -70,24 +32,17 @@
 	});
 
 	async function loadPlugins() {
-		loading = true;
-		error = '';
-		try {
-			const params = new URLSearchParams();
-			if (search) params.set('q', search);
-			if (selectedCategory) params.set('category', selectedCategory);
-			params.set('limit', '50');
-
-			const resp = await apiRequest<Plugin[]>('GET', `/plugins?${params.toString()}`);
-			plugins = resp;
-		} catch (err: any) {
-			error = err.message || 'Failed to load plugins';
-		} finally {
-			loading = false;
-		}
+		const result = await loadOp.run(() =>
+			api.listPlugins({
+				q: search.trim() || undefined,
+				category: selectedCategory || undefined,
+				limit: 50
+			})
+		);
+		if (result) plugins = result;
 	}
 
-	async function installPlugin(plugin: Plugin) {
+	async function installPlugin(plugin: PluginListing) {
 		const guildId = $currentGuildId;
 		if (!guildId) {
 			addToast('Select a server first to install plugins', 'error');
@@ -96,20 +51,21 @@
 
 		installing = plugin.id;
 		try {
-			await apiRequest('POST', `/guilds/${guildId}/plugins`, {
-				plugin_id: plugin.id,
-				config: {}
-			});
+			await api.installPlugin(guildId, plugin.id);
+			plugins = plugins.map((entry) =>
+				entry.id === plugin.id ? { ...entry, install_count: entry.install_count + 1 } : entry
+			);
 			addToast(`${plugin.name} installed successfully`, 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to install plugin', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to install plugin'), 'error');
 		} finally {
 			installing = null;
 		}
 	}
 
 	function handleSearch() {
-		loadPlugins();
+		if (searchTimeout) clearTimeout(searchTimeout);
+		searchTimeout = setTimeout(loadPlugins, 250);
 	}
 
 	function formatInstalls(count: number): string {
@@ -143,6 +99,7 @@
 				class="input w-full pl-10"
 				placeholder="Search plugins..."
 				bind:value={search}
+				oninput={handleSearch}
 				onkeydown={(e) => e.key === 'Enter' && handleSearch()}
 			/>
 		</div>
@@ -158,12 +115,12 @@
 	</div>
 
 	<!-- Plugin grid -->
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-16">
 			<span class="inline-block h-8 w-8 animate-spin rounded-full border-3 border-brand-500 border-t-transparent"></span>
 		</div>
-	{:else if error}
-		<div class="rounded-lg bg-red-500/10 px-6 py-4 text-sm text-red-400">{error}</div>
+	{:else if loadOp.error}
+		<div class="rounded-lg bg-red-500/10 px-6 py-4 text-sm text-red-400">{loadOp.error}</div>
 	{:else if plugins.length === 0}
 		<div class="flex flex-col items-center justify-center py-16">
 			<svg class="h-16 w-16 text-text-muted" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
@@ -192,7 +149,8 @@
 							<div class="flex items-center gap-2">
 								<h3 class="truncate text-sm font-semibold text-text-primary">{plugin.name}</h3>
 								{#if plugin.verified}
-									<svg class="h-4 w-4 shrink-0 text-brand-400" fill="currentColor" viewBox="0 0 20 20" title="Verified">
+									<svg class="h-4 w-4 shrink-0 text-brand-400" fill="currentColor" viewBox="0 0 20 20">
+										<title>Verified</title>
 										<path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
 									</svg>
 								{/if}

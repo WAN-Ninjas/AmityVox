@@ -123,6 +123,7 @@
 		role="listbox"
 		aria-label="Set status"
 		aria-expanded="true"
+		tabindex="-1"
 	>
 		<!-- Status options -->
 		<div class="p-1.5">
@@ -165,10 +166,11 @@
 				</button>
 			{:else}
 				<div class="space-y-2 px-2 py-1">
-					<label class="block text-xs font-bold uppercase tracking-wide text-text-muted">
-						Status Message
-					</label>
-					<input
+				<label class="block text-xs font-bold uppercase tracking-wide text-text-muted" for="custom-status-message">
+					Status Message
+				</label>
+				<input
+					id="custom-status-message"
 						type="text"
 						class="input w-full text-sm"
 						bind:value={customText}
@@ -176,10 +178,10 @@
 						maxlength="128"
 					/>
 
-					<label class="block text-xs font-bold uppercase tracking-wide text-text-muted">
-						Clear After
-					</label>
-					<select class="input w-full text-sm" bind:value={expiryMs}>
+				<label class="block text-xs font-bold uppercase tracking-wide text-text-muted" for="custom-status-expiry">
+					Clear After
+				</label>
+				<select id="custom-status-expiry" class="input w-full text-sm" bind:value={expiryMs}>
 						{#each expiryOptions as opt (opt.label)}
 							<option value={opt.value}>{opt.label}</option>
 						{/each}

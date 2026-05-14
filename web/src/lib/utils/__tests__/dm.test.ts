@@ -20,6 +20,7 @@ function makeUser(overrides: Partial<User> = {}): User {
 		accent_color: null,
 		pronouns: null,
 		flags: 0,
+		last_online: null,
 		created_at: '2024-01-01T00:00:00Z',
 		...overrides,
 	};
@@ -45,6 +46,8 @@ function makeChannel(overrides: Partial<Channel> = {}): Channel {
 		locked_by: null,
 		locked_at: null,
 		archived: false,
+		parent_channel_id: null,
+		last_activity_at: null,
 		created_at: '2024-01-01T00:00:00Z',
 		...overrides,
 	};

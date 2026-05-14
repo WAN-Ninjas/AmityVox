@@ -21,18 +21,18 @@ const profileCacheTTL = 5 * time.Minute
 
 // userProfileResponse is the response type for the user profile federation endpoint.
 type userProfileResponse struct {
-	ID             string  `json:"id"`
-	Username       string  `json:"username"`
-	DisplayName    *string `json:"display_name,omitempty"`
-	AvatarID       *string `json:"avatar_id,omitempty"`
-	Bio            *string `json:"bio,omitempty"`
-	StatusText     *string `json:"status_text,omitempty"`
-	StatusEmoji    *string `json:"status_emoji,omitempty"`
-	BannerID       *string `json:"banner_id,omitempty"`
-	AccentColor    *string `json:"accent_color,omitempty"`
-	Pronouns       *string `json:"pronouns,omitempty"`
-	Flags          int     `json:"flags"`
-	InstanceID     *string `json:"instance_id,omitempty"`
+	ID          string  `json:"id"`
+	Username    string  `json:"username"`
+	DisplayName *string `json:"display_name,omitempty"`
+	AvatarID    *string `json:"avatar_id,omitempty"`
+	Bio         *string `json:"bio,omitempty"`
+	StatusText  *string `json:"status_text,omitempty"`
+	StatusEmoji *string `json:"status_emoji,omitempty"`
+	BannerID    *string `json:"banner_id,omitempty"`
+	AccentColor *string `json:"accent_color,omitempty"`
+	Pronouns    *string `json:"pronouns,omitempty"`
+	Flags       int     `json:"flags"`
+	InstanceID  *string `json:"instance_id,omitempty"`
 }
 
 // profileFetchTime tracks when each remote user's profile was last fetched.
@@ -59,7 +59,8 @@ func (ss *SyncService) HandleUserProfile(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 
-	// Query the local user — must belong to this instance (instance_id IS NULL for local users).
+	// Query the local user. Current local users use this instance ID; older rows
+	// may still have NULL instance_id.
 	var profile userProfileResponse
 	var instanceID *string
 	err := ss.fed.pool.QueryRow(ctx,
@@ -83,8 +84,7 @@ func (ss *SyncService) HandleUserProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Verify the user belongs to this instance (local user has NULL instance_id,
-	// or instance_id matching our instance ID).
+	// Verify the user belongs to this instance.
 	if instanceID != nil && *instanceID != ss.fed.instanceID {
 		http.Error(w, `{"error":{"code":"not_found","message":"User does not belong to this instance"}}`, http.StatusNotFound)
 		return

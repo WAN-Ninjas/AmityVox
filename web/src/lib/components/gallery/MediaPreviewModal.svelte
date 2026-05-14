@@ -70,7 +70,7 @@
 	}
 </script>
 
-<Modal bind:open title={attachment?.filename ?? 'Media Preview'} {onclose}>
+<Modal {open} title={attachment?.filename ?? 'Media Preview'} {onclose}>
 	{#if attachment}
 		<div class="space-y-4">
 			<!-- Media preview -->

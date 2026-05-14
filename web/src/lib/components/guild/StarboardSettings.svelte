@@ -1,30 +1,9 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type StarboardConfig, type StarboardEntry } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
-
-	interface StarboardConfig {
-		guild_id: string;
-		enabled: boolean;
-		channel_id: string | null;
-		emoji: string;
-		threshold: number;
-		self_star: boolean;
-		nsfw_allowed: boolean;
-	}
-
-	interface StarboardEntry {
-		id: string;
-		guild_id: string;
-		source_message_id: string;
-		source_channel_id: string;
-		starboard_message_id: string | null;
-		star_count: number;
-		author_id: string;
-		created_at: string;
-	}
 
 	let loadOp = $state(createAsyncOp());
 	let saveOp = $state(createAsyncOp());
@@ -48,7 +27,7 @@
 	async function loadConfig() {
 		error = '';
 		const result = await loadOp.run(
-			() => api.request<StarboardConfig>('GET', `/guilds/${guildId}/starboard`)
+			() => api.getStarboardConfig(guildId)
 		);
 		if (loadOp.error) {
 			error = loadOp.error;
@@ -68,16 +47,14 @@
 		error = '';
 		success = '';
 		const result = await saveOp.run(
-			() => api.request<StarboardConfig>(
-				'PATCH', `/guilds/${guildId}/starboard`, {
-					enabled: config.enabled,
-					channel_id: config.channel_id,
-					emoji: config.emoji,
-					threshold: config.threshold,
-					self_star: config.self_star,
-					nsfw_allowed: config.nsfw_allowed
-				}
-			)
+			() => api.updateStarboardConfig(guildId, {
+				enabled: config.enabled,
+				channel_id: config.channel_id,
+				emoji: config.emoji,
+				threshold: config.threshold,
+				self_star: config.self_star,
+				nsfw_allowed: config.nsfw_allowed
+			})
 		);
 		if (saveOp.error) {
 			error = saveOp.error;
@@ -90,9 +67,7 @@
 
 	async function loadEntries() {
 		const result = await loadEntriesOp.run(
-			() => api.request<StarboardEntry[]>(
-				'GET', `/guilds/${guildId}/starboard/entries?limit=50`
-			)
+			() => api.getStarboardEntries(guildId, 50)
 		);
 		if (loadEntriesOp.error) {
 			error = loadEntriesOp.error;
@@ -167,10 +142,10 @@
 				</label>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="starboard-channel-id">
 						Starboard Channel
 					</label>
-					<select class="input w-full" bind:value={config.channel_id}>
+					<select id="starboard-channel-id" class="input w-full" bind:value={config.channel_id}>
 						<option value={null}>Select a channel...</option>
 						{#each channels as ch}
 							<option value={ch.id}>#{ch.name}</option>
@@ -182,10 +157,10 @@
 				</div>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="starboard-emoji">
 						Emoji
 					</label>
-					<select class="input w-40" bind:value={config.emoji}>
+					<select id="starboard-emoji" class="input w-40" bind:value={config.emoji}>
 						<option value="star">{emojiDisplay('star')} Star</option>
 						<option value="heart">{emojiDisplay('heart')} Heart</option>
 						<option value="fire">{emojiDisplay('fire')} Fire</option>
@@ -195,10 +170,10 @@
 				</div>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="starboard-threshold">
 						Threshold
 					</label>
-					<input type="number" class="input w-24" bind:value={config.threshold}
+					<input id="starboard-threshold" type="number" class="input w-24" bind:value={config.threshold}
 						min="1" max="100" />
 					<p class="mt-1 text-xs text-text-muted">
 						Number of reactions needed to post to the starboard

@@ -18,9 +18,9 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/api/activities"
 	"github.com/amityvox/amityvox/internal/api/admin"
+	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/api/bookmarks"
 	"github.com/amityvox/amityvox/internal/api/bots"
 	"github.com/amityvox/amityvox/internal/api/channels"
@@ -56,26 +56,26 @@ import (
 // Server is the HTTP API server for AmityVox. It holds the chi router, database
 // reference, services, configuration, and logger.
 type Server struct {
-	Router      *chi.Mux
-	DB          *database.DB
-	Config      *config.Config
-	AuthService *auth.Service
-	EventBus    *events.Bus
-	Cache       *presence.Cache
-	Media       *media.Service
-	Search      *search.Service
-	Voice      *voice.Service
-	Encryption *encryption.Service
+	Router        *chi.Mux
+	DB            *database.DB
+	Config        *config.Config
+	AuthService   *auth.Service
+	EventBus      *events.Bus
+	Cache         *presence.Cache
+	Media         *media.Service
+	Search        *search.Service
+	Voice         *voice.Service
+	Encryption    *encryption.Service
 	AutoMod       *automod.Service
 	Notifications *notifications.Service
 	WebAuthn      *webauthn.WebAuthn
-	InstanceID string
-	Version     string
-	Logger      *slog.Logger
-	FedSvc      *federation.Service       // exposed for admin federation handlers
-	FedProxy    apiutil.FederationProxy  // optional, set after sync service creation
-	UserHandler *users.Handler           // exposed for federation wiring
-	server      *http.Server
+	InstanceID    string
+	Version       string
+	Logger        *slog.Logger
+	FedSvc        *federation.Service     // exposed for admin federation handlers
+	FedProxy      apiutil.FederationProxy // optional, set after sync service creation
+	UserHandler   *users.Handler          // exposed for federation wiring
+	server        *http.Server
 }
 
 // NewServer creates a new API server with all routes and middleware registered.
@@ -251,7 +251,7 @@ func (s *Server) registerRoutes() {
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
 	}
-widgetH := &widgets.Handler{
+	widgetH := &widgets.Handler{
 		Pool:     s.DB.Pool,
 		EventBus: s.EventBus,
 		Logger:   s.Logger,
@@ -286,11 +286,14 @@ widgetH := &widgets.Handler{
 
 	// API v1 routes.
 	s.Router.Route("/api/v1", func(r chi.Router) {
+		r.Get("/client-config", s.handleClientConfig)
+
 		// Auth routes.
 		r.Route("/auth", func(r chi.Router) {
 			// Public auth endpoints (login/register) — IP-based rate limiting.
 			r.Group(func(r chi.Router) {
 				r.Use(s.RateLimitGlobal())
+				r.Get("/registration", s.handleGetPublicRegistrationConfig)
 				r.Post("/register", s.handleRegister)
 				r.Post("/login", s.handleLogin)
 			})
@@ -431,6 +434,14 @@ widgetH := &widgets.Handler{
 				r.Put("/{guildID}/guide", guildH.HandleUpdateServerGuide)
 				r.Get("/{guildID}/bump", guildH.HandleGetBumpStatus)
 				r.Post("/{guildID}/bump", guildH.HandleBumpGuild)
+				r.Get("/{guildID}/plugins", widgetH.HandleGetGuildPlugins)
+				r.Post("/{guildID}/plugins", widgetH.HandleInstallPlugin)
+				r.Patch("/{guildID}/plugins/{installID}", widgetH.HandleUpdateGuildPlugin)
+				r.Delete("/{guildID}/plugins/{installID}", widgetH.HandleUninstallPlugin)
+				r.Get("/{guildID}/channel-templates", channelH.HandleGetChannelTemplates)
+				r.Post("/{guildID}/channel-templates", channelH.HandleCreateChannelTemplate)
+				r.Delete("/{guildID}/channel-templates/{templateID}", channelH.HandleDeleteChannelTemplate)
+				r.Post("/{guildID}/channel-templates/{templateID}/apply", channelH.HandleApplyChannelTemplate)
 				r.Route("/{guildID}/templates", func(r chi.Router) {
 					r.Post("/", guildH.HandleCreateGuildTemplate)
 					r.Get("/", guildH.HandleGetGuildTemplates)
@@ -439,7 +450,7 @@ widgetH := &widgets.Handler{
 					r.Post("/{templateID}/apply", guildH.HandleApplyGuildTemplate)
 				})
 				r.Get("/{guildID}/members/@me/permissions", guildH.HandleGetMyPermissions)
-			r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
+				r.Get("/{guildID}/members", guildH.HandleGetGuildMembers)
 				r.Get("/{guildID}/members/search", guildH.HandleSearchGuildMembers)
 				r.Get("/{guildID}/members/{memberID}", guildH.HandleGetGuildMember)
 				r.Patch("/{guildID}/members/{memberID}", guildH.HandleUpdateGuildMember)
@@ -598,12 +609,12 @@ widgetH := &widgets.Handler{
 				r.Post("/{channelID}/messages/{messageID}/report", modH.HandleReportMessage)
 				r.Post("/{channelID}/messages/{messageID}/report-admin", modH.HandleReportToAdmin)
 				r.Post("/{channelID}/messages/{messageID}/translate", channelH.HandleTranslateMessage)
-			r.Get("/{channelID}/threads", channelH.HandleGetThreads)
+				r.Get("/{channelID}/threads", channelH.HandleGetThreads)
 				r.Post("/{channelID}/threads/{threadID}/hide", channelH.HandleHideThread)
 				r.Delete("/{channelID}/threads/{threadID}/hide", channelH.HandleUnhideThread)
 				r.Post("/{channelID}/lock", modH.HandleLockChannel)
 				r.Post("/{channelID}/unlock", modH.HandleUnlockChannel)
-			r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
+				r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 				r.Get("/{channelID}/export", userH.HandleExportChannelMessages)
 				r.Get("/{channelID}/gallery", channelH.HandleGetChannelGallery)
 
@@ -925,7 +936,6 @@ widgetH := &widgets.Handler{
 				r.Post("/files/upload", stubHandler("upload_file"))
 			}
 
-
 			// MLS encryption delivery service routes.
 			if s.Encryption != nil {
 				r.Route("/encryption", func(r chi.Router) {
@@ -1004,6 +1014,11 @@ widgetH := &widgets.Handler{
 
 			// Admin routes — protected by RequireAdmin middleware.
 			r.Route("/admin", func(r chi.Router) {
+				// First-run setup must be reachable before an admin user exists.
+				// HandleCompleteSetup still requires admin access when setup has already completed.
+				r.Get("/setup/status", adminH.HandleGetSetupStatus)
+				r.Post("/setup/complete", adminH.HandleCompleteSetup)
+
 				r.Use(RequireAdmin(s.DB.Pool))
 				r.Get("/instance", adminH.HandleGetInstance)
 				r.Patch("/instance", adminH.HandleUpdateInstance)
@@ -1070,9 +1085,7 @@ widgetH := &widgets.Handler{
 				r.Delete("/federation/profiles/{profileID}", adminH.HandleRemoveInstanceProfile)
 				r.Get("/federation/users/{instanceID}/{userID}", adminH.HandleGetFederatedUserProfile)
 
-				// Self-hosting setup and management.
-				r.Get("/setup/status", adminH.HandleGetSetupStatus)
-				r.Post("/setup/complete", adminH.HandleCompleteSetup)
+				// Self-hosting management.
 				r.Get("/updates", adminH.HandleCheckUpdates)
 				r.Post("/updates/latest", adminH.HandleSetLatestVersion)
 				r.Post("/updates/dismiss", adminH.HandleDismissUpdate)
@@ -1144,6 +1157,32 @@ widgetH := &widgets.Handler{
 	}
 }
 
+type clientConfigResponse struct {
+	FileUploadsEnabled bool            `json:"file_uploads_enabled"`
+	MaxUploadBytes     int64           `json:"max_upload_bytes"`
+	LocalInstanceID    string          `json:"local_instance_id"`
+	Experimental       map[string]bool `json:"experimental_features"`
+}
+
+func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
+	resp := clientConfigResponse{
+		FileUploadsEnabled: s.Media != nil,
+		LocalInstanceID:    s.InstanceID,
+		Experimental: map[string]bool{
+			"translation":    false,
+			"whiteboard":     false,
+			"kanban":         false,
+			"location_share": false,
+			"code_snippets":  false,
+			"transcription":  false,
+		},
+	}
+	if s.Media != nil {
+		resp.MaxUploadBytes = s.Media.MaxUploadBytes()
+	}
+	apiutil.WriteJSON(w, http.StatusOK, resp)
+}
+
 // Start begins listening for HTTP requests on the configured address.
 func (s *Server) Start() error {
 	s.server = &http.Server{
@@ -1168,6 +1207,27 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 // --- Auth Handlers ---
+
+// handleGetPublicRegistrationConfig returns public registration mode metadata.
+// GET /api/v1/auth/registration
+func (s *Server) handleGetPublicRegistrationConfig(w http.ResponseWriter, r *http.Request) {
+	var mode, message string
+	if err := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(
+			(SELECT value FROM instance_settings WHERE key = 'registration_mode'), 'open'
+		)`).Scan(&mode); err != nil {
+		mode = "open"
+	}
+	s.DB.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(
+			(SELECT value FROM instance_settings WHERE key = 'registration_message'), ''
+		)`).Scan(&message)
+
+	WriteJSON(w, http.StatusOK, map[string]string{
+		"mode":    mode,
+		"message": message,
+	})
+}
 
 // handleRegister handles POST /api/v1/auth/register.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

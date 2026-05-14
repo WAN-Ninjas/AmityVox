@@ -1,37 +1,9 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type LevelingConfig, type LevelRole, type MemberXP } from '$lib/api/client';
 	import type { Role, Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
-
-	interface LevelingConfig {
-		guild_id: string;
-		enabled: boolean;
-		xp_per_message: number;
-		xp_cooldown_seconds: number;
-		level_up_channel_id: string | null;
-		level_up_message: string;
-		stack_roles: boolean;
-	}
-
-	interface LevelRole {
-		id: string;
-		guild_id: string;
-		level: number;
-		role_id: string;
-	}
-
-	interface MemberXP {
-		guild_id: string;
-		user_id: string;
-		xp: number;
-		level: number;
-		messages_counted: number;
-		username: string;
-		display_name: string | null;
-		avatar_id: string | null;
-	}
 
 	let loadOp = $state(createAsyncOp());
 	let saveOp = $state(createAsyncOp());
@@ -61,9 +33,7 @@
 	async function loadConfig() {
 		error = '';
 		const data = await loadOp.run(
-			() => api.request<{ config: LevelingConfig; level_roles: LevelRole[] }>(
-				'GET', `/guilds/${guildId}/leveling`
-			)
+			() => api.getLeveling(guildId)
 		);
 		if (loadOp.error) {
 			error = loadOp.error;
@@ -88,16 +58,14 @@
 		error = '';
 		success = '';
 		const updated = await saveOp.run(
-			() => api.request<LevelingConfig>(
-				'PATCH', `/guilds/${guildId}/leveling`, {
-					enabled: config.enabled,
-					xp_per_message: config.xp_per_message,
-					xp_cooldown_seconds: config.xp_cooldown_seconds,
-					level_up_channel_id: config.level_up_channel_id,
-					level_up_message: config.level_up_message,
-					stack_roles: config.stack_roles
-				}
-			)
+			() => api.updateLeveling(guildId, {
+				enabled: config.enabled,
+				xp_per_message: config.xp_per_message,
+				xp_cooldown_seconds: config.xp_cooldown_seconds,
+				level_up_channel_id: config.level_up_channel_id,
+				level_up_message: config.level_up_message,
+				stack_roles: config.stack_roles
+			})
 		);
 		if (saveOp.error) {
 			error = saveOp.error;
@@ -112,12 +80,10 @@
 		if (!newRoleId) return;
 		error = '';
 		const lr = await addRoleOp.run(
-			() => api.request<LevelRole>(
-				'POST', `/guilds/${guildId}/leveling/roles`, {
-					level: newLevel,
-					role_id: newRoleId
-				}
-			)
+			() => api.createLevelRole(guildId, {
+				level: newLevel,
+				role_id: newRoleId
+			})
 		);
 		if (addRoleOp.error) {
 			error = addRoleOp.error;
@@ -130,7 +96,7 @@
 
 	async function removeLevelRole(id: string) {
 		try {
-			await api.request('DELETE', `/guilds/${guildId}/leveling/roles/${id}`);
+			await api.deleteLevelRole(guildId, id);
 			levelRoles = levelRoles.filter(lr => lr.id !== id);
 		} catch (err: any) {
 			error = err.message || 'Failed to remove level role';
@@ -139,9 +105,7 @@
 
 	async function loadLeaderboard() {
 		const result = await loadLeaderboardOp.run(
-			() => api.request<MemberXP[]>(
-				'GET', `/guilds/${guildId}/leveling/leaderboard?limit=50`
-			)
+			() => api.getLevelingLeaderboard(guildId, 50)
 		);
 		if (loadLeaderboardOp.error) {
 			error = loadLeaderboardOp.error;
@@ -216,27 +180,27 @@
 				</label>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="leveling-xp-per-message" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 						XP Per Message
 					</label>
-					<input type="number" class="input w-32" bind:value={config.xp_per_message}
+					<input id="leveling-xp-per-message" type="number" class="input w-32" bind:value={config.xp_per_message}
 						min="1" max="100" />
 				</div>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="leveling-xp-cooldown" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 						XP Cooldown (seconds)
 					</label>
-					<input type="number" class="input w-32" bind:value={config.xp_cooldown_seconds}
+					<input id="leveling-xp-cooldown" type="number" class="input w-32" bind:value={config.xp_cooldown_seconds}
 						min="0" max="600" />
 					<p class="mt-1 text-xs text-text-muted">Time before a user can earn XP again</p>
 				</div>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="leveling-level-up-channel" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 						Level Up Channel
 					</label>
-					<select class="input w-full" bind:value={config.level_up_channel_id}>
+					<select id="leveling-level-up-channel" class="input w-full" bind:value={config.level_up_channel_id}>
 						<option value={null}>None (no notification)</option>
 						{#each channels as ch}
 							<option value={ch.id}>#{ch.name}</option>
@@ -245,10 +209,10 @@
 				</div>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="leveling-level-up-message" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 						Level Up Message
 					</label>
-					<textarea class="input w-full" rows="2" bind:value={config.level_up_message}></textarea>
+					<textarea id="leveling-level-up-message" class="input w-full" rows="2" bind:value={config.level_up_message}></textarea>
 					<p class="mt-1 text-xs text-text-muted">
 						Variables: {'{user}'}, {'{level}'}, {'{username}'}
 					</p>
@@ -292,12 +256,12 @@
 
 				<div class="flex gap-2">
 					<div>
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Level</label>
-						<input type="number" class="input w-20" bind:value={newLevel} min="1" max="100" />
+						<label for="leveling-new-level" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Level</label>
+						<input id="leveling-new-level" type="number" class="input w-20" bind:value={newLevel} min="1" max="100" />
 					</div>
 					<div class="flex-1">
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Role</label>
-						<select class="input w-full" bind:value={newRoleId}>
+						<label for="leveling-new-role" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Role</label>
+						<select id="leveling-new-role" class="input w-full" bind:value={newRoleId}>
 							<option value="">Select role...</option>
 							{#each roles as role}
 								<option value={role.id}>{role.name}</option>

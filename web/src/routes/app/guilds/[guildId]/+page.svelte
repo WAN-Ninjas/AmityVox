@@ -2,13 +2,14 @@
 	import { currentGuild } from '$lib/stores/guilds';
 	import { textChannels } from '$lib/stores/channels';
 	import { presenceMap } from '$lib/stores/presence';
+	import { guildEventsByGuild, loadGuildEvents } from '$lib/stores/guildEvents';
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
-	import type { GuildEvent, OnboardingConfig } from '$lib/types';
+	import type { BumpStatus, GuideStep } from '$lib/api/client';
+	import type { OnboardingConfig } from '$lib/types';
 	import { fileUrl } from '$lib/utils/avatar';
 	import OnboardingModal from '$lib/components/guild/OnboardingModal.svelte';
 
-	let events = $state<GuildEvent[]>([]);
 	let eventsLoading = $state(true);
 	let eventsError = $state(false);
 	let members = $state<{ total: number; online: number }>({ total: 0, online: 0 });
@@ -18,34 +19,21 @@
 	let onboardingConfig = $state<OnboardingConfig | null>(null);
 
 	// --- Server Guide ---
-	interface GuideStep {
-		id: string;
-		guild_id: string;
-		title: string;
-		content: string;
-		position: number;
-		channel_id: string | null;
-		created_at: string;
-	}
-
 	let guideSteps = $state<GuideStep[]>([]);
 	let guideLoading = $state(true);
 	let guideCurrentStep = $state(0);
 	let guideDismissed = $state(false);
+	const routeGuildId = $derived($page.params.guildId ?? '');
 
 	// --- Bump System ---
-	interface BumpStatus {
-		can_bump: boolean;
-		next_bump_at: string | null;
-		last_bump: string | null;
-		bump_count_24h: number;
-	}
-
 	let bumpStatus = $state<BumpStatus | null>(null);
 	let bumpLoading = $state(false);
 	let bumpMessage = $state<string | null>(null);
 	let bumpCooldownText = $state('');
 	let bumpCooldownInterval: ReturnType<typeof setInterval> | null = null;
+	const events = $derived(
+		routeGuildId ? ($guildEventsByGuild.get(routeGuildId) ?? []).slice(0, 5) : []
+	);
 
 	// Check onboarding status whenever guildId changes.
 	$effect(() => {
@@ -86,14 +74,9 @@
 		eventsLoading = true;
 		eventsError = false;
 
-		api
-			.getGuildEvents(guildId, { status: 'scheduled', limit: 5 })
-			.then((data) => {
-				events = data;
-			})
+		loadGuildEvents(guildId)
 			.catch(() => {
 				eventsError = true;
-				events = [];
 			})
 			.finally(() => {
 				eventsLoading = false;
@@ -115,17 +98,10 @@
 			guideDismissed = true;
 		}
 
-		fetch(`/api/v1/guilds/${guildId}/guide`, {
-			headers: {
-				Authorization: `Bearer ${getToken()}`
-			}
-		})
-			.then((res) => {
-				if (!res.ok) throw new Error('Failed to load guide');
-				return res.json();
-			})
-			.then((json) => {
-				guideSteps = json.data ?? [];
+		api
+			.getServerGuide(guildId)
+			.then((steps) => {
+				guideSteps = steps;
 			})
 			.catch(() => {
 				guideSteps = [];
@@ -144,17 +120,10 @@
 			return;
 		}
 
-		fetch(`/api/v1/guilds/${guildId}/bump`, {
-			headers: {
-				Authorization: `Bearer ${getToken()}`
-			}
-		})
-			.then((res) => {
-				if (!res.ok) throw new Error('Failed to load bump status');
-				return res.json();
-			})
-			.then((json) => {
-				bumpStatus = json.data;
+		api
+			.getBumpStatus(guildId)
+			.then((status) => {
+				bumpStatus = status;
 				updateBumpCooldown();
 			})
 			.catch(() => {
@@ -215,13 +184,6 @@
 		}
 	}
 
-	function getToken(): string {
-		if (typeof document === 'undefined') return '';
-		const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
-		if (match) return decodeURIComponent(match[1]);
-		return localStorage.getItem('token') ?? '';
-	}
-
 	async function handleBump() {
 		const guildId = $page.params.guildId;
 		if (!guildId || bumpLoading) return;
@@ -230,30 +192,16 @@
 		bumpMessage = null;
 
 		try {
-			const res = await fetch(`/api/v1/guilds/${guildId}/bump`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${getToken()}`
-				}
-			});
-
-			const json = await res.json();
-
-			if (res.ok) {
-				const data = json.data;
-				bumpMessage = data.bump_message;
-				bumpStatus = {
-					can_bump: false,
-					next_bump_at: data.next_bump_at,
-					last_bump: new Date().toISOString(),
-					bump_count_24h: (bumpStatus?.bump_count_24h ?? 0) + 1
-				};
-			} else {
-				bumpMessage = json.error?.message ?? 'Failed to bump guild';
-			}
-		} catch {
-			bumpMessage = 'Failed to bump guild';
+			const data = await api.bumpGuild(guildId);
+			bumpMessage = data.bump_message;
+			bumpStatus = {
+				can_bump: false,
+				next_bump_at: data.next_bump_at,
+				last_bump: new Date().toISOString(),
+				bump_count_24h: (bumpStatus?.bump_count_24h ?? 0) + 1
+			};
+		} catch (err: any) {
+			bumpMessage = err.message || 'Failed to bump guild';
 		} finally {
 			bumpLoading = false;
 			// Clear the message after a few seconds.
@@ -491,6 +439,7 @@
 						{#each guideSteps as _, i}
 							<button
 								onclick={() => (guideCurrentStep = i)}
+								aria-label="Show guide step {i + 1}"
 								class="h-1.5 flex-1 rounded-full transition-colors {i === guideCurrentStep
 									? 'bg-brand-500'
 									: i < guideCurrentStep
@@ -675,7 +624,7 @@
 {#if onboardingConfig && $currentGuild}
 	<OnboardingModal
 		bind:open={showOnboarding}
-		guildId={$page.params.guildId}
+		guildId={routeGuildId}
 		guildName={$currentGuild.name}
 		onboarding={onboardingConfig}
 		onComplete={handleOnboardingComplete}

@@ -43,7 +43,7 @@
 
 			group.channels.push({
 				channelId,
-				channelName: channel.name,
+				channelName: channel.name ?? 'Voice Channel',
 				participants: Array.from(participants.values()).map((p) => ({
 					userId: p.userId,
 					username: p.username,

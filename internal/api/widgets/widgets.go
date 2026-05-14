@@ -462,10 +462,10 @@ func (h *Handler) HandleDeleteChannelWidget(w http.ResponseWriter, r *http.Reque
 	widgetID := chi.URLParam(r, "widgetID")
 
 	// Get widget details for permission check.
-	var guildID, creatorID string
+	var guildID, channelID, creatorID string
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT guild_id, creator_id FROM channel_widgets WHERE id = $1`, widgetID,
-	).Scan(&guildID, &creatorID)
+		`SELECT guild_id, channel_id, creator_id FROM channel_widgets WHERE id = $1`, widgetID,
+	).Scan(&guildID, &channelID, &creatorID)
 	if err == pgx.ErrNoRows {
 		apiutil.WriteError(w, http.StatusNotFound, "widget_not_found", "Widget not found")
 		return
@@ -492,8 +492,9 @@ func (h *Handler) HandleDeleteChannelWidget(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.EventBus.PublishGuildEvent(r.Context(), events.SubjectChannelUpdate, "CHANNEL_WIDGET_DELETE", guildID, map[string]string{
-		"widget_id": widgetID,
-		"guild_id":  guildID,
+		"widget_id":  widgetID,
+		"guild_id":   guildID,
+		"channel_id": channelID,
 	})
 
 	w.WriteHeader(http.StatusNoContent)
@@ -1105,5 +1106,3 @@ func hashRecoveryCode(code string) string {
 	h := sha256.Sum256([]byte(code))
 	return hex.EncodeToString(h[:])
 }
-
-

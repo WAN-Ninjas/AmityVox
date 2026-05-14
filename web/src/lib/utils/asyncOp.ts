@@ -1,6 +1,8 @@
 // Async operation helper — eliminates repeated loading/error/try-catch boilerplate.
 // In components, wrap with $state() for reactivity: `let op = $state(createAsyncOp())`
 
+import { getErrorMessage } from './apiError';
+
 export interface AsyncOp {
 	loading: boolean;
 	error: string | null;
@@ -16,8 +18,8 @@ export function createAsyncOp(): AsyncOp {
 			this.error = null;
 			try {
 				return await fn();
-			} catch (e: any) {
-				this.error = e?.message || 'An error occurred';
+			} catch (e: unknown) {
+				this.error = getErrorMessage(e, 'An error occurred');
 				if (onError) onError(this.error!);
 				return undefined;
 			} finally {

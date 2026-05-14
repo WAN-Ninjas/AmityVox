@@ -77,7 +77,7 @@
 	}
 </script>
 
-<Modal bind:open title="Create Group DM" {onclose}>
+<Modal {open} title="Create Group DM" {onclose}>
 	<div class="space-y-4">
 		<!-- Group name (optional) -->
 		<div>

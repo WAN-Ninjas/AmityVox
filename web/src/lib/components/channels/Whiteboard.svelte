@@ -1,37 +1,11 @@
 <!-- Whiteboard.svelte — Collaborative whiteboard widget with drawing tools. -->
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type WhiteboardData, type WhiteboardObject } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import Modal from '$lib/components/common/Modal.svelte';
 
-	interface WhiteboardData {
-		id: string;
-		channel_id: string;
-		name: string;
-		creator_id: string;
-		state: { objects: DrawObject[]; version: number };
-		width: number;
-		height: number;
-		background_color: string;
-		locked: boolean;
-		collaborators: Array<{ user_id: string; username: string; cursor_x: number; cursor_y: number }>;
-	}
-
-	interface DrawObject {
-		id: string;
-		type: 'path' | 'rect' | 'circle' | 'text' | 'line' | 'arrow';
-		points?: number[];
-		x?: number;
-		y?: number;
-		width?: number;
-		height?: number;
-		radius?: number;
-		text?: string;
-		color: string;
-		strokeWidth: number;
-		fill?: string;
-		userId: string;
-	}
+	type DrawObject = WhiteboardObject;
 
 	interface Props {
 		channelId: string;
@@ -41,7 +15,7 @@
 
 	let { channelId, whiteboardId, onclose }: Props = $props();
 
-	let canvas: HTMLCanvasElement;
+	let canvas = $state<HTMLCanvasElement>();
 	let ctx: CanvasRenderingContext2D | null = null;
 	let whiteboard = $state<WhiteboardData | null>(null);
 	let objects = $state<DrawObject[]>([]);
@@ -56,10 +30,14 @@
 	let currentPath = $state<number[]>([]);
 	let startX = $state(0);
 	let startY = $state(0);
+	let textPromptOpen = $state(false);
+	let textInput = $state('');
+	let textX = $state(0);
+	let textY = $state(0);
 
 	// Create mode.
 	let boardName = $state('Untitled Whiteboard');
-	let showCreateForm = $state(!whiteboardId);
+	let showCreateForm = $state(false);
 
 	const tools = [
 		{ id: 'pen', icon: 'M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z', label: 'Pen' },
@@ -73,11 +51,12 @@
 	const colors = ['#ffffff', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'];
 
 	async function createWhiteboard() {
-		const result = await createOp.run(() => api.request<WhiteboardData>(
-			'POST',
-			`/channels/${channelId}/experimental/whiteboards`,
-			{ name: boardName, width: 1920, height: 1080, background_color: '#1a1a2e' }
-		));
+		const result = await createOp.run(() => api.createWhiteboard(channelId, {
+			name: boardName,
+			width: 1920,
+			height: 1080,
+			background_color: '#1a1a2e'
+		}));
 		if (!createOp.error && result) {
 			whiteboard = result;
 			whiteboardId = result.id;
@@ -87,11 +66,9 @@
 	}
 
 	async function loadWhiteboard() {
-		if (!whiteboardId) return;
-		const data = await loadOp.run(() => api.request<WhiteboardData>(
-			'GET',
-			`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`
-		));
+		const id = whiteboardId;
+		if (!id) return;
+		const data = await loadOp.run(() => api.getWhiteboard(channelId, id));
 		if (!loadOp.error && data) {
 			whiteboard = data;
 			objects = data.state?.objects ?? [];
@@ -208,23 +185,36 @@
 			currentPath = [x, y];
 		}
 		if (tool === 'text') {
-			const text = prompt('Enter text:');
-			if (text) {
-				const obj: DrawObject = {
-					id: crypto.randomUUID(),
-					type: 'text',
-					x, y,
-					text,
-					color,
-					strokeWidth,
-					userId: $currentUser?.id ?? ''
-				};
-				objects = [...objects, obj];
-				redraw();
-				saveState();
-			}
+			textX = x;
+			textY = y;
+			textInput = '';
+			textPromptOpen = true;
 			isDrawing = false;
 		}
+	}
+
+	function submitTextObject() {
+		const text = textInput.trim();
+		if (!text) {
+			textPromptOpen = false;
+			return;
+		}
+
+		const obj: DrawObject = {
+			id: crypto.randomUUID(),
+			type: 'text',
+			x: textX,
+			y: textY,
+			text,
+			color,
+			strokeWidth,
+			userId: $currentUser?.id ?? ''
+		};
+		objects = [...objects, obj];
+		textPromptOpen = false;
+		textInput = '';
+		redraw();
+		saveState();
 	}
 
 	function handleMouseMove(e: MouseEvent) {
@@ -305,7 +295,7 @@
 	async function saveState() {
 		if (!whiteboardId) return;
 		try {
-			await api.request('PATCH', `/channels/${channelId}/experimental/whiteboards/${whiteboardId}`, {
+			await api.updateWhiteboard(channelId, whiteboardId, {
 				state: JSON.stringify({ objects, version: (whiteboard?.state?.version ?? 0) + 1 })
 			});
 		} catch {
@@ -327,6 +317,7 @@
 	}
 
 	$effect(() => {
+		if (!whiteboardId) showCreateForm = true;
 		if (whiteboardId && !showCreateForm) {
 			loadWhiteboard();
 		}
@@ -379,12 +370,13 @@
 			<!-- Colors -->
 			<div class="flex items-center gap-0.5">
 				{#each colors as c}
-					<button
-						type="button"
-						class="w-5 h-5 rounded-full border-2 transition-transform {color === c ? 'border-brand-400 scale-110' : 'border-transparent hover:scale-105'}"
-						style="background-color: {c};"
-						onclick={() => (color = c)}
-					></button>
+						<button
+							type="button"
+							class="w-5 h-5 rounded-full border-2 transition-transform {color === c ? 'border-brand-400 scale-110' : 'border-transparent hover:scale-105'}"
+							style="background-color: {c};"
+							onclick={() => (color = c)}
+							aria-label="Select color {c}"
+						></button>
 				{/each}
 			</div>
 
@@ -418,7 +410,7 @@
 				Clear
 			</button>
 			{#if onclose}
-				<button type="button" class="text-text-muted hover:text-text-primary p-1" onclick={onclose}>
+				<button type="button" class="text-text-muted hover:text-text-primary p-1" onclick={onclose} aria-label="Close whiteboard">
 					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 					</svg>
@@ -462,3 +454,25 @@
 		{/if}
 	</div>
 {/if}
+
+<Modal open={textPromptOpen} title="Add Text" onclose={() => (textPromptOpen = false)}>
+	<form class="space-y-4" onsubmit={(e) => { e.preventDefault(); submitTextObject(); }}>
+		<label class="block text-sm font-medium text-text-secondary" for="whiteboard-text-input">
+			Text
+		</label>
+		<input
+			id="whiteboard-text-input"
+			class="input w-full"
+			bind:value={textInput}
+			maxlength="200"
+		/>
+		<div class="flex justify-end gap-2">
+			<button type="button" class="btn-secondary text-sm" onclick={() => (textPromptOpen = false)}>
+				Cancel
+			</button>
+			<button type="submit" class="btn-primary text-sm" disabled={!textInput.trim()}>
+				Add Text
+			</button>
+		</div>
+	</form>
+</Modal>

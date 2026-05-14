@@ -11,8 +11,8 @@ import (
 	"net"
 	"net/http"
 	"regexp"
-	"strings"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,10 +38,10 @@ type Handler struct {
 	Pool       *pgxpool.Pool
 	InstanceID string
 	Logger     *slog.Logger
-	Media      MediaDeleter         // optional — enables S3 cleanup on admin media delete
-	EventBus   *events.Bus          // optional — enables real-time announcement events
-	Cache      *presence.Cache      // optional — enables accurate online user count
-	FedSvc     *federation.Service  // optional — enables federation handshake from admin
+	Media      MediaDeleter        // optional — enables S3 cleanup on admin media delete
+	EventBus   *events.Bus         // optional — enables real-time announcement events
+	Cache      *presence.Cache     // optional — enables accurate online user count
+	FedSvc     *federation.Service // optional — enables federation handshake from admin
 }
 
 type updateInstanceRequest struct {
@@ -404,24 +404,24 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type stats struct {
-		Users        int64  `json:"users"`
-		OnlineUsers  int64  `json:"online_users"`
-		Guilds       int64  `json:"guilds"`
-		Channels     int64  `json:"channels"`
-		Messages     int64  `json:"messages"`
-		MessagesToday int64 `json:"messages_today"`
-		Files        int64  `json:"files"`
-		Roles        int64  `json:"roles"`
-		Emoji        int64  `json:"emoji"`
-		Invites      int64  `json:"invites"`
-		FedPeers     int64  `json:"federation_peers"`
-		DBSize       string `json:"database_size"`
-		GoVersion    string `json:"go_version"`
-		NumGoroutine int    `json:"goroutines"`
-		MemAllocMB   uint64 `json:"mem_alloc_mb"`
-		MemSysMB     uint64 `json:"mem_sys_mb"`
-		NumCPU       int    `json:"num_cpu"`
-		Uptime       string `json:"uptime"`
+		Users         int64  `json:"users"`
+		OnlineUsers   int64  `json:"online_users"`
+		Guilds        int64  `json:"guilds"`
+		Channels      int64  `json:"channels"`
+		Messages      int64  `json:"messages"`
+		MessagesToday int64  `json:"messages_today"`
+		Files         int64  `json:"files"`
+		Roles         int64  `json:"roles"`
+		Emoji         int64  `json:"emoji"`
+		Invites       int64  `json:"invites"`
+		FedPeers      int64  `json:"federation_peers"`
+		DBSize        string `json:"database_size"`
+		GoVersion     string `json:"go_version"`
+		NumGoroutine  int    `json:"goroutines"`
+		MemAllocMB    uint64 `json:"mem_alloc_mb"`
+		MemSysMB      uint64 `json:"mem_sys_mb"`
+		NumCPU        int    `json:"num_cpu"`
+		Uptime        string `json:"uptime"`
 	}
 
 	var s stats
@@ -914,16 +914,16 @@ func (h *Handler) HandleListRegistrationTokens(w http.ResponseWriter, r *http.Re
 	defer rows.Close()
 
 	type tokenEntry struct {
-		ID            string     `json:"id"`
-		CreatedBy     string     `json:"created_by"`
-		CreatorName   string     `json:"creator_name"`
-		MaxUses       int        `json:"max_uses"`
-		Uses          int        `json:"uses"`
-		Note          *string    `json:"note"`
-		ExpiresAt     *time.Time `json:"expires_at"`
-		CreatedAt     time.Time  `json:"created_at"`
-		Expired       bool       `json:"expired"`
-		Exhausted     bool       `json:"exhausted"`
+		ID          string     `json:"id"`
+		CreatedBy   string     `json:"created_by"`
+		CreatorName string     `json:"creator_name"`
+		MaxUses     int        `json:"max_uses"`
+		Uses        int        `json:"uses"`
+		Note        *string    `json:"note"`
+		ExpiresAt   *time.Time `json:"expires_at"`
+		CreatedAt   time.Time  `json:"created_at"`
+		Expired     bool       `json:"expired"`
+		Exhausted   bool       `json:"exhausted"`
 	}
 
 	tokens := make([]tokenEntry, 0)
@@ -1321,14 +1321,14 @@ func (h *Handler) HandleGetGuildDetails(w http.ResponseWriter, r *http.Request) 
 
 	type guildDetail struct {
 		models.Guild
-		OwnerName      string `json:"owner_name"`
-		ChannelCount   int    `json:"channel_count"`
-		RoleCount      int    `json:"role_count"`
-		EmojiCount     int    `json:"emoji_count"`
-		InviteCount    int    `json:"invite_count"`
-		MessageCount   int64  `json:"message_count"`
-		MessagesToday  int64  `json:"messages_today"`
-		BanCount       int    `json:"ban_count"`
+		OwnerName     string `json:"owner_name"`
+		ChannelCount  int    `json:"channel_count"`
+		RoleCount     int    `json:"role_count"`
+		EmojiCount    int    `json:"emoji_count"`
+		InviteCount   int    `json:"invite_count"`
+		MessageCount  int64  `json:"message_count"`
+		MessagesToday int64  `json:"messages_today"`
+		BanCount      int    `json:"ban_count"`
 	}
 
 	var g guildDetail
@@ -1514,12 +1514,12 @@ func (h *Handler) HandleGetRateLimitStats(w http.ResponseWriter, r *http.Request
 		`SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'rate_limit_window_seconds'), '60')`).Scan(&windowSecs)
 
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"top_ips":                    topIPs,
-		"total_entries_24h":          totalEntries,
-		"blocked_entries_24h":        blockedEntries,
-		"unique_ips_24h":             uniqueIPs,
-		"requests_per_window":        reqsPerWindow,
-		"window_seconds":             windowSecs,
+		"top_ips":             topIPs,
+		"total_entries_24h":   totalEntries,
+		"blocked_entries_24h": blockedEntries,
+		"unique_ips_24h":      uniqueIPs,
+		"requests_per_window": reqsPerWindow,
+		"window_seconds":      windowSecs,
 	})
 }
 
@@ -1611,7 +1611,7 @@ func (h *Handler) HandleGetRateLimitLog(w http.ResponseWriter, r *http.Request) 
 }
 
 // HandleUpdateRateLimitConfig updates rate limiting configuration.
-// PATCH /api/v1/admin/rate-limits/config
+// PATCH /api/v1/admin/rate-limits
 func (h *Handler) HandleUpdateRateLimitConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
 		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
