@@ -106,10 +106,12 @@
 
 	<!-- Language picker dropdown -->
 	{#if showLangPicker}
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="absolute left-0 top-full z-20 mt-1 max-h-48 w-40 overflow-y-auto rounded bg-bg-floating shadow-lg border border-bg-modifier"
 			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="menu"
+			tabindex="-1"
 		>
 			{#each commonLanguages as lang (lang.code)}
 				<button

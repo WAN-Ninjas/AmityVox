@@ -4,15 +4,12 @@
 	import { currentGuildId, setGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
-	import { api } from '$lib/api/client';
-	import { appendMessage } from '$lib/stores/messages';
 	import { addToast } from '$lib/stores/toast';
 	import { dmList } from '$lib/stores/dms';
 	import { currentUser } from '$lib/stores/auth';
 	import { presenceMap } from '$lib/stores/presence';
 	import { voiceChannelId, voiceState, joinVoice, leaveVoice, toggleCamera } from '$lib/stores/voice';
 	import { dismissIncomingCall } from '$lib/stores/callRing';
-	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import { avatarUrl } from '$lib/utils/avatar';
 	import Avatar from '$components/common/Avatar.svelte';
@@ -32,20 +29,22 @@
 
 	let isDragging = $state(false);
 	let dragCounter = 0;
-	let isUploading = $state(false);
+	let messageInputRef = $state<{ addPendingFiles: (files: File[]) => void }>();
 
+	const routeChannelId = $derived($page.params.channelId ?? '');
 	const dmChannel = $derived($dmList.find(c => c.id === $page.params.channelId));
 	const recipientName = $derived(dmChannel ? getDMDisplayName(dmChannel, $currentUser?.id) : 'Direct Message');
 	const recipient = $derived(dmChannel ? getDMRecipient(dmChannel, $currentUser?.id) : undefined);
 	const recipientStatus = $derived(recipient ? ($presenceMap.get(recipient.id) ?? 'offline') : undefined);
 	const isGroupDM = $derived(dmChannel?.channel_type === 'group');
-	const inCall = $derived($voiceChannelId === $page.params.channelId && $voiceState !== 'disconnected');
+	const inCall = $derived($voiceChannelId === routeChannelId && $voiceState !== 'disconnected');
 
 	async function startCall(withVideo: boolean = false) {
+		if (!routeChannelId) return;
 		callLoading = true;
 		try {
-			dismissIncomingCall($page.params.channelId);
-			await joinVoice($page.params.channelId, '', recipientName);
+			dismissIncomingCall(routeChannelId);
+			await joinVoice(routeChannelId, '', recipientName);
 			if (withVideo) {
 				try { await toggleCamera(); } catch { /* camera failure is non-fatal */ }
 			}
@@ -95,7 +94,7 @@
 		}
 	}
 
-	async function handleDrop(e: DragEvent) {
+	function handleDrop(e: DragEvent) {
 		e.preventDefault();
 		isDragging = false;
 		dragCounter = 0;
@@ -104,32 +103,7 @@
 		const channelId = $currentChannelId;
 		if (!files?.length || !channelId) return;
 
-		isUploading = true;
-		try {
-			const isEncrypted = !!$currentChannel?.encrypted;
-			const opts: { attachment_ids?: string[]; encrypted?: boolean } = {};
-			if (isEncrypted) opts.encrypted = true;
-			for (let file of files) {
-				if (isEncrypted) {
-					try {
-						const buf = await file.arrayBuffer();
-						const encBuf = await e2ee.encryptFile(channelId, buf);
-						file = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
-					} catch {
-						addToast('Failed to encrypt file. Do you have the channel key?', 'error');
-						return;
-					}
-				}
-				const uploaded = await api.uploadFile(file);
-				const sent = await api.sendMessage(channelId, '', { ...opts, attachment_ids: [uploaded.id] });
-				appendMessage(sent);
-			}
-			addToast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, 'success');
-		} catch (err) {
-			addToast('Upload failed', 'error');
-		} finally {
-			isUploading = false;
-		}
+		messageInputRef?.addPendingFiles(Array.from(files));
 	}
 </script>
 
@@ -151,20 +125,8 @@
 				<svg class="h-12 w-12 text-brand-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
 					<path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
 				</svg>
-				<span class="text-lg font-medium text-text-primary">Drop files to upload</span>
-				<span class="text-sm text-text-muted">Files will be sent to this conversation</span>
-			</div>
-		</div>
-	{/if}
-
-	{#if isUploading}
-		<div class="absolute inset-0 z-50 flex items-center justify-center bg-bg-primary/60">
-			<div class="flex items-center gap-3 rounded-lg bg-bg-secondary px-6 py-4 shadow-lg">
-				<svg class="h-5 w-5 animate-spin text-brand-400" fill="none" viewBox="0 0 24 24">
-					<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-					<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-				</svg>
-				<span class="text-sm text-text-primary">Uploading...</span>
+				<span class="text-lg font-medium text-text-primary">Drop files to attach</span>
+				<span class="text-sm text-text-muted">Review files in the composer before sending</span>
 			</div>
 		</div>
 	{/if}
@@ -289,11 +251,11 @@
 		{/if}
 	</header>
 	{#if inCall}
-		<VoiceChannelView channelId={$page.params.channelId} guildId="" />
+		<VoiceChannelView channelId={routeChannelId} guildId="" />
 	{:else}
 		<MessageList />
 		<TypingIndicator typingUsers={$currentTypingUsers} />
-		<MessageInput />
+		<MessageInput bind:this={messageInputRef} />
 	{/if}
 </div>
 
@@ -301,10 +263,12 @@
 	<GroupDMSettingsPanel channel={dmChannel} bind:open={showGroupSettings} onclose={() => (showGroupSettings = false)} />
 {/if}
 
-<ProfileModal userId={profileUserId} open={!!profileUserId} onclose={() => (profileUserId = null)} />
+{#if profileUserId}
+	<ProfileModal userId={profileUserId} open onclose={() => (profileUserId = null)} />
+{/if}
 
 {#if dmChannel}
-	<Modal bind:open={showEncryption} title="Encryption" onclose={() => (showEncryption = false)}>
+	<Modal open={showEncryption} title="Encryption" onclose={() => (showEncryption = false)}>
 		<EncryptionPanel
 			channelId={dmChannel.id}
 			encrypted={dmChannel.encrypted ?? false}

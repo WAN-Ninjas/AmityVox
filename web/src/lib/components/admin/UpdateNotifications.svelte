@@ -161,8 +161,8 @@
 				</label>
 
 				<div>
-					<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Release Channel</label>
-					<select class="input w-full" bind:value={config.channel}>
+					<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted" for="update-release-channel">Release Channel</label>
+					<select id="update-release-channel" class="input w-full" bind:value={config.channel}>
 						<option value="stable">Stable</option>
 						<option value="beta">Beta</option>
 						<option value="nightly">Nightly</option>

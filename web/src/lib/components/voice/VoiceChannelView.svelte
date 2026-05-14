@@ -63,9 +63,10 @@
 			$participantList.find((p) => p.userId === userId) ?? {
 				userId,
 				username: 'Unknown',
-				displayName: null,
-				avatarId: null,
-				muted: false,
+					displayName: null,
+					avatarId: null,
+					instanceId: null,
+					muted: false,
 				deafened: false,
 				speaking: false
 			}
@@ -376,7 +377,7 @@
 				<div class="border-t border-bg-floating">
 					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
 						<h3 class="text-sm font-semibold text-text-primary">Voice Settings</h3>
-						<button class="text-text-muted hover:text-text-primary" onclick={() => (showSettings = false)}>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showSettings = false)} aria-label="Close voice settings">
 							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 								<path d="M6 18L18 6M6 6l12 12" />
 							</svg>
@@ -402,7 +403,7 @@
 				<div class="border-t border-bg-floating">
 					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
 						<h3 class="text-sm font-semibold text-text-primary">Soundboard</h3>
-						<button class="text-text-muted hover:text-text-primary" onclick={() => (showSoundboard = false)}>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showSoundboard = false)} aria-label="Close soundboard">
 							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 								<path d="M6 18L18 6M6 6l12 12" />
 							</svg>
@@ -418,7 +419,7 @@
 				<div class="border-t border-bg-floating">
 					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
 						<h3 class="text-sm font-semibold text-text-primary">Screen Share</h3>
-						<button class="text-text-muted hover:text-text-primary" onclick={() => (showScreenShare = false)}>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showScreenShare = false)} aria-label="Close screen share settings">
 							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 								<path d="M6 18L18 6M6 6l12 12" />
 							</svg>

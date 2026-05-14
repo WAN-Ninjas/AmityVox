@@ -22,11 +22,11 @@ import (
 
 	"github.com/buckket/go-blurhash"
 	"github.com/go-chi/chi/v5"
-	xdraw "golang.org/x/image/draw"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	xdraw "golang.org/x/image/draw"
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/models"
@@ -112,6 +112,14 @@ func (s *Service) EnsureBucket(ctx context.Context) error {
 		s.logger.Info("created S3 bucket", slog.String("bucket", s.bucket))
 	}
 	return nil
+}
+
+// MaxUploadBytes returns the effective maximum upload size enforced by HandleUpload.
+func (s *Service) MaxUploadBytes() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.maxUpload
 }
 
 // HandleUpload handles POST /api/v1/files/upload.

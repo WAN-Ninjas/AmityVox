@@ -73,6 +73,600 @@ import type {
 
 const API_BASE = '/api/v1';
 
+export interface SharedTheme {
+	id: string;
+	user_id: string;
+	author_name: string;
+	name: string;
+	description: string;
+	variables: Record<string, string>;
+	custom_css: string;
+	preview_colors: string[];
+	share_code: string;
+	downloads: number;
+	like_count: number;
+	liked: boolean;
+	created_at: string;
+}
+
+export interface ShareThemeRequest {
+	name: string;
+	description?: string;
+	variables: Record<string, string>;
+	custom_css?: string;
+	preview_colors?: string[];
+}
+
+export interface GuideStep {
+	id: string;
+	guild_id: string;
+	title: string;
+	content: string;
+	position: number;
+	channel_id: string | null;
+	created_at: string;
+}
+
+export interface BumpStatus {
+	can_bump: boolean;
+	next_bump_at: string | null;
+	last_bump: string | null;
+	bump_count_24h: number;
+}
+
+export interface BumpResponse {
+	success: boolean;
+	next_bump_at: string;
+	bump_message: string;
+}
+
+export interface AdminBotWithDetails extends User {
+	guild_permissions: Array<{
+		bot_id: string;
+		guild_id: string;
+		scopes: string[];
+		max_role_position: number;
+		created_at: string;
+		updated_at: string;
+	}>;
+	event_subscriptions: Array<{
+		id: string;
+		bot_id: string;
+		guild_id: string;
+		event_types: string[];
+		webhook_url: string;
+		created_at: string;
+	}>;
+	rate_limit: {
+		bot_id: string;
+		requests_per_second: number;
+		burst: number;
+		updated_at: string;
+	} | null;
+	presence: {
+		bot_id: string;
+		status: string;
+		activity_type: string | null;
+		activity_name: string | null;
+		updated_at: string;
+	} | null;
+}
+
+export interface RateLimitIPStat {
+	ip_address: string;
+	total_requests: number;
+	block_count: number;
+	last_seen: string;
+}
+
+export interface RateLimitStats {
+	top_ips: RateLimitIPStat[];
+	total_entries_24h: number;
+	blocked_entries_24h: number;
+	unique_ips_24h: number;
+	requests_per_window: string;
+	window_seconds: string;
+}
+
+export interface RateLimitLogEntry {
+	id: string;
+	ip_address: string;
+	endpoint: string;
+	requests_count: number;
+	window_start: string;
+	blocked: boolean;
+	created_at: string;
+}
+
+export interface ContentScanRule {
+	id: string;
+	name: string;
+	pattern: string;
+	action: string;
+	target: string;
+	enabled: boolean;
+	created_at: string;
+}
+
+export interface ContentScanLogEntry {
+	id: string;
+	rule_id: string;
+	rule_name: string;
+	user_id: string;
+	username: string;
+	channel_id: string;
+	content_matched: string;
+	action_taken: string;
+	created_at: string;
+}
+
+export interface CaptchaConfig {
+	provider: string;
+	site_key: string;
+	secret_key: string;
+}
+
+export interface PluginListing {
+	id: string;
+	name: string;
+	description: string | null;
+	author: string;
+	version: string;
+	homepage_url: string | null;
+	icon_url: string | null;
+	category: string;
+	public: boolean;
+	verified: boolean;
+	install_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface GuildPluginEntry {
+	id: string;
+	guild_id: string;
+	plugin_id: string;
+	enabled: boolean;
+	config: Record<string, unknown>;
+	installed_by: string;
+	installed_at: string;
+	updated_at: string;
+	name: string;
+	description: string | null;
+	author: string;
+	version: string;
+	icon_url: string | null;
+	category: string;
+}
+
+export interface ImportAccountPayload {
+	profile?: Record<string, unknown>;
+	settings?: Record<string, unknown>;
+}
+
+export interface ChannelTemplate {
+	id: string;
+	guild_id: string;
+	name: string;
+	channel_type: string;
+	topic: string | null;
+	slowmode_seconds: number;
+	nsfw: boolean;
+	permission_overwrites?: unknown;
+	created_by: string;
+	created_at: string;
+}
+
+export interface AutoRoleRule {
+	id: string;
+	guild_id: string;
+	role_id: string;
+	rule_type: 'on_join' | 'after_delay' | 'on_verify';
+	delay_seconds: number;
+	enabled: boolean;
+	created_at: string;
+	role_name: string;
+}
+
+export interface LevelingConfig {
+	guild_id: string;
+	enabled: boolean;
+	xp_per_message: number;
+	xp_cooldown_seconds: number;
+	level_up_channel_id: string | null;
+	level_up_message: string;
+	stack_roles: boolean;
+}
+
+export interface LevelRole {
+	id: string;
+	guild_id: string;
+	level: number;
+	role_id: string;
+}
+
+export interface MemberXP {
+	guild_id: string;
+	user_id: string;
+	xp: number;
+	level: number;
+	messages_counted: number;
+	username: string;
+	display_name: string | null;
+	avatar_id: string | null;
+}
+
+export interface BoostInfo {
+	id: string;
+	guild_id: string;
+	user_id: string;
+	tier: number;
+	started_at: string;
+	expires_at: string | null;
+	active: boolean;
+	username: string;
+}
+
+export interface BoostSummary {
+	boost_count: number;
+	boost_tier: number;
+	boosters: BoostInfo[];
+	user_boosted: boolean;
+}
+
+export interface Integration {
+	id: string;
+	guild_id: string;
+	integration_type: string;
+	channel_id: string;
+	name: string;
+	enabled: boolean;
+	config: Record<string, unknown>;
+	created_by: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface BridgeConnection {
+	id: string;
+	guild_id: string;
+	bridge_type: string;
+	channel_id: string;
+	remote_id: string;
+	enabled: boolean;
+	config: Record<string, unknown>;
+	status: string;
+	last_error: string | null;
+	created_by: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface IntegrationLogEntry {
+	id: string;
+	integration_id: string | null;
+	bridge_connection_id: string | null;
+	direction: string;
+	source_id: string | null;
+	amityvox_message_id: string | null;
+	channel_id: string;
+	status: string;
+	error_message: string | null;
+	created_at: string;
+}
+
+export interface CodeSnippet {
+	id: string;
+	channel_id: string;
+	author_id: string;
+	title?: string;
+	language: string;
+	code: string;
+	stdin?: string;
+	output?: string;
+	output_error?: string;
+	exit_code?: number;
+	runtime_ms?: number;
+	runnable: boolean;
+}
+
+export interface CodeSnippetRunResult {
+	output: string;
+	output_error?: string;
+	exit_code: number;
+	runtime_ms: number;
+}
+
+export interface LocationShare {
+	id: string;
+	user_id: string;
+	channel_id: string;
+	latitude: number;
+	longitude: number;
+	accuracy?: number;
+	altitude?: number;
+	label?: string;
+	live: boolean;
+	expires_at?: string;
+	created_at: string;
+	updated_at: string;
+	username: string;
+	display_name?: string;
+	avatar_id?: string;
+}
+
+export interface WhiteboardUpdate {
+	state?: string;
+	name?: string;
+	locked?: boolean;
+}
+
+export interface WhiteboardObject {
+	id: string;
+	type: 'path' | 'rect' | 'circle' | 'text' | 'line' | 'arrow';
+	points?: number[];
+	x?: number;
+	y?: number;
+	width?: number;
+	height?: number;
+	radius?: number;
+	text?: string;
+	color: string;
+	strokeWidth: number;
+	fill?: string;
+	userId: string;
+}
+
+export interface WhiteboardData {
+	id: string;
+	channel_id: string;
+	name: string;
+	creator_id: string;
+	state: { objects: WhiteboardObject[]; version: number };
+	width: number;
+	height: number;
+	background_color: string;
+	locked: boolean;
+	collaborators: Array<{ user_id: string; username: string; cursor_x: number; cursor_y: number }>;
+}
+
+export interface GuildInsightDay {
+	date: string;
+	member_count: number;
+	members_joined: number;
+	members_left: number;
+	messages_sent: number;
+	reactions_added: number;
+	voice_minutes: number;
+	active_members: number;
+}
+
+export interface GuildInsightHour {
+	hour: number;
+	messages: number;
+}
+
+export interface GuildInsights {
+	daily: GuildInsightDay[];
+	peak_hours: GuildInsightHour[];
+	total_members: number;
+	total_messages: number;
+	growth_rate: number;
+}
+
+export interface StarboardConfig {
+	guild_id: string;
+	enabled: boolean;
+	channel_id: string | null;
+	emoji: string;
+	threshold: number;
+	self_star: boolean;
+	nsfw_allowed: boolean;
+}
+
+export interface StarboardEntry {
+	id: string;
+	guild_id: string;
+	source_message_id: string;
+	source_channel_id: string;
+	starboard_message_id: string | null;
+	star_count: number;
+	author_id: string;
+	created_at: string;
+}
+
+export interface WelcomeConfig {
+	guild_id: string;
+	enabled: boolean;
+	channel_id: string | null;
+	message: string;
+	dm_enabled: boolean;
+	dm_message: string;
+	embed_enabled: boolean;
+	embed_color: string | null;
+	embed_title: string | null;
+	embed_image_url: string | null;
+}
+
+export interface EffectEvent {
+	id: string;
+	message_id: string;
+	channel_id: string;
+	user_id: string;
+	effect_type: string;
+	config: Record<string, unknown>;
+}
+
+export interface SuperReaction {
+	id: string;
+	message_id: string;
+	user_id: string;
+	emoji: string;
+	intensity: number;
+	username: string;
+}
+
+export interface TranscriptionSettings {
+	channel_id: string;
+	user_id: string;
+	enabled: boolean;
+	language: string;
+}
+
+export interface TranscriptionEntry {
+	id: string;
+	channel_id: string;
+	user_id: string;
+	content: string;
+	confidence?: number;
+	language: string;
+	duration_ms: number;
+	started_at: string;
+	ended_at: string;
+	created_at: string;
+	username: string;
+	display_name?: string;
+	avatar_id?: string;
+}
+
+export interface VideoRecordingPayload {
+	title: string;
+	s3_key: string;
+	s3_bucket: string;
+	duration_ms: number;
+	file_size_bytes: number;
+	width: number;
+	height: number;
+	thumbnail_s3_key?: string;
+}
+
+export interface AdminFederationPeerHealth {
+	peer_id: string;
+	peer_domain: string;
+	peer_name: string | null;
+	peer_software: string;
+	federation_status: string;
+	health_status: string;
+	last_sync_at: string | null;
+	last_event_at: string | null;
+	event_lag_ms: number;
+	events_sent: number;
+	events_received: number;
+	errors_24h: number;
+	version: string | null;
+	capabilities: string[];
+	established_at: string;
+}
+
+export interface AdminFederationDashboard {
+	peers: AdminFederationPeerHealth[];
+	federation_mode: string;
+	total_peers: number;
+	active_peers: number;
+	blocked_peers: number;
+	degraded_peers: number;
+	pending_deliveries: number;
+	failed_deliveries: number;
+	total_deliveries: number;
+}
+
+export interface AdminFederationPeerControl {
+	id: string;
+	peer_id: string;
+	peer_domain: string;
+	peer_name: string | null;
+	action: string;
+	reason: string | null;
+	created_by: string;
+	created_at: string;
+}
+
+export interface AdminFederationDeliveryReceipt {
+	id: string;
+	message_id: string;
+	source_instance: string;
+	target_instance: string;
+	status: string;
+	attempts: number;
+	last_attempt_at: string | null;
+	delivered_at: string | null;
+	error_message: string | null;
+	created_at: string;
+}
+
+export interface AdminFederationSearchConfig {
+	enabled: boolean;
+	index_outgoing: boolean;
+	index_incoming: boolean;
+	allowed_peers: string[];
+}
+
+export interface AdminFederationProtocolInfo {
+	protocol_version: string;
+	capabilities: string[];
+	supported_protocols: string[];
+	default_capabilities: string[];
+}
+
+export interface AdminBridgeConfig {
+	id: string;
+	bridge_type: string;
+	enabled: boolean;
+	display_name: string;
+	config: Record<string, unknown>;
+	status: string;
+	last_sync_at: string | null;
+	error_message: string | null;
+	channel_count: number;
+	virtual_user_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AdminBridgeChannelMapping {
+	id: string;
+	local_channel_id: string;
+	local_channel_name: string | null;
+	remote_channel_id: string;
+	remote_channel_name: string | null;
+	direction: string;
+	active: boolean;
+	last_message_at: string | null;
+	message_count: number;
+	created_at: string;
+}
+
+export interface AdminBridgeVirtualUser {
+	id: string;
+	remote_user_id: string;
+	remote_username: string;
+	remote_avatar: string | null;
+	platform: string;
+	last_active_at: string | null;
+	created_at: string;
+}
+
+export interface ClientConfig {
+	file_uploads_enabled: boolean;
+	max_upload_bytes: number;
+	local_instance_id: string;
+	experimental_features?: Record<string, boolean>;
+}
+
+export interface ChannelWidget {
+	id: string;
+	channel_id: string;
+	guild_id: string;
+	widget_type: string;
+	title: string;
+	config: Record<string, unknown>;
+	creator_id: string;
+	position: number;
+	active: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
 class ApiClient {
 	private token: string | null = null;
 
@@ -92,7 +686,7 @@ class ApiClient {
 		return this.token;
 	}
 
-	private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+	async request<T>(method: string, path: string, body?: unknown): Promise<T> {
 		const headers: Record<string, string> = {
 			'Content-Type': 'application/json'
 		};
@@ -154,18 +748,23 @@ class ApiClient {
 
 	// --- Auth ---
 
-	async register(username: string, email: string, password: string): Promise<LoginResponse> {
+	async register(username: string, email: string, password: string, token?: string): Promise<LoginResponse> {
 		const data = await this.post<RegisterResponse>('/auth/register', {
 			username,
 			email,
-			password
+			password,
+			...(token ? { token } : {})
 		});
 		this.setToken(data.token);
 		return data;
 	}
 
-	async login(username: string, password: string): Promise<LoginResponse> {
-		const data = await this.post<LoginResponse>('/auth/login', { username, password });
+	async login(username: string, password: string, totpCode?: string): Promise<LoginResponse> {
+		const data = await this.post<LoginResponse>('/auth/login', {
+			username,
+			password,
+			...(totpCode ? { totp_code: totpCode } : {})
+		});
 		this.setToken(data.token);
 		return data;
 	}
@@ -173,6 +772,33 @@ class ApiClient {
 	async logout(): Promise<void> {
 		await this.post('/auth/logout');
 		this.setToken(null);
+	}
+
+	getPublicRegistrationSettings(): Promise<RegistrationSettings> {
+		return this.get('/auth/registration');
+	}
+
+	// --- First-run setup ---
+
+	getSetupStatus(): Promise<{ completed: boolean; instance_name: string; instance_id: string }> {
+		return this.get('/admin/setup/status');
+	}
+
+	completeSetup(data: {
+		instance_name: string;
+		description?: string;
+		domain?: string;
+		federation_mode?: string;
+		registration_mode?: string;
+		admin_username?: string;
+		admin_email?: string;
+		admin_password?: string;
+	}): Promise<{ status: string; message: string }> {
+		return this.post('/admin/setup/complete', data);
+	}
+
+	getClientConfig(): Promise<ClientConfig> {
+		return this.get('/client-config');
 	}
 
 	// --- Users ---
@@ -229,6 +855,18 @@ class ApiClient {
 		return this.post('/users/@me/group-dms', { user_ids: userIds, name });
 	}
 
+	exportUserData(): Promise<Record<string, unknown>> {
+		return this.get('/users/@me/export');
+	}
+
+	exportAccount(): Promise<Record<string, unknown>> {
+		return this.get('/users/@me/export-account');
+	}
+
+	importAccount(data: ImportAccountPayload): Promise<User> {
+		return this.post('/users/@me/import-account', data);
+	}
+
 	addGroupDMRecipient(channelId: string, userId: string): Promise<Channel> {
 		return this.put(`/channels/${channelId}/recipients/${userId}`);
 	}
@@ -261,6 +899,22 @@ class ApiClient {
 
 	leaveGuild(guildId: string): Promise<void> {
 		return this.post(`/guilds/${guildId}/leave`);
+	}
+
+	getServerGuide(guildId: string): Promise<GuideStep[]> {
+		return this.get(`/guilds/${guildId}/guide`);
+	}
+
+	updateServerGuide(guildId: string, steps: Pick<GuideStep, 'title' | 'content' | 'position' | 'channel_id'>[]): Promise<GuideStep[]> {
+		return this.put(`/guilds/${guildId}/guide`, { steps });
+	}
+
+	getBumpStatus(guildId: string): Promise<BumpStatus> {
+		return this.get(`/guilds/${guildId}/bump`);
+	}
+
+	bumpGuild(guildId: string): Promise<BumpResponse> {
+		return this.post(`/guilds/${guildId}/bump`);
 	}
 
 	// --- Channels ---
@@ -298,6 +952,10 @@ class ApiClient {
 		if (params?.limit) query.set('limit', String(params.limit));
 		const qs = query.toString();
 		return this.get(`/channels/${channelId}/messages${qs ? '?' + qs : ''}`);
+	}
+
+	getMessage(channelId: string, messageId: string): Promise<Message> {
+		return this.get(`/channels/${channelId}/messages/${messageId}`);
 	}
 
 	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[]; encrypted?: boolean; encryption_session_id?: string; mention_user_ids?: string[]; mention_role_ids?: string[]; mention_here?: boolean }): Promise<Message> {
@@ -705,6 +1363,37 @@ class ApiClient {
 		return this.get(`/giphy/categories?limit=${limit}`);
 	}
 
+	// --- Theme Gallery ---
+
+	listThemes(options?: { sort?: 'newest' | 'downloads' | 'likes'; q?: string; limit?: number; offset?: number }): Promise<SharedTheme[]> {
+		const params = new URLSearchParams();
+		params.set('sort', options?.sort ?? 'newest');
+		params.set('limit', String(options?.limit ?? 60));
+		if (options?.offset !== undefined) params.set('offset', String(options.offset));
+		if (options?.q) params.set('q', options.q);
+		return this.get(`/themes?${params}`);
+	}
+
+	shareTheme(data: ShareThemeRequest): Promise<SharedTheme> {
+		return this.post('/themes', data);
+	}
+
+	getSharedTheme(shareCode: string): Promise<SharedTheme> {
+		return this.get(`/themes/${shareCode}`);
+	}
+
+	likeTheme(themeId: string): Promise<void> {
+		return this.put(`/themes/${themeId}/like`);
+	}
+
+	unlikeTheme(themeId: string): Promise<void> {
+		return this.del(`/themes/${themeId}/like`);
+	}
+
+	deleteTheme(themeId: string): Promise<void> {
+		return this.del(`/themes/${themeId}`);
+	}
+
 	// --- Gallery ---
 
 	getChannelGallery(channelId: string, options?: { before?: string; type?: string }): Promise<Attachment[]> {
@@ -769,8 +1458,68 @@ class ApiClient {
 		return this.get('/admin/instance');
 	}
 
-	updateAdminInstance(data: { name?: string; description?: string; federation_mode?: string }): Promise<InstanceInfo> {
+	updateAdminInstance(data: {
+		name?: string | null;
+		description?: string | null;
+		federation_mode?: string;
+		shorthand?: string | null;
+		voice_mode?: string;
+	}): Promise<InstanceInfo> {
 		return this.patch('/admin/instance', data);
+	}
+
+	getAdminBots(): Promise<AdminBotWithDetails[]> {
+		return this.get('/admin/bots');
+	}
+
+	getRateLimitStats(): Promise<RateLimitStats> {
+		return this.get('/admin/rate-limits/stats');
+	}
+
+	getRateLimitLog(params?: { limit?: number; offset?: number; blocked?: boolean; ip?: string }): Promise<RateLimitLogEntry[]> {
+		const query = new URLSearchParams();
+		if (params?.limit) query.set('limit', String(params.limit));
+		if (params?.offset) query.set('offset', String(params.offset));
+		if (params?.blocked) query.set('blocked', 'true');
+		if (params?.ip) query.set('ip', params.ip);
+		const qs = query.toString();
+		return this.get(`/admin/rate-limits/log${qs ? '?' + qs : ''}`);
+	}
+
+	updateRateLimitConfig(data: { requests_per_window?: string; window_seconds?: string }): Promise<{ status: string }> {
+		return this.patch('/admin/rate-limits', data);
+	}
+
+	getContentScanRules(): Promise<ContentScanRule[]> {
+		return this.get('/admin/content-scan/rules');
+	}
+
+	getContentScanLog(params?: { limit?: number; offset?: number }): Promise<ContentScanLogEntry[]> {
+		const query = new URLSearchParams();
+		if (params?.limit) query.set('limit', String(params.limit));
+		if (params?.offset) query.set('offset', String(params.offset));
+		const qs = query.toString();
+		return this.get(`/admin/content-scan/log${qs ? '?' + qs : ''}`);
+	}
+
+	createContentScanRule(data: Omit<ContentScanRule, 'id' | 'created_at'>): Promise<ContentScanRule> {
+		return this.post('/admin/content-scan/rules', data);
+	}
+
+	updateContentScanRule(ruleId: string, data: Partial<Omit<ContentScanRule, 'id' | 'created_at'>>): Promise<ContentScanRule> {
+		return this.patch(`/admin/content-scan/rules/${ruleId}`, data);
+	}
+
+	deleteContentScanRule(ruleId: string): Promise<void> {
+		return this.del(`/admin/content-scan/rules/${ruleId}`);
+	}
+
+	getCaptchaConfig(): Promise<CaptchaConfig> {
+		return this.get('/admin/captcha');
+	}
+
+	updateCaptchaConfig(data: { provider?: 'none' | 'hcaptcha' | 'recaptcha'; site_key?: string; secret_key?: string }): Promise<CaptchaConfig> {
+		return this.patch('/admin/captcha', data);
 	}
 
 	// --- Admin Guilds ---
@@ -848,6 +1597,76 @@ class ApiClient {
 
 	acknowledgeKeyChange(auditId: string): Promise<{ status: string }> {
 		return this.post(`/admin/federation/key-audit/${auditId}/acknowledge`);
+	}
+
+	getAdminFederationDashboard(): Promise<AdminFederationDashboard> {
+		return this.get('/admin/federation/dashboard');
+	}
+
+	getAdminFederationPeerControls(): Promise<AdminFederationPeerControl[]> {
+		return this.get('/admin/federation/peers/controls');
+	}
+
+	updateAdminFederationPeerControl(peerId: string, data: { action: string; reason?: string }): Promise<void> {
+		return this.put(`/admin/federation/peers/${peerId}/control`, data);
+	}
+
+	getAdminFederationDeliveryReceipts(status?: string): Promise<AdminFederationDeliveryReceipt[]> {
+		const query = status ? `?status=${encodeURIComponent(status)}` : '';
+		return this.get(`/admin/federation/delivery-receipts${query}`);
+	}
+
+	retryAdminFederationDelivery(receiptId: string): Promise<void> {
+		return this.post(`/admin/federation/delivery-receipts/${receiptId}/retry`);
+	}
+
+	getAdminFederationSearchConfig(): Promise<AdminFederationSearchConfig> {
+		return this.get('/admin/federation/search-config');
+	}
+
+	updateAdminFederationSearchConfig(config: AdminFederationSearchConfig): Promise<void> {
+		return this.patch('/admin/federation/search-config', config);
+	}
+
+	getAdminFederationProtocol(): Promise<AdminFederationProtocolInfo> {
+		return this.get('/admin/federation/protocol');
+	}
+
+	getAdminBridges(): Promise<AdminBridgeConfig[]> {
+		return this.get('/admin/bridges');
+	}
+
+	createAdminBridge(data: { bridge_type: string; display_name: string; config?: Record<string, unknown> }): Promise<AdminBridgeConfig> {
+		return this.post('/admin/bridges', data);
+	}
+
+	updateAdminBridge(bridgeId: string, data: Partial<Pick<AdminBridgeConfig, 'enabled' | 'display_name' | 'config'>>): Promise<AdminBridgeConfig> {
+		return this.patch(`/admin/bridges/${bridgeId}`, data);
+	}
+
+	deleteAdminBridge(bridgeId: string): Promise<void> {
+		return this.del(`/admin/bridges/${bridgeId}`);
+	}
+
+	getAdminBridgeMappings(bridgeId: string): Promise<AdminBridgeChannelMapping[]> {
+		return this.get(`/admin/bridges/${bridgeId}/mappings`);
+	}
+
+	createAdminBridgeMapping(bridgeId: string, data: {
+		local_channel_id: string;
+		remote_channel_id: string;
+		remote_channel_name?: string;
+		direction: string;
+	}): Promise<AdminBridgeChannelMapping> {
+		return this.post(`/admin/bridges/${bridgeId}/mappings`, data);
+	}
+
+	deleteAdminBridgeMapping(bridgeId: string, mappingId: string): Promise<void> {
+		return this.del(`/admin/bridges/${bridgeId}/mappings/${mappingId}`);
+	}
+
+	getAdminBridgeVirtualUsers(bridgeId: string): Promise<AdminBridgeVirtualUser[]> {
+		return this.get(`/admin/bridges/${bridgeId}/virtual-users`);
 	}
 
 	// --- Admin Instance Bans ---
@@ -1249,6 +2068,235 @@ class ApiClient {
 
 	resolveReport(guildId: string, reportId: string, status: 'resolved' | 'dismissed'): Promise<MessageReport> {
 		return this.patch(`/guilds/${guildId}/reports/${reportId}`, { status });
+	}
+
+	// --- Auto Roles ---
+
+	getAutoRoles(guildId: string): Promise<AutoRoleRule[]> {
+		return this.get(`/guilds/${guildId}/auto-roles`);
+	}
+
+	createAutoRole(guildId: string, data: {
+		role_id: string;
+		rule_type: AutoRoleRule['rule_type'];
+		delay_seconds?: number;
+	}): Promise<AutoRoleRule> {
+		return this.post(`/guilds/${guildId}/auto-roles`, data);
+	}
+
+	updateAutoRole(guildId: string, ruleId: string, data: Partial<Pick<AutoRoleRule, 'enabled' | 'delay_seconds' | 'rule_type' | 'role_id'>>): Promise<AutoRoleRule> {
+		return this.patch(`/guilds/${guildId}/auto-roles/${ruleId}`, data);
+	}
+
+	deleteAutoRole(guildId: string, ruleId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/auto-roles/${ruleId}`);
+	}
+
+	// --- Leveling ---
+
+	getLeveling(guildId: string): Promise<{ config: LevelingConfig; level_roles: LevelRole[] }> {
+		return this.get(`/guilds/${guildId}/leveling`);
+	}
+
+	updateLeveling(guildId: string, data: Partial<LevelingConfig>): Promise<LevelingConfig> {
+		return this.patch(`/guilds/${guildId}/leveling`, data);
+	}
+
+	createLevelRole(guildId: string, data: { level: number; role_id: string }): Promise<LevelRole> {
+		return this.post(`/guilds/${guildId}/leveling/roles`, data);
+	}
+
+	deleteLevelRole(guildId: string, levelRoleId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/leveling/roles/${levelRoleId}`);
+	}
+
+	getLevelingLeaderboard(guildId: string, limit = 50): Promise<MemberXP[]> {
+		return this.get(`/guilds/${guildId}/leveling/leaderboard?limit=${encodeURIComponent(String(limit))}`);
+	}
+
+	// --- Boosts ---
+
+	getBoosts(guildId: string): Promise<BoostSummary> {
+		return this.get(`/guilds/${guildId}/boosts`);
+	}
+
+	boostGuild(guildId: string): Promise<void> {
+		return this.post(`/guilds/${guildId}/boosts`);
+	}
+
+	unboostGuild(guildId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/boosts`);
+	}
+
+	// --- Integrations ---
+
+	getIntegrations(guildId: string): Promise<Integration[]> {
+		return this.get(`/guilds/${guildId}/integrations`);
+	}
+
+	createIntegration(guildId: string, data: {
+		integration_type: string;
+		channel_id: string;
+		name: string;
+		config: Record<string, unknown>;
+	}): Promise<Integration> {
+		return this.post(`/guilds/${guildId}/integrations`, data);
+	}
+
+	updateIntegration(guildId: string, integrationId: string, data: Partial<Pick<Integration, 'name' | 'enabled' | 'config'>>): Promise<Integration> {
+		return this.patch(`/guilds/${guildId}/integrations/${integrationId}`, data);
+	}
+
+	deleteIntegration(guildId: string, integrationId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/integrations/${integrationId}`);
+	}
+
+	getBridgeConnections(guildId: string): Promise<BridgeConnection[]> {
+		return this.get(`/guilds/${guildId}/bridge-connections`);
+	}
+
+	createBridgeConnection(guildId: string, data: {
+		bridge_type: string;
+		channel_id: string;
+		remote_id: string;
+		config: Record<string, unknown>;
+	}): Promise<BridgeConnection> {
+		return this.post(`/guilds/${guildId}/bridge-connections`, data);
+	}
+
+	updateBridgeConnection(guildId: string, bridgeId: string, data: Partial<Pick<BridgeConnection, 'enabled' | 'remote_id' | 'config'>>): Promise<BridgeConnection> {
+		return this.patch(`/guilds/${guildId}/bridge-connections/${bridgeId}`, data);
+	}
+
+	deleteBridgeConnection(guildId: string, bridgeId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/bridge-connections/${bridgeId}`);
+	}
+
+	getIntegrationLog(guildId: string): Promise<IntegrationLogEntry[]> {
+		return this.get(`/guilds/${guildId}/integrations/log`);
+	}
+
+	// --- Experimental Channel Features ---
+
+	createCodeSnippet(channelId: string, data: {
+		title?: string;
+		language: string;
+		code: string;
+		stdin?: string;
+		runnable: boolean;
+	}): Promise<CodeSnippet> {
+		return this.post(`/channels/${channelId}/experimental/code-snippets`, data);
+	}
+
+	runCodeSnippet(channelId: string, snippetId: string): Promise<CodeSnippetRunResult> {
+		return this.post(`/channels/${channelId}/experimental/code-snippets/${snippetId}/run`);
+	}
+
+	getLocations(channelId: string): Promise<LocationShare[]> {
+		return this.get(`/channels/${channelId}/experimental/locations`);
+	}
+
+	shareLocation(channelId: string, data: {
+		latitude: number;
+		longitude: number;
+		accuracy?: number | null;
+		altitude?: number | null;
+		label?: string;
+		live: boolean;
+		duration?: number;
+	}): Promise<LocationShare> {
+		return this.post(`/channels/${channelId}/experimental/location`, data);
+	}
+
+	updateLiveLocation(channelId: string, locationId: string, data: {
+		latitude: number;
+		longitude: number;
+		accuracy?: number | null;
+		altitude?: number | null;
+	}): Promise<void> {
+		return this.patch(`/channels/${channelId}/experimental/location/${locationId}`, data);
+	}
+
+	deleteLiveLocation(channelId: string, locationId: string): Promise<void> {
+		return this.del(`/channels/${channelId}/experimental/location/${locationId}`);
+	}
+
+	updateWhiteboard(channelId: string, whiteboardId: string, data: WhiteboardUpdate): Promise<void> {
+		return this.patch(`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`, data);
+	}
+
+	createWhiteboard(channelId: string, data: {
+		name: string;
+		width: number;
+		height: number;
+		background_color: string;
+	}): Promise<WhiteboardData> {
+		return this.post(`/channels/${channelId}/experimental/whiteboards`, data);
+	}
+
+	getWhiteboard(channelId: string, whiteboardId: string): Promise<WhiteboardData> {
+		return this.get(`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`);
+	}
+
+	getGuildInsights(guildId: string, days: number): Promise<GuildInsights> {
+		return this.get(`/guilds/${guildId}/insights?days=${encodeURIComponent(String(days))}`);
+	}
+
+	getStarboardConfig(guildId: string): Promise<StarboardConfig> {
+		return this.get(`/guilds/${guildId}/starboard`);
+	}
+
+	updateStarboardConfig(guildId: string, data: Partial<Omit<StarboardConfig, 'guild_id'>>): Promise<StarboardConfig> {
+		return this.patch(`/guilds/${guildId}/starboard`, data);
+	}
+
+	getStarboardEntries(guildId: string, limit = 50): Promise<StarboardEntry[]> {
+		return this.get(`/guilds/${guildId}/starboard/entries?limit=${encodeURIComponent(String(limit))}`);
+	}
+
+	getWelcomeConfig(guildId: string): Promise<WelcomeConfig> {
+		return this.get(`/guilds/${guildId}/welcome`);
+	}
+
+	updateWelcomeConfig(guildId: string, data: Partial<Omit<WelcomeConfig, 'guild_id'>>): Promise<WelcomeConfig> {
+		return this.patch(`/guilds/${guildId}/welcome`, data);
+	}
+
+	createMessageEffect(channelId: string, messageId: string, data: {
+		effect_type: string;
+		config: Record<string, unknown>;
+	}): Promise<EffectEvent> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/effects`, data);
+	}
+
+	addSuperReaction(channelId: string, messageId: string, data: {
+		emoji: string;
+		intensity: number;
+	}): Promise<SuperReaction> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/super-reactions`, data);
+	}
+
+	getSuperReactions(channelId: string, messageId: string): Promise<SuperReaction[]> {
+		return this.get(`/channels/${channelId}/messages/${messageId}/super-reactions`);
+	}
+
+	getTranscriptionSettings(channelId: string): Promise<TranscriptionSettings> {
+		return this.get(`/channels/${channelId}/experimental/transcription/settings`);
+	}
+
+	updateTranscriptionSettings(channelId: string, data: {
+		enabled: boolean;
+		language: string;
+	}): Promise<TranscriptionSettings> {
+		return this.patch(`/channels/${channelId}/experimental/transcription/settings`, data);
+	}
+
+	getTranscriptions(channelId: string): Promise<TranscriptionEntry[]> {
+		return this.get(`/channels/${channelId}/experimental/transcriptions`);
+	}
+
+	createVideoRecording(channelId: string, data: VideoRecordingPayload): Promise<unknown> {
+		return this.post(`/channels/${channelId}/experimental/recordings`, data);
 	}
 
 	// --- Moderation: Channel Lock ---
@@ -1835,16 +2883,33 @@ class ApiClient {
 
 	// --- Guild Plugins ---
 
-	getGuildPlugins(guildId: string): Promise<any[]> {
+	listPlugins(options?: { q?: string; category?: string; limit?: number }): Promise<PluginListing[]> {
+		const params = new URLSearchParams();
+		if (options?.q) params.set('q', options.q);
+		if (options?.category) params.set('category', options.category);
+		if (options?.limit) params.set('limit', String(options.limit));
+		const qs = params.toString();
+		return this.get(`/plugins${qs ? '?' + qs : ''}`);
+	}
+
+	getPlugin(pluginId: string): Promise<PluginListing & { manifest: unknown }> {
+		return this.get(`/plugins/${pluginId}`);
+	}
+
+	installPlugin(guildId: string, pluginId: string, config: Record<string, unknown> = {}): Promise<GuildPluginEntry> {
+		return this.post(`/guilds/${guildId}/plugins`, { plugin_id: pluginId, config });
+	}
+
+	getGuildPlugins(guildId: string): Promise<GuildPluginEntry[]> {
 		return this.get(`/guilds/${guildId}/plugins`);
 	}
 
-	updateGuildPlugin(guildId: string, pluginId: string, data: any): Promise<any> {
-		return this.patch(`/guilds/${guildId}/plugins/${pluginId}`, data);
+	updateGuildPlugin(guildId: string, installId: string, data: { enabled?: boolean; config?: Record<string, unknown> }): Promise<{ status: string }> {
+		return this.patch(`/guilds/${guildId}/plugins/${installId}`, data);
 	}
 
-	deleteGuildPlugin(guildId: string, pluginId: string): Promise<void> {
-		return this.del(`/guilds/${guildId}/plugins/${pluginId}`);
+	deleteGuildPlugin(guildId: string, installId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/plugins/${installId}`);
 	}
 
 	// --- Guild Templates ---
@@ -1865,17 +2930,40 @@ class ApiClient {
 		return this.post(`/guilds/${guildId}/templates/${templateId}/apply`, data);
 	}
 
+	getChannelTemplates(guildId: string): Promise<ChannelTemplate[]> {
+		return this.get(`/guilds/${guildId}/channel-templates`);
+	}
+
+	createChannelTemplate(guildId: string, data: {
+		name: string;
+		channel_type?: string;
+		topic?: string | null;
+		slowmode_seconds?: number;
+		nsfw?: boolean;
+		permission_overwrites?: unknown;
+	}): Promise<ChannelTemplate> {
+		return this.post(`/guilds/${guildId}/channel-templates`, data);
+	}
+
+	deleteChannelTemplate(guildId: string, templateId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/channel-templates/${templateId}`);
+	}
+
+	applyChannelTemplate(guildId: string, templateId: string, data: { name: string; category_id?: string | null }): Promise<Channel> {
+		return this.post(`/guilds/${guildId}/channel-templates/${templateId}/apply`, data);
+	}
+
 	// --- Channel Widgets ---
 
-	getChannelWidgets(channelId: string): Promise<any[]> {
+	getChannelWidgets(channelId: string): Promise<ChannelWidget[]> {
 		return this.get(`/channels/${channelId}/widgets`);
 	}
 
-	createChannelWidget(channelId: string, widget: any): Promise<any> {
+	createChannelWidget(channelId: string, widget: { widget_type: string; title: string; config?: Record<string, unknown> }): Promise<ChannelWidget> {
 		return this.post(`/channels/${channelId}/widgets`, widget);
 	}
 
-	updateChannelWidget(channelId: string, widgetId: string, data: any): Promise<any> {
+	updateChannelWidget(channelId: string, widgetId: string, data: Partial<Pick<ChannelWidget, 'title' | 'config' | 'position' | 'active'>>): Promise<ChannelWidget> {
 		return this.patch(`/channels/${channelId}/widgets/${widgetId}`, data);
 	}
 

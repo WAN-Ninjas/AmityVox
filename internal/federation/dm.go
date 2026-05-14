@@ -20,11 +20,11 @@ import (
 
 // federatedDMCreateRequest is the signed payload for creating a DM mirror.
 type federatedDMCreateRequest struct {
-	ChannelID    string              `json:"channel_id"`     // remote channel ID
-	ChannelType  string              `json:"channel_type"`   // "dm" or "group"
-	Creator      federatedUserInfo   `json:"creator"`        // who initiated the DM
-	RecipientIDs []string            `json:"recipient_ids"`  // all participant user IDs
-	Recipients   []federatedUserInfo `json:"recipients"`     // full user info for stubs
+	ChannelID    string              `json:"channel_id"`    // remote channel ID
+	ChannelType  string              `json:"channel_type"`  // "dm" or "group"
+	Creator      federatedUserInfo   `json:"creator"`       // who initiated the DM
+	RecipientIDs []string            `json:"recipient_ids"` // all participant user IDs
+	Recipients   []federatedUserInfo `json:"recipients"`    // full user info for stubs
 	GroupName    *string             `json:"group_name,omitempty"`
 }
 
@@ -39,18 +39,33 @@ type federatedUserInfo struct {
 
 // federatedDMMessageRequest is the signed payload for delivering a DM message.
 type federatedDMMessageRequest struct {
-	RemoteChannelID string                 `json:"remote_channel_id"`
-	Message         federatedMessageData   `json:"message"`
+	RemoteChannelID string               `json:"remote_channel_id"`
+	Message         federatedMessageData `json:"message"`
 }
 
 // federatedMessageData carries the message content for federation.
 type federatedMessageData struct {
-	ID          string          `json:"id"`
-	AuthorID    string          `json:"author_id"`
-	Content     string          `json:"content"`
-	Attachments json.RawMessage `json:"attachments,omitempty"`
-	Embeds      json.RawMessage `json:"embeds,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
+	ID                  string                `json:"id"`
+	AuthorID            string                `json:"author_id"`
+	Content             string                `json:"content"`
+	Nonce               *string               `json:"nonce,omitempty"`
+	MessageType         string                `json:"message_type,omitempty"`
+	Flags               int                   `json:"flags,omitempty"`
+	ReplyToIDs          []string              `json:"reply_to_ids,omitempty"`
+	MentionUserIDs      []string              `json:"mention_user_ids,omitempty"`
+	MentionRoleIDs      []string              `json:"mention_role_ids,omitempty"`
+	MentionHere         bool                  `json:"mention_here,omitempty"`
+	ThreadID            *string               `json:"thread_id,omitempty"`
+	MasqueradeName      *string               `json:"masquerade_name,omitempty"`
+	MasqueradeAvatar    *string               `json:"masquerade_avatar,omitempty"`
+	MasqueradeColor     *string               `json:"masquerade_color,omitempty"`
+	Encrypted           bool                  `json:"encrypted,omitempty"`
+	EncryptionSessionID *string               `json:"encryption_session_id,omitempty"`
+	VoiceDurationMs     *int                  `json:"voice_duration_ms,omitempty"`
+	VoiceWaveform       json.RawMessage       `json:"voice_waveform,omitempty"`
+	Attachments         []federatedAttachment `json:"attachments,omitempty"`
+	Embeds              []federatedEmbed      `json:"embeds,omitempty"`
+	CreatedAt           time.Time             `json:"created_at"`
 }
 
 // federatedDMRecipientRequest is the signed payload for adding/removing recipients.
@@ -201,13 +216,14 @@ func (ss *SyncService) HandleFederatedDMCreate(w http.ResponseWriter, r *http.Re
 
 	if req.ChannelType == "group" {
 		_, err = tx.Exec(ctx,
-			`INSERT INTO channels (id, channel_type, name, owner_id, created_at) VALUES ($1, 'group', $2, $3, $4)`,
-			localChannelID, req.GroupName, req.Creator.ID, now,
+			`INSERT INTO channels (id, instance_id, channel_type, name, owner_id, created_at)
+			 VALUES ($1, $2, 'group', $3, $4, $5)`,
+			localChannelID, senderID, req.GroupName, req.Creator.ID, now,
 		)
 	} else {
 		_, err = tx.Exec(ctx,
-			`INSERT INTO channels (id, channel_type, created_at) VALUES ($1, 'dm', $2)`,
-			localChannelID, now,
+			`INSERT INTO channels (id, instance_id, channel_type, created_at) VALUES ($1, $2, 'dm', $3)`,
+			localChannelID, senderID, now,
 		)
 	}
 	if err != nil {
@@ -320,14 +336,35 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	// Insert the message into the local database.
 	createdAt := req.Message.CreatedAt
 	if createdAt.IsZero() {
-		createdAt = time.Now()
+		createdAt = time.Now().UTC()
+	}
+	if req.Message.MessageType == "" {
+		req.Message.MessageType = models.MessageTypeDefault
 	}
 
-	tag, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO messages (id, channel_id, author_id, content, created_at)
-		 VALUES ($1, $2, $3, $4, $5)
+	tx, err := ss.fed.pool.Begin(ctx)
+	if err != nil {
+		ss.logger.Error("failed to begin federated DM message tx",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()),
+		)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO messages (id, channel_id, author_id, instance_id, content, nonce, message_type, flags,
+		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
+		                       thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+		                       encrypted, encryption_session_id, voice_duration_ms, voice_waveform, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		 ON CONFLICT (id) DO NOTHING`,
-		req.Message.ID, localChannelID, req.Message.AuthorID, req.Message.Content, createdAt,
+		req.Message.ID, localChannelID, req.Message.AuthorID, senderID, req.Message.Content, req.Message.Nonce,
+		req.Message.MessageType, req.Message.Flags, req.Message.ReplyToIDs, req.Message.MentionUserIDs,
+		req.Message.MentionRoleIDs, req.Message.MentionHere, req.Message.ThreadID, req.Message.MasqueradeName,
+		req.Message.MasqueradeAvatar, req.Message.MasqueradeColor, req.Message.Encrypted,
+		req.Message.EncryptionSessionID, req.Message.VoiceDurationMs, req.Message.VoiceWaveform, createdAt,
 	)
 	if err != nil {
 		ss.logger.Error("failed to persist federated DM message",
@@ -340,20 +377,39 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 
 	// If the message already existed (retry), skip duplicate broadcast.
 	if tag.RowsAffected() == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			ss.logger.Error("failed to commit duplicate federated DM message tx",
+				slog.String("message_id", req.Message.ID),
+				slog.String("error", err.Error()),
+			)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 		return
 	}
 
-	// Note: Attachments and embeds are stored in separate tables (attachments, embeds)
-	// linked by message_id. For federated messages, the actual files live on the remote
-	// instance's S3. We don't proxy or re-upload them — we just pass the metadata through
-	// to WebSocket clients so they can render the remote URLs. Full attachment proxying
-	// is a future enhancement.
+	if err := ss.upsertFederatedAttachments(ctx, tx, senderID, req.Message.ID, req.Message.Attachments); err != nil {
+		ss.logger.Error("failed to persist federated DM attachments",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()),
+		)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := ss.upsertFederatedEmbeds(ctx, tx, senderID, req.Message.ID, req.Message.Embeds); err != nil {
+		ss.logger.Error("failed to persist federated DM embeds",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()),
+		)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
 	// Update channel's last_message_id.
-	if _, err := ss.fed.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`,
 		req.Message.ID, localChannelID); err != nil {
 		ss.logger.Warn("failed to update last_message_id",
@@ -361,20 +417,31 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 			slog.String("error", err.Error()),
 		)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		ss.logger.Error("failed to commit federated DM message tx",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()),
+		)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
 	// Publish MESSAGE_CREATE for local WebSocket clients.
 	// Include attachment/embed metadata so clients can render remote media.
 	msg := map[string]interface{}{
-		"id":         req.Message.ID,
-		"channel_id": localChannelID,
-		"author_id":  req.Message.AuthorID,
-		"content":    req.Message.Content,
-		"created_at": createdAt,
+		"id":           req.Message.ID,
+		"channel_id":   localChannelID,
+		"author_id":    req.Message.AuthorID,
+		"content":      req.Message.Content,
+		"instance_id":  senderID,
+		"message_type": req.Message.MessageType,
+		"flags":        req.Message.Flags,
+		"created_at":   createdAt,
 	}
-	if req.Message.Attachments != nil {
+	if len(req.Message.Attachments) > 0 {
 		msg["attachments"] = req.Message.Attachments
 	}
-	if req.Message.Embeds != nil {
+	if len(req.Message.Embeds) > 0 {
 		msg["embeds"] = req.Message.Embeds
 	}
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", localChannelID, msg)

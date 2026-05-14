@@ -158,11 +158,13 @@
 											</svg>
 										</button>
 										{#if reminderOpenId === bookmark.message_id}
-											<!-- svelte-ignore a11y_no_static_element_interactions -->
-											<div
-												class="absolute right-0 top-8 z-20 w-56 rounded-lg bg-bg-floating p-2 shadow-xl"
-												onclick={(e) => e.stopPropagation()}
-											>
+					<div
+						class="absolute right-0 top-8 z-20 w-56 rounded-lg bg-bg-floating p-2 shadow-xl"
+						onclick={(e) => e.stopPropagation()}
+						onkeydown={(e) => e.stopPropagation()}
+						role="menu"
+						tabindex="-1"
+					>
 												<button
 													class="w-full rounded px-3 py-1.5 text-left text-sm text-text-secondary hover:bg-bg-modifier"
 													onclick={() => setReminder(bookmark, getPresetTime('15m'))}
@@ -183,9 +185,10 @@
 												</button>
 												<div class="my-1 border-t border-bg-modifier"></div>
 												<div class="px-3 py-1.5">
-													<label class="mb-1 block text-xs text-text-muted">Custom date/time</label>
-													<input
-														type="datetime-local"
+						<label class="mb-1 block text-xs text-text-muted" for="bookmark-custom-reminder-{bookmark.message_id}">Custom date/time</label>
+						<input
+							id="bookmark-custom-reminder-{bookmark.message_id}"
+							type="datetime-local"
 														class="w-full rounded bg-bg-primary px-2 py-1 text-xs text-text-primary"
 														bind:value={customReminderDate}
 														onkeydown={(e) => { if (e.key === 'Enter') handleCustomReminder(bookmark); }}

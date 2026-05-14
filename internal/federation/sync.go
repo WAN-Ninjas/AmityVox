@@ -3,11 +3,14 @@ package federation
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,12 +33,12 @@ const maxRetryAttempts = 10
 
 // FederatedMessage is the envelope for messages sent between federated instances.
 type FederatedMessage struct {
-	Type      string       `json:"type"`                  // Event type (e.g., MESSAGE_CREATE)
-	OriginID  string       `json:"origin_id"`             // Originating instance ID
-	Timestamp HLCTimestamp `json:"timestamp"`              // HLC timestamp for causal ordering
-	GuildID   string       `json:"guild_id,omitempty"`
+	Type      string       `json:"type"`      // Event type (e.g., MESSAGE_CREATE)
+	OriginID  string       `json:"origin_id"` // Originating instance ID
+	Timestamp HLCTimestamp `json:"timestamp"` // HLC timestamp for causal ordering
+	GuildID   string       `json:"guild_id"`
 	ChannelID string       `json:"channel_id,omitempty"`
-	Data      interface{}  `json:"data"`                   // Event payload
+	Data      interface{}  `json:"data"` // Event payload
 }
 
 // InboxRequest is the incoming request body at /federation/v1/inbox.
@@ -80,10 +83,10 @@ type SyncService struct {
 
 	// Per-peer inbox concurrency limiter — prevents a single peer from
 	// monopolizing the DB pool. Lazy-created per sender ID.
-	peerSems           sync.Map     // senderID -> chan struct{}
-	peerInboxLimit     int          // configurable, default 20
+	peerSems           sync.Map      // senderID -> chan struct{}
+	peerInboxLimit     int           // configurable, default 20
 	deliverySem        chan struct{} // global outbound delivery limiter
-	backfillWindowDays int          // configurable, default 7
+	backfillWindowDays int           // configurable, default 7
 
 	// Async timestamp tracking — flushed every 10s by StartTimestampFlusher.
 	touchMu          sync.Mutex
@@ -380,17 +383,9 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If GuildID is empty, try to extract it from the data payload. The HOST
-	// message handler may only set ChannelID; without GuildID, the gateway's
-	// shouldDispatchTo cannot route the event to the correct clients.
-	if msg.GuildID == "" {
-		var dataGuild struct {
-			GuildID string `json:"guild_id"`
-		}
-		if eventData, err := json.Marshal(msg.Data); err == nil {
-			json.Unmarshal(eventData, &dataGuild)
-			msg.GuildID = dataGuild.GuildID
-		}
+	if msg.GuildID == "" && requiresFederationGuildID(msg.Type, msg.ChannelID) {
+		http.Error(w, "Missing guild_id", http.StatusBadRequest)
+		return
 	}
 
 	// Update HLC with remote timestamp.
@@ -410,7 +405,7 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 				slog.String("error", err.Error()),
 			)
 		} else {
-			ss.persistInboundMessage(r.Context(), signed.SenderID, msg.Type, msg.GuildID, msg.ChannelID, eventData)
+			ss.persistInboundMessage(r.Context(), signed.SenderID, msg.Type, msg.GuildID, msg.ChannelID, eventData, msg.Timestamp)
 		}
 	}
 
@@ -473,11 +468,87 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 }
 
+func requiresFederationGuildID(eventType, channelID string) bool {
+	if channelID != "" {
+		return true
+	}
+	return strings.HasPrefix(eventType, "GUILD_") ||
+		strings.HasPrefix(eventType, "CHANNEL_") ||
+		strings.HasPrefix(eventType, "MESSAGE_") ||
+		strings.HasPrefix(eventType, "REACTION_")
+}
+
+type federatedMessagePayload struct {
+	ID                  string                  `json:"id"`
+	AuthorID            string                  `json:"author_id"`
+	Content             *string                 `json:"content"`
+	Nonce               *string                 `json:"nonce"`
+	MessageType         string                  `json:"message_type"`
+	Flags               int                     `json:"flags"`
+	ReplyToIDs          []string                `json:"reply_to_ids"`
+	MentionUserIDs      []string                `json:"mention_user_ids"`
+	MentionRoleIDs      []string                `json:"mention_role_ids"`
+	MentionHere         bool                    `json:"mention_here"`
+	ThreadID            *string                 `json:"thread_id"`
+	MasqueradeName      *string                 `json:"masquerade_name"`
+	MasqueradeAvatar    *string                 `json:"masquerade_avatar"`
+	MasqueradeColor     *string                 `json:"masquerade_color"`
+	Encrypted           bool                    `json:"encrypted"`
+	EncryptionSessionID *string                 `json:"encryption_session_id"`
+	VoiceDurationMs     *int                    `json:"voice_duration_ms"`
+	VoiceWaveform       json.RawMessage         `json:"voice_waveform"`
+	Attachments         []federatedAttachment   `json:"attachments"`
+	Embeds              []federatedEmbed        `json:"embeds"`
+	CreatedAt           *time.Time              `json:"created_at"`
+	Author              *federatedMessageAuthor `json:"author"`
+}
+
+type federatedMessageAuthor struct {
+	ID          string  `json:"id"`
+	Username    string  `json:"username"`
+	DisplayName *string `json:"display_name"`
+	AvatarID    *string `json:"avatar_id"`
+}
+
+type federatedAttachment struct {
+	ID              string   `json:"id"`
+	UploaderID      *string  `json:"uploader_id"`
+	Filename        string   `json:"filename"`
+	ContentType     string   `json:"content_type"`
+	SizeBytes       int64    `json:"size_bytes"`
+	Width           *int     `json:"width"`
+	Height          *int     `json:"height"`
+	DurationSeconds *float64 `json:"duration_seconds"`
+	S3Bucket        string   `json:"s3_bucket"`
+	S3Key           string   `json:"s3_key"`
+	Blurhash        *string  `json:"blurhash"`
+	AltText         *string  `json:"alt_text"`
+	NSFW            bool     `json:"nsfw"`
+	Description     *string  `json:"description"`
+}
+
+type federatedEmbed struct {
+	ID          string  `json:"id"`
+	EmbedType   string  `json:"embed_type"`
+	URL         *string `json:"url"`
+	Title       *string `json:"title"`
+	Description *string `json:"description"`
+	SiteName    *string `json:"site_name"`
+	IconURL     *string `json:"icon_url"`
+	Color       *string `json:"color"`
+	ImageURL    *string `json:"image_url"`
+	ImageWidth  *int    `json:"image_width"`
+	ImageHeight *int    `json:"image_height"`
+	VideoURL    *string `json:"video_url"`
+	SpecialType *string `json:"special_type"`
+	SpecialID   *string `json:"special_id"`
+}
+
 // persistInboundMessage writes inbound federated message events to the local
 // database. Guild channels are now stored in the real channels table with the
 // same IDs as the remote instance, so we check for direct existence first.
 // DM channels still use federation_dm_channel_map for ID mapping.
-func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstanceID, eventType, guildID, remoteChannelID string, data json.RawMessage) {
+func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstanceID, eventType, guildID, remoteChannelID string, data json.RawMessage, ts HLCTimestamp) {
 	channelID := remoteChannelID // Start with the channel ID as-is
 
 	// Check if this channel exists directly (guild channels stored with real IDs).
@@ -514,27 +585,59 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 
 	switch eventType {
 	case "MESSAGE_CREATE":
-		var msgData struct {
-			ID          string          `json:"id"`
-			AuthorID    string          `json:"author_id"`
-			Content     string          `json:"content"`
-			Attachments json.RawMessage `json:"attachments,omitempty"`
-			Embeds      json.RawMessage `json:"embeds,omitempty"`
-			CreatedAt   *time.Time      `json:"created_at,omitempty"`
-		}
+		var msgData federatedMessagePayload
 		if err := json.Unmarshal(data, &msgData); err != nil {
 			ss.logger.Warn("failed to unmarshal inbound message", slog.String("error", err.Error()))
 			return
+		}
+		if msgData.MessageType == "" {
+			msgData.MessageType = models.MessageTypeDefault
+		}
+		if msgData.Author != nil && msgData.Author.ID != "" {
+			ss.ensureRemoteUserStub(ctx, remoteInstanceID, federatedUserInfo{
+				ID:          msgData.Author.ID,
+				Username:    msgData.Author.Username,
+				DisplayName: msgData.Author.DisplayName,
+				AvatarID:    msgData.Author.AvatarID,
+			})
 		}
 		createdAt := time.Now().UTC()
 		if msgData.CreatedAt != nil {
 			createdAt = *msgData.CreatedAt
 		}
-		_, err := ss.fed.pool.Exec(ctx,
-			`INSERT INTO messages (id, channel_id, author_id, content, created_at)
-			 VALUES ($1, $2, $3, $4, $5)
-			 ON CONFLICT (id) DO NOTHING`,
-			msgData.ID, channelID, msgData.AuthorID, msgData.Content, createdAt)
+		tx, err := ss.fed.pool.Begin(ctx)
+		if err != nil {
+			ss.logger.Warn("failed to start inbound message transaction", slog.String("error", err.Error()))
+			return
+		}
+		defer tx.Rollback(ctx)
+		_, err = tx.Exec(ctx,
+			`INSERT INTO messages (id, channel_id, author_id, instance_id, content, nonce, message_type, flags,
+			                       reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
+			                       thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+			                       encrypted, encryption_session_id, voice_duration_ms, voice_waveform, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+			 ON CONFLICT (id) DO UPDATE SET
+			   content = EXCLUDED.content, flags = EXCLUDED.flags,
+			   reply_to_ids = EXCLUDED.reply_to_ids, mention_user_ids = EXCLUDED.mention_user_ids,
+			   mention_role_ids = EXCLUDED.mention_role_ids, mention_here = EXCLUDED.mention_here,
+			   thread_id = EXCLUDED.thread_id, encrypted = EXCLUDED.encrypted,
+			   encryption_session_id = EXCLUDED.encryption_session_id,
+			   voice_duration_ms = EXCLUDED.voice_duration_ms, voice_waveform = EXCLUDED.voice_waveform`,
+			msgData.ID, channelID, msgData.AuthorID, remoteInstanceID, msgData.Content, msgData.Nonce,
+			msgData.MessageType, msgData.Flags, msgData.ReplyToIDs, msgData.MentionUserIDs,
+			msgData.MentionRoleIDs, msgData.MentionHere, msgData.ThreadID, msgData.MasqueradeName,
+			msgData.MasqueradeAvatar, msgData.MasqueradeColor, msgData.Encrypted,
+			msgData.EncryptionSessionID, msgData.VoiceDurationMs, msgData.VoiceWaveform, createdAt)
+		if err == nil {
+			err = ss.upsertFederatedAttachments(ctx, tx, remoteInstanceID, msgData.ID, msgData.Attachments)
+		}
+		if err == nil {
+			err = ss.upsertFederatedEmbeds(ctx, tx, remoteInstanceID, msgData.ID, msgData.Embeds)
+		}
+		if err == nil {
+			err = tx.Commit(ctx)
+		}
 		if err != nil {
 			ss.logger.Warn("failed to persist inbound message",
 				slog.String("message_id", msgData.ID),
@@ -577,7 +680,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 	case "TYPING_START":
 		// No DB persistence needed — just let the event flow through NATS to the gateway.
 
-	case "REACTION_ADD":
+	case "REACTION_ADD", "MESSAGE_REACTION_ADD":
 		var rxData struct {
 			MessageID string `json:"message_id"`
 			UserID    string `json:"user_id"`
@@ -588,15 +691,15 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			return
 		}
 		if _, err := ss.fed.pool.Exec(ctx,
-			`INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
-			 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
-			rxData.MessageID, rxData.UserID, rxData.Emoji); err != nil {
+			`INSERT INTO reactions (message_id, user_id, emoji, instance_id, created_at)
+			 VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING`,
+			rxData.MessageID, rxData.UserID, rxData.Emoji, remoteInstanceID); err != nil {
 			ss.logger.Warn("failed to persist inbound reaction add",
 				slog.String("message_id", rxData.MessageID),
 				slog.String("error", err.Error()))
 		}
 
-	case "REACTION_REMOVE":
+	case "REACTION_REMOVE", "MESSAGE_REACTION_REMOVE":
 		var rxData struct {
 			MessageID string `json:"message_id"`
 			UserID    string `json:"user_id"`
@@ -607,7 +710,7 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 			return
 		}
 		if _, err := ss.fed.pool.Exec(ctx,
-			`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+			`DELETE FROM reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
 			rxData.MessageID, rxData.UserID, rxData.Emoji); err != nil {
 			ss.logger.Warn("failed to persist inbound reaction remove",
 				slog.String("message_id", rxData.MessageID),
@@ -619,24 +722,100 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 		// No local persistence needed since pin state is managed by the remote instance.
 	}
 
-	// Store inbound event in federation_events for backfill support.
-	// Use the event's created_at timestamp for HLC if available, otherwise fall back to now.
-	hlcWallMs := time.Now().UnixMilli()
-	var tsExtract struct {
-		CreatedAt *time.Time `json:"created_at"`
+	if ts.WallMs == 0 {
+		ts = HLCTimestamp{WallMs: time.Now().UnixMilli()}
 	}
-	if json.Unmarshal(data, &tsExtract) == nil && tsExtract.CreatedAt != nil {
-		hlcWallMs = tsExtract.CreatedAt.UnixMilli()
+	ss.storeFederationEvent(ctx, remoteInstanceID, eventType, guildID, channelID, ts, data)
+}
+
+func (ss *SyncService) upsertFederatedAttachments(ctx context.Context, tx pgx.Tx, remoteInstanceID, messageID string, attachments []federatedAttachment) error {
+	for _, att := range attachments {
+		if att.ID == "" || att.Filename == "" || att.ContentType == "" || att.S3Bucket == "" || att.S3Key == "" {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO attachments (id, message_id, uploader_id, filename, content_type, size_bytes,
+			                         width, height, duration_seconds, s3_bucket, s3_key, blurhash,
+			                         alt_text, nsfw, description, instance_id, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+			 ON CONFLICT (id) DO UPDATE SET
+			   message_id = EXCLUDED.message_id, filename = EXCLUDED.filename,
+			   content_type = EXCLUDED.content_type, size_bytes = EXCLUDED.size_bytes,
+			   width = EXCLUDED.width, height = EXCLUDED.height,
+			   duration_seconds = EXCLUDED.duration_seconds, s3_bucket = EXCLUDED.s3_bucket,
+			   s3_key = EXCLUDED.s3_key, blurhash = EXCLUDED.blurhash,
+			   alt_text = EXCLUDED.alt_text, nsfw = EXCLUDED.nsfw,
+			   description = EXCLUDED.description, instance_id = EXCLUDED.instance_id`,
+			att.ID, messageID, att.UploaderID, att.Filename, att.ContentType, att.SizeBytes,
+			att.Width, att.Height, att.DurationSeconds, att.S3Bucket, att.S3Key, att.Blurhash,
+			att.AltText, att.NSFW, att.Description, remoteInstanceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ss *SyncService) upsertFederatedEmbeds(ctx context.Context, tx pgx.Tx, remoteInstanceID, messageID string, embeds []federatedEmbed) error {
+	for i, embed := range embeds {
+		if embed.ID == "" {
+			embed.ID = stableFederatedEmbedID(messageID, i, embed)
+		}
+		if embed.EmbedType == "" {
+			embed.EmbedType = "rich"
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO embeds (id, message_id, embed_type, url, title, description,
+			                    site_name, icon_url, color, image_url, image_width, image_height,
+			                    video_url, special_type, special_id, instance_id, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+			 ON CONFLICT (id) DO UPDATE SET
+			   message_id = EXCLUDED.message_id, embed_type = EXCLUDED.embed_type,
+			   url = EXCLUDED.url, title = EXCLUDED.title, description = EXCLUDED.description,
+			   site_name = EXCLUDED.site_name, icon_url = EXCLUDED.icon_url,
+			   color = EXCLUDED.color, image_url = EXCLUDED.image_url,
+			   image_width = EXCLUDED.image_width, image_height = EXCLUDED.image_height,
+			   video_url = EXCLUDED.video_url, special_type = EXCLUDED.special_type,
+			   special_id = EXCLUDED.special_id, instance_id = EXCLUDED.instance_id`,
+			embed.ID, messageID, embed.EmbedType, embed.URL, embed.Title, embed.Description,
+			embed.SiteName, embed.IconURL, embed.Color, embed.ImageURL, embed.ImageWidth,
+			embed.ImageHeight, embed.VideoURL, embed.SpecialType, embed.SpecialID, remoteInstanceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ss *SyncService) storeFederationEvent(ctx context.Context, instanceID, eventType, guildID, channelID string, ts HLCTimestamp, payload json.RawMessage) {
+	if guildID == "" {
+		return
+	}
+	if ts.WallMs == 0 {
+		ts = HLCTimestamp{WallMs: time.Now().UnixMilli()}
 	}
 	if _, err := ss.fed.pool.Exec(ctx,
 		`INSERT INTO federation_events (id, instance_id, event_type, guild_id, channel_id, hlc_wall_ms, hlc_counter, payload)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 ON CONFLICT (id) DO NOTHING`,
-		models.NewULID().String(), remoteInstanceID, eventType, guildID, channelID,
-		hlcWallMs, 0, data); err != nil {
+		stableFederationEventID(instanceID, eventType, guildID, channelID, ts, payload), instanceID, eventType, guildID, channelID,
+		ts.WallMs, ts.Counter, payload); err != nil {
 		ss.logger.Warn("failed to store federation event for backfill",
-			slog.String("event_type", eventType), slog.String("instance_id", remoteInstanceID), slog.String("error", err.Error()))
+			slog.String("event_type", eventType),
+			slog.String("instance_id", instanceID),
+			slog.String("error", err.Error()))
 	}
+}
+
+func stableFederationEventID(instanceID, eventType, guildID, channelID string, ts HLCTimestamp, payload json.RawMessage) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00", instanceID, eventType, guildID, channelID, ts.WallMs, ts.Counter)
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func stableFederatedEmbedID(messageID string, index int, embed federatedEmbed) string {
+	normalized, _ := json.Marshal(embed)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", messageID, index, normalized)))
+	return hex.EncodeToString(sum[:])
 }
 
 // persistInboundPresence updates the local user stub's presence when a
@@ -1077,6 +1256,10 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 			guildID = *nullableGuildID
 		}
 	}
+	if guildID == "" && event.ChannelID != "" {
+		ss.routeDMEvent(ctx, event)
+		return
+	}
 
 	// Only the home instance should forward guild events to peers. If this
 	// guild is owned by a different instance, the event originated from a
@@ -1152,11 +1335,19 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 		}
 	}
 
+	ts := ss.hlc.Now()
 	msg := FederatedMessage{
 		Type:      event.Type,
+		OriginID:  ss.fed.instanceID,
+		Timestamp: ts,
 		GuildID:   guildID,
 		ChannelID: event.ChannelID,
 		Data:      data,
+	}
+	if guildID != "" {
+		if payload, err := json.Marshal(data); err == nil {
+			ss.storeFederationEvent(ctx, ss.fed.instanceID, event.Type, guildID, event.ChannelID, ts, payload)
+		}
 	}
 
 	if event.ChannelID != "" {
@@ -1164,6 +1355,203 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	} else {
 		ss.DeliverToAllPeers(ctx, msg)
 	}
+}
+
+func (ss *SyncService) routeDMEvent(ctx context.Context, event events.Event) {
+	if event.Type != "MESSAGE_CREATE" {
+		ss.logger.Debug("skipping unsupported federated DM event",
+			slog.String("type", event.Type),
+			slog.String("channel_id", event.ChannelID))
+		return
+	}
+
+	var msg models.Message
+	if err := json.Unmarshal(event.Data, &msg); err != nil {
+		ss.logger.Warn("failed to unmarshal DM message event for federation",
+			slog.String("channel_id", event.ChannelID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	rows, err := ss.fed.pool.Query(ctx,
+		`SELECT fdm.remote_channel_id, fp.peer_id, i.domain
+		 FROM federation_dm_channel_map fdm
+		 JOIN federation_peers fp
+		   ON fp.peer_id = fdm.remote_instance_id
+		  AND fp.instance_id = $1
+		  AND fp.status = 'active'
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fdm.local_channel_id = $2`,
+		ss.fed.instanceID, event.ChannelID)
+	if err != nil {
+		ss.logger.Error("failed to query federated DM peers",
+			slog.String("channel_id", event.ChannelID),
+			slog.String("error", err.Error()))
+		return
+	}
+	defer rows.Close()
+
+	type dmPeerTarget struct {
+		remoteChannelID string
+		peerID          string
+		domain          string
+	}
+	var peers []dmPeerTarget
+	for rows.Next() {
+		var p dmPeerTarget
+		if err := rows.Scan(&p.remoteChannelID, &p.peerID, &p.domain); err == nil {
+			peers = append(peers, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		ss.logger.Error("failed to iterate federated DM peers", slog.String("error", err.Error()))
+		return
+	}
+
+	for _, peer := range peers {
+		p := peer
+		go func() {
+			ss.deliverySem <- struct{}{}
+			defer func() { <-ss.deliverySem }()
+			ss.deliverDMMessageToPeer(ctx, p.domain, p.peerID, p.remoteChannelID, msg)
+		}()
+	}
+}
+
+func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
+	content := ""
+	if msg.Content != nil {
+		content = *msg.Content
+	}
+	req := federatedDMMessageRequest{
+		RemoteChannelID: remoteChannelID,
+		Message: federatedMessageData{
+			ID:                  msg.ID,
+			AuthorID:            msg.AuthorID,
+			Content:             content,
+			Nonce:               msg.Nonce,
+			MessageType:         msg.MessageType,
+			Flags:               msg.Flags,
+			ReplyToIDs:          msg.ReplyToIDs,
+			MentionUserIDs:      msg.MentionUserIDs,
+			MentionRoleIDs:      msg.MentionRoleIDs,
+			MentionHere:         msg.MentionHere,
+			ThreadID:            msg.ThreadID,
+			MasqueradeName:      msg.MasqueradeName,
+			MasqueradeAvatar:    msg.MasqueradeAvatar,
+			MasqueradeColor:     msg.MasqueradeColor,
+			Encrypted:           msg.Encrypted,
+			EncryptionSessionID: msg.EncryptionSessionID,
+			VoiceDurationMs:     msg.VoiceDurationMs,
+			VoiceWaveform:       msg.VoiceWaveform,
+			Attachments:         federationAttachmentsFromModels(msg.Attachments),
+			Embeds:              federationEmbedsFromModels(msg.Embeds),
+			CreatedAt:           msg.CreatedAt,
+		},
+	}
+	signed, err := ss.fed.Sign(req)
+	if err != nil {
+		ss.logger.Error("failed to sign federated DM message",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+	body, err := json.Marshal(signed)
+	if err != nil {
+		ss.logger.Error("failed to marshal federated DM message",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	url := fmt.Sprintf("https://%s/federation/v1/dm/message", domain)
+	reqHTTP, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		ss.logger.Error("failed to create federated DM request",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+	reqHTTP.Header.Set("Content-Type", "application/json")
+	reqHTTP.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
+
+	resp, err := ss.client.Do(reqHTTP)
+	if err != nil {
+		ss.logger.Error("failed to deliver federated DM message",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		ss.logger.Warn("federated DM message rejected",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.String("body", string(respBody)))
+	}
+}
+
+func federationAttachmentsFromModels(attachments []models.Attachment) []federatedAttachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]federatedAttachment, 0, len(attachments))
+	for _, att := range attachments {
+		var duration *float64
+		if att.DurationSeconds != nil {
+			v := float64(*att.DurationSeconds)
+			duration = &v
+		}
+		out = append(out, federatedAttachment{
+			ID:              att.ID,
+			UploaderID:      att.UploaderID,
+			Filename:        att.Filename,
+			ContentType:     att.ContentType,
+			SizeBytes:       att.SizeBytes,
+			Width:           att.Width,
+			Height:          att.Height,
+			DurationSeconds: duration,
+			S3Bucket:        att.S3Bucket,
+			S3Key:           att.S3Key,
+			Blurhash:        att.Blurhash,
+			AltText:         att.AltText,
+			NSFW:            att.NSFW,
+			Description:     att.Description,
+		})
+	}
+	return out
+}
+
+func federationEmbedsFromModels(embeds []models.Embed) []federatedEmbed {
+	if len(embeds) == 0 {
+		return nil
+	}
+	out := make([]federatedEmbed, 0, len(embeds))
+	for _, embed := range embeds {
+		out = append(out, federatedEmbed{
+			ID:          embed.ID,
+			EmbedType:   embed.EmbedType,
+			URL:         embed.URL,
+			Title:       embed.Title,
+			Description: embed.Description,
+			SiteName:    embed.SiteName,
+			IconURL:     embed.IconURL,
+			Color:       embed.Color,
+			ImageURL:    embed.ImageURL,
+			ImageWidth:  embed.ImageWidth,
+			ImageHeight: embed.ImageHeight,
+			VideoURL:    embed.VideoURL,
+			SpecialType: embed.SpecialType,
+			SpecialID:   embed.SpecialID,
+		})
+	}
+	return out
 }
 
 // ProcessRetryQueue is a no-op — retry processing is handled by the JetStream
@@ -1190,23 +1578,23 @@ func federationToGatewayType(fedType string) string {
 // received federated events into the local event bus.
 func eventTypeToSubject(eventType string) string {
 	mapping := map[string]string{
-		"MESSAGE_CREATE":       events.SubjectMessageCreate,
-		"MESSAGE_UPDATE":       events.SubjectMessageUpdate,
-		"MESSAGE_DELETE":       events.SubjectMessageDelete,
-		"REACTION_ADD":         events.SubjectMessageReactionAdd,
-		"REACTION_REMOVE":      events.SubjectMessageReactionDel,
-		"GUILD_CREATE":         events.SubjectGuildCreate,
-		"GUILD_UPDATE":         events.SubjectGuildUpdate,
-		"GUILD_MEMBER_ADD":     events.SubjectGuildMemberAdd,
-		"GUILD_MEMBER_REMOVE":  events.SubjectGuildMemberRemove,
-		"CHANNEL_CREATE":       events.SubjectChannelCreate,
-		"CHANNEL_UPDATE":       events.SubjectChannelUpdate,
-		"CHANNEL_DELETE":       events.SubjectChannelDelete,
-		"CHANNEL_PINS_UPDATE":  events.SubjectChannelPinsUpdate,
-		"TYPING_START":         events.SubjectTypingStart,
-		"VOICE_STATE_UPDATE":   events.SubjectVoiceStateUpdate,
-		"CALL_RING":            events.SubjectCallRing,
-		"PRESENCE_UPDATE":      events.SubjectPresenceUpdate,
+		"MESSAGE_CREATE":      events.SubjectMessageCreate,
+		"MESSAGE_UPDATE":      events.SubjectMessageUpdate,
+		"MESSAGE_DELETE":      events.SubjectMessageDelete,
+		"REACTION_ADD":        events.SubjectMessageReactionAdd,
+		"REACTION_REMOVE":     events.SubjectMessageReactionDel,
+		"GUILD_CREATE":        events.SubjectGuildCreate,
+		"GUILD_UPDATE":        events.SubjectGuildUpdate,
+		"GUILD_MEMBER_ADD":    events.SubjectGuildMemberAdd,
+		"GUILD_MEMBER_REMOVE": events.SubjectGuildMemberRemove,
+		"CHANNEL_CREATE":      events.SubjectChannelCreate,
+		"CHANNEL_UPDATE":      events.SubjectChannelUpdate,
+		"CHANNEL_DELETE":      events.SubjectChannelDelete,
+		"CHANNEL_PINS_UPDATE": events.SubjectChannelPinsUpdate,
+		"TYPING_START":        events.SubjectTypingStart,
+		"VOICE_STATE_UPDATE":  events.SubjectVoiceStateUpdate,
+		"CALL_RING":           events.SubjectCallRing,
+		"PRESENCE_UPDATE":     events.SubjectPresenceUpdate,
 	}
 	return mapping[eventType]
 }
@@ -1219,7 +1607,7 @@ func RetryDelay(attempt int) time.Duration {
 // syncRequest is the payload sent by a peer requesting event backfill after reconnection.
 type syncRequest struct {
 	LastSeenHLC HLCTimestamp `json:"last_seen_hlc"`
-	GuildIDs    []string    `json:"guild_ids"`
+	GuildIDs    []string     `json:"guild_ids"`
 }
 
 // syncEvent is a single event in a sync response.
@@ -1531,7 +1919,7 @@ func (ss *SyncService) RequestBackfill(ctx context.Context, peerID string) error
 
 	for _, evt := range syncResp.Events {
 		if evt.ChannelID != "" {
-			ss.persistInboundMessage(ctx, peerID, evt.Type, evt.GuildID, evt.ChannelID, evt.Payload)
+			ss.persistInboundMessage(ctx, peerID, evt.Type, evt.GuildID, evt.ChannelID, evt.Payload, evt.HLC)
 		}
 		// Route guild-level events (GUILD_UPDATE, CHANNEL_CREATE, CHANNEL_DELETE,
 		// GUILD_DELETE, GUILD_MEMBER_ADD, GUILD_MEMBER_REMOVE) through the same
@@ -1555,4 +1943,3 @@ func (ss *SyncService) RequestBackfill(ctx context.Context, peerID string) error
 
 	return nil
 }
-

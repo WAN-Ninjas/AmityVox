@@ -1,21 +1,13 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type ChannelWidget } from '$lib/api/client';
+	import {
+		channelWidgetsByChannel,
+		loadChannelWidgets,
+		upsertChannelWidget,
+		removeChannelWidget as removeStoredChannelWidget
+	} from '$lib/stores/channelWidgets';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
-
-	interface ChannelWidget {
-		id: string;
-		channel_id: string;
-		guild_id: string;
-		widget_type: string;
-		title: string;
-		config: Record<string, unknown>;
-		creator_id: string;
-		position: number;
-		active: boolean;
-		created_at: string;
-		updated_at: string;
-	}
 
 	interface Props {
 		channelId: string;
@@ -24,12 +16,12 @@
 
 	let { channelId, guildId }: Props = $props();
 
-	let widgets = $state<ChannelWidget[]>([]);
 	let loadOp = $state(createAsyncOp());
 	let showAddForm = $state(false);
 	let newTitle = $state('');
 	let newType = $state('notes');
 	let createOp = $state(createAsyncOp());
+	const widgets = $derived($channelWidgetsByChannel.get(channelId) ?? []);
 
 	const widgetTypeLabels: Record<string, string> = {
 		notes: 'Collaborative Notes',
@@ -51,11 +43,9 @@
 	});
 
 	async function loadWidgets(chId: string) {
-		const result = await loadOp.run(() => api.getChannelWidgets(chId));
+		await loadOp.run(() => loadChannelWidgets(chId));
 		if (!loadOp.error) {
-			widgets = result!;
-		} else {
-			widgets = [];
+			return;
 		}
 	}
 
@@ -73,7 +63,7 @@
 			msg => addToast(msg, 'error')
 		);
 		if (!createOp.error) {
-			widgets = [...widgets, widget!];
+			upsertChannelWidget(widget!);
 			showAddForm = false;
 			newTitle = '';
 			addToast('Widget added', 'success');
@@ -83,7 +73,7 @@
 	async function removeWidget(widgetId: string) {
 		try {
 			await api.deleteChannelWidget(channelId, widgetId);
-			widgets = widgets.filter((w) => w.id !== widgetId);
+			removeStoredChannelWidget(channelId, widgetId);
 			addToast('Widget removed', 'success');
 		} catch (err: any) {
 			addToast(err.message || 'Failed to remove widget', 'error');
@@ -92,12 +82,10 @@
 
 	async function toggleWidget(widget: ChannelWidget) {
 		try {
-			await api.updateChannelWidget(channelId, widget.id, {
+			const updated = await api.updateChannelWidget(channelId, widget.id, {
 				active: !widget.active
 			});
-			widgets = widgets.map((w) =>
-				w.id === widget.id ? { ...w, active: !w.active } : w
-			);
+			upsertChannelWidget(updated);
 		} catch (err: any) {
 			addToast(err.message || 'Failed to toggle widget', 'error');
 		}
@@ -118,20 +106,21 @@
 	{#if showAddForm}
 		<div class="rounded-lg border border-bg-modifier bg-bg-secondary p-4">
 			<div class="mb-3">
-				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="new-widget-type">
 					Widget Type
 				</label>
-				<select class="input w-full" bind:value={newType}>
+				<select id="new-widget-type" class="input w-full" bind:value={newType}>
 					{#each Object.entries(widgetTypeLabels) as [value, label]}
 						<option {value}>{label}</option>
 					{/each}
 				</select>
 			</div>
 			<div class="mb-3">
-				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="new-widget-title">
 					Title
 				</label>
 				<input
+					id="new-widget-title"
 					type="text"
 					class="input w-full"
 					bind:value={newTitle}

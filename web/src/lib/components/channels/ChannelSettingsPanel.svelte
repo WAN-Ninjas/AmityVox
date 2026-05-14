@@ -296,30 +296,33 @@
 
 			<!-- Add new tag -->
 			<div class="flex items-end gap-2">
-				<div class="flex-1">
-					<label class="mb-1 block text-xs text-text-muted">Name</label>
-					<input
-						bind:value={newTagName}
+					<div class="flex-1">
+						<label class="mb-1 block text-xs text-text-muted" for="new-forum-tag-name">Name</label>
+						<input
+							id="new-forum-tag-name"
+							bind:value={newTagName}
 						type="text"
 						placeholder="Tag name"
 						class="input w-full text-sm"
 						maxlength="30"
 					/>
 				</div>
-				<div class="w-16">
-					<label class="mb-1 block text-xs text-text-muted">Emoji</label>
-					<input
-						bind:value={newTagEmoji}
+					<div class="w-16">
+						<label class="mb-1 block text-xs text-text-muted" for="new-forum-tag-emoji">Emoji</label>
+						<input
+							id="new-forum-tag-emoji"
+							bind:value={newTagEmoji}
 						type="text"
 						placeholder="🔖"
 						class="input w-full text-center text-sm"
 						maxlength="4"
 					/>
 				</div>
-				<div class="w-12">
-					<label class="mb-1 block text-xs text-text-muted">Color</label>
-					<input
-						bind:value={newTagColor}
+					<div class="w-12">
+						<label class="mb-1 block text-xs text-text-muted" for="new-forum-tag-color">Color</label>
+						<input
+							id="new-forum-tag-color"
+							bind:value={newTagColor}
 						type="color"
 						class="h-[34px] w-full cursor-pointer rounded border border-bg-modifier bg-bg-tertiary"
 					/>
@@ -403,30 +406,33 @@
 
 			<!-- Add new tag -->
 			<div class="flex items-end gap-2">
-				<div class="flex-1">
-					<label class="mb-1 block text-xs text-text-muted">Name</label>
-					<input
-						bind:value={newGalleryTagName}
+					<div class="flex-1">
+						<label class="mb-1 block text-xs text-text-muted" for="new-gallery-tag-name">Name</label>
+						<input
+							id="new-gallery-tag-name"
+							bind:value={newGalleryTagName}
 						type="text"
 						placeholder="Tag name"
 						class="input w-full text-sm"
 						maxlength="30"
 					/>
 				</div>
-				<div class="w-16">
-					<label class="mb-1 block text-xs text-text-muted">Emoji</label>
-					<input
-						bind:value={newGalleryTagEmoji}
+					<div class="w-16">
+						<label class="mb-1 block text-xs text-text-muted" for="new-gallery-tag-emoji">Emoji</label>
+						<input
+							id="new-gallery-tag-emoji"
+							bind:value={newGalleryTagEmoji}
 						type="text"
 						placeholder="🔖"
 						class="input w-full text-center text-sm"
 						maxlength="4"
 					/>
 				</div>
-				<div class="w-12">
-					<label class="mb-1 block text-xs text-text-muted">Color</label>
-					<input
-						bind:value={newGalleryTagColor}
+					<div class="w-12">
+						<label class="mb-1 block text-xs text-text-muted" for="new-gallery-tag-color">Color</label>
+						<input
+							id="new-gallery-tag-color"
+							bind:value={newGalleryTagColor}
 						type="color"
 						class="h-[34px] w-full cursor-pointer rounded border border-bg-modifier bg-bg-tertiary"
 					/>

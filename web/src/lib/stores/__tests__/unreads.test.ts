@@ -25,6 +25,7 @@ import {
 	mentionCounts,
 	getLastReadId,
 	incrementUnread,
+	incrementMention,
 	clearChannelUnreads,
 	totalUnreads
 } from '../unreads';
@@ -80,6 +81,14 @@ describe('unreads store', () => {
 		expect(get(getMentionCount('ch-1'))).toBe(2);
 		expect(get(getMentionCount('ch-2'))).toBe(1);
 		expect(get(getMentionCount('ch-unknown'))).toBe(0);
+	});
+
+	it('increments mention count without incrementing unread count', () => {
+		incrementUnread('ch-1');
+		incrementMention('ch-1');
+
+		expect(get(getUnreadCount('ch-1'))).toBe(1);
+		expect(get(getMentionCount('ch-1'))).toBe(1);
 	});
 
 	it('exposes mentionCounts derived store as a Map', () => {

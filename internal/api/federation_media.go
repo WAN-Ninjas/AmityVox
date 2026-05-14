@@ -67,6 +67,10 @@ func (s *Server) handleFederationMediaProxy(w http.ResponseWriter, r *http.Reque
 		WriteError(w, http.StatusBadRequest, "invalid_instance_id", "instanceId must not contain path traversal characters")
 		return
 	}
+	if instanceID == s.InstanceID {
+		http.Redirect(w, r, "/api/v1/files/"+fileID, http.StatusTemporaryRedirect)
+		return
+	}
 
 	isRangeRequest := r.Header.Get("Range") != ""
 	cacheKey := fmt.Sprintf("fed:media:%s:%s", instanceID, fileID)

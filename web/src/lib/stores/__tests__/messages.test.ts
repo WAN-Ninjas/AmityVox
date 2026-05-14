@@ -1,11 +1,23 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { get } from 'svelte/store';
+
+vi.mock('$lib/api/client', () => ({
+	api: {
+		getMessages: vi.fn()
+	}
+}));
+
 import {
 	messagesByChannel,
 	appendMessage,
+	applyReactionEvent,
+	backfillLoadedChannels,
 	clearChannelMessages,
-	getChannelMessages
+	getChannelMessages,
+	loadMessages,
+	updateMessage
 } from '../messages';
+import { api } from '$lib/api/client';
 import type { Message } from '$lib/types';
 
 function createMockMessage(overrides?: Partial<Message>): Message {
@@ -27,6 +39,7 @@ function createMockMessage(overrides?: Partial<Message>): Message {
 		masquerade_avatar: null,
 		masquerade_color: null,
 		encrypted: false,
+		encryption_session_id: null,
 		attachments: [],
 		embeds: [],
 		reactions: [],
@@ -39,6 +52,7 @@ function createMockMessage(overrides?: Partial<Message>): Message {
 describe('messages store', () => {
 	beforeEach(() => {
 		messagesByChannel.set(new Map());
+		vi.mocked(api.getMessages).mockReset();
 	});
 
 	it('starts with empty map', () => {
@@ -78,6 +92,117 @@ describe('messages store', () => {
 		expect(map.get('ch-1')).toHaveLength(1);
 	});
 
+	it('appendMessage replaces a matching nonce to reduce sender duplicates', () => {
+		const pending = createMockMessage({ id: 'pending-1', nonce: 'nonce-1', content: 'Sending' });
+		const confirmed = createMockMessage({ id: 'msg-1', nonce: 'nonce-1', content: 'Sent' });
+
+		appendMessage(pending);
+		appendMessage(confirmed);
+
+		const channelMsgs = get(messagesByChannel).get('ch-1');
+		expect(channelMsgs).toHaveLength(1);
+		expect(channelMsgs![0].id).toBe('msg-1');
+		expect(channelMsgs![0].content).toBe('Sent');
+	});
+
+	it('updateMessage merges partial patches into existing messages', () => {
+		const msg = createMockMessage({
+			id: 'msg-1',
+			content: 'Original',
+			reactions: [{ emoji: '👍', count: 1, me: false }]
+		});
+		appendMessage(msg);
+
+		updateMessage({
+			id: 'msg-1',
+			channel_id: 'ch-1',
+			embeds: [
+				{
+					type: 'link',
+					url: null,
+					title: 'Example',
+					description: null,
+					color: null,
+					thumbnail_url: null,
+					thumbnail_width: null,
+					thumbnail_height: null,
+					image_url: null,
+					image_width: null,
+					image_height: null,
+					video_url: null,
+					author_name: null,
+					author_url: null,
+					provider_name: null,
+					provider_url: null
+				}
+			]
+		});
+
+		const updated = get(messagesByChannel).get('ch-1')![0];
+		expect(updated.content).toBe('Original');
+		expect(updated.reactions).toEqual([{ emoji: '👍', count: 1, me: false }]);
+		expect(updated.embeds[0].title).toBe('Example');
+	});
+
+	it('applyReactionEvent patches sparse add events', () => {
+		appendMessage(createMockMessage({ id: 'msg-1' }));
+
+		applyReactionEvent(
+			{ channel_id: 'ch-1', message_id: 'msg-1', user_id: 'self', emoji: '🔥' },
+			'add',
+			'self'
+		);
+
+		expect(get(messagesByChannel).get('ch-1')![0].reactions).toEqual([
+			{ emoji: '🔥', count: 1, me: true }
+		]);
+	});
+
+	it('applyReactionEvent patches sparse remove events without channel_id', () => {
+		appendMessage(
+			createMockMessage({
+				id: 'msg-1',
+				reactions: [{ emoji: '🔥', count: 2, me: true }]
+			})
+		);
+
+		applyReactionEvent({ message_id: 'msg-1', user_id: 'self', emoji: '🔥' }, 'remove', 'self');
+
+		expect(get(messagesByChannel).get('ch-1')![0].reactions).toEqual([
+			{ emoji: '🔥', count: 1, me: false }
+		]);
+	});
+
+	it('applyReactionEvent ignores duplicate sparse self events', () => {
+		appendMessage(
+			createMockMessage({
+				id: 'msg-1',
+				reactions: [{ emoji: '🔥', count: 1, me: true }]
+			})
+		);
+
+		applyReactionEvent(
+			{ channel_id: 'ch-1', message_id: 'msg-1', user_id: 'self', emoji: '🔥' },
+			'add',
+			'self'
+		);
+		expect(get(messagesByChannel).get('ch-1')![0].reactions).toEqual([
+			{ emoji: '🔥', count: 1, me: true }
+		]);
+
+		applyReactionEvent(
+			{ channel_id: 'ch-1', message_id: 'msg-1', user_id: 'self', emoji: '🔥' },
+			'remove',
+			'self'
+		);
+		applyReactionEvent(
+			{ channel_id: 'ch-1', message_id: 'msg-1', user_id: 'self', emoji: '🔥' },
+			'remove',
+			'self'
+		);
+		expect(get(messagesByChannel).get('ch-1')![0].reactions).toEqual([]);
+	});
+
 	it('clearChannelMessages clears messages for a channel', () => {
 		const msg1 = createMockMessage({ channel_id: 'ch-1' });
 		const msg2 = createMockMessage({ channel_id: 'ch-2' });
@@ -113,5 +238,40 @@ describe('messages store', () => {
 	it('getChannelMessages returns empty array for unknown channel', () => {
 		const store = getChannelMessages('nonexistent');
 		expect(get(store)).toEqual([]);
+	});
+
+	it('loadMessages ignores stale initial responses for the same channel', async () => {
+		let resolveFirst: (messages: Message[]) => void = () => {};
+		let resolveSecond: (messages: Message[]) => void = () => {};
+		vi.mocked(api.getMessages)
+			.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }))
+			.mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve; }));
+
+		const firstLoad = loadMessages('ch-1');
+		const secondLoad = loadMessages('ch-1');
+
+		resolveSecond([createMockMessage({ id: 'newer', channel_id: 'ch-1' })]);
+		await secondLoad;
+
+		resolveFirst([createMockMessage({ id: 'older', channel_id: 'ch-1' })]);
+		await firstLoad;
+
+		const channelMessages = get(messagesByChannel).get('ch-1') ?? [];
+		expect(channelMessages.map((message) => message.id)).toEqual(['newer']);
+	});
+
+	it('backfillLoadedChannels loads messages after each loaded channel latest id', async () => {
+		appendMessage(createMockMessage({ id: 'msg-1', channel_id: 'ch-1' }));
+		appendMessage(createMockMessage({ id: 'msg-2', channel_id: 'ch-2' }));
+		vi.mocked(api.getMessages)
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1' })])
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-4', channel_id: 'ch-2' })]);
+
+		await backfillLoadedChannels();
+
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-1', limit: 100 });
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-2', { after: 'msg-2', limit: 100 });
+		expect(get(messagesByChannel).get('ch-1')?.map((message) => message.id)).toEqual(['msg-1', 'msg-3']);
+		expect(get(messagesByChannel).get('ch-2')?.map((message) => message.id)).toEqual(['msg-2', 'msg-4']);
 	});
 });

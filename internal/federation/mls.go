@@ -75,8 +75,8 @@ type mlsCommitResponse struct {
 // --- Helper ---
 
 // verifyChannelInLocalGuild verifies that a channel belongs to a guild and that
-// the guild is local (instance_id IS NULL). Returns an error if the channel is
-// not found, does not belong to the guild, or the guild is federated.
+// the guild is owned by this instance. Older rows may still have a NULL
+// instance_id, but current local guild rows use the local instance ID.
 func (ss *SyncService) verifyChannelInLocalGuild(ctx context.Context, guildID, channelID string) error {
 	var instanceID *string
 	err := ss.fed.pool.QueryRow(ctx,
@@ -90,7 +90,7 @@ func (ss *SyncService) verifyChannelInLocalGuild(ctx context.Context, guildID, c
 	if err != nil {
 		return fmt.Errorf("verifying channel ownership: %w", err)
 	}
-	if instanceID != nil {
+	if instanceID != nil && *instanceID != ss.fed.instanceID {
 		return fmt.Errorf("guild %s is not local to this instance", guildID)
 	}
 	return nil
@@ -293,8 +293,8 @@ func (ss *SyncService) HandleMLSSendWelcome(w http.ResponseWriter, r *http.Reque
 		writeMLSError(w, http.StatusInternalServerError, "internal_error", "Failed to verify receiver")
 		return
 	}
-	// Receiver must be a local user (instance_id IS NULL).
-	if receiverInstanceID != nil {
+	// Receiver must be a local user owned by this instance.
+	if receiverInstanceID != nil && *receiverInstanceID != ss.fed.instanceID {
 		writeMLSError(w, http.StatusBadRequest, "not_local_user", "Receiver is not a local user on this instance")
 		return
 	}

@@ -22,7 +22,13 @@ export function isGuildFederated(guild: Guild, localInstanceId: string): boolean
 
 export async function loadGuilds() {
 	const list = await api.getMyGuilds();
-	guilds.setAll(list.map(g => [g.id, g]));
+	guilds.update((map) => {
+		const next = new Map(map);
+		for (const guild of list) {
+			next.set(guild.id, guild);
+		}
+		return next;
+	});
 }
 
 export function setGuild(id: string | null) {

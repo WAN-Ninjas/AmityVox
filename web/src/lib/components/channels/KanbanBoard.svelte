@@ -60,7 +60,7 @@
 	let createCardOp = $state(createAsyncOp());
 
 	// Create mode.
-	let showCreateForm = $state(!boardId);
+	let showCreateForm = $state(false);
 	let boardName = $state('Project Board');
 	let boardDescription = $state('');
 
@@ -204,6 +204,7 @@
 	}
 
 	$effect(() => {
+		if (!boardId) showCreateForm = true;
 		if (boardId && !showCreateForm) {
 			loadBoard();
 		}

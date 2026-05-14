@@ -20,7 +20,7 @@
 		created_at: string;
 		author?: { username: string; display_name?: string | null; avatar_id?: string | null };
 	} | null>(null);
-	let quotedChannel = $state<{ id: string; name: string; guild_id?: string | null } | null>(null);
+	let quotedChannel = $state<{ id: string; name: string | null; guild_id?: string | null } | null>(null);
 
 	$effect(() => {
 		loadQuote();

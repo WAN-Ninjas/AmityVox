@@ -141,7 +141,7 @@ describe('guilds store', () => {
 		expect(get(currentGuild)).toBeNull();
 	});
 
-	it('loadGuilds replaces all guilds from the API', async () => {
+	it('loadGuilds merges guilds from the API without dropping existing entries', async () => {
 		// Pre-populate with an existing guild.
 		const existing = createMockGuild({ id: 'guild-old', name: 'Old Guild' });
 		updateGuild(existing);
@@ -156,8 +156,8 @@ describe('guilds store', () => {
 		await loadGuilds();
 
 		const map = get(guilds);
-		expect(map.size).toBe(2);
-		expect(map.has('guild-old')).toBe(false);
+		expect(map.size).toBe(3);
+		expect(map.has('guild-old')).toBe(true);
 		expect(map.has('guild-new-1')).toBe(true);
 		expect(map.has('guild-new-2')).toBe(true);
 		expect(map.get('guild-new-1')?.name).toBe('New Alpha');

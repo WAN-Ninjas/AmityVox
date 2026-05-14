@@ -1,7 +1,6 @@
 <!-- CameraSettings.svelte — Resolution, frame rate, and facing mode settings for camera. -->
 <script lang="ts">
 	import { selfCamera, getRoom } from '$lib/stores/voice';
-	import { VideoPresets } from 'livekit-client';
 	import { api } from '$lib/api/client';
 
 	let resolution = $state<'360p' | '720p' | '1080p'>('720p');
@@ -50,11 +49,12 @@
 			// Toggle off then on with new constraints and encoding
 			await room.localParticipant.setCameraEnabled(false);
 			const res = getResolutionConstraints();
-			await room.localParticipant.setCameraEnabled(true, {
-				resolution: { width: res.width, height: res.height, frameRate: framerate },
-				facingMode,
-				videoEncoding: getVideoEncoding()
-			});
+				await room.localParticipant.setCameraEnabled(true, {
+					resolution: { width: res.width, height: res.height, frameRate: framerate },
+					facingMode
+				}, {
+					videoEncoding: getVideoEncoding()
+				});
 		} catch (err: any) {
 			error = err.message || 'Failed to apply camera settings';
 			console.error('[Camera] Settings error:', err);
@@ -66,8 +66,8 @@
 
 <div class="flex flex-col gap-3">
 	<div class="flex flex-col gap-1">
-		<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary">Resolution</label>
-		<select class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={resolution}>
+		<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary" for="camera-resolution">Resolution</label>
+		<select id="camera-resolution" class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={resolution}>
 			<option value="360p">360p (Low bandwidth)</option>
 			<option value="720p">720p (HD)</option>
 			<option value="1080p">1080p (Full HD)</option>
@@ -75,8 +75,8 @@
 	</div>
 
 	<div class="flex flex-col gap-1">
-		<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary">Frame Rate</label>
-		<select class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={framerate}>
+		<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary" for="camera-framerate">Frame Rate</label>
+		<select id="camera-framerate" class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={framerate}>
 			<option value={15}>15 fps (Low bandwidth)</option>
 			<option value={30}>30 fps (Standard)</option>
 			<option value={60}>60 fps (Smooth)</option>
@@ -84,8 +84,8 @@
 	</div>
 
 	<div class="flex flex-col gap-1">
-		<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary">Camera</label>
-		<select class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={facingMode}>
+		<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary" for="camera-facing-mode">Camera</label>
+		<select id="camera-facing-mode" class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={facingMode}>
 			<option value="user">Front Camera</option>
 			<option value="environment">Rear Camera</option>
 		</select>

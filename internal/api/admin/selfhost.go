@@ -67,14 +67,14 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		InstanceName    string `json:"instance_name"`
-		Description     string `json:"description"`
-		AdminUsername   string `json:"admin_username"`
-		AdminEmail      string `json:"admin_email"`
-		AdminPassword   string `json:"admin_password"`
-		FederationMode  string `json:"federation_mode"`
+		InstanceName     string `json:"instance_name"`
+		Description      string `json:"description"`
+		AdminUsername    string `json:"admin_username"`
+		AdminEmail       string `json:"admin_email"`
+		AdminPassword    string `json:"admin_password"`
+		FederationMode   string `json:"federation_mode"`
 		RegistrationMode string `json:"registration_mode"`
-		Domain          string `json:"domain"`
+		Domain           string `json:"domain"`
 	}
 	if !apiutil.DecodeJSON(w, r, &req) {
 		return
@@ -108,6 +108,20 @@ func (h *Handler) HandleCompleteSetup(w http.ResponseWriter, r *http.Request) {
 	if req.Domain != "" {
 		h.Pool.Exec(r.Context(),
 			`UPDATE instances SET domain = $1 WHERE id = $2`, req.Domain, h.InstanceID)
+	}
+
+	// During first-run setup there is no admin yet. Promote the account created
+	// by the setup wizard so the user can actually reach the admin dashboard
+	// after setup completes.
+	if completed != "true" && req.AdminUsername != "" {
+		_, err := h.Pool.Exec(r.Context(),
+			`UPDATE users SET flags = flags | $1
+			 WHERE instance_id = $2 AND (username = $3 OR email = $4)`,
+			models.UserFlagAdmin, h.InstanceID, req.AdminUsername, req.AdminEmail)
+		if err != nil {
+			apiutil.InternalError(w, h.Logger, "Failed to promote setup admin", err)
+			return
+		}
 	}
 
 	// Mark setup as completed.
@@ -324,11 +338,11 @@ func (h *Handler) HandleGetHealthDashboard(w http.ResponseWriter, r *http.Reques
 	}
 
 	type serviceHealth struct {
-		Name           string  `json:"name"`
-		Status         string  `json:"status"`
-		ResponseTimeMs int     `json:"response_time_ms"`
-		Details        string  `json:"details"`
-		LastChecked    string  `json:"last_checked"`
+		Name           string `json:"name"`
+		Status         string `json:"status"`
+		ResponseTimeMs int    `json:"response_time_ms"`
+		Details        string `json:"details"`
+		LastChecked    string `json:"last_checked"`
 	}
 
 	services := make([]serviceHealth, 0, 5)
@@ -430,11 +444,11 @@ func (h *Handler) HandleGetHealthDashboard(w http.ResponseWriter, r *http.Reques
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"services": services,
 		"database": map[string]interface{}{
-			"size":            dbSize,
-			"total_conns":     poolStats.TotalConns(),
-			"idle_conns":      poolStats.IdleConns(),
-			"acquired_conns":  poolStats.AcquiredConns(),
-			"max_conns":       poolStats.MaxConns(),
+			"size":           dbSize,
+			"total_conns":    poolStats.TotalConns(),
+			"idle_conns":     poolStats.IdleConns(),
+			"acquired_conns": poolStats.AcquiredConns(),
+			"max_conns":      poolStats.MaxConns(),
 		},
 		"runtime": map[string]interface{}{
 			"go_version":    runtime.Version(),
@@ -572,9 +586,9 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 
 	// Database table sizes.
 	type tableSize struct {
-		Name       string `json:"name"`
-		Size       string `json:"size"`
-		RowCount   int64  `json:"row_count"`
+		Name     string `json:"name"`
+		Size     string `json:"size"`
+		RowCount int64  `json:"row_count"`
 	}
 
 	tableRows, err := h.Pool.Query(r.Context(),
@@ -600,11 +614,11 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 
 	// Top uploaders.
 	type topUploader struct {
-		UserID      string `json:"user_id"`
-		Username    string `json:"username"`
-		FileCount   int64  `json:"file_count"`
-		TotalBytes  int64  `json:"total_bytes"`
-		Readable    string `json:"readable_size"`
+		UserID     string `json:"user_id"`
+		Username   string `json:"username"`
+		FileCount  int64  `json:"file_count"`
+		TotalBytes int64  `json:"total_bytes"`
+		Readable   string `json:"readable_size"`
 	}
 
 	uploaderRows, err := h.Pool.Query(r.Context(),
@@ -661,14 +675,14 @@ func (h *Handler) HandleGetStorageDashboard(w http.ResponseWriter, r *http.Reque
 	}
 
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"total_files":       totalFiles,
-		"total_bytes":       totalBytes,
-		"total_readable":    formatBytes(totalBytes),
-		"breakdown":         breakdown,
-		"database_size":     dbSize,
-		"tables":            tables,
-		"top_uploaders":     uploaders,
-		"upload_trend_30d":  trends,
+		"total_files":      totalFiles,
+		"total_bytes":      totalBytes,
+		"total_readable":   formatBytes(totalBytes),
+		"breakdown":        breakdown,
+		"database_size":    dbSize,
+		"tables":           tables,
+		"top_uploaders":    uploaders,
+		"upload_trend_30d": trends,
 	})
 }
 

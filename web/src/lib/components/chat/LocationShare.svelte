@@ -1,24 +1,6 @@
 <!-- LocationShare.svelte — Displays GPS coordinates on an interactive map tile. -->
 <script lang="ts">
-	import { api } from '$lib/api/client';
-
-	interface LocationData {
-		id: string;
-		user_id: string;
-		channel_id: string;
-		latitude: number;
-		longitude: number;
-		accuracy?: number;
-		altitude?: number;
-		label?: string;
-		live: boolean;
-		expires_at?: string;
-		created_at: string;
-		updated_at: string;
-		username: string;
-		display_name?: string;
-		avatar_id?: string;
-	}
+	import { api, type LocationShare as LocationData } from '$lib/api/client';
 
 	interface Props {
 		channelId: string;
@@ -69,10 +51,7 @@
 		loading = true;
 		error = '';
 		try {
-			const data = await api.request<LocationData[]>(
-				'GET',
-				`/channels/${channelId}/experimental/locations`
-			);
+			const data = await api.getLocations(channelId);
 			locations = data ?? [];
 		} catch (err: any) {
 			error = err.message || 'Failed to load locations';
@@ -92,7 +71,7 @@
 				});
 			});
 
-			const result = await api.request<LocationData>('POST', `/channels/${channelId}/experimental/location`, {
+			const result = await api.shareLocation(channelId, {
 				latitude: pos.coords.latitude,
 				longitude: pos.coords.longitude,
 				accuracy: pos.coords.accuracy,
@@ -132,7 +111,7 @@
 						timeout: 5000
 					});
 				});
-				await api.request('PATCH', `/channels/${channelId}/experimental/location/${liveLocationId}`, {
+				await api.updateLiveLocation(channelId, liveLocationId, {
 					latitude: pos.coords.latitude,
 					longitude: pos.coords.longitude,
 					accuracy: pos.coords.accuracy,
@@ -151,7 +130,7 @@
 		}
 		if (liveLocationId) {
 			try {
-				await api.request('DELETE', `/channels/${channelId}/experimental/location/${liveLocationId}`);
+				await api.deleteLiveLocation(channelId, liveLocationId);
 			} catch {
 				// Ignore errors on cleanup.
 			}

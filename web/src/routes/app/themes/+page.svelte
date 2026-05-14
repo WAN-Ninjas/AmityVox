@@ -1,23 +1,8 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type SharedTheme } from '$lib/api/client';
 	import { onMount } from 'svelte';
 	import { addToast } from '$lib/stores/toast';
-
-	interface SharedTheme {
-		id: string;
-		user_id: string;
-		author_name: string;
-		name: string;
-		description: string;
-		variables: Record<string, string>;
-		custom_css: string;
-		preview_colors: string[];
-		share_code: string;
-		downloads: number;
-		like_count: number;
-		liked: boolean;
-		created_at: string;
-	}
+	import { confirmAction } from '$lib/stores/confirm';
 
 	let themes = $state<SharedTheme[]>([]);
 	let loading = $state(true);
@@ -25,6 +10,7 @@
 	let sort = $state<'newest' | 'downloads' | 'likes'>('newest');
 	let search = $state('');
 	let searchTimeout: ReturnType<typeof setTimeout>;
+	let mounted = false;
 
 	// Share theme modal
 	let showShareModal = $state(false);
@@ -32,28 +18,11 @@
 	let shareDescription = $state('');
 	let sharing = $state(false);
 
-	function authHeaders(): Record<string, string> {
-		const token = api.getToken();
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-		return headers;
-	}
-
 	async function loadThemes() {
 		loading = true;
 		error = '';
 		try {
-			const params = new URLSearchParams({ sort, limit: '60' });
-			if (search.trim()) params.set('q', search.trim());
-			const res = await fetch(`/api/v1/themes?${params}`, {
-				headers: authHeaders()
-			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to load themes');
-			}
-			const data = await res.json();
-			themes = data.data ?? [];
+			themes = await api.listThemes({ sort, limit: 60, q: search.trim() || undefined });
 		} catch (err: any) {
 			error = err.message || 'Failed to load themes';
 		} finally {
@@ -62,12 +31,15 @@
 	}
 
 	onMount(() => {
+		mounted = true;
 		loadThemes();
 	});
 
 	$effect(() => {
 		sort;
-		loadThemes();
+		if (mounted) {
+			loadThemes();
+		}
 	});
 
 	function onSearchInput() {
@@ -76,26 +48,22 @@
 	}
 
 	async function toggleLike(theme: SharedTheme) {
+		const wasLiked = theme.liked;
+		const nextLikeCount = Math.max(0, theme.like_count + (wasLiked ? -1 : 1));
+		themes = themes.map(t =>
+			t.id === theme.id ? { ...t, liked: !wasLiked, like_count: nextLikeCount } : t
+		);
 		try {
-			const method = theme.liked ? 'DELETE' : 'PUT';
-			const res = await fetch(`/api/v1/themes/${theme.id}/like`, {
-				method,
-				headers: authHeaders()
-			});
-			if (!res.ok && res.status !== 204) {
-				throw new Error('Failed to update like');
-			}
-			if (theme.liked) {
-				themes = themes.map(t =>
-					t.id === theme.id ? { ...t, liked: false, like_count: t.like_count - 1 } : t
-				);
+			if (wasLiked) {
+				await api.unlikeTheme(theme.id);
 			} else {
-				themes = themes.map(t =>
-					t.id === theme.id ? { ...t, liked: true, like_count: t.like_count + 1 } : t
-				);
+				await api.likeTheme(theme.id);
 			}
 		} catch (err: any) {
-			addToast('Failed to update like', 'error');
+			themes = themes.map(t =>
+				t.id === theme.id ? { ...t, liked: wasLiked, like_count: theme.like_count } : t
+			);
+			addToast(err.message || 'Failed to update like', 'error');
 		}
 	}
 
@@ -152,21 +120,13 @@
 				}
 			}
 
-			const res = await fetch('/api/v1/themes', {
-				method: 'POST',
-				headers: authHeaders(),
-				body: JSON.stringify({
-					name: shareName.trim(),
-					description: shareDescription.trim(),
-					variables,
-					preview_colors: previewColors,
-					custom_css: localStorage.getItem('amityvox_custom_css') || ''
-				})
+			await api.shareTheme({
+				name: shareName.trim(),
+				description: shareDescription.trim(),
+				variables,
+				preview_colors: previewColors,
+				custom_css: localStorage.getItem('amityvox_custom_css') || ''
 			});
-			if (!res.ok) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to share theme');
-			}
 
 			addToast('Theme shared to gallery', 'success');
 			showShareModal = false;
@@ -181,16 +141,9 @@
 	}
 
 	async function deleteTheme(themeId: string) {
-		if (!confirm('Are you sure you want to delete this theme?')) return;
+		if (!(await confirmAction({ title: 'Delete Theme', message: 'Are you sure you want to delete this theme?', confirmLabel: 'Delete' }))) return;
 		try {
-			const res = await fetch(`/api/v1/themes/${themeId}`, {
-				method: 'DELETE',
-				headers: authHeaders()
-			});
-			if (!res.ok && res.status !== 204) {
-				const body = await res.json();
-				throw new Error(body?.error?.message || 'Failed to delete theme');
-			}
+			await api.deleteTheme(themeId);
 			themes = themes.filter(t => t.id !== themeId);
 			addToast('Theme deleted', 'info');
 		} catch (err: any) {
@@ -379,18 +332,25 @@
 </div>
 
 <!-- Share Theme Modal -->
-{#if showShareModal}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-		onclick={() => (showShareModal = false)}
-	>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
+	{#if showShareModal}
 		<div
-			class="w-full max-w-md rounded-lg bg-bg-floating p-6 shadow-xl"
-			onclick={(e) => e.stopPropagation()}
+			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+			onclick={() => (showShareModal = false)}
+			onkeydown={(e) => e.key === 'Escape' && (showShareModal = false)}
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="share-theme-title"
+			tabindex="-1"
 		>
-			<h2 class="mb-4 text-lg font-semibold text-text-primary">Share Your Theme</h2>
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<div
+				class="w-full max-w-md rounded-lg bg-bg-floating p-6 shadow-xl"
+				onclick={(e) => e.stopPropagation()}
+				onkeydown={(e) => e.stopPropagation()}
+				role="document"
+				tabindex="-1"
+			>
+				<h2 id="share-theme-title" class="mb-4 text-lg font-semibold text-text-primary">Share Your Theme</h2>
 			<p class="mb-4 text-sm text-text-muted">
 				Share your current theme with the community. Your active CSS variables and custom CSS will be captured.
 			</p>

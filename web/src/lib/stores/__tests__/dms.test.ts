@@ -37,6 +37,8 @@ function mockDMChannel(overrides?: Partial<Channel>): Channel {
 		locked_by: null,
 		locked_at: null,
 		archived: false,
+		parent_channel_id: null,
+		last_activity_at: null,
 		created_at: new Date().toISOString(),
 		...overrides
 	};

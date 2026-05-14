@@ -131,11 +131,13 @@ func TestFederatedDMMessageRequest_WithAttachments(t *testing.T) {
 	req := federatedDMMessageRequest{
 		RemoteChannelID: "ch-100",
 		Message: federatedMessageData{
-			ID:          "msg-2",
-			AuthorID:    "user-2",
-			Content:     "Check this out",
-			Attachments: json.RawMessage(`[{"id":"att-1","filename":"test.png"}]`),
-			CreatedAt:   time.Now(),
+			ID:       "msg-2",
+			AuthorID: "user-2",
+			Content:  "Check this out",
+			Attachments: []federatedAttachment{
+				{ID: "att-1", Filename: "test.png", ContentType: "image/png", S3Bucket: "remote", S3Key: "att-1", SizeBytes: 42},
+			},
+			CreatedAt: time.Now(),
 		},
 	}
 
@@ -149,12 +151,11 @@ func TestFederatedDMMessageRequest_WithAttachments(t *testing.T) {
 		t.Fatalf("unmarshal error: %v", err)
 	}
 
-	if decoded.Message.Attachments == nil {
-		t.Error("Message.Attachments should not be nil")
+	if len(decoded.Message.Attachments) != 1 {
+		t.Fatalf("Message.Attachments length = %d, want 1", len(decoded.Message.Attachments))
 	}
-	expected := json.RawMessage(`[{"id":"att-1","filename":"test.png"}]`)
-	if string(decoded.Message.Attachments) != string(expected) {
-		t.Errorf("Message.Attachments = %s, want %s", decoded.Message.Attachments, expected)
+	if decoded.Message.Attachments[0].ID != "att-1" || decoded.Message.Attachments[0].Filename != "test.png" {
+		t.Errorf("Message.Attachments[0] = %+v, want att-1/test.png", decoded.Message.Attachments[0])
 	}
 }
 

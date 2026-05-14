@@ -459,7 +459,9 @@ func (h *Handler) HandleCreateForumPost(w http.ResponseWriter, r *http.Request) 
 		}
 
 		// 3. Set message thread_id to the new thread.
-		tx.Exec(r.Context(), `UPDATE messages SET thread_id = $1 WHERE id = $2`, threadID, msgID)
+		if _, err := tx.Exec(r.Context(), `UPDATE messages SET thread_id = $1 WHERE id = $2`, threadID, msgID); err != nil {
+			return err
+		}
 
 		// 4. Insert forum_post_tags.
 		post.Tags = []models.ForumTag{}
@@ -473,17 +475,30 @@ func (h *Handler) HandleCreateForumPost(w http.ResponseWriter, r *http.Request) 
 
 		// 5. Link attachments if any.
 		if len(req.AttachmentIDs) > 0 {
-			tx.Exec(r.Context(),
+			tag, err := tx.Exec(r.Context(),
 				`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
 				msgID, req.AttachmentIDs, userID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != int64(len(req.AttachmentIDs)) {
+				return errInvalidAttachments
+			}
 		}
 
 		// 6. Update forum channel's last_activity_at.
-		tx.Exec(r.Context(), `UPDATE channels SET last_activity_at = now() WHERE id = $1`, channelID)
+		if _, err := tx.Exec(r.Context(), `UPDATE channels SET last_activity_at = now() WHERE id = $1`, channelID); err != nil {
+			return err
+		}
 
 		return nil
 	})
 	if err != nil {
+		if err == errInvalidAttachments {
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_attachments",
+				"One or more attachments are invalid, already linked, or not owned by you")
+			return
+		}
 		apiutil.InternalError(w, h.Logger, "Failed to create post", err)
 		return
 	}

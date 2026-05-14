@@ -22,6 +22,23 @@ export function base64ToArrayBuffer(base64: string): ArrayBuffer {
 	return bytes.buffer;
 }
 
+function randomBytes(length: number): Uint8Array<ArrayBuffer> {
+	const bytes = new Uint8Array(new ArrayBuffer(length));
+	crypto.getRandomValues(bytes);
+	return bytes;
+}
+
+function copyBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+	const buffer = new ArrayBuffer(bytes.byteLength);
+	const copy = new Uint8Array(buffer);
+	copy.set(bytes);
+	return copy;
+}
+
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	return copyBytes(bytes).buffer;
+}
+
 // --- Passphrase-Based Key Derivation ---
 
 /**
@@ -90,13 +107,13 @@ export async function importSessionKey(rawBytes: ArrayBuffer): Promise<CryptoKey
 export async function encrypt(
 	key: CryptoKey,
 	plaintext: string
-): Promise<{ ciphertext: ArrayBuffer; iv: Uint8Array }> {
-	const iv = crypto.getRandomValues(new Uint8Array(12));
+): Promise<{ ciphertext: ArrayBuffer; iv: Uint8Array<ArrayBuffer> }> {
+	const iv = randomBytes(12);
 	const encoder = new TextEncoder();
 	const ciphertext = await crypto.subtle.encrypt(
 		{ name: 'AES-GCM', iv },
 		key,
-		encoder.encode(plaintext)
+		bytesToArrayBuffer(encoder.encode(plaintext))
 	);
 	return { ciphertext, iv };
 }
@@ -107,7 +124,7 @@ export async function decrypt(
 	ciphertext: ArrayBuffer,
 	iv: Uint8Array
 ): Promise<string> {
-	const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+	const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: copyBytes(iv) }, key, ciphertext);
 	return new TextDecoder().decode(plainBuffer);
 }
 
@@ -133,7 +150,7 @@ export async function decryptFromWire(key: CryptoKey, wireData: string): Promise
 	const combined = new Uint8Array(base64ToArrayBuffer(wireData));
 	const iv = combined.slice(0, 12);
 	const ciphertext = combined.slice(12);
-	return decrypt(key, ciphertext.buffer, iv);
+	return decrypt(key, bytesToArrayBuffer(ciphertext), copyBytes(iv));
 }
 
 // --- Binary (file) Encrypt / Decrypt ---
@@ -143,7 +160,7 @@ export async function decryptFromWire(key: CryptoKey, wireData: string): Promise
  * Returns iv_12_bytes || aes_gcm_ciphertext as a single ArrayBuffer.
  */
 export async function encryptBinary(key: CryptoKey, data: ArrayBuffer): Promise<ArrayBuffer> {
-	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const iv = randomBytes(12);
 	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
 	const combined = new Uint8Array(12 + ciphertext.byteLength);
 	combined.set(iv, 0);
@@ -159,5 +176,9 @@ export async function decryptBinary(key: CryptoKey, encryptedData: ArrayBuffer):
 	const combined = new Uint8Array(encryptedData);
 	const iv = combined.slice(0, 12);
 	const ciphertext = combined.slice(12);
-	return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+	return crypto.subtle.decrypt(
+		{ name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
+		key,
+		bytesToArrayBuffer(ciphertext)
+	);
 }

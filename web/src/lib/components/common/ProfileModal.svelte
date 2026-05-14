@@ -177,10 +177,13 @@
 		aria-modal="true"
 		tabindex="-1"
 	>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_element_interactions -->
 		<div
 			class="w-full max-w-lg overflow-hidden rounded-xl bg-bg-floating shadow-2xl"
 			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="document"
+			tabindex="-1"
 		>
 			{#if loading}
 				<div class="flex items-center justify-center p-16">

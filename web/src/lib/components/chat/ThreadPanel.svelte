@@ -17,7 +17,7 @@
 	let { threadChannel, parentMessage = null, onclose }: Props = $props();
 
 	let content = $state('');
-	let messagesContainer: HTMLDivElement;
+	let messagesContainer = $state<HTMLDivElement>();
 	let loading = $state(true);
 	let forumTags = $state<ForumTag[]>([]);
 	let channelPassphrase = $state('');
@@ -86,7 +86,7 @@
 		if (!threadChannel.encrypted || !hasKey) return;
 		const msgs = rawThreadMessages;
 		for (const msg of msgs) {
-			if (msg.encrypted && !decryptedContents.has(msg.id)) {
+			if (msg.encrypted && msg.content && !decryptedContents.has(msg.id)) {
 				e2ee.decryptMessage(encryptionChannelId, msg.content).then((plain) => {
 					decryptedContents.set(msg.id, plain);
 					decryptedContents = new Map(decryptedContents);
@@ -103,7 +103,7 @@
 			return decryptedContents.get(msg.id)!;
 		}
 		if (msg.encrypted) return '[Encrypted message]';
-		return msg.content;
+		return msg.content ?? '';
 	}
 
 	const threadMessages = $derived(rawThreadMessages);

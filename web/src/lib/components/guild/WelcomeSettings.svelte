@@ -1,22 +1,9 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type WelcomeConfig } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
-
-	interface WelcomeConfig {
-		guild_id: string;
-		enabled: boolean;
-		channel_id: string | null;
-		message: string;
-		dm_enabled: boolean;
-		dm_message: string;
-		embed_enabled: boolean;
-		embed_color: string | null;
-		embed_title: string | null;
-		embed_image_url: string | null;
-	}
 
 	let loadOp = $state(createAsyncOp());
 	let saveOp = $state(createAsyncOp());
@@ -39,7 +26,7 @@
 
 	async function loadConfig() {
 		error = '';
-		const result = await loadOp.run(() => api.request<WelcomeConfig>('GET', `/guilds/${guildId}/welcome`));
+		const result = await loadOp.run(() => api.getWelcomeConfig(guildId));
 		if (!loadOp.error) {
 			config = result!;
 		} else {
@@ -57,19 +44,17 @@
 	async function saveConfig() {
 		error = '';
 		success = '';
-		const result = await saveOp.run(() => api.request<WelcomeConfig>(
-			'PATCH', `/guilds/${guildId}/welcome`, {
-				enabled: config.enabled,
-				channel_id: config.channel_id,
-				message: config.message,
-				dm_enabled: config.dm_enabled,
-				dm_message: config.dm_message,
-				embed_enabled: config.embed_enabled,
-				embed_color: config.embed_color,
-				embed_title: config.embed_title,
-				embed_image_url: config.embed_image_url
-			}
-		));
+		const result = await saveOp.run(() => api.updateWelcomeConfig(guildId, {
+			enabled: config.enabled,
+			channel_id: config.channel_id,
+			message: config.message,
+			dm_enabled: config.dm_enabled,
+			dm_message: config.dm_message,
+			embed_enabled: config.embed_enabled,
+			embed_color: config.embed_color,
+			embed_title: config.embed_title,
+			embed_image_url: config.embed_image_url
+		}));
 		if (!saveOp.error) {
 			config = result!;
 			success = 'Settings saved';
@@ -125,11 +110,11 @@
 				<h3 class="mb-3 text-sm font-semibold text-text-primary">Channel Welcome Message</h3>
 
 				<div class="space-y-3">
-					<div>
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-							Channel
-						</label>
-						<select class="input w-full" bind:value={config.channel_id}>
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="welcome-channel-id">
+								Channel
+							</label>
+							<select id="welcome-channel-id" class="input w-full" bind:value={config.channel_id}>
 							<option value={null}>Select a channel...</option>
 							{#each channels as ch}
 								<option value={ch.id}>#{ch.name}</option>
@@ -137,11 +122,11 @@
 						</select>
 					</div>
 
-					<div>
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-							Message
-						</label>
-						<textarea class="input w-full" rows="3" bind:value={config.message}></textarea>
+						<div>
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="welcome-message">
+								Message
+							</label>
+							<textarea id="welcome-message" class="input w-full" rows="3" bind:value={config.message}></textarea>
 						<p class="mt-1 text-xs text-text-muted">
 							Variables: {'{user}'} (mention), {'{username}'} (plain), {'{guild}'} (server name), {'{membercount}'}
 						</p>
@@ -165,11 +150,11 @@
 				</label>
 
 				{#if config.dm_enabled}
-					<div class="mt-3">
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-							DM Message
-						</label>
-						<textarea class="input w-full" rows="3" bind:value={config.dm_message}></textarea>
+						<div class="mt-3">
+							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="welcome-dm-message">
+								DM Message
+							</label>
+							<textarea id="welcome-dm-message" class="input w-full" rows="3" bind:value={config.dm_message}></textarea>
 						<p class="mt-1 text-xs text-text-muted">
 							Variables: {'{user}'}, {'{username}'}, {'{guild}'}
 						</p>
@@ -188,30 +173,30 @@
 
 				{#if config.embed_enabled}
 					<div class="mt-3 space-y-3">
-						<div>
-							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-								Embed Title
-							</label>
-							<input type="text" class="input w-full" bind:value={config.embed_title} />
+							<div>
+								<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="welcome-embed-title">
+									Embed Title
+								</label>
+								<input id="welcome-embed-title" type="text" class="input w-full" bind:value={config.embed_title} />
 						</div>
 
-						<div>
-							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-								Embed Color
-							</label>
-							<div class="flex items-center gap-2">
-								<input type="color" bind:value={config.embed_color}
-									class="h-8 w-8 cursor-pointer rounded border-0" />
-								<input type="text" class="input w-28" bind:value={config.embed_color}
-									placeholder="#5865F2" />
+							<div>
+								<div class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+									Embed Color
+								</div>
+								<div class="flex items-center gap-2">
+									<input type="color" bind:value={config.embed_color} aria-label="Embed color picker"
+										class="h-8 w-8 cursor-pointer rounded border-0" />
+									<input type="text" class="input w-28" bind:value={config.embed_color} aria-label="Embed color hex"
+										placeholder="#5865F2" />
+								</div>
 							</div>
-						</div>
 
-						<div>
-							<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
-								Image URL (optional)
-							</label>
-							<input type="text" class="input w-full" bind:value={config.embed_image_url}
+							<div>
+								<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="welcome-embed-image-url">
+									Image URL (optional)
+								</label>
+								<input id="welcome-embed-image-url" type="text" class="input w-full" bind:value={config.embed_image_url}
 								placeholder="https://example.com/welcome.png" />
 						</div>
 					</div>

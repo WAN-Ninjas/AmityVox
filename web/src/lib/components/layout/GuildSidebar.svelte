@@ -13,6 +13,7 @@
 	import NotificationPopover from '$components/common/NotificationPopover.svelte';
 	import { DragController } from '$lib/utils/dragDrop';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -144,7 +145,7 @@
 	}
 
 	async function handleLeaveGuild(guildId: string) {
-		if (!confirm('Are you sure you want to leave this server?')) return;
+		if (!(await confirmAction({ title: 'Leave Server', message: 'Are you sure you want to leave this server?', confirmLabel: 'Leave Server' }))) return;
 		try {
 			await api.leaveGuild(guildId);
 			guilds.removeEntry(guildId);
@@ -187,6 +188,7 @@
 				class="group/drag"
 				data-guild-id={guild.id}
 				onpointerdown={(e) => guildDragController?.handlePointerDown(e, guild.id)}
+				role="listitem"
 			>
 				<button
 					class="group relative flex h-9 w-9 items-center justify-center rounded-md border bg-bg-tertiary transition-colors hover:bg-brand-500 {guild.instance_id && $currentUser && guild.instance_id !== $currentUser.instance_id ? 'border-blue-500/30' : 'border-bg-modifier'}"
@@ -335,7 +337,7 @@
 	<!-- Settings button -->
 	<button
 		class="flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-primary"
-		class:!bg-bg-modifier={$page.url.pathname.startsWith('/app/settings') || $page.url.pathname === '/settings'}
+		class:!bg-bg-modifier={$page.url.pathname.startsWith('/app/settings')}
 		onclick={() => goto('/app/settings')}
 		title="User Settings"
 	>

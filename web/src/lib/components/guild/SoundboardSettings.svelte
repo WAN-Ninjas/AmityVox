@@ -212,10 +212,11 @@
 					</span>
 				</label>
 
-				<div class="config-field">
-					<label class="field-label">Maximum Sounds</label>
-					<input
-						type="number"
+					<div class="config-field">
+						<label class="field-label" for="soundboard-max-sounds">Maximum Sounds</label>
+						<input
+							id="soundboard-max-sounds"
+							type="number"
 						class="input field-input"
 						bind:value={config.max_sounds}
 						min={1}
@@ -224,10 +225,11 @@
 					<span class="field-hint">Number of sound slots available (1-100)</span>
 				</div>
 
-				<div class="config-field">
-					<label class="field-label">Cooldown (seconds)</label>
-					<input
-						type="number"
+					<div class="config-field">
+						<label class="field-label" for="soundboard-cooldown-seconds">Cooldown (seconds)</label>
+						<input
+							id="soundboard-cooldown-seconds"
+							type="number"
 						class="input field-input"
 						bind:value={config.cooldown_seconds}
 						min={0}
@@ -276,20 +278,22 @@
 			{#if showAddForm}
 				<div class="add-form">
 					<div class="form-row">
-						<div class="form-field">
-							<label class="field-label">Name</label>
-							<input
-								type="text"
+							<div class="form-field">
+								<label class="field-label" for="new-sound-name">Name</label>
+								<input
+									id="new-sound-name"
+									type="text"
 								class="input"
 								bind:value={newSoundName}
 								placeholder="Sound name"
 								maxlength={32}
 							/>
 						</div>
-						<div class="form-field emoji-field">
-							<label class="field-label">Emoji</label>
-							<input
-								type="text"
+							<div class="form-field emoji-field">
+								<label class="field-label" for="new-sound-emoji">Emoji</label>
+								<input
+									id="new-sound-emoji"
+									type="text"
 								class="input"
 								bind:value={newSoundEmoji}
 								placeholder="Optional"
@@ -299,10 +303,11 @@
 					</div>
 
 					<div class="form-row">
-						<div class="form-field">
-							<label class="field-label">Audio File</label>
-							<input
-								type="file"
+							<div class="form-field">
+								<label class="field-label" for="new-sound-file">Audio File</label>
+								<input
+									id="new-sound-file"
+									type="file"
 								accept="audio/*"
 								onchange={handleFileSelect}
 								class="file-input"
@@ -313,13 +318,14 @@
 
 					{#if selectedFile}
 						<div class="form-row">
-							<div class="form-field">
-								<label class="field-label">
-									Volume
-									<span class="field-value">{Math.round(newSoundVolume * 100)}%</span>
-								</label>
-								<input
-									type="range"
+								<div class="form-field">
+									<label class="field-label" for="new-sound-volume">
+										Volume
+										<span class="field-value">{Math.round(newSoundVolume * 100)}%</span>
+									</label>
+									<input
+										id="new-sound-volume"
+										type="range"
 									min="0.1"
 									max="2"
 									step="0.1"

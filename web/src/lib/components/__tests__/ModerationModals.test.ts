@@ -177,9 +177,9 @@ describe('Moderation Target Validation', () => {
 	});
 
 	it('should allow moderating regular members', () => {
-		const currentUserId = 'mod-1';
-		const ownerId = 'owner-1';
-		const targetUserId = 'regular-1';
+		const currentUserId: string = 'mod-1';
+		const ownerId: string = 'owner-1';
+		const targetUserId: string = 'regular-1';
 		const isSelf = currentUserId === targetUserId;
 		const isOwner = targetUserId === ownerId;
 		const canModerate = !isSelf && !isOwner;

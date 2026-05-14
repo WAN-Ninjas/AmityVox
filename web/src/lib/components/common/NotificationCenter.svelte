@@ -6,10 +6,15 @@
 		unreadNotificationCount,
 		markAllNotificationsRead,
 		markNotificationRead,
-		removeNotification,
+		deleteNotification,
 		clearAllNotifications,
-		type AppNotification
 	} from '$lib/stores/notifications';
+	import type { ServerNotification } from '$lib/types';
+	import {
+		formatNotificationTimestamp,
+		getNotificationDisplay,
+		getNotificationNavigationUrl
+	} from '$lib/utils/notificationHelpers';
 
 	interface Props {
 		open?: boolean;
@@ -23,18 +28,11 @@
 		onclose?.();
 	}
 
-	function handleNotificationClick(notification: AppNotification) {
+	function handleNotificationClick(notification: ServerNotification) {
 		markNotificationRead(notification.id);
 
-		if (notification.type === 'friend_request') {
-			goto('/app/friends');
-		} else if (notification.channel_id) {
-			if (notification.guild_id) {
-				goto(`/app/guilds/${notification.guild_id}/channels/${notification.channel_id}`);
-			} else {
-				goto(`/app/dms/${notification.channel_id}`);
-			}
-		}
+		const url = getNotificationNavigationUrl(notification);
+		if (url) goto(url);
 
 		close();
 	}
@@ -49,52 +47,7 @@
 
 	function handleDismiss(e: MouseEvent, id: string) {
 		e.stopPropagation();
-		removeNotification(id);
-	}
-
-	function getTypeIcon(type: AppNotification['type']): string {
-		switch (type) {
-			case 'mention':
-				return '<path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18" />';
-			case 'reply':
-				return '<path d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />';
-			case 'dm':
-				return '<path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />';
-			case 'friend_request':
-				return '<path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="8.5" cy="7" r="4" /><line x1="20" y1="8" x2="20" y2="14" /><line x1="23" y1="11" x2="17" y2="11" />';
-			default:
-				return '<circle cx="12" cy="12" r="10" />';
-		}
-	}
-
-	function getTypeLabel(type: AppNotification['type']): string {
-		switch (type) {
-			case 'mention':
-				return 'Mentioned you';
-			case 'reply':
-				return 'Replied to you';
-			case 'dm':
-				return 'Direct message';
-			case 'friend_request':
-				return 'Friend request';
-			default:
-				return 'Notification';
-		}
-	}
-
-	function formatTimestamp(isoStr: string): string {
-		const date = new Date(isoStr);
-		const now = new Date();
-		const diffMs = now.getTime() - date.getTime();
-		const diffMin = Math.floor(diffMs / 60000);
-		const diffHr = Math.floor(diffMs / 3600000);
-		const diffDay = Math.floor(diffMs / 86400000);
-
-		if (diffMin < 1) return 'Just now';
-		if (diffMin < 60) return `${diffMin}m ago`;
-		if (diffHr < 24) return `${diffHr}h ago`;
-		if (diffDay < 7) return `${diffDay}d ago`;
-		return date.toLocaleDateString();
+		deleteNotification(id);
 	}
 
 	function handleBackdrop(e: MouseEvent) {
@@ -115,7 +68,7 @@
 		tabindex="-1"
 	>
 		<!-- Slide-out panel on the right -->
-		<aside
+		<div
 			class="absolute right-0 top-0 flex h-full w-full max-w-sm flex-col bg-bg-secondary shadow-2xl"
 			role="dialog"
 			aria-modal="true"
@@ -178,6 +131,7 @@
 								{group.label}
 							</h3>
 							{#each group.notifications as notification (notification.id)}
+								{@const display = getNotificationDisplay(notification)}
 								<div
 									role="button"
 									tabindex="0"
@@ -187,24 +141,22 @@
 								>
 									<!-- Type icon -->
 									<div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full {notification.read ? 'bg-bg-tertiary text-text-muted' : 'bg-brand-500/15 text-brand-400'}">
-										<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-											{@html getTypeIcon(notification.type)}
-										</svg>
+										<span class="text-sm font-bold {display.colorClass}">{display.icon}</span>
 									</div>
 
 									<!-- Content -->
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
-											<span class="truncate text-sm font-medium text-text-primary">{notification.sender_name}</span>
+											<span class="truncate text-sm font-medium text-text-primary">{notification.actor_name}</span>
 											{#if !notification.read}
 												<span class="h-2 w-2 shrink-0 rounded-full bg-brand-500"></span>
 											{/if}
 										</div>
-										<p class="text-xs text-text-muted">{getTypeLabel(notification.type)}</p>
-										{#if notification.content}
-											<p class="mt-0.5 truncate text-xs text-text-secondary">{notification.content}</p>
+										<p class="text-xs text-text-muted">{display.label}</p>
+										{#if display.preview}
+											<p class="mt-0.5 truncate text-xs text-text-secondary">{display.preview}</p>
 										{/if}
-										<p class="mt-1 text-2xs text-text-muted">{formatTimestamp(notification.created_at)}</p>
+										<p class="mt-1 text-2xs text-text-muted">{formatNotificationTimestamp(notification.created_at)}</p>
 									</div>
 
 									<!-- Dismiss button -->
@@ -223,6 +175,6 @@
 					{/each}
 				{/if}
 			</div>
-		</aside>
+		</div>
 	</div>
 {/if}

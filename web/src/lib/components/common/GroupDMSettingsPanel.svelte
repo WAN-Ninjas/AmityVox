@@ -44,7 +44,7 @@
 	}
 </script>
 
-<Modal bind:open title="Group Settings" {onclose}>
+<Modal {open} title="Group Settings" {onclose}>
 	<div class="space-y-4">
 		<!-- Group info -->
 		<div>

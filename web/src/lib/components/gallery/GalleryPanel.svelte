@@ -19,7 +19,7 @@
 	let loadingMore = $state(false);
 	let hasMore = $state(true);
 	let typeFilter = $state('all');
-	let scope = $state<'channel' | 'server'>(channelId ? 'channel' : 'server');
+	let scope = $state<'channel' | 'server'>('server');
 	let selectedItem = $state<Attachment | null>(null);
 	let showPreview = $state(false);
 
@@ -61,6 +61,7 @@
 	}
 
 	$effect(() => {
+		if (channelId && scope !== 'channel' && !selectedItem) scope = 'channel';
 		// Re-load when channelId, guildId, filter, or scope changes.
 		channelId; guildId; typeFilter; scope;
 		loadGallery();

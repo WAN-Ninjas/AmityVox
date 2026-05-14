@@ -12,7 +12,7 @@ vi.mock('$lib/api/client', () => ({
 vi.mock('../guilds', () => {
 	const { writable } = require('svelte/store');
 	return {
-		currentGuildId: writable<string | null>(null)
+		currentGuildId: writable(null as string | null)
 	};
 });
 

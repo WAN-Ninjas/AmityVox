@@ -83,7 +83,7 @@
 				<Avatar
 					name={call.callerDisplayName ?? call.callerName}
 					src={avatarUrl(call.callerAvatarId, call.callerInstanceId || undefined)}
-					size="xl"
+					size="lg"
 				/>
 			</div>
 

@@ -1,11 +1,13 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { currentChannelId, currentChannel } from '$lib/stores/channels';
-	import { api } from '$lib/api/client';
+	import { api, ApiRequestError } from '$lib/api/client';
 	import { getGatewayClient } from '$lib/stores/gateway';
 	import { appendMessage } from '$lib/stores/messages';
 	import { replyingTo, editingMessage, cancelReply, cancelEdit } from '$lib/stores/messageInteraction';
 	import { messagesByChannel } from '$lib/stores/messages';
 	import { currentUser } from '$lib/stores/auth';
+	import { canManageChannels, canManageMessages, isAdministrator } from '$lib/stores/permissions';
 	import { addToast } from '$lib/stores/toast';
 	import { getDMDisplayName } from '$lib/utils/dm';
 	import { e2ee } from '$lib/encryption/e2eeManager';
@@ -17,7 +19,7 @@
 	import type { Sticker } from '$lib/types';
 
 	let content = $state('');
-	let inputEl: HTMLTextAreaElement;
+	let inputEl = $state<HTMLTextAreaElement>();
 	let typingTimeout: ReturnType<typeof setTimeout> | null = null;
 	let showEmojiPicker = $state(false);
 	let showGiphyPicker = $state(false);
@@ -27,12 +29,14 @@
 	let customDatetime = $state('');
 	let showVoiceRecorder = $state(false);
 	let showInputMore = $state(false);
+	let slowmodeNow = $state(Date.now());
+	let localLastSentAtByChannel = $state<Record<string, number>>({});
 
 	// --- Mention autocomplete ---
 	let showMentionAutocomplete = $state(false);
 	let mentionQuery = $state('');
 	let mentionStartIndex = $state(0);
-	let mentionAutocomplete: { handleKeydown: (e: KeyboardEvent) => boolean } | undefined;
+	let mentionAutocomplete = $state<{ handleKeydown: (e: KeyboardEvent) => boolean }>();
 	/** Maps display text (e.g. "@Horatio") → wire syntax (e.g. "<@01KH...>") for mentions inserted via autocomplete. */
 	let mentionMap = new Map<string, string>();
 
@@ -76,8 +80,23 @@
 	let pendingAltTexts = $state<Record<number, string>>({});
 	let uploading = $state(false);
 
-	// Default max upload size in bytes (25 MB). This could be overridden by instance config.
-	const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+	const FALLBACK_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+	let maxFileSizeBytes = $state(FALLBACK_MAX_FILE_SIZE_BYTES);
+	let fileUploadsEnabled = $state(true);
+
+	onMount(() => {
+		api.getClientConfig()
+			.then((config) => {
+				fileUploadsEnabled = config.file_uploads_enabled;
+				if (config.max_upload_bytes > 0) {
+					maxFileSizeBytes = config.max_upload_bytes;
+				}
+			})
+			.catch(() => {
+				fileUploadsEnabled = true;
+				maxFileSizeBytes = FALLBACK_MAX_FILE_SIZE_BYTES;
+			});
+	});
 
 	/**
 	 * Format a byte count into a human-readable string (KB, MB, GB).
@@ -93,7 +112,7 @@
 	 * Check whether a file exceeds the upload size limit.
 	 */
 	function isFileOverLimit(file: File): boolean {
-		return file.size > MAX_FILE_SIZE_BYTES;
+		return file.size > maxFileSizeBytes;
 	}
 
 	const hasOversizedFiles = $derived(pendingFiles.some(isFileOverLimit));
@@ -116,6 +135,16 @@
 		pendingAltTexts = {};
 	}
 
+	export function addPendingFiles(files: File[]) {
+		if (files.length === 0) return;
+		if (!fileUploadsEnabled) {
+			addToast('File uploads are unavailable on this instance', 'error');
+			return;
+		}
+		pendingFiles = [...pendingFiles, ...files];
+		addToast(`${files.length} file${files.length > 1 ? 's' : ''} attached — press Send to upload`, 'info');
+	}
+
 	// When entering edit mode, populate the input with the message content.
 	$effect(() => {
 		if ($editingMessage) {
@@ -132,6 +161,64 @@
 			? getDMDisplayName($currentChannel, $currentUser?.id)
 			: $currentChannel?.name ?? 'channel'
 	);
+	const slowmodeRemainingSeconds = $derived.by(() => {
+		if (isEditing || $canManageMessages || $canManageChannels || $isAdministrator) return 0;
+		const channelId = $currentChannelId;
+		const slowmodeSeconds = $currentChannel?.slowmode_seconds ?? 0;
+		if (!channelId || slowmodeSeconds <= 0) return 0;
+
+		const ownMessageSentAt = latestOwnMessageSentAt(channelId);
+		const localSentAt = localLastSentAtByChannel[channelId] ?? 0;
+		const lastSentAt = Math.max(ownMessageSentAt, localSentAt);
+		if (lastSentAt === 0) return 0;
+
+		const nextAllowedAt = lastSentAt + slowmodeSeconds * 1000;
+		return Math.max(0, Math.ceil((nextAllowedAt - slowmodeNow) / 1000));
+	});
+	const slowmodeBlocked = $derived(slowmodeRemainingSeconds > 0);
+
+	$effect(() => {
+		if (($currentChannel?.slowmode_seconds ?? 0) <= 0) return;
+		slowmodeNow = Date.now();
+		const interval = window.setInterval(() => {
+			slowmodeNow = Date.now();
+		}, 1000);
+		return () => window.clearInterval(interval);
+	});
+
+	function latestOwnMessageSentAt(channelId: string): number {
+		const userId = $currentUser?.id;
+		if (!userId) return 0;
+		const messages = $messagesByChannel.get(channelId) ?? [];
+		let latest = 0;
+		for (const message of messages) {
+			if (message.author_id !== userId) continue;
+			const sentAt = Date.parse(message.created_at);
+			if (!Number.isNaN(sentAt)) {
+				latest = Math.max(latest, sentAt);
+			}
+		}
+		return latest;
+	}
+
+	function recordSuccessfulSend(channelId: string) {
+		if (($currentChannel?.slowmode_seconds ?? 0) <= 0) return;
+		localLastSentAtByChannel = { ...localLastSentAtByChannel, [channelId]: Date.now() };
+	}
+
+	function guardSlowmode(): boolean {
+		if (!slowmodeBlocked) return false;
+		addToast(`Slowmode active. Try again in ${slowmodeRemainingSeconds}s`, 'error');
+		return true;
+	}
+
+	function handleSendError(err: unknown, fallback: string) {
+		if (err instanceof ApiRequestError && err.code === 'slowmode') {
+			addToast(err.message, 'error');
+			return;
+		}
+		addToast(fallback, 'error');
+	}
 
 	async function handleSubmit() {
 		const channelId = $currentChannelId;
@@ -164,6 +251,8 @@
 			return;
 		}
 
+		if (guardSlowmode()) return;
+
 		// Normal send (possibly with reply).
 		const opts: { reply_to_ids?: string[]; silent?: boolean; encrypted?: boolean } = {};
 		if (isReplying && $replyingTo) {
@@ -192,9 +281,10 @@
 
 			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
+			recordSuccessfulSend(channelId);
 		} catch (e) {
 			content = msg;
-			addToast('Failed to send message', 'error');
+			handleSendError(e, 'Failed to send message');
 		}
 	}
 
@@ -399,20 +489,23 @@
 		const files = target.files;
 		if (!files || files.length === 0) return;
 
-		for (const file of files) {
-			pendingFiles = [...pendingFiles, file];
-		}
+		addPendingFiles(Array.from(files));
 		target.value = '';
 	}
 
 	async function uploadPendingFiles() {
 		const channelId = $currentChannelId;
 		if (!channelId || pendingFiles.length === 0) return;
+		if (!fileUploadsEnabled) {
+			addToast('File uploads are unavailable on this instance', 'error');
+			return;
+		}
+		if (guardSlowmode()) return;
 
 		// Check for oversized files.
 		const oversized = pendingFiles.filter(isFileOverLimit);
 		if (oversized.length > 0) {
-			addToast(`${oversized.length} file(s) exceed the ${formatFileSize(MAX_FILE_SIZE_BYTES)} limit`, 'error');
+			addToast(`${oversized.length} file(s) exceed the ${formatFileSize(maxFileSizeBytes)} limit`, 'error');
 			return;
 		}
 
@@ -458,13 +551,14 @@
 			}
 			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
+			recordSuccessfulSend(channelId);
 			cancelReply();
 			content = '';
 			if (inputEl) inputEl.style.height = 'auto';
 			pendingFiles = [];
 			pendingAltTexts = {};
 		} catch (err) {
-			addToast('Upload failed', 'error');
+			handleSendError(err, 'Upload failed');
 		} finally {
 			uploading = false;
 		}
@@ -474,9 +568,18 @@
 		const target = e.target as HTMLInputElement;
 		const file = target.files?.[0];
 		if (!file || !$currentChannelId) return;
+		if (!fileUploadsEnabled) {
+			addToast('File uploads are unavailable on this instance', 'error');
+			target.value = '';
+			return;
+		}
+		if (guardSlowmode()) {
+			target.value = '';
+			return;
+		}
 
 		if (isFileOverLimit(file)) {
-			addToast(`File exceeds the ${formatFileSize(MAX_FILE_SIZE_BYTES)} limit`, 'error');
+			addToast(`File exceeds the ${formatFileSize(maxFileSizeBytes)} limit`, 'error');
 			target.value = '';
 			return;
 		}
@@ -506,9 +609,10 @@
 			opts.attachment_ids = [uploaded.id];
 			const sent = await api.sendMessage($currentChannelId, '', opts);
 			appendMessage(sent);
+			recordSuccessfulSend($currentChannelId);
 			cancelReply();
 		} catch (err) {
-			addToast('Upload failed', 'error');
+			handleSendError(err, 'Upload failed');
 		}
 		target.value = '';
 	}
@@ -531,8 +635,7 @@
 		e.preventDefault();
 
 		// Add pasted images to pending files instead of auto-sending.
-		pendingFiles = [...pendingFiles, ...imageFiles];
-		addToast(`${imageFiles.length} image${imageFiles.length > 1 ? 's' : ''} added — press Send to upload`, 'info');
+		addPendingFiles(imageFiles);
 	}
 
 	function insertEmoji(emoji: string) {
@@ -545,6 +648,7 @@
 		showGiphyPicker = false;
 		const channelId = $currentChannelId;
 		if (!channelId) return;
+		if (guardSlowmode()) return;
 		try {
 			let sendContent = gifUrl;
 			const opts: Record<string, any> = {};
@@ -559,8 +663,9 @@
 			}
 			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
+			recordSuccessfulSend(channelId);
 		} catch (e) {
-			addToast('Failed to send GIF', 'error');
+			handleSendError(e, 'Failed to send GIF');
 		}
 	}
 
@@ -568,6 +673,7 @@
 		showStickerPicker = false;
 		const channelId = $currentChannelId;
 		if (!channelId) return;
+		if (guardSlowmode()) return;
 		if ($currentChannel?.encrypted) {
 			addToast('Stickers are not supported in encrypted channels', 'error');
 			return;
@@ -577,14 +683,16 @@
 			const opts: Record<string, any> = { attachment_ids: [sticker.file_id] };
 			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
+			recordSuccessfulSend(channelId);
 		} catch (e) {
-			addToast('Failed to send sticker', 'error');
+			handleSendError(e, 'Failed to send sticker');
 		}
 	}
 
 	async function sendVoiceMessage(audioBlob: Blob, waveform: number[], durationMs: number) {
 		const channelId = $currentChannelId;
 		if (!channelId) return;
+		if (guardSlowmode()) return;
 
 		showVoiceRecorder = false;
 
@@ -614,8 +722,9 @@
 			}
 			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
+			recordSuccessfulSend(channelId);
 		} catch (err) {
-			addToast('Failed to send voice message', 'error');
+			handleSendError(err, 'Failed to send voice message');
 		}
 	}
 </script>
@@ -716,7 +825,7 @@
 					<span class="text-xs font-semibold text-text-muted">
 						{pendingFiles.length} file{pendingFiles.length > 1 ? 's' : ''} attached
 						<span class="ml-1 font-normal text-text-muted">
-							(max {formatFileSize(MAX_FILE_SIZE_BYTES)})
+							(max {formatFileSize(maxFileSizeBytes)})
 						</span>
 					</span>
 					<div class="flex items-center gap-2">
@@ -729,9 +838,9 @@
 						<button
 							class="btn-primary text-xs px-3 py-1"
 							onclick={uploadPendingFiles}
-							disabled={uploading || hasOversizedFiles}
+							disabled={uploading || hasOversizedFiles || slowmodeBlocked || !fileUploadsEnabled}
 						>
-							{uploading ? 'Uploading...' : 'Send'}
+							{uploading ? 'Uploading...' : slowmodeBlocked ? `${slowmodeRemainingSeconds}s` : 'Send'}
 						</button>
 					</div>
 				</div>
@@ -781,6 +890,16 @@
 			</div>
 		{/if}
 
+		{#if slowmodeBlocked}
+			<div class="mb-2 flex items-center gap-2 rounded bg-bg-secondary px-3 py-2 text-xs text-text-muted">
+				<svg class="h-4 w-4 shrink-0 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M12 8v4l3 3" />
+					<circle cx="12" cy="12" r="9" />
+				</svg>
+				<span>Slowmode active. You can send again in {slowmodeRemainingSeconds}s.</span>
+			</div>
+		{/if}
+
 		<!-- Voice recorder (replaces the input bar when active) -->
 		{#if showVoiceRecorder}
 			<VoiceMessageRecorder
@@ -823,7 +942,6 @@
 					rows="1"
 					aria-label="Message input"
 					autocomplete="off"
-					autocorrect="on"
 					name="chat-message"
 				></textarea>
 
@@ -979,8 +1097,7 @@
 							</svg>
 						</button>
 						{#if showInputMore}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div class="fixed inset-0 z-40" onclick={() => (showInputMore = false)}></div>
+								<button class="fixed inset-0 z-40 cursor-default" aria-label="Close input actions" onclick={() => (showInputMore = false)}></button>
 							<div class="absolute bottom-8 right-0 z-50 flex gap-2 rounded-lg bg-bg-floating p-2 shadow-xl">
 								<button
 									class="flex items-center justify-center rounded p-1.5 transition-colors {silentMode ? 'text-yellow-500' : 'text-text-muted hover:text-text-primary'}"

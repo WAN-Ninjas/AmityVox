@@ -66,11 +66,12 @@
 
 	{#if invite}
 		<div class="mb-4">
-			<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+			<label for="invite-link" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
 				Invite Link
 			</label>
 			<div class="flex gap-2">
 				<input
+					id="invite-link"
 					type="text"
 					class="input flex-1"
 					readonly
@@ -93,10 +94,10 @@
 		<button class="btn-secondary w-full" onclick={() => (invite = null)}>Generate New</button>
 	{:else}
 		<div class="mb-4">
-			<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+			<label for="invite-max-age" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
 				Expire After
 			</label>
-			<select class="input w-full" bind:value={maxAge}>
+			<select id="invite-max-age" class="input w-full" bind:value={maxAge}>
 				{#each ageOptions as opt}
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
@@ -104,10 +105,10 @@
 		</div>
 
 		<div class="mb-4">
-			<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+			<label for="invite-max-uses" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
 				Max Uses (0 = unlimited)
 			</label>
-			<input type="number" class="input w-full" bind:value={maxUses} min="0" max="1000" />
+			<input id="invite-max-uses" type="number" class="input w-full" bind:value={maxUses} min="0" max="1000" />
 		</div>
 
 		<div class="flex justify-end gap-2">

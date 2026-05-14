@@ -183,7 +183,7 @@ describe('channels store', () => {
 		expect(get(currentChannel)).toBeNull();
 	});
 
-	it('loadChannels replaces all channels for a guild', async () => {
+	it('loadChannels merges channels without dropping existing realtime entries', async () => {
 		// Pre-populate with an existing channel.
 		const existing = createMockChannel({ id: 'ch-old', name: 'old' });
 		updateChannel(existing);
@@ -198,11 +198,32 @@ describe('channels store', () => {
 		await loadChannels('guild-1');
 
 		const map = get(channels);
-		expect(map.size).toBe(2);
-		expect(map.has('ch-old')).toBe(false);
+		expect(map.size).toBe(3);
+		expect(map.has('ch-old')).toBe(true);
 		expect(map.has('ch-new-1')).toBe(true);
 		expect(map.has('ch-new-2')).toBe(true);
 		expect(map.get('ch-new-1')?.name).toBe('new-general');
+	});
+
+	it('loadChannels ignores stale responses from earlier requests', async () => {
+		let resolveFirst: (channels: Channel[]) => void = () => {};
+		let resolveSecond: (channels: Channel[]) => void = () => {};
+		vi.mocked(api.getGuildChannels)
+			.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }))
+			.mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve; }));
+
+		const firstLoad = loadChannels('guild-1');
+		const secondLoad = loadChannels('guild-2');
+
+		resolveSecond([createMockChannel({ id: 'guild-2-channel', guild_id: 'guild-2', name: 'newer' })]);
+		await secondLoad;
+
+		resolveFirst([createMockChannel({ id: 'guild-1-channel', guild_id: 'guild-1', name: 'older' })]);
+		await firstLoad;
+
+		const map = get(channels);
+		expect(map.has('guild-2-channel')).toBe(true);
+		expect(map.has('guild-1-channel')).toBe(false);
 	});
 });
 

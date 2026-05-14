@@ -216,9 +216,10 @@
 				{#if activeTab === 'federated'}
 					<!-- Peer selector -->
 					<div class="mb-3">
-						<label class="mb-1 block text-xs font-medium text-text-muted">Select Instance</label>
-						<select
-							class="input w-full"
+					<label class="mb-1 block text-xs font-medium text-text-muted" for="federated-peer-select">Select Instance</label>
+					<select
+						id="federated-peer-select"
+						class="input w-full"
 							onchange={(e) => (selectedPeerId = (e.target as HTMLSelectElement).value)}
 							value={selectedPeerId}
 						>
@@ -464,7 +465,7 @@
 										<span class="h-2 w-2 rounded-full bg-green-500"></span>
 										{peer.status}
 									</span>
-									<span>Since {formatDate(peer.established_at)}</span>
+									<span>Since {formatDate(peer.created_at)}</span>
 								</div>
 								<p class="mt-3 text-xs text-blue-400">Browse servers &rarr;</p>
 							</button>

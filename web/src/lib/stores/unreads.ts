@@ -134,6 +134,14 @@ export function incrementUnread(channelId: string, isMention: boolean = false) {
 	}
 }
 
+// Increment only the mention count for a channel that has already been marked unread.
+export function incrementMention(channelId: string) {
+	if (get(currentChannelId) === channelId) return;
+
+	const current = get(unreadState).get(channelId) ?? { lastReadId: null, mentionCount: 0 };
+	unreadState.setEntry(channelId, { ...current, mentionCount: current.mentionCount + 1 });
+}
+
 // Clear unreads when viewing a channel.
 export function clearChannelUnreads(channelId: string) {
 	unreadCounts.removeEntry(channelId);

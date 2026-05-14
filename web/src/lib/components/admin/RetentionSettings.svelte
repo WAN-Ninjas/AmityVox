@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	interface RetentionPolicy {
 		id: string;
@@ -87,7 +88,7 @@
 	}
 
 	async function deletePolicy(policyId: string) {
-		if (!confirm('Delete this retention policy? This action cannot be undone.')) return;
+		if (!(await confirmAction({ title: 'Delete Retention Policy', message: 'Delete this retention policy? This action cannot be undone.', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteAdminRetentionPolicy(policyId);
 			policies = policies.filter(p => p.id !== policyId);
@@ -98,7 +99,7 @@
 	}
 
 	async function runPolicy(policyId: string) {
-		if (!confirm('Run this retention policy now? Messages older than the retention period will be permanently deleted.')) return;
+		if (!(await confirmAction({ title: 'Run Retention Policy', message: 'Run this retention policy now? Messages older than the retention period will be permanently deleted.', confirmLabel: 'Run Now', variant: 'primary' }))) return;
 		runningPolicyId = policyId;
 		try {
 			const result = await api.runAdminRetentionPolicy(policyId);
