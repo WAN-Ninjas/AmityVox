@@ -4,8 +4,8 @@ rtc:
   port_range_start: 50000
   port_range_end: 50100
   use_external_ip: false
-  # Set this to your server's public IP address.
-  node_ip: 0.0.0.0
+  # Set this to your server's public IP address or DNS name.
+  node_ip: "YOUR_PUBLIC_IP_OR_DNS"
 turn:
   enabled: true
   udp_port: 443
