@@ -22,7 +22,8 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 - [x] Make federated guild join mirror writes transactional.
 - [ ] Store full federated channel, role, member, DM, and message data instead of partial mirrors.
   - Guild join mirrors now store richer channel/role/member data.
-  - Remaining gaps: federated DM mirrors, invite/manage member paths, channel-create replay, and remote guild post messages.
+  - Federated DM create/message/update/delete/reaction mirrors now carry stable ownership and route through dedicated DM endpoints.
+  - Remaining gaps: invite/manage member paths, channel-create replay, and remote guild post messages.
 - [x] Reject malformed federation envelopes that omit required `guild_id`.
 - [ ] Record replayable federation events for host-side guild/channel/role/member/message mutations.
   - Host-side events are now recorded, but replay idempotency still needs stable event identity/dedupe.
@@ -67,17 +68,18 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 
 ## Reopened Feature-Completion Backlog
 
-1. [ ] Complete federated DM parity.
+1. [x] Complete federated DM parity.
    - Done: set `channels.instance_id` for remote-created DM/group mirrors.
    - Done: persist federated DM messages with `messages.instance_id`, rich fields, attachments, and embeds.
    - Done: route local DM `MESSAGE_CREATE` events through the dedicated DM federation endpoint instead of the guild inbox.
-   - Remaining: DM update/delete/reaction federation parity.
+   - Done: federate DM message edits, deletes, reaction adds, and reaction removals through signed dedicated DM endpoints.
 2. [ ] Make federation event replay idempotent.
    - Done: stored federation events now use a deterministic ID derived from instance, event type, guild/channel, HLC, and payload.
    - Done: anonymous federated embeds now get deterministic IDs during replay.
+   - Done: event ID hashing now compacts JSON payloads so whitespace-only replay differences do not duplicate rows.
    - Remaining: broader integration coverage for repeated cross-instance backfill.
-3. [ ] Close remaining federation `instance_id` write gaps.
-   - Remote guild post messages, channel-create replay, invite accept membership, and manage-created channels/roles/members need explicit ownership semantics.
+3. [x] Close remaining federation `instance_id` write gaps.
+   - Done: remote guild post messages, channel-create replay, invite accept membership, manage-created channels/roles, and manage member joins now write explicit ownership.
 4. [ ] Replace frontend reconnect message-only fetch with real missed-event reconciliation.
 5. [ ] Finish API error standardization across high-traffic routes and settings panes.
 6. [ ] Finish async-state consolidation for search, theme, discover, and admin surfaces.

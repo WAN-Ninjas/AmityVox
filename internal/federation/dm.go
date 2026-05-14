@@ -43,6 +43,20 @@ type federatedDMMessageRequest struct {
 	Message         federatedMessageData `json:"message"`
 }
 
+// federatedDMMessageDeleteRequest is the signed payload for deleting a DM message.
+type federatedDMMessageDeleteRequest struct {
+	RemoteChannelID string `json:"remote_channel_id"`
+	MessageID       string `json:"message_id"`
+}
+
+// federatedDMReactionRequest is the signed payload for mutating a DM reaction.
+type federatedDMReactionRequest struct {
+	RemoteChannelID string `json:"remote_channel_id"`
+	MessageID       string `json:"message_id"`
+	UserID          string `json:"user_id"`
+	Emoji           string `json:"emoji"`
+}
+
 // federatedMessageData carries the message content for federation.
 type federatedMessageData struct {
 	ID                  string                `json:"id"`
@@ -66,6 +80,7 @@ type federatedMessageData struct {
 	Attachments         []federatedAttachment `json:"attachments,omitempty"`
 	Embeds              []federatedEmbed      `json:"embeds,omitempty"`
 	CreatedAt           time.Time             `json:"created_at"`
+	EditedAt            *time.Time            `json:"edited_at,omitempty"`
 }
 
 // federatedDMRecipientRequest is the signed payload for adding/removing recipients.
@@ -451,6 +466,246 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 }
 
+// HandleFederatedDMMessageUpdate handles POST /federation/v1/dm/message/update.
+func (ss *SyncService) HandleFederatedDMMessageUpdate(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var req federatedDMMessageRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.RemoteChannelID == "" || req.Message.ID == "" || req.Message.AuthorID == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	if !ss.validateSenderUser(ctx, w, senderID, req.Message.AuthorID) {
+		return
+	}
+	localChannelID, ok := ss.lookupFederatedDMLocalChannel(ctx, w, req.RemoteChannelID, senderID)
+	if !ok {
+		return
+	}
+
+	editedAt := time.Now().UTC()
+	if req.Message.EditedAt != nil && !req.Message.EditedAt.IsZero() {
+		editedAt = *req.Message.EditedAt
+	}
+
+	tx, err := ss.fed.pool.Begin(ctx)
+	if err != nil {
+		ss.logger.Error("failed to begin federated DM message update tx",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE messages
+		    SET content = $1, edited_at = $2, flags = $3,
+		        mention_user_ids = $4, mention_role_ids = $5, mention_here = $6,
+		        masquerade_name = $7, masquerade_avatar = $8, masquerade_color = $9,
+		        encrypted = $10, encryption_session_id = $11,
+		        voice_duration_ms = $12, voice_waveform = $13
+		  WHERE id = $14 AND channel_id = $15`,
+		req.Message.Content, editedAt, req.Message.Flags,
+		req.Message.MentionUserIDs, req.Message.MentionRoleIDs, req.Message.MentionHere,
+		req.Message.MasqueradeName, req.Message.MasqueradeAvatar, req.Message.MasqueradeColor,
+		req.Message.Encrypted, req.Message.EncryptionSessionID,
+		req.Message.VoiceDurationMs, req.Message.VoiceWaveform,
+		req.Message.ID, localChannelID,
+	)
+	if err != nil {
+		ss.logger.Error("failed to persist federated DM message update",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+	if len(req.Message.Attachments) > 0 {
+		if err := ss.upsertFederatedAttachments(ctx, tx, senderID, req.Message.ID, req.Message.Attachments); err != nil {
+			ss.logger.Error("failed to persist federated DM update attachments",
+				slog.String("message_id", req.Message.ID),
+				slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(req.Message.Embeds) > 0 {
+		if err := ss.upsertFederatedEmbeds(ctx, tx, senderID, req.Message.ID, req.Message.Embeds); err != nil {
+			ss.logger.Error("failed to persist federated DM update embeds",
+				slog.String("message_id", req.Message.ID),
+				slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		ss.logger.Error("failed to commit federated DM message update tx",
+			slog.String("message_id", req.Message.ID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	msg := map[string]interface{}{
+		"id":               req.Message.ID,
+		"channel_id":       localChannelID,
+		"author_id":        req.Message.AuthorID,
+		"content":          req.Message.Content,
+		"instance_id":      senderID,
+		"message_type":     req.Message.MessageType,
+		"flags":            req.Message.Flags,
+		"mention_user_ids": req.Message.MentionUserIDs,
+		"mention_role_ids": req.Message.MentionRoleIDs,
+		"mention_here":     req.Message.MentionHere,
+		"edited_at":        editedAt,
+	}
+	if len(req.Message.Attachments) > 0 {
+		msg["attachments"] = req.Message.Attachments
+	}
+	if len(req.Message.Embeds) > 0 {
+		msg["embeds"] = req.Message.Embeds
+	}
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageUpdate, "MESSAGE_UPDATE", localChannelID, msg)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+}
+
+// HandleFederatedDMMessageDelete handles POST /federation/v1/dm/message/delete.
+func (ss *SyncService) HandleFederatedDMMessageDelete(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var req federatedDMMessageDeleteRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.RemoteChannelID == "" || req.MessageID == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	localChannelID, ok := ss.lookupFederatedDMLocalChannel(ctx, w, req.RemoteChannelID, senderID)
+	if !ok {
+		return
+	}
+
+	if _, err := ss.fed.pool.Exec(ctx,
+		`DELETE FROM messages WHERE id = $1 AND channel_id = $2`,
+		req.MessageID, localChannelID); err != nil {
+		ss.logger.Error("failed to delete federated DM message",
+			slog.String("message_id", req.MessageID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageDelete, "MESSAGE_DELETE", localChannelID, map[string]string{
+		"id":          req.MessageID,
+		"channel_id":  localChannelID,
+		"instance_id": senderID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleFederatedDMReactionAdd handles POST /federation/v1/dm/reaction/add.
+func (ss *SyncService) HandleFederatedDMReactionAdd(w http.ResponseWriter, r *http.Request) {
+	ss.handleFederatedDMReaction(w, r, true)
+}
+
+// HandleFederatedDMReactionRemove handles POST /federation/v1/dm/reaction/remove.
+func (ss *SyncService) HandleFederatedDMReactionRemove(w http.ResponseWriter, r *http.Request) {
+	ss.handleFederatedDMReaction(w, r, false)
+}
+
+func (ss *SyncService) handleFederatedDMReaction(w http.ResponseWriter, r *http.Request, add bool) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var req federatedDMReactionRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.RemoteChannelID == "" || req.MessageID == "" || req.UserID == "" || req.Emoji == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+	localChannelID, ok := ss.lookupFederatedDMLocalChannel(ctx, w, req.RemoteChannelID, senderID)
+	if !ok {
+		return
+	}
+
+	var exists bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2)`,
+		req.MessageID, localChannelID).Scan(&exists); err != nil || !exists {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+
+	if add {
+		if _, err := ss.fed.pool.Exec(ctx,
+			`INSERT INTO reactions (message_id, user_id, emoji, instance_id, created_at)
+			 VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING`,
+			req.MessageID, req.UserID, req.Emoji, senderID); err != nil {
+			ss.logger.Error("failed to add federated DM reaction", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionAdd, "MESSAGE_REACTION_ADD", localChannelID, map[string]string{
+			"message_id":  req.MessageID,
+			"channel_id":  localChannelID,
+			"user_id":     req.UserID,
+			"emoji":       req.Emoji,
+			"instance_id": senderID,
+		})
+	} else {
+		if _, err := ss.fed.pool.Exec(ctx,
+			`DELETE FROM reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+			req.MessageID, req.UserID, req.Emoji); err != nil {
+			ss.logger.Error("failed to remove federated DM reaction", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		ss.bus.PublishChannelEvent(ctx, events.SubjectMessageReactionDel, "MESSAGE_REACTION_REMOVE", localChannelID, map[string]string{
+			"message_id":  req.MessageID,
+			"channel_id":  localChannelID,
+			"user_id":     req.UserID,
+			"emoji":       req.Emoji,
+			"instance_id": senderID,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // HandleFederatedDMRecipientAdd handles POST /federation/v1/dm/recipient-add —
 // adds a user to a local mirror of a group DM.
 func (ss *SyncService) HandleFederatedDMRecipientAdd(w http.ResponseWriter, r *http.Request) {
@@ -647,6 +902,25 @@ func (ss *SyncService) verifyFederationRequest(w http.ResponseWriter, r *http.Re
 	}
 
 	return &signed, signed.SenderID, true
+}
+
+func (ss *SyncService) lookupFederatedDMLocalChannel(ctx context.Context, w http.ResponseWriter, remoteChannelID, remoteInstanceID string) (string, bool) {
+	var localChannelID string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT local_channel_id FROM federation_dm_channel_map
+		 WHERE remote_channel_id = $1 AND remote_instance_id = $2 LIMIT 1`,
+		remoteChannelID, remoteInstanceID,
+	).Scan(&localChannelID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			http.Error(w, "Unknown channel", http.StatusNotFound)
+		} else {
+			ss.logger.Error("failed to lookup channel mirror", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+		}
+		return "", false
+	}
+	return localChannelID, true
 }
 
 // NotifyFederatedDM sends a DM creation notification to a remote instance.

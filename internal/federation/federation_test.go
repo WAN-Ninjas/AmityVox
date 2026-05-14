@@ -362,6 +362,21 @@ func TestStableFederationEventID(t *testing.T) {
 	}
 }
 
+func TestStableFederationEventID_CompactsJSONPayload(t *testing.T) {
+	ts := HLCTimestamp{WallMs: 1234, Counter: 2}
+	compact := json.RawMessage(`{"content":"hello","id":"msg-1"}`)
+	spaced := json.RawMessage(`{
+		"content": "hello",
+		"id": "msg-1"
+	}`)
+
+	first := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, compact)
+	second := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, spaced)
+	if first != second {
+		t.Fatalf("stable event ID should ignore JSON whitespace: %q != %q", first, second)
+	}
+}
+
 func TestStableFederatedEmbedID(t *testing.T) {
 	embed := federatedEmbed{URL: testPtr("https://example.test"), Title: testPtr("Example")}
 	first := stableFederatedEmbedID("msg-1", 0, embed)
