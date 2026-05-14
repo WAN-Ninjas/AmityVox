@@ -2,7 +2,7 @@
 	import { tick, untrack } from 'svelte';
 	import type { Message, Channel } from '$lib/types';
 	import { currentChannelId } from '$lib/stores/channels';
-	import { messagesByChannel, loadMessages, isLoadingMessages } from '$lib/stores/messages';
+	import { messagesByChannel, loadMessages, loadingMessagesByChannel } from '$lib/stores/messages';
 	import { unreadCounts, getLastReadId } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
@@ -124,6 +124,11 @@
 		return $messagesByChannel.get(channelId) ?? ([] as Message[]);
 	});
 
+	const currentChannelLoading = $derived.by(() => {
+		const channelId = $currentChannelId;
+		return channelId ? ($loadingMessagesByChannel.get(channelId) ?? false) : false;
+	});
+
 	// Track the last-read message ID for the current channel.
 	const lastReadId = $derived.by(() => {
 		const channelId = $currentChannelId;
@@ -193,7 +198,7 @@
 		shouldAutoScroll = scrollHeight - scrollTop - clientHeight < 100;
 
 		// Load more when scrolled to top.
-		if (scrollTop < 50 && !$isLoadingMessages && messages.length > 0) {
+		if (scrollTop < 50 && !currentChannelLoading && messages.length > 0) {
 			const channelId = $currentChannelId;
 			if (channelId) {
 				loadMessages(channelId, messages[0]?.id);
@@ -356,7 +361,7 @@
 		class="h-full overflow-y-auto"
 		onscroll={handleScroll}
 	>
-	{#if $isLoadingMessages && messages.length === 0}
+	{#if currentChannelLoading && messages.length === 0}
 		<div class="flex h-full items-center justify-center">
 			<div class="text-center">
 				<div class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
@@ -462,8 +467,16 @@
 
 	<!-- Bulk delete confirmation dialog -->
 	{#if showBulkConfirm}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showBulkConfirm = false)}>
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+			role="button"
+			tabindex="0"
+			onclick={() => (showBulkConfirm = false)}
+			onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') showBulkConfirm = false; }}
+			aria-label="Close delete confirmation"
+		>
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<div class="w-96 rounded-lg bg-bg-floating p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
 				<h3 class="mb-2 text-lg font-semibold text-text-primary">Delete Messages</h3>
 				<p class="mb-4 text-sm text-text-secondary">

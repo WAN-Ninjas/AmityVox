@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Message, Channel } from '$lib/types';
+	import type { Message, Channel, Embed } from '$lib/types';
 	import Avatar from '$components/common/Avatar.svelte';
 	import ContextMenu from '$components/common/ContextMenu.svelte';
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
@@ -33,6 +33,7 @@
 	import { clientNicknames } from '$lib/stores/nicknames';
 	import { isEmojiOnly } from '$lib/utils/emoji';
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
+	import { clientConfig, isExperimentalEnabled } from '$lib/stores/clientConfig';
 
 	interface Props {
 		message: Message;
@@ -44,6 +45,20 @@
 	}
 
 	let { message, isCompact = false, isLastInGroup = true, groupMessageIds, onscrollto, onopenthread }: Props = $props();
+
+	interface CrossChannelQuoteEmbed extends Embed {
+		type: 'cross_channel_quote';
+		quote_message_id: string;
+		quote_channel_id: string;
+	}
+
+	function isCrossChannelQuoteEmbed(embed: Embed): embed is CrossChannelQuoteEmbed {
+		return (
+			embed.type === 'cross_channel_quote' &&
+			typeof (embed as Partial<CrossChannelQuoteEmbed>).quote_message_id === 'string' &&
+			typeof (embed as Partial<CrossChannelQuoteEmbed>).quote_channel_id === 'string'
+		);
+	}
 
 	let contextMenu = $state<{ x: number; y: number } | null>(null);
 	let attachmentContextMenu = $state<{ x: number; y: number; attachment: any } | null>(null);
@@ -449,14 +464,14 @@
 	}
 
 	async function submitQuoteInChannel() {
-		if (!quoteTargetChannelId.trim()) return;
+		const targetChannelId = quoteTargetChannelId.trim();
+		if (!targetChannelId) return;
 		quotingInChannel = true;
 		try {
-			await api.createMessage(quoteTargetChannelId.trim(), {
-				content: `> **Quoted from <#${message.channel_id}>:**\n> ${message.content?.slice(0, 500) ?? ''}\n\n`,
+			await api.sendMessage(targetChannelId, `> **Quoted from <#${message.channel_id}>:**\n> ${message.content?.slice(0, 500) ?? ''}\n\n`, {
 				quote_message_id: message.id,
 				quote_channel_id: message.channel_id
-			});
+			} as any);
 			addToast('Quote sent', 'success');
 			showQuoteInChannel = false;
 			quoteTargetChannelId = '';
@@ -482,6 +497,8 @@
 		}
 	}
 </script>
+
+<svelte:window onkeydown={(e) => showReportModal && e.key === 'Escape' && (showReportModal = false)} />
 
 <!-- Fully blocked users: render nothing -->
 {#if blockLevel === 'block'}
@@ -675,10 +692,10 @@
 				</div>
 			{:else if imageOnlyUrl}
 				<!-- Message is a single image/GIF URL — render inline -->
-				<button class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl)}>
-					<img
-						src={imageOnlyUrl}
-						alt="Linked image"
+					<button type="button" class="mt-1 block" onclick={() => (lightboxSrc = imageOnlyUrl)} aria-label="Open linked media">
+						<img
+							src={imageOnlyUrl}
+							alt="Linked media"
 						class="max-h-72 max-w-full rounded"
 						loading="lazy"
 						onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
@@ -695,15 +712,15 @@
 					{/if}
 					<MarkdownRenderer content={displayContent} members={$guildMembers} roles={$guildRolesMap} />
 				</div>
-				{#if !message.encrypted && isLastInGroup}
+				{#if !message.encrypted && isLastInGroup && isExperimentalEnabled($clientConfig, 'translation')}
 					<TranslateButton channelId={message.channel_id} messageIds={groupMessageIds ?? [message.id]} />
 				{/if}
 			{/if}
 
 			<!-- Cross-channel quote embed -->
-			{#if message.embeds?.some(e => e.type === 'cross_channel_quote')}
-				{@const quoteEmbed = message.embeds.find(e => e.type === 'cross_channel_quote')}
-				{#if quoteEmbed?.quote_message_id && quoteEmbed?.quote_channel_id}
+			{#if message.embeds?.some(isCrossChannelQuoteEmbed)}
+				{@const quoteEmbed = message.embeds.find(isCrossChannelQuoteEmbed)}
+				{#if quoteEmbed}
 					<CrossChannelQuote
 						quoteMessageId={quoteEmbed.quote_message_id}
 						quoteChannelId={quoteEmbed.quote_channel_id}
@@ -723,14 +740,15 @@
 								onlightbox={(src) => (lightboxSrc = src)}
 								oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
 							/>
-						{:else if attachment.content_type?.startsWith('image/')}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							{#if shouldBlurImage(attachment.id)}
-								<div
-									class="relative max-h-80 max-w-md cursor-pointer overflow-hidden rounded"
-									onclick={() => revealImage(attachment.id)}
-								>
-									<img
+							{:else if attachment.content_type?.startsWith('image/')}
+								{#if shouldBlurImage(attachment.id)}
+									<button
+										type="button"
+										class="relative max-h-80 max-w-md cursor-pointer overflow-hidden rounded"
+										onclick={() => revealImage(attachment.id)}
+										aria-label="Reveal NSFW image"
+									>
+										<img
 										src={fileUrl(attachment.id, attachment.instance_id || undefined)}
 										alt={attachment.alt_text || attachment.filename}
 										class="max-h-80 max-w-md rounded transition-[filter]"
@@ -739,29 +757,41 @@
 									/>
 									<div class="absolute inset-0 flex items-center justify-center bg-black/30">
 										<span class="rounded bg-bg-floating/80 px-3 py-1.5 text-xs font-medium text-text-primary">
-											Click to reveal NSFW image
-										</span>
-									</div>
-								</div>
-							{:else if isStickerMessage}
-								<img
-									src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-									alt={attachment.alt_text || attachment.filename}
-									class="h-40 w-40 object-contain cursor-pointer hover:scale-105 transition-transform"
-									loading="lazy"
-									onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
-									oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-								/>
-							{:else}
-								<div class="inline-flex flex-col">
-									<img
-										src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-										alt={attachment.alt_text || attachment.filename}
-										class="max-h-80 max-w-md rounded cursor-pointer hover:brightness-90 transition-[filter]"
-										loading="lazy"
+												Click to reveal NSFW image
+											</span>
+										</div>
+									</button>
+								{:else if isStickerMessage}
+									<button
+										type="button"
+										class="block"
 										onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
 										oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-									/>
+										aria-label="Open {attachment.alt_text || attachment.filename}"
+									>
+										<img
+											src={fileUrl(attachment.id, attachment.instance_id || undefined)}
+											alt={attachment.alt_text || attachment.filename}
+											class="h-40 w-40 object-contain transition-transform hover:scale-105"
+											loading="lazy"
+										/>
+									</button>
+								{:else}
+									<div class="inline-flex flex-col">
+										<button
+											type="button"
+											class="block"
+											onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
+											oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
+											aria-label="Open {attachment.alt_text || attachment.filename}"
+										>
+											<img
+												src={fileUrl(attachment.id, attachment.instance_id || undefined)}
+												alt={attachment.alt_text || attachment.filename}
+												class="max-h-80 max-w-md rounded transition-[filter] hover:brightness-90"
+												loading="lazy"
+											/>
+										</button>
 									{#if attachment.alt_text}
 										<span class="mt-0.5 max-w-md text-2xs text-text-muted">{attachment.alt_text}</span>
 									{/if}
@@ -987,13 +1017,15 @@
 
 <!-- Report message modal -->
 {#if showReportModal}
-	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showReportModal = false} onkeydown={(e) => e.key === 'Escape' && (showReportModal = false)} role="dialog" tabindex="-1">
-		<div class="w-96 rounded-lg bg-bg-secondary p-4 shadow-xl" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
-			<h3 class="mb-3 text-lg font-semibold text-text-primary">Report Message</h3>
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="report-message-title">
+		<button type="button" class="absolute inset-0 h-full w-full cursor-default" aria-label="Close report message dialog" onclick={() => showReportModal = false}></button>
+		<div class="relative z-10 w-96 rounded-lg bg-bg-secondary p-4 shadow-xl">
+			<h3 id="report-message-title" class="mb-3 text-lg font-semibold text-text-primary">Report Message</h3>
 			<p class="mb-2 text-sm text-text-muted">This will be sent to instance moderators for review.</p>
 			<textarea
 				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
 				placeholder="Why are you reporting this message?"
+				aria-label="Report reason"
 				rows="3"
 				bind:value={reportReason}
 			></textarea>
@@ -1052,10 +1084,10 @@
 
 <!-- Forward message modal -->
 {#if showForward}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showForward = false)}>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="w-96 rounded-lg bg-bg-floating p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
-			<h3 class="mb-4 text-lg font-semibold text-text-primary">Forward Message</h3>
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="forward-message-title">
+		<button type="button" class="absolute inset-0 h-full w-full cursor-default" aria-label="Close forward message dialog" onclick={() => (showForward = false)}></button>
+		<div class="relative z-10 w-96 rounded-lg bg-bg-floating p-6 shadow-xl">
+			<h3 id="forward-message-title" class="mb-4 text-lg font-semibold text-text-primary">Forward Message</h3>
 			<p class="mb-3 text-sm text-text-muted">
 				Enter the channel ID to forward this message to:
 			</p>
@@ -1063,10 +1095,12 @@
 				{message.content?.slice(0, 100)}{(message.content?.length ?? 0) > 100 ? '...' : ''}
 			</div>
 			<input
+				id="forward-target-channel"
 				type="text"
 				class="input mb-4 w-full"
 				bind:value={forwardTargetId}
 				placeholder="Target channel ID"
+				aria-label="Target channel ID"
 				onkeydown={(e) => e.key === 'Enter' && submitForward()}
 			/>
 			<div class="flex justify-end gap-2">
@@ -1081,10 +1115,10 @@
 
 <!-- Quote in channel modal -->
 {#if showQuoteInChannel}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showQuoteInChannel = false)}>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="w-96 rounded-lg bg-bg-floating p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
-			<h3 class="mb-4 text-lg font-semibold text-text-primary">Quote in Another Channel</h3>
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="quote-channel-title">
+		<button type="button" class="absolute inset-0 h-full w-full cursor-default" aria-label="Close quote dialog" onclick={() => (showQuoteInChannel = false)}></button>
+		<div class="relative z-10 w-96 rounded-lg bg-bg-floating p-6 shadow-xl">
+			<h3 id="quote-channel-title" class="mb-4 text-lg font-semibold text-text-primary">Quote in Another Channel</h3>
 			<p class="mb-3 text-sm text-text-muted">
 				Enter the channel ID to send this quote to:
 			</p>
@@ -1093,10 +1127,12 @@
 				{message.content?.slice(0, 150)}{(message.content?.length ?? 0) > 150 ? '...' : ''}
 			</div>
 			<input
+				id="quote-target-channel"
 				type="text"
 				class="input mb-4 w-full"
 				bind:value={quoteTargetChannelId}
 				placeholder="Target channel ID"
+				aria-label="Target channel ID"
 				onkeydown={(e) => e.key === 'Enter' && submitQuoteInChannel()}
 			/>
 			<div class="flex justify-end gap-2">

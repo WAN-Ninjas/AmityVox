@@ -213,9 +213,9 @@
 				<h4 class="settings-title">Voice Settings</h4>
 
 				<!-- Input Mode -->
-				<div class="setting-group">
-					<label class="setting-label">Input Mode</label>
-					<div class="radio-group">
+					<div class="setting-group">
+						<div id="voice-input-mode-label" class="setting-label">Input Mode</div>
+						<div class="radio-group" role="radiogroup" aria-labelledby="voice-input-mode-label">
 						<label class="radio-option">
 							<input
 								type="radio"
@@ -242,8 +242,8 @@
 				<!-- PTT Keybind -->
 				{#if inputMode === 'ptt'}
 					<div class="setting-group">
-						<label class="setting-label">PTT Keybind</label>
-						<button
+							<div class="setting-label">PTT Keybind</div>
+							<button
 							class="keybind-btn"
 							class:recording={recordingPTTKey}
 							onclick={() => recordingPTTKey = !recordingPTTKey}
@@ -256,12 +256,13 @@
 				<!-- VAD Threshold -->
 				{#if inputMode === 'vad'}
 					<div class="setting-group">
-						<label class="setting-label">
-							Sensitivity
-							<span class="setting-value">{Math.round(vadThreshold * 100)}%</span>
-						</label>
-						<input
-							type="range"
+							<label class="setting-label" for="voice-vad-threshold">
+								Sensitivity
+								<span class="setting-value">{Math.round(vadThreshold * 100)}%</span>
+							</label>
+							<input
+								id="voice-vad-threshold"
+								type="range"
 							min="0"
 							max="1"
 							step="0.05"
@@ -274,12 +275,13 @@
 
 				<!-- Input Volume -->
 				<div class="setting-group">
-					<label class="setting-label">
-						Input Volume
-						<span class="setting-value">{Math.round(inputVolume * 100)}%</span>
-					</label>
-					<input
-						type="range"
+						<label class="setting-label" for="voice-input-volume">
+							Input Volume
+							<span class="setting-value">{Math.round(inputVolume * 100)}%</span>
+						</label>
+						<input
+							id="voice-input-volume"
+							type="range"
 						min="0"
 						max="2"
 						step="0.05"
@@ -291,12 +293,13 @@
 
 				<!-- Output Volume -->
 				<div class="setting-group">
-					<label class="setting-label">
-						Output Volume
-						<span class="setting-value">{Math.round(outputVolume * 100)}%</span>
-					</label>
-					<input
-						type="range"
+						<label class="setting-label" for="voice-output-volume">
+							Output Volume
+							<span class="setting-value">{Math.round(outputVolume * 100)}%</span>
+						</label>
+						<input
+							id="voice-output-volume"
+							type="range"
 						min="0"
 						max="2"
 						step="0.05"
@@ -307,8 +310,8 @@
 				</div>
 
 				<!-- Audio Processing -->
-				<div class="setting-group">
-					<label class="setting-label">Audio Processing</label>
+					<div class="setting-group">
+						<div class="setting-label">Audio Processing</div>
 					<div class="toggle-list">
 						<label class="toggle-option">
 							<input

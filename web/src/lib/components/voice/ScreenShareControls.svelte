@@ -45,7 +45,7 @@
 		}
 	}
 
-	function getScreenEncoding(): { maxBitrate: number; maxFramerate: number; priority: string } {
+	function getScreenEncoding(): { maxBitrate: number; maxFramerate: number; priority: 'high' } {
 		const bitrateMap: Record<string, Record<number, number>> = {
 			'720p':  { 15: 1_500_000, 30: 2_000_000, 60: 3_000_000 },
 			'1080p': { 15: 2_500_000, 30: 5_000_000, 60: 7_000_000 },
@@ -70,12 +70,13 @@
 			error = null;
 
 			const res = getResolutionConstraints();
-			await room.localParticipant.setScreenShareEnabled(true, {
-				audio: audioEnabled,
-				resolution: { width: res.width, height: res.height, frameRate: framerate },
-				contentHint: 'detail',
-				videoEncoding: getScreenEncoding()
-			});
+				await room.localParticipant.setScreenShareEnabled(true, {
+					audio: audioEnabled,
+					resolution: { width: res.width, height: res.height, frameRate: framerate },
+					contentHint: 'detail'
+				}, {
+					videoEncoding: getScreenEncoding()
+				});
 
 			isSharing = true;
 			showSettings = false;
@@ -132,8 +133,8 @@
 				<h4 class="m-0 text-sm font-semibold text-text-primary">Screen Share Settings</h4>
 
 				<div class="flex flex-col gap-1">
-					<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary">Resolution</label>
-					<select class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={resolution}>
+					<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary" for="screen-share-resolution">Resolution</label>
+					<select id="screen-share-resolution" class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={resolution}>
 						<option value="720p">720p (HD)</option>
 						<option value="1080p">1080p (Full HD)</option>
 						<option value="4k">4K (Ultra HD)</option>
@@ -141,8 +142,8 @@
 				</div>
 
 				<div class="flex flex-col gap-1">
-					<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary">Frame Rate</label>
-					<select class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={framerate}>
+					<label class="text-2xs font-medium uppercase tracking-wide text-text-secondary" for="screen-share-framerate">Frame Rate</label>
+					<select id="screen-share-framerate" class="rounded border border-bg-tertiary bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500" bind:value={framerate}>
 						<option value={15}>15 fps (Low bandwidth)</option>
 						<option value={30}>30 fps (Standard)</option>
 						<option value={60}>60 fps (Smooth)</option>

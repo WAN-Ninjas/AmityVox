@@ -249,10 +249,11 @@
 						{user.display_name ?? user.username}
 					{/if}
 				</h3>
-				{#if user.flags & UserFlagVerified}
-					<svg class="h-4 w-4 text-brand-500" viewBox="0 0 24 24" fill="currentColor" title="Verified">
-						<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
-					</svg>
+					{#if user.flags & UserFlagVerified}
+						<svg class="h-4 w-4 text-brand-500" viewBox="0 0 24 24" fill="currentColor">
+							<title>Verified</title>
+							<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+						</svg>
 				{/if}
 				{#if user.flags & UserFlagBot}
 					<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-2xs font-bold text-brand-400">BOT</span>

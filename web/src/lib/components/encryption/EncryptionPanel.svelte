@@ -146,6 +146,7 @@
 				if (encrypted.length > 0) {
 					const decrypted: { id: string; content: string }[] = [];
 					for (const msg of encrypted) {
+						if (!msg.content) continue;
 						try {
 							const plaintext = await e2ee.decryptMessage(chId, msg.content);
 							decrypted.push({ id: msg.id, content: plaintext });

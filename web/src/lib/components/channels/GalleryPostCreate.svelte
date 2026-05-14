@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { GalleryTag } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
@@ -18,9 +19,9 @@
 	let title = $state('');
 	let description = $state('');
 	let selectedTagIds = $state<Set<string>>(new Set());
-	let pendingFiles = $state<File[]>(initialFiles ?? []);
+	let pendingFiles = $state<File[]>(untrack(() => initialFiles ?? []));
 	let creating = $state(false);
-	let showGuidelines = $state(!!guidelines);
+	let showGuidelines = $state(untrack(() => !!guidelines));
 	let fileInput: HTMLInputElement;
 
 	const ACCEPTED_TYPES = 'image/*,video/*';
@@ -226,10 +227,10 @@
 
 		<!-- Tag picker -->
 		{#if tags.length > 0}
-			<div>
-				<label class="mb-1.5 block text-xs font-medium text-text-secondary">
+			<fieldset class="m-0 min-w-0 border-0 p-0">
+				<legend class="mb-1.5 block text-xs font-medium text-text-secondary">
 					Tags {requireTags ? '(required)' : '(optional)'}
-				</label>
+				</legend>
 				<div class="flex flex-wrap gap-1.5">
 					{#each tags as tag (tag.id)}
 						<button
@@ -247,7 +248,7 @@
 						</button>
 					{/each}
 				</div>
-			</div>
+			</fieldset>
 		{/if}
 
 		<!-- Actions -->

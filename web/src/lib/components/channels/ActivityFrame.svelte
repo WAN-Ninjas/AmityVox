@@ -117,7 +117,7 @@
 		if (!session) return;
 		const sessionId = session.id;
 		await joinOp.run(async () => {
-			await api.joinActivitySession(channelId, sessionId);
+			await api.joinActivitySession(sessionId);
 			await loadActiveSession();
 		});
 		if (joinOp.error) {
@@ -128,7 +128,7 @@
 	async function leaveSession() {
 		if (!session) return;
 		try {
-			await api.leaveActivitySession(channelId, session.id);
+			await api.leaveActivitySession(session.id);
 			await loadActiveSession();
 		} catch {
 			// Ignore.
@@ -138,7 +138,7 @@
 	async function endSession() {
 		if (!session) return;
 		try {
-			await api.endActivitySession(channelId, session.id);
+			await api.endActivitySession(session.id);
 			session = null;
 			participants = [];
 			showBrowser = true;

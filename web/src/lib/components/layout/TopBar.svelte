@@ -75,11 +75,19 @@
 			{#if $currentChannel.topic}
 				<span class="mx-1 text-text-muted">|</span>
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<span
-					class="min-w-0 cursor-pointer text-sm text-text-muted {topicExpanded ? '' : 'truncate'}"
-					onclick={() => (topicExpanded = !topicExpanded)}
-					title={topicExpanded ? 'Click to collapse' : $currentChannel.topic}
-				>
+					<span
+						class="min-w-0 cursor-pointer text-sm text-text-muted {topicExpanded ? '' : 'truncate'}"
+						onclick={() => (topicExpanded = !topicExpanded)}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								topicExpanded = !topicExpanded;
+							}
+						}}
+						role="button"
+						tabindex="0"
+						title={topicExpanded ? 'Click to collapse' : $currentChannel.topic}
+					>
 					{$currentChannel.topic}
 				</span>
 			{/if}
@@ -183,10 +191,9 @@
 						<circle cx="12" cy="19" r="2" />
 					</svg>
 				</button>
-				{#if showMobileMenu}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div class="fixed inset-0 z-40" onclick={() => (showMobileMenu = false)}></div>
-					<div class="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg bg-bg-floating py-1 shadow-xl">
+					{#if showMobileMenu}
+						<button class="fixed inset-0 z-40 cursor-default" aria-label="Close mobile channel menu" onclick={() => (showMobileMenu = false)}></button>
+						<div class="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg bg-bg-floating py-1 shadow-xl">
 						{#if $canManageChannels}
 							<button
 								class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"

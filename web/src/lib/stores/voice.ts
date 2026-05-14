@@ -660,23 +660,26 @@ function handleTrackSubscribed(
 
 	// Attach video tracks (camera + screen share) to the videoTracks store.
 	if (track.kind === Track.Kind.Video) {
-		const isScreenShare = publication.source === Track.Source.ScreenShare;
-		const videoEl = track.attach() as HTMLVideoElement;
-		videoEl.autoplay = true;
-		videoEl.playsInline = true;
-		videoEl.muted = true; // Audio comes via separate audio track
-		const info: VideoTrackInfo = {
-			trackSid: track.sid,
-			userId,
-			source: isScreenShare ? 'screenshare' : 'camera',
-			videoElement: videoEl,
-			participantIdentity: participant.identity
-		};
-		videoTracks.update((map) => {
-			const next = new Map(map);
-			next.set(track.sid, info);
-			return next;
-		});
+		const trackSid = track.sid ?? publication.trackSid;
+		if (trackSid) {
+			const isScreenShare = publication.source === Track.Source.ScreenShare;
+			const videoEl = track.attach() as HTMLVideoElement;
+			videoEl.autoplay = true;
+			videoEl.playsInline = true;
+			videoEl.muted = true; // Audio comes via separate audio track
+			const info: VideoTrackInfo = {
+				trackSid,
+				userId,
+				source: isScreenShare ? 'screenshare' : 'camera',
+				videoElement: videoEl,
+				participantIdentity: participant.identity
+			};
+			videoTracks.update((map) => {
+				const next = new Map(map);
+				next.set(trackSid, info);
+				return next;
+			});
+		}
 	}
 
 	// Update the participant's mute state.
@@ -699,9 +702,10 @@ function handleTrackUnsubscribed(
 ) {
 	// Remove video track from store.
 	if (track.kind === Track.Kind.Video) {
+		const trackSid = track.sid ?? _publication.trackSid;
 		videoTracks.update((map) => {
 			const next = new Map(map);
-			next.delete(track.sid);
+			if (trackSid) next.delete(trackSid);
 			return next;
 		});
 	}
@@ -723,6 +727,8 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 	const metadata = parseMetadata(participant.metadata);
 	const userId = metadata.userId ?? participant.identity;
 	const isScreenShare = publication.source === Track.Source.ScreenShare;
+	const trackSid = track.sid ?? publication.trackSid;
+	if (!trackSid) return;
 
 	const videoEl = track.attach() as HTMLVideoElement;
 	videoEl.autoplay = true;
@@ -730,7 +736,7 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 	videoEl.muted = true; // Audio comes via separate audio track
 
 	const info: VideoTrackInfo = {
-		trackSid: track.sid,
+		trackSid,
 		userId,
 		source: isScreenShare ? 'screenshare' : 'camera',
 		videoElement: videoEl,
@@ -738,7 +744,7 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 	};
 	videoTracks.update((map) => {
 		const next = new Map(map);
-		next.set(track.sid, info);
+		next.set(trackSid, info);
 		return next;
 	});
 }
@@ -746,10 +752,11 @@ function handleLocalTrackPublished(publication: LocalTrackPublication, participa
 function handleLocalTrackUnpublished(publication: LocalTrackPublication, _participant: LocalParticipant) {
 	const track = publication.track;
 	if (!track || track.kind !== Track.Kind.Video) return;
+	const trackSid = track.sid ?? publication.trackSid;
 
 	videoTracks.update((map) => {
 		const next = new Map(map);
-		next.delete(track.sid);
+		if (trackSid) next.delete(trackSid);
 		return next;
 	});
 	track.detach().forEach((el) => el.remove());

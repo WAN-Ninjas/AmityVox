@@ -114,14 +114,15 @@
 				<p class="text-sm font-medium text-text-primary">Enable Server Widget</p>
 				<p class="text-xs text-text-muted">Allow external websites to show a widget with your server information.</p>
 			</div>
-			<button
-				class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out"
+				<button
+					class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out"
 				class:bg-brand-500={enabled}
 				class:bg-bg-modifier={!enabled}
-				onclick={() => (enabled = !enabled)}
-				role="switch"
-				aria-checked={enabled}
-			>
+					onclick={() => (enabled = !enabled)}
+					role="switch"
+					aria-checked={enabled}
+					aria-label="Enable server widget"
+				>
 				<span
 					class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
 					class:translate-x-5={enabled}
@@ -132,11 +133,11 @@
 
 		{#if enabled}
 			<!-- Style selector -->
-			<div>
-				<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-					Widget Style
-				</label>
-				<div class="flex flex-col gap-2">
+				<div>
+					<div id="widget-style-label" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
+						Widget Style
+					</div>
+					<div class="flex flex-col gap-2" role="radiogroup" aria-labelledby="widget-style-label">
 					{#each styleOptions as opt}
 						<label
 							class="flex cursor-pointer items-center gap-3 rounded-lg border border-bg-modifier bg-bg-secondary p-3 transition-colors hover:border-brand-500/30"
@@ -159,14 +160,14 @@
 			</div>
 
 			<!-- Invite channel -->
-			<div>
-				<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-					Invite Channel
-				</label>
+				<div>
+					<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted" for="widget-invite-channel">
+						Invite Channel
+					</label>
 				<p class="mb-2 text-xs text-text-muted">
 					Select a channel for the widget's invite button. An active invite must exist for this channel.
 				</p>
-				<select class="input w-full" bind:value={inviteChannelId}>
+					<select id="widget-invite-channel" class="input w-full" bind:value={inviteChannelId}>
 					<option value="">None (no invite button)</option>
 					{#each textChannels as ch}
 						<option value={ch.id}>#{ch.name}</option>

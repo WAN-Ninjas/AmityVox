@@ -12,6 +12,9 @@
 	} from '$lib/types';
 
 	type Tab = 'dashboard' | 'message_reports' | 'user_reports' | 'issues';
+	type IssueFilter = '' | ReportedIssue['status'] | 'all';
+	type ResolutionStatus = 'resolved' | 'dismissed';
+	type IssueResolutionStatus = ResolutionStatus | 'in_progress';
 	let currentTab = $state<Tab>('dashboard');
 
 	// --- Dashboard ---
@@ -32,7 +35,7 @@
 	let issues = $state<ReportedIssue[]>([]);
 	let loadingIssues = $state(false);
 	let issuesLoaded = $state(false);
-	let issueFilter = $state<string>('');  // '' = active (open+in_progress), 'all', 'open', 'in_progress', 'resolved', 'dismissed'
+	let issueFilter = $state<IssueFilter>('');  // '' = active (open+in_progress), 'all', 'open', 'in_progress', 'resolved', 'dismissed'
 
 	// --- Resolve modal ---
 	let resolveModalOpen = $state(false);
@@ -95,7 +98,7 @@
 		}
 	}
 
-	function setIssueFilter(filter: string) {
+	function setIssueFilter(filter: IssueFilter) {
 		issueFilter = filter;
 		issuesLoaded = false;
 		loadIssues();
@@ -108,13 +111,15 @@
 		resolveModalOpen = true;
 	}
 
-	async function submitResolve(status: string) {
+	async function submitResolve(status: IssueResolutionStatus) {
 		resolving = true;
 		try {
 			if (resolveType === 'message_report') {
+				if (status === 'in_progress') return;
 				await api.resolveModerationMessageReport(resolveId, status, resolveNotes || undefined);
 				messageReports = messageReports.map(r => r.id === resolveId ? { ...r, status } : r);
 			} else if (resolveType === 'user_report') {
+				if (status === 'in_progress') return;
 				await api.resolveModerationUserReport(resolveId, status, resolveNotes || undefined);
 				userReports = userReports.map(r => r.id === resolveId ? { ...r, status } : r);
 			} else if (resolveType === 'issue') {
@@ -151,6 +156,15 @@
 	function formatDate(dateStr: string): string {
 		return new Date(dateStr).toLocaleString();
 	}
+
+	const issueFilters: { value: IssueFilter; label: string }[] = [
+		{ value: '', label: 'Active' },
+		{ value: 'open', label: 'Open' },
+		{ value: 'in_progress', label: 'In Progress' },
+		{ value: 'resolved', label: 'Resolved' },
+		{ value: 'dismissed', label: 'Dismissed' },
+		{ value: 'all', label: 'All' }
+	];
 
 	$effect(() => {
 		if (currentTab === 'dashboard') loadStats();
@@ -348,14 +362,7 @@
 					</button>
 				</div>
 				<div class="mb-4 flex flex-wrap gap-1.5">
-					{#each [
-						{ value: '', label: 'Active' },
-						{ value: 'open', label: 'Open' },
-						{ value: 'in_progress', label: 'In Progress' },
-						{ value: 'resolved', label: 'Resolved' },
-						{ value: 'dismissed', label: 'Dismissed' },
-						{ value: 'all', label: 'All' }
-					] as filter (filter.value)}
+					{#each issueFilters as filter (filter.value)}
 						<button
 							class="rounded-full px-3 py-1 text-xs font-medium transition-colors {issueFilter === filter.value ? 'bg-brand-500 text-white' : 'bg-bg-modifier text-text-muted hover:text-text-secondary'}"
 							onclick={() => setIssueFilter(filter.value)}
@@ -417,11 +424,13 @@
 	</div>
 </div>
 
-<!-- Resolve Modal -->
-{#if resolveModalOpen}
-	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => resolveModalOpen = false} onkeydown={(e) => e.key === 'Escape' && (resolveModalOpen = false)} role="dialog" tabindex="-1">
-		<div class="w-96 rounded-lg bg-bg-secondary p-4 shadow-xl" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
-			<h3 class="mb-3 text-lg font-semibold text-text-primary">Resolve Item</h3>
+	<!-- Resolve Modal -->
+	{#if resolveModalOpen}
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+		<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => resolveModalOpen = false} onkeydown={(e) => e.key === 'Escape' && (resolveModalOpen = false)} role="dialog" aria-modal="true" aria-labelledby="resolve-item-title" tabindex="-1">
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<div class="w-96 rounded-lg bg-bg-secondary p-4 shadow-xl" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
+			<h3 id="resolve-item-title" class="mb-3 text-lg font-semibold text-text-primary">Resolve Item</h3>
 			<textarea
 				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
 				placeholder="Optional notes..."

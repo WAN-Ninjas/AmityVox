@@ -1,25 +1,14 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type AutoRoleRule } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Role } from '$lib/types';
 
 	let { guildId }: { guildId: string } = $props();
 
-	interface AutoRole {
-		id: string;
-		guild_id: string;
-		role_id: string;
-		rule_type: 'on_join' | 'after_delay' | 'on_verify';
-		delay_seconds: number;
-		enabled: boolean;
-		created_at: string;
-		role_name: string;
-	}
-
 	let error = $state('');
 	let success = $state('');
 
-	let autoRoles = $state<AutoRole[]>([]);
+	let autoRoles = $state<AutoRoleRule[]>([]);
 	let roles = $state<Role[]>([]);
 
 	let newRoleId = $state('');
@@ -32,7 +21,7 @@
 	async function loadAutoRoles() {
 		error = '';
 		const result = await loadOp.run(
-			() => api.request<AutoRole[]>('GET', `/guilds/${guildId}/auto-roles`),
+			() => api.getAutoRoles(guildId),
 			msg => (error = msg)
 		);
 		if (result) autoRoles = result;
@@ -49,13 +38,11 @@
 		error = '';
 		success = '';
 		const ar = await createOp.run(
-			() => api.request<AutoRole>(
-				'POST', `/guilds/${guildId}/auto-roles`, {
-					role_id: newRoleId,
-					rule_type: newRuleType,
-					delay_seconds: newRuleType === 'after_delay' ? newDelaySeconds : 0
-				}
-			),
+			() => api.createAutoRole(guildId, {
+				role_id: newRoleId,
+				rule_type: newRuleType,
+				delay_seconds: newRuleType === 'after_delay' ? newDelaySeconds : 0
+			}),
 			msg => (error = msg)
 		);
 		if (!createOp.error) {
@@ -68,13 +55,9 @@
 		}
 	}
 
-	async function toggleAutoRole(rule: AutoRole) {
+	async function toggleAutoRole(rule: AutoRoleRule) {
 		try {
-			const updated = await api.request<AutoRole>(
-				'PATCH', `/guilds/${guildId}/auto-roles/${rule.id}`, {
-					enabled: !rule.enabled
-				}
-			);
+			const updated = await api.updateAutoRole(guildId, rule.id, { enabled: !rule.enabled });
 			autoRoles = autoRoles.map(ar => ar.id === updated.id ? updated : ar);
 		} catch (err: any) {
 			error = err.message || 'Failed to update auto role';
@@ -83,7 +66,7 @@
 
 	async function deleteAutoRole(id: string) {
 		try {
-			await api.request('DELETE', `/guilds/${guildId}/auto-roles/${id}`);
+			await api.deleteAutoRole(guildId, id);
 			autoRoles = autoRoles.filter(ar => ar.id !== id);
 		} catch (err: any) {
 			error = err.message || 'Failed to delete auto role';
@@ -181,10 +164,10 @@
 
 			<div class="space-y-3">
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="auto-role-role" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 						Role
 					</label>
-					<select class="input w-full" bind:value={newRoleId}>
+					<select id="auto-role-role" class="input w-full" bind:value={newRoleId}>
 						<option value="">Select role...</option>
 						{#each roles as role}
 							<option value={role.id}>{role.name}</option>
@@ -193,10 +176,10 @@
 				</div>
 
 				<div>
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+					<label for="auto-role-rule-type" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 						Rule Type
 					</label>
-					<select class="input w-full" bind:value={newRuleType}>
+					<select id="auto-role-rule-type" class="input w-full" bind:value={newRuleType}>
 						<option value="on_join">On Join - assign immediately when member joins</option>
 						<option value="after_delay">After Delay - assign after a time period</option>
 						<option value="on_verify">On Verify - assign after passing verification</option>
@@ -205,10 +188,10 @@
 
 				{#if newRuleType === 'after_delay'}
 					<div>
-						<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
+						<label for="auto-role-delay" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">
 							Delay
 						</label>
-						<select class="input w-full" bind:value={newDelaySeconds}>
+						<select id="auto-role-delay" class="input w-full" bind:value={newDelaySeconds}>
 							<option value={60}>1 minute</option>
 							<option value={300}>5 minutes</option>
 							<option value={600}>10 minutes</option>

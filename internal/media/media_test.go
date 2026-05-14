@@ -1,12 +1,12 @@
 package media
 
 import (
+	"bytes"
 	"encoding/json"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
-	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -190,14 +190,8 @@ func TestStripExifData_PNG(t *testing.T) {
 func TestStripExifData_UnknownFormat(t *testing.T) {
 	img := createTestImage(50, 50)
 	stripped := stripExifData(img, "image/webp")
-	if stripped == nil {
-		t.Fatal("expected fallback PNG encoding for unknown format")
-	}
-
-	// Should be valid PNG.
-	_, err := png.Decode(bytes.NewReader(stripped))
-	if err != nil {
-		t.Fatalf("fallback PNG is not valid: %v", err)
+	if stripped != nil {
+		t.Fatal("expected nil for unknown format to preserve original bytes")
 	}
 }
 

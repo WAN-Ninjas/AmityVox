@@ -12,8 +12,8 @@
 	let menuEl: HTMLDivElement;
 
 	// Adjust position to stay within viewport.
-	let adjustedX = $state(x);
-	let adjustedY = $state(y);
+	let adjustedX = $state(0);
+	let adjustedY = $state(0);
 
 	$effect(() => {
 		if (!menuEl) return;

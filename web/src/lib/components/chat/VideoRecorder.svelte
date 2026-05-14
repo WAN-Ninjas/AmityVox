@@ -21,7 +21,7 @@
 	let uploading = $state(false);
 	let mode = $state<'camera' | 'screen'>('screen');
 	let timerInterval = $state<ReturnType<typeof setInterval> | null>(null);
-	let videoPreview: HTMLVideoElement;
+	let videoPreview = $state<HTMLVideoElement | null>(null);
 
 	// Recording limits.
 	const MAX_DURATION_SECONDS = 300; // 5 minutes.
@@ -174,7 +174,7 @@
 			const fileData = await api.uploadFile(file) as any;
 
 			// Register the recording.
-			await api.request('POST', `/channels/${channelId}/experimental/recordings`, {
+			await api.createVideoRecording(channelId, {
 				title: `Recording ${new Date().toLocaleString()}`,
 				s3_key: fileData.s3_key,
 				s3_bucket: fileData.s3_bucket || 'amityvox',
@@ -225,7 +225,7 @@
 			{/if}
 		</div>
 		{#if onclose}
-			<button type="button" class="text-text-muted hover:text-text-primary" onclick={onclose}>
+			<button type="button" class="text-text-muted hover:text-text-primary" onclick={onclose} aria-label="Close video recorder">
 				<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 				</svg>
@@ -324,6 +324,7 @@
 		{:else if previewUrl}
 			<!-- Preview recorded video -->
 			<div class="rounded-lg overflow-hidden bg-black mb-3" style="aspect-ratio: 16/9;">
+				<!-- svelte-ignore a11y_media_has_caption -->
 				<video
 					src={previewUrl}
 					class="w-full h-full object-contain"

@@ -1,25 +1,7 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type BoostSummary } from '$lib/api/client';
 
 	let { guildId }: { guildId: string } = $props();
-
-	interface BoostInfo {
-		id: string;
-		guild_id: string;
-		user_id: string;
-		tier: number;
-		started_at: string;
-		expires_at: string | null;
-		active: boolean;
-		username: string;
-	}
-
-	interface BoostSummary {
-		boost_count: number;
-		boost_tier: number;
-		boosters: BoostInfo[];
-		user_boosted: boolean;
-	}
 
 	let loading = $state(false);
 	let error = $state('');
@@ -31,7 +13,7 @@
 		loading = true;
 		error = '';
 		try {
-			summary = await api.request<BoostSummary>('GET', `/guilds/${guildId}/boosts`);
+			summary = await api.getBoosts(guildId);
 		} catch (err: any) {
 			error = err.message || 'Failed to load boosts';
 		} finally {
@@ -45,10 +27,10 @@
 		success = '';
 		try {
 			if (summary?.user_boosted) {
-				await api.request('DELETE', `/guilds/${guildId}/boosts`);
+				await api.unboostGuild(guildId);
 				success = 'Boost removed';
 			} else {
-				await api.request('POST', `/guilds/${guildId}/boosts`);
+				await api.boostGuild(guildId);
 				success = 'Server boosted!';
 			}
 			await loadBoosts();

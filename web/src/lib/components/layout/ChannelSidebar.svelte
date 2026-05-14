@@ -3,6 +3,7 @@
 	import { channelList, textChannels, voiceChannels, forumChannels, galleryChannels, currentChannelId, setChannel, updateChannel as updateChannelStore, removeChannel as removeChannelStore, threadsByParent, hideThread as hideThreadStore, getThreadActivityFilter, setThreadActivityFilter, pendingThreadOpen, activeThreadId, editChannelSignal } from '$lib/stores/channels';
 	import { channelVoiceUsers, voiceChannelId, joinVoice } from '$lib/stores/voice';
 	import { currentUser } from '$lib/stores/auth';
+	import { guildEventsByGuild, loadGuildEvents } from '$lib/stores/guildEvents';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import { presenceMap } from '$lib/stores/presence';
@@ -12,6 +13,7 @@
 	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 	import { pendingIncomingCount, relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
 	import { api } from '$lib/api/client';
 	import { goto } from '$app/navigation';
@@ -28,7 +30,7 @@
 	import StatusPicker from '$components/common/StatusPicker.svelte';
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
-	import type { Channel, GuildEvent } from '$lib/types';
+	import type { Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import DragHandle from '$components/common/DragHandle.svelte';
 	import FederationBadge from '$components/common/FederationBadge.svelte';
@@ -72,7 +74,9 @@
 		}
 	}
 
-	let upcomingEvents = $state<GuildEvent[]>([]);
+	const upcomingEvents = $derived(
+		$currentGuildId ? ($guildEventsByGuild.get($currentGuildId) ?? []).slice(0, 3) : []
+	);
 
 	// Archived channels
 	let showArchived = $state(false);
@@ -179,18 +183,14 @@
 			const updated = await api.updateChannel(channelId, { archived: archive });
 			updateChannelStore(updated);
 		} catch (err: any) {
-			alert(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} channel`);
+			addToast(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} channel`, 'error');
 		}
 	}
 
 	$effect(() => {
 		const gid = $currentGuildId;
 		if (gid) {
-			api.getGuildEvents(gid, { status: 'scheduled', limit: 3 })
-				.then((events) => { upcomingEvents = events; })
-				.catch(() => { upcomingEvents = []; });
-		} else {
-			upcomingEvents = [];
+			loadGuildEvents(gid).catch(() => {});
 		}
 	});
 
@@ -337,7 +337,7 @@
 	}
 
 	async function handleDeleteThread(thread: Channel) {
-		if (!confirm(`Delete thread "${thread.name}"? This will permanently remove the thread and all its messages.`)) return;
+		if (!(await confirmAction({ title: 'Delete Thread', message: `Delete thread "${thread.name}"? This will permanently remove the thread and all its messages.`, confirmLabel: 'Delete Thread' }))) return;
 		try {
 			await api.deleteChannel(thread.id);
 			removeChannelStore(thread.id);
@@ -410,12 +410,12 @@
 	}
 
 	async function handleDeleteChannel(channelId: string) {
-		if (!confirm('Are you sure you want to delete this channel?')) return;
+		if (!(await confirmAction({ title: 'Delete Channel', message: 'Are you sure you want to delete this channel?', confirmLabel: 'Delete Channel' }))) return;
 		try {
 			await api.deleteChannel(channelId);
 			removeChannelStore(channelId);
 		} catch (err: any) {
-			alert(err.message || 'Failed to delete channel');
+			addToast(err.message || 'Failed to delete channel', 'error');
 		}
 	}
 
@@ -690,6 +690,8 @@
 		<div
 			class="flex h-12 items-center justify-between border-b border-bg-floating px-4"
 			oncontextmenu={(e) => { e.preventDefault(); guildContextMenu = { x: e.clientX, y: e.clientY }; channelContextMenu = null; dmContextMenu = null; }}
+			role="button"
+			tabindex="0"
 		>
 			<div class="flex min-w-0 items-center gap-1.5">
 				<h2 class="truncate text-sm font-semibold text-text-primary">{$currentGuild.name}</h2>
@@ -764,6 +766,7 @@
 							class="group/drag flex items-center"
 							data-channel-id={channel.id}
 							onpointerdown={(e) => channelDragController?.handlePointerDown(e, channel.id)}
+							role="listitem"
 						>
 							<DragHandle visible={$canManageChannels} />
 							<button
@@ -773,7 +776,8 @@
 							>
 								{#if channel.encrypted}
 									{@const unlocked = $unlockedChannels.has(channel.id)}
-									<svg class="h-4 w-4 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title={unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}>
+										<svg class="h-4 w-4 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<title>{unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}</title>
 										{#if unlocked}
 											<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
 										{:else}
@@ -785,7 +789,8 @@
 								{/if}
 								<span class="flex-1 truncate font-mono">{channel.name}</span>
 							{#if chMuted}
-								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
+									<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<title>Muted</title>
 									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
 									<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
 								</svg>
@@ -841,6 +846,7 @@
 					class="group/drag flex items-center"
 					data-channel-id={ch.id}
 					onpointerdown={(e) => channelDragController?.handlePointerDown(e, ch.id)}
+					role="listitem"
 				>
 					<DragHandle visible={$canManageChannels} />
 					<button
@@ -875,6 +881,7 @@
 					class="group/drag flex items-center"
 					data-channel-id={ch.id}
 					onpointerdown={(e) => channelDragController?.handlePointerDown(e, ch.id)}
+					role="listitem"
 				>
 					<DragHandle visible={$canManageChannels} />
 					<button
@@ -1061,18 +1068,19 @@
 							onclick={() => goto(`/app/dms/${dm.id}`)}
 							oncontextmenu={(e) => { e.preventDefault(); dmContextMenu = { x: e.clientX, y: e.clientY, channel: dm }; channelContextMenu = null; threadContextMenu = null; }}
 						>
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span
 							class="cursor-pointer"
 							onclick={(e) => { if (dmRecipient) { e.stopPropagation(); dmProfileUserId = dmRecipient.id; } }}
+							onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && dmRecipient) { e.preventDefault(); e.stopPropagation(); dmProfileUserId = dmRecipient.id; } }}
 							role="button"
-							tabindex="-1"
+							tabindex="0"
 						>
 							<Avatar name={dmName} src={dmRecipient?.avatar_id ? avatarUrl(dmRecipient.avatar_id, dmRecipient.instance_id || undefined) : null} size="sm" status={dmRecipient ? ($presenceMap.get(dmRecipient.id) ?? undefined) : undefined} />
 						</span>
 							{#if dm.encrypted}
 								{@const unlocked = $unlockedChannels.has(dm.id)}
-								<svg class="h-3.5 w-3.5 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title={unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}>
+									<svg class="h-3.5 w-3.5 shrink-0 {unlocked ? 'text-green-400' : 'text-red-400'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<title>{unlocked ? 'Encrypted (unlocked)' : 'Encrypted (locked)'}</title>
 									{#if unlocked}
 										<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
 									{:else}
@@ -1082,7 +1090,8 @@
 							{/if}
 							<span class="flex-1 truncate">{dmName}</span>
 							{#if dmMuted}
-								<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" title="Muted">
+									<svg class="h-3.5 w-3.5 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<title>Muted</title>
 									<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
 									<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
 								</svg>
@@ -1159,6 +1168,9 @@
 		class="fixed z-50 min-w-[160px] rounded-md bg-bg-floating p-1 shadow-lg"
 		style="left: {channelContextMenu.x}px; top: {channelContextMenu.y}px;"
 		onclick={(e) => e.stopPropagation()}
+		onkeydown={(e) => e.stopPropagation()}
+		role="menu"
+		tabindex="-1"
 	>
 		{#if $canManageChannels}
 		<button
@@ -1312,6 +1324,9 @@
 		class="fixed z-50 min-w-[160px] rounded-md bg-bg-floating p-1 shadow-lg"
 		style="left: {threadContextMenu.x}px; top: {threadContextMenu.y}px;"
 		onclick={(e) => e.stopPropagation()}
+		onkeydown={(e) => e.stopPropagation()}
+		role="menu"
+		tabindex="-1"
 	>
 		<button
 			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
@@ -1407,6 +1422,9 @@
 		class="fixed z-50 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg"
 		style="left: {guildContextMenu.x}px; top: {guildContextMenu.y}px;"
 		onclick={(e) => e.stopPropagation()}
+		onkeydown={(e) => e.stopPropagation()}
+		role="menu"
+		tabindex="-1"
 	>
 		{#if gMuted}
 			<button
@@ -1481,8 +1499,8 @@
 	{/if}
 
 	<div class="mb-4">
-		<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel Type</label>
-		<div class="flex gap-2">
+		<div id="channel-type-label" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel Type</div>
+		<div class="flex gap-2" role="group" aria-labelledby="channel-type-label">
 			<button
 				class={channelTypeButtonClass('text')}
 				onclick={() => (newChannelType = 'text')}
@@ -1568,11 +1586,12 @@
 
 	<div class="mb-4">
 		<label class="flex items-center gap-3 cursor-pointer">
-			<button
-				type="button"
-				role="switch"
-				aria-checked={editChannelNsfw}
-				class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors {editChannelNsfw ? 'bg-red-500' : 'bg-bg-modifier'}"
+				<button
+					type="button"
+					role="switch"
+					aria-checked={editChannelNsfw}
+					aria-label="NSFW Channel"
+					class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors {editChannelNsfw ? 'bg-red-500' : 'bg-bg-modifier'}"
 				onclick={() => (editChannelNsfw = !editChannelNsfw)}
 			>
 				<span
@@ -1673,4 +1692,6 @@
 
 <GroupDMCreateModal bind:open={showGroupDMCreate} onclose={() => (showGroupDMCreate = false)} />
 
-<ProfileModal userId={dmProfileUserId} open={!!dmProfileUserId} onclose={() => (dmProfileUserId = null)} />
+	{#if dmProfileUserId}
+		<ProfileModal userId={dmProfileUserId} open={!!dmProfileUserId} onclose={() => (dmProfileUserId = null)} />
+	{/if}

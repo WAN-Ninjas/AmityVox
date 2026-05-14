@@ -527,11 +527,13 @@
 	</ContextMenu>
 {/if}
 
-<!-- Report user modal -->
-{#if showReportUserModal && reportUserTarget}
-	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showReportUserModal = false} onkeydown={(e) => e.key === 'Escape' && (showReportUserModal = false)} role="dialog" tabindex="-1">
-		<div class="mx-4 w-full max-w-sm rounded-lg bg-bg-secondary p-4 shadow-xl md:mx-0" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
-			<h3 class="mb-3 text-lg font-semibold text-text-primary">Report User</h3>
+	<!-- Report user modal -->
+	{#if showReportUserModal && reportUserTarget}
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showReportUserModal = false} onkeydown={(e) => e.key === 'Escape' && (showReportUserModal = false)} role="dialog" aria-modal="true" aria-labelledby="report-user-title" tabindex="-1">
+				<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+				<div class="mx-4 w-full max-w-sm rounded-lg bg-bg-secondary p-4 shadow-xl md:mx-0" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
+				<h3 id="report-user-title" class="mb-3 text-lg font-semibold text-text-primary">Report User</h3>
 			<p class="mb-2 text-sm text-text-muted">
 				Report <strong class="text-text-primary">{reportUserTarget.nickname ?? reportUserTarget.user?.username ?? 'this user'}</strong> to instance moderators.
 			</p>

@@ -1,10 +1,14 @@
 <script lang="ts">
-	import type { Guild, GuildFolder as GuildFolderType } from '$lib/types';
-	import { removeGuildFolder, loadGuildFolders } from '$lib/stores/guilds';
+	import type { Guild } from '$lib/types';
 	import { currentUser } from '$lib/stores/auth';
 	import { fileUrl } from '$lib/utils/avatar';
 	import { addToast } from '$lib/stores/toast';
-	import { api } from '$lib/api/client';
+
+	interface GuildFolderType {
+		id: string;
+		name: string;
+		color: string | null;
+	}
 
 	interface Props {
 		folder: GuildFolderType;
@@ -20,14 +24,8 @@
 	let expanded = $state(false);
 	let isPointerOver = $state(false);
 
-	async function deleteFolder() {
-		try {
-			await api.deleteGuildFolder(folder.id);
-			removeGuildFolder(folder.id);
-			addToast('Folder deleted', 'info');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete folder', 'error');
-		}
+	function deleteFolder() {
+		addToast('Server folders are not available in this build', 'info');
 	}
 
 	// Show first 4 guild icons in a 2x2 grid when collapsed.

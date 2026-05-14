@@ -3,10 +3,15 @@
 import { writable, derived } from 'svelte/store';
 import type { User } from '$lib/types';
 import { api } from '$lib/api/client';
+import { setLocalInstanceId } from '$lib/utils/avatar';
 
 export const currentUser = writable<User | null>(null);
 export const isAuthenticated = derived(currentUser, ($user) => $user !== null);
 export const isLoading = writable(true);
+
+currentUser.subscribe((user) => {
+	setLocalInstanceId(user?.instance_id ?? null);
+});
 
 export async function initAuth() {
 	const token = api.getToken();
@@ -25,14 +30,14 @@ export async function initAuth() {
 	}
 }
 
-export async function login(username: string, password: string) {
-	const { user } = await api.login(username, password);
+export async function login(username: string, password: string, totpCode?: string) {
+	const { user } = await api.login(username, password, totpCode);
 	currentUser.set(user);
 	return user;
 }
 
-export async function register(username: string, email: string, password: string) {
-	const { user } = await api.register(username, email, password);
+export async function register(username: string, email: string, password: string, token?: string) {
+	const { user } = await api.register(username, email, password, token);
 	currentUser.set(user);
 	return user;
 }

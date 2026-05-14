@@ -1,136 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api/client';
+	import {
+		api,
+		type AdminFederationDashboard,
+		type AdminFederationDeliveryReceipt,
+		type AdminFederationPeerControl,
+		type AdminFederationPeerHealth,
+		type AdminFederationProtocolInfo,
+		type AdminFederationSearchConfig
+	} from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import type { KeyAuditEntry } from '$lib/types';
-
-	// Typed fetch helpers using the existing api client's token.
-	async function adminGet<T>(path: string): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function adminPost<T>(path: string, body?: unknown): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function adminPut<T>(path: string, body?: unknown): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		return json.data as T;
-	}
-	async function adminPatch<T>(path: string, body?: unknown): Promise<T> {
-		const token = api.getToken();
-		const res = await fetch(`/api/v1${path}`, {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
-			throw new Error(err.error?.message || res.statusText);
-		}
-		if (res.status === 204) return undefined as T;
-		const json = await res.json();
-		return json.data as T;
-	}
-
-	// --- Types ---
-	interface PeerHealth {
-		peer_id: string;
-		peer_domain: string;
-		peer_name: string | null;
-		peer_software: string;
-		federation_status: string;
-		health_status: string;
-		last_sync_at: string | null;
-		last_event_at: string | null;
-		event_lag_ms: number;
-		events_sent: number;
-		events_received: number;
-		errors_24h: number;
-		version: string | null;
-		capabilities: string[];
-		established_at: string;
-	}
-
-	interface DashboardData {
-		peers: PeerHealth[];
-		federation_mode: string;
-		total_peers: number;
-		active_peers: number;
-		blocked_peers: number;
-		degraded_peers: number;
-		pending_deliveries: number;
-		failed_deliveries: number;
-		total_deliveries: number;
-	}
-
-	interface PeerControl {
-		id: string;
-		peer_id: string;
-		peer_domain: string;
-		peer_name: string | null;
-		action: string;
-		reason: string | null;
-		created_by: string;
-		created_at: string;
-	}
-
-	interface DeliveryReceipt {
-		id: string;
-		message_id: string;
-		source_instance: string;
-		target_instance: string;
-		status: string;
-		attempts: number;
-		last_attempt_at: string | null;
-		delivered_at: string | null;
-		error_message: string | null;
-		created_at: string;
-	}
-
-	interface SearchConfig {
-		enabled: boolean;
-		index_outgoing: boolean;
-		index_incoming: boolean;
-		allowed_peers: string[];
-	}
-
-	interface ProtocolInfo {
-		protocol_version: string;
-		capabilities: string[];
-		supported_protocols: string[];
-		default_capabilities: string[];
-	}
 
 	interface PendingPeer {
 		peer_id: string;
@@ -148,13 +28,13 @@
 	let loading = $state(true);
 	let error = $state('');
 
-	let dashboard = $state<DashboardData | null>(null);
-	let controls = $state<PeerControl[]>([]);
+	let dashboard = $state<AdminFederationDashboard | null>(null);
+	let controls = $state<AdminFederationPeerControl[]>([]);
 	let blockedPeers = $derived(controls.filter(c => c.action === 'block'));
 	let allowedPeers = $derived(controls.filter(c => c.action === 'allow'));
-	let deliveryReceipts = $state<DeliveryReceipt[]>([]);
-	let searchConfig = $state<SearchConfig>({ enabled: false, index_outgoing: false, index_incoming: false, allowed_peers: [] });
-	let protocolInfo = $state<ProtocolInfo | null>(null);
+	let deliveryReceipts = $state<AdminFederationDeliveryReceipt[]>([]);
+	let searchConfig = $state<AdminFederationSearchConfig>({ enabled: false, index_outgoing: false, index_incoming: false, allowed_peers: [] });
+	let protocolInfo = $state<AdminFederationProtocolInfo | null>(null);
 	let keyAuditEntries = $state<KeyAuditEntry[]>([]);
 	let pendingPeers = $derived<PendingPeer[]>(
 		dashboard?.peers.filter(p => p.federation_status === 'pending') ?? []
@@ -179,7 +59,7 @@
 		loading = true;
 		error = '';
 		try {
-			dashboard = await adminGet<DashboardData>('/admin/federation/dashboard');
+			dashboard = await api.getAdminFederationDashboard();
 		} catch (e: any) {
 			error = e.message || 'Failed to load federation dashboard';
 		} finally {
@@ -189,7 +69,7 @@
 
 	async function loadConfig() {
 		try {
-			const inst = await adminGet<any>('/admin/instance');
+			const inst = await api.getAdminInstance();
 			configFedMode = inst.federation_mode || 'open';
 			configShorthand = inst.shorthand || '';
 			configVoiceMode = inst.voice_mode || 'direct';
@@ -203,7 +83,7 @@
 	async function saveConfig() {
 		savingConfig = true;
 		try {
-			await adminPatch('/admin/instance', {
+			await api.updateAdminInstance({
 				federation_mode: configFedMode,
 				shorthand: configShorthand || null,
 				voice_mode: configVoiceMode,
@@ -222,7 +102,7 @@
 	async function loadControls() {
 		loadingControls = true;
 		try {
-			controls = await adminGet<PeerControl[]>('/admin/federation/peers/controls');
+			controls = await api.getAdminFederationPeerControls();
 		} catch (e: any) {
 			addToast('Failed to load peer controls: ' + e.message, 'error');
 		} finally {
@@ -233,10 +113,7 @@
 	async function loadDeliveryReceipts() {
 		loadingDelivery = true;
 		try {
-			const path = deliveryFilter
-				? `/admin/federation/delivery-receipts?status=${deliveryFilter}`
-				: '/admin/federation/delivery-receipts';
-			deliveryReceipts = await adminGet<DeliveryReceipt[]>(path);
+			deliveryReceipts = await api.getAdminFederationDeliveryReceipts(deliveryFilter || undefined);
 		} catch (e: any) {
 			addToast('Failed to load delivery receipts: ' + e.message, 'error');
 		} finally {
@@ -246,7 +123,7 @@
 
 	async function loadSearchConfig() {
 		try {
-			searchConfig = await adminGet<SearchConfig>('/admin/federation/search-config');
+			searchConfig = await api.getAdminFederationSearchConfig();
 		} catch {
 			// Use defaults.
 		}
@@ -254,7 +131,7 @@
 
 	async function loadProtocol() {
 		try {
-			protocolInfo = await adminGet<ProtocolInfo>('/admin/federation/protocol');
+			protocolInfo = await api.getAdminFederationProtocol();
 		} catch (e: any) {
 			addToast('Failed to load protocol info: ' + e.message, 'error');
 		}
@@ -304,7 +181,7 @@
 	// --- Actions ---
 	async function updatePeerControl(peerId: string, action: string, reason?: string) {
 		try {
-			await adminPut(`/admin/federation/peers/${peerId}/control`, { action, reason });
+			await api.updateAdminFederationPeerControl(peerId, { action, reason });
 			addToast(`Peer ${action === 'block' ? 'blocked' : action === 'allow' ? 'allowed' : 'muted'} successfully`, 'success');
 			await loadDashboard();
 			await loadControls();
@@ -315,7 +192,7 @@
 
 	async function retryDelivery(receiptId: string) {
 		try {
-			await adminPost(`/admin/federation/delivery-receipts/${receiptId}/retry`);
+			await api.retryAdminFederationDelivery(receiptId);
 			addToast('Retry queued', 'success');
 			await loadDeliveryReceipts();
 		} catch (e: any) {
@@ -326,7 +203,7 @@
 	async function saveSearchConfig() {
 		savingSearch = true;
 		try {
-			await adminPatch('/admin/federation/search-config', searchConfig);
+			await api.updateAdminFederationSearchConfig(searchConfig);
 			addToast('Search config updated', 'success');
 		} catch (e: any) {
 			addToast('Failed to save search config: ' + e.message, 'error');
@@ -462,34 +339,34 @@
 				<h3 class="text-lg font-semibold text-text-primary mb-4">Federation Config</h3>
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					<div>
-						<label class="block text-sm font-medium text-text-muted mb-1">Federation Mode</label>
-						<select bind:value={configFedMode} class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary">
+						<label for="federation-mode" class="block text-sm font-medium text-text-muted mb-1">Federation Mode</label>
+						<select id="federation-mode" bind:value={configFedMode} class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary">
 							<option value="open">Open</option>
 							<option value="allowlist">Allowlist</option>
 							<option value="closed">Closed</option>
 						</select>
 					</div>
 					<div>
-						<label class="block text-sm font-medium text-text-muted mb-1">Voice Mode</label>
-						<select bind:value={configVoiceMode} class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary">
+						<label for="voice-mode" class="block text-sm font-medium text-text-muted mb-1">Voice Mode</label>
+						<select id="voice-mode" bind:value={configVoiceMode} class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary">
 							<option value="direct">Direct</option>
 							<option value="relay">Relay</option>
 						</select>
 					</div>
 					<div>
-						<label class="block text-sm font-medium text-text-muted mb-1">Instance Shorthand</label>
-						<input type="text" bind:value={configShorthand} maxlength="5" placeholder="e.g. DEV"
+						<label for="instance-shorthand" class="block text-sm font-medium text-text-muted mb-1">Instance Shorthand</label>
+						<input id="instance-shorthand" type="text" bind:value={configShorthand} maxlength="5" placeholder="e.g. DEV"
 							class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary" />
 						<p class="mt-1 text-xs text-text-muted">Max 5 characters. Shown as badge on federated content.</p>
 					</div>
 					<div>
-						<label class="block text-sm font-medium text-text-muted mb-1">Instance Name</label>
-						<input type="text" bind:value={configName} placeholder="My Instance"
+						<label for="instance-name" class="block text-sm font-medium text-text-muted mb-1">Instance Name</label>
+						<input id="instance-name" type="text" bind:value={configName} placeholder="My Instance"
 							class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary" />
 					</div>
 					<div class="sm:col-span-2">
-						<label class="block text-sm font-medium text-text-muted mb-1">Description</label>
-						<textarea bind:value={configDescription} rows="2" placeholder="A brief description of this instance"
+						<label for="instance-description" class="block text-sm font-medium text-text-muted mb-1">Description</label>
+						<textarea id="instance-description" bind:value={configDescription} rows="2" placeholder="A brief description of this instance"
 							class="w-full rounded-md bg-bg-primary border border-bg-floating px-3 py-2 text-text-primary resize-none"></textarea>
 					</div>
 				</div>

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,8 @@ type Handler struct {
 	FedProxy apiutil.FederationProxy // optional, nil if federation disabled
 }
 
+var errInvalidAttachments = errors.New("invalid attachments")
+
 // --- DM Spam Detection ---
 
 // dmSpamTracker tracks recent DM sends per user to detect spam patterns.
@@ -47,7 +50,7 @@ var dmSpamTracker = &dmTracker{
 }
 
 const (
-	dmSpamRecipientThreshold = 5           // same content to this many different recipients = flagged
+	dmSpamRecipientThreshold = 5 // same content to this many different recipients = flagged
 	dmSpamWindow             = 10 * time.Minute
 )
 
@@ -157,7 +160,7 @@ type createMessageRequest struct {
 	ReplyToIDs          []string `json:"reply_to_ids"`
 	MentionUserIDs      []string `json:"mention_user_ids"`
 	MentionRoleIDs      []string `json:"mention_role_ids"`
-	MentionHere     bool     `json:"mention_here"`
+	MentionHere         bool     `json:"mention_here"`
 	Silent              bool     `json:"silent"`
 	Encrypted           bool     `json:"encrypted"`
 	EncryptionSessionID *string  `json:"encryption_session_id"`
@@ -828,46 +831,67 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var msg models.Message
-	err = h.Pool.QueryRow(r.Context(),
-		`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags,
-		                       reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
-		                       encrypted, encryption_session_id, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
-		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
-		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
-		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		           encrypted, encryption_session_id, created_at`,
-		msgID, channelID, userID, req.Content, req.Nonce, msgType, flags,
-		req.ReplyToIDs, mentionUserIDs, mentionRoleIDs, mentionHere,
-		req.Encrypted, req.EncryptionSessionID,
-	).Scan(
-		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
-		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
-		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
-		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
-	)
+	err = apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags,
+			                       reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
+			                       encrypted, encryption_session_id, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+			 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+			           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
+			           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+			           encrypted, encryption_session_id, created_at`,
+			msgID, channelID, userID, req.Content, req.Nonce, msgType, flags,
+			req.ReplyToIDs, mentionUserIDs, mentionRoleIDs, mentionHere,
+			req.Encrypted, req.EncryptionSessionID,
+		).Scan(
+			&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+			&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+			&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+			&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+		); err != nil {
+			return err
+		}
+
+		if len(req.AttachmentIDs) > 0 {
+			tag, err := tx.Exec(r.Context(),
+				`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
+				msgID, req.AttachmentIDs, userID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != int64(len(req.AttachmentIDs)) {
+				return errInvalidAttachments
+			}
+		}
+
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE channels SET last_activity_at = now(), reply_count = reply_count + 1
+			 WHERE id = $1 AND parent_channel_id IS NOT NULL`,
+			channelID); err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, errInvalidAttachments) {
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_attachments",
+				"One or more attachments are invalid, already linked, or not owned by you")
+			return
+		}
 		apiutil.InternalError(w, h.Logger, "Failed to send message", err)
 		return
 	}
 
-	// Link attachments to the message.
 	if len(req.AttachmentIDs) > 0 {
-		h.Pool.Exec(r.Context(),
-			`UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND uploader_id = $3 AND message_id IS NULL`,
-			msgID, req.AttachmentIDs, userID)
 		msg.Attachments = h.loadAttachments(r.Context(), msgID)
 	}
-
-	// Update last_message_id on the channel.
-	h.Pool.Exec(r.Context(),
-		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
-
-	// Update last_activity_at and reply_count for thread channels (fire-and-forget).
-	h.Pool.Exec(r.Context(),
-		`UPDATE channels SET last_activity_at = now(), reply_count = reply_count + 1
-		 WHERE id = $1 AND parent_channel_id IS NOT NULL`,
-		channelID)
 
 	// Populate author user data for the response and event.
 	h.enrichMessageWithAuthor(r.Context(), &msg)
@@ -1098,6 +1122,8 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	msg.Attachments = h.loadAttachments(r.Context(), messageID)
+	msg.Embeds = h.loadEmbeds(r.Context(), messageID)
 	h.enrichMessageWithAuthor(r.Context(), &msg)
 
 	h.EventBus.Publish(r.Context(), events.SubjectMessageUpdate, events.Event{
@@ -2706,12 +2732,12 @@ func (h *Handler) HandlePublishMessage(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type followerInfo struct {
-		FollowerID       string
-		WebhookID        string
-		GuildID          string
-		TargetChannelID  string
-		WebhookName      string
-		WebhookAvatarID  *string
+		FollowerID      string
+		WebhookID       string
+		GuildID         string
+		TargetChannelID string
+		WebhookName     string
+		WebhookAvatarID *string
 	}
 
 	var followers []followerInfo
@@ -3142,21 +3168,21 @@ func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID st
 // channelCtx holds pre-fetched channel state and computed permissions for the
 // message-send hot path. This replaces 20+ sequential queries with 2.
 type channelCtx struct {
-	GuildID          *string
-	ChannelType      string
-	Locked           bool
-	Archived         bool
-	ReadOnly         bool
-	ReadOnlyRoleIDs  []string
-	Encrypted        bool
-	SlowmodeSeconds  int
-	OwnerID          string // guild owner, empty for DMs
-	UserFlags        int
-	ComputedPerms    uint64
-	IsOwner          bool
-	IsAdmin          bool
-	IsDMRecipient    bool
-	TimeoutUntil     *time.Time
+	GuildID         *string
+	ChannelType     string
+	Locked          bool
+	Archived        bool
+	ReadOnly        bool
+	ReadOnlyRoleIDs []string
+	Encrypted       bool
+	SlowmodeSeconds int
+	OwnerID         string // guild owner, empty for DMs
+	UserFlags       int
+	ComputedPerms   uint64
+	IsOwner         bool
+	IsAdmin         bool
+	IsDMRecipient   bool
+	TimeoutUntil    *time.Time
 }
 
 // loadChannelCtx fetches all channel state, guild ownership, and user
@@ -3559,5 +3585,3 @@ func (h *Handler) HandleGetChannelGallery(w http.ResponseWriter, r *http.Request
 
 	apiutil.WriteJSON(w, http.StatusOK, attachments)
 }
-
-

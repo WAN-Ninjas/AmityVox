@@ -107,6 +107,7 @@
 			<button
 				class="rounded p-1 text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-primary md:hidden"
 				onclick={() => history.back()}
+				aria-label="Back"
 			>
 				<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 					<path d="M15 19l-7-7 7-7" />
@@ -154,6 +155,7 @@
 				<button
 					class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-text-muted hover:text-text-primary"
 					onclick={clearSearch}
+					aria-label="Clear search"
 				>
 					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 						<path d="M6 18L18 6M6 6l12 12" />

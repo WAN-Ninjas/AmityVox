@@ -4,6 +4,7 @@ import { writable, derived } from 'svelte/store';
 import type { Channel } from '$lib/types';
 import { api } from '$lib/api/client';
 import { createMapStore } from '$lib/stores/mapHelpers';
+import { currentGuildId } from '$lib/stores/guilds';
 
 export const channels = createMapStore<string, Channel>();
 export const currentChannelId = writable<string | null>(null);
@@ -17,8 +18,10 @@ export const editChannelSignal = writable<string | null>(null);
 // Tracks which thread is currently open in the side panel.
 export const activeThreadId = writable<string | null>(null);
 
-export const channelList = derived(channels, ($channels) =>
-	Array.from($channels.values()).sort((a, b) => a.position - b.position)
+export const channelList = derived([channels, currentGuildId], ([$channels, $currentGuildId]) =>
+	Array.from($channels.values())
+		.filter((channel) => !$currentGuildId || channel.guild_id === $currentGuildId)
+		.sort((a, b) => a.position - b.position)
 );
 
 // Text channels excluding threads (threads have parent_channel_id set).
@@ -161,9 +164,20 @@ export function setThreadActivityFilter(channelId: string, minutes: number | nul
 
 // --- Core Functions ---
 
+let latestLoadRequest = 0;
+
 export async function loadChannels(guildId: string) {
+	const requestId = ++latestLoadRequest;
 	const list = await api.getGuildChannels(guildId);
-	channels.setAll(list.map(c => [c.id, c]));
+	if (requestId !== latestLoadRequest) return;
+
+	channels.update((map) => {
+		const next = new Map(map);
+		for (const channel of list) {
+			next.set(channel.id, channel);
+		}
+		return next;
+	});
 }
 
 

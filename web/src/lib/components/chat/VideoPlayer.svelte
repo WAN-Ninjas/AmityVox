@@ -210,17 +210,20 @@
 	></video>
 
 	<!-- Transparent click overlay for play/pause toggle (above video, below controls) -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div
-		class="absolute inset-0 z-[1] cursor-pointer"
+	<button
+		type="button"
+		aria-label={paused ? 'Play video' : 'Pause video'}
+		class="absolute inset-0 z-[1] cursor-pointer border-0 bg-transparent p-0"
 		onclick={handlePlayPauseClick}
-	></div>
+	></button>
 
 	<!-- Play overlay (shown when paused and video hasn't started yet) -->
 	{#if paused && !hasPlayed}
 		<button
+			type="button"
 			class="absolute inset-0 z-[2] flex cursor-pointer items-center justify-center bg-black/30"
 			onclick={handlePlayPauseClick}
+			aria-label="Play video"
 		>
 			<div class="flex h-14 w-14 items-center justify-center rounded-full bg-bg-secondary/80 shadow-lg">
 				<svg class="ml-1 h-7 w-7 text-text-primary" fill="currentColor" viewBox="0 0 24 24">
@@ -232,6 +235,7 @@
 
 	<!-- Custom controls overlay -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
 		class="absolute inset-x-0 bottom-0 z-[3] flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-6 transition-opacity duration-200"
 		class:opacity-0={!showControls}

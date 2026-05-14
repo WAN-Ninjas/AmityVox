@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	interface GuildPlugin {
 		id: string;
@@ -70,7 +71,7 @@
 	}
 
 	async function uninstallPlugin(plugin: GuildPlugin) {
-		if (!confirm(`Uninstall "${plugin.name}"? This will remove all plugin configuration.`)) return;
+		if (!(await confirmAction({ title: 'Uninstall Plugin', message: `Uninstall "${plugin.name}"? This will remove all plugin configuration.`, confirmLabel: 'Uninstall' }))) return;
 		try {
 			await api.deleteGuildPlugin(guildId, plugin.id);
 			plugins = plugins.filter((p) => p.id !== plugin.id);
@@ -167,6 +168,7 @@
 								onclick={() => togglePlugin(plugin)}
 								role="switch"
 								aria-checked={plugin.enabled}
+								aria-label="{plugin.enabled ? 'Disable' : 'Enable'} {plugin.name}"
 							>
 								<span
 									class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
@@ -200,10 +202,11 @@
 
 					{#if configuring === plugin.id}
 						<div class="mt-4 border-t border-bg-modifier pt-4">
-							<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-								Plugin Configuration (JSON)
-							</label>
-							<textarea
+						<label class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted" for="plugin-config-{plugin.id}">
+							Plugin Configuration (JSON)
+						</label>
+						<textarea
+							id="plugin-config-{plugin.id}"
 								class="input w-full font-mono text-xs"
 								rows="6"
 								bind:value={configJson}

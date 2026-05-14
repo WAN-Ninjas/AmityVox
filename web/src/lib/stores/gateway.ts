@@ -3,14 +3,15 @@
 import { writable, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
+import { api } from '$lib/api/client';
 import { currentUser } from './auth';
 import { loadGuilds, updateGuild, removeGuild, currentGuildId } from './guilds';
 import { updateChannel, removeChannel, loadChannels, channels as channelsStore, currentChannelId } from './channels';
-import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages } from './messages';
+import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages, applyReactionEvent, backfillLoadedChannels } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs, updateDMChannel, dmChannels } from './dms';
-import { incrementUnread, loadReadState, loadChannelGuildMap, registerChannelGuild } from './unreads';
+import { incrementUnread, incrementMention, loadReadState, loadChannelGuildMap, registerChannelGuild, channelGuildMap } from './unreads';
 import { handleNotificationCreate, handleNotificationUpdate, handleNotificationDelete, loadNotifications } from './notifications';
 import { initPushNotifications } from '$lib/utils/pushNotifications';
 import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
@@ -20,16 +21,62 @@ import { loadChannelMutePrefs, isChannelMuted, isGuildMuted } from './muting';
 import { updateGuildMember, updateUserInMembers, guildMembers } from './members';
 import { startIdleDetection, stopIdleDetection, setManualStatus } from '$lib/utils/idle';
 import { addToast } from './toast';
-import { clearChannelMessages } from './messages';
 import { addAnnouncement, updateAnnouncement, removeAnnouncement } from './announcements';
+import { upsertGuildEvent, removeGuildEvent as removeStoredGuildEvent } from './guildEvents';
+import { upsertChannelWidget, removeChannelWidget as removeStoredChannelWidget } from './channelWidgets';
 import { addIncomingCall, dismissIncomingCall, clearIncomingCalls } from './callRing';
 import { clearChannelUnreads } from './unreads';
-import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship, ServerNotification } from '$lib/types';
+import type { ChannelWidget } from '$lib/api/client';
+import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship, ServerNotification, GuildEvent } from '$lib/types';
 
 export const gatewayConnected = writable(false);
 
 let client: GatewayClient | null = null;
 let hasReceivedReady = false;
+const selfRoleIdsByGuild = new Map<string, Set<string>>();
+const pendingSelfRoleLoads = new Map<string, Promise<Set<string>>>();
+
+function cacheSelfRoleIds(guildId: string, roleIds: string[]) {
+	selfRoleIdsByGuild.set(guildId, new Set(roleIds));
+}
+
+function getCachedSelfRoleIds(guildId: string): Set<string> | undefined {
+	const activeGuildId = get(currentGuildId);
+	const selfId = get(currentUser)?.id;
+	if (activeGuildId === guildId && selfId) {
+		const activeMember = get(guildMembers).get(selfId);
+		if (activeMember?.roles) {
+			cacheSelfRoleIds(guildId, activeMember.roles);
+		}
+	}
+	return selfRoleIdsByGuild.get(guildId);
+}
+
+async function loadSelfRoleIds(guildId: string, selfId: string): Promise<Set<string>> {
+	const cached = getCachedSelfRoleIds(guildId);
+	if (cached) return cached;
+
+	const pending = pendingSelfRoleLoads.get(guildId);
+	if (pending) return pending;
+
+	const load = api.getMemberRoles(guildId, selfId)
+		.then((roles) => {
+			const ids = new Set(roles.map((role) => role.id));
+			selfRoleIdsByGuild.set(guildId, ids);
+			return ids;
+		})
+		.catch(() => new Set<string>())
+		.finally(() => {
+			pendingSelfRoleLoads.delete(guildId);
+		});
+
+	pendingSelfRoleLoads.set(guildId, load);
+	return load;
+}
+
+function roleIdsContainMention(roleIds: Set<string>, mentionedRoleIds: string[]) {
+	return mentionedRoleIds.some((roleId) => roleIds.has(roleId));
+}
 
 export function connectGateway(token: string) {
 	if (client) client.disconnect();
@@ -89,11 +136,18 @@ export function connectGateway(token: string) {
 				const isReconnect = hasReceivedReady;
 				hasReceivedReady = true;
 				if (isReconnect) {
+					backfillLoadedChannels().catch((err) => {
+						console.warn('Failed to backfill missed messages after reconnect', err);
+					});
 					const activeChannelId = get(currentChannelId);
 					if (activeChannelId) {
-						clearChannelMessages(activeChannelId);
 						loadMessages(activeChannelId);
 					}
+					loadGuilds();
+					loadDMs();
+					loadReadState();
+					loadChannelGuildMap();
+					loadNotifications();
 					addToast('Reconnected to server', 'success', 3000);
 				}
 				break;
@@ -171,21 +225,24 @@ export function connectGateway(token: string) {
 				currentUser.subscribe((u) => (selfId = u?.id ?? undefined))();
 				if (msg.author_id !== selfId) {
 					// Check if this message mentions the current user (direct, @here, or role mention).
-				let isMention = msg.mention_here ||
+					let isMention = msg.mention_here ||
 						(selfId ? msg.mention_user_ids?.includes(selfId) : false);
-				if (!isMention && selfId && msg.mention_role_ids?.length > 0) {
-					// Only check role mentions if the message's channel belongs to the
-					// currently viewed guild, since guildMembers only holds members for
-					// that guild.
-					const activeGuildId = get(currentGuildId);
-					if (activeGuildId && msgChannel?.guild_id === activeGuildId) {
-						const member = get(guildMembers).get(selfId);
-						if (member?.roles?.some(r => msg.mention_role_ids.includes(r))) {
-							isMention = true;
+					const mentionedRoleIds = msg.mention_role_ids ?? [];
+					const messageGuildId = msgChannel?.guild_id ?? get(channelGuildMap).get(msg.channel_id);
+					if (!isMention && selfId && messageGuildId && mentionedRoleIds.length > 0) {
+						const cachedRoles = getCachedSelfRoleIds(messageGuildId);
+						if (cachedRoles) {
+							isMention = roleIdsContainMention(cachedRoles, mentionedRoleIds);
 						}
 					}
-				}
 					incrementUnread(msg.channel_id, isMention);
+					if (!isMention && selfId && messageGuildId && mentionedRoleIds.length > 0) {
+						loadSelfRoleIds(messageGuildId, selfId).then((roleIds) => {
+							if (roleIdsContainMention(roleIds, mentionedRoleIds)) {
+								incrementMention(msg.channel_id);
+							}
+						});
+					}
 					// Notifications are now server-generated via NOTIFICATION_CREATE events.
 				}
 				// Update DM channel metadata so the sidebar re-renders and re-sorts.
@@ -295,6 +352,9 @@ export function connectGateway(token: string) {
 				currentUser.subscribe((u) => (selfId = u?.id))();
 				if (memberData.user_id === selfId && memberData.guild_id) {
 					loadPermissions(memberData.guild_id);
+					if (memberData.roles !== undefined) {
+						cacheSelfRoleIds(memberData.guild_id, memberData.roles);
+					}
 				}
 				// Update member store for real-time role display.
 				if (memberData.roles !== undefined) {
@@ -351,6 +411,7 @@ export function connectGateway(token: string) {
 				if (removed.user_id === selfId) {
 					// We were removed from the guild.
 					removeGuild(removed.guild_id);
+					selfRoleIdsByGuild.delete(removed.guild_id);
 					invalidatePermissions(removed.guild_id);
 				}
 				break;
@@ -390,9 +451,16 @@ export function connectGateway(token: string) {
 			// --- Guild scheduled events ---
 			case 'GUILD_EVENT_CREATE':
 			case 'GUILD_EVENT_UPDATE':
-			case 'GUILD_EVENT_DELETE':
-				// Scheduled event changes — currently no dedicated frontend store.
+				upsertGuildEvent(data as GuildEvent);
 				break;
+			case 'GUILD_EVENT_DELETE': {
+				const eventData = data as { guild_id: string; id?: string; event_id?: string };
+				const eventId = eventData.id ?? eventData.event_id;
+				if (eventData.guild_id && eventId) {
+					removeStoredGuildEvent(eventData.guild_id, eventId);
+				}
+				break;
+			}
 
 			// --- Guild onboarding ---
 			case 'GUILD_ONBOARDING_UPDATE':
@@ -400,9 +468,13 @@ export function connectGateway(token: string) {
 				break;
 
 			// --- Channel pins update ---
-			case 'CHANNEL_PINS_UPDATE':
-				// Pin count changed — components that display pins will refetch on focus.
+			case 'CHANNEL_PINS_UPDATE': {
+				const pinData = data as { channel_id?: string };
+				if (pinData.channel_id && get(currentChannelId) === pinData.channel_id) {
+					loadMessages(pinData.channel_id);
+				}
 				break;
+			}
 
 			// --- Channel ACK (read state, user-scoped) ---
 			case 'CHANNEL_ACK': {
@@ -414,27 +486,45 @@ export function connectGateway(token: string) {
 			// --- Channel widget events ---
 			case 'CHANNEL_WIDGET_CREATE':
 			case 'CHANNEL_WIDGET_UPDATE':
-			case 'CHANNEL_WIDGET_DELETE':
-				// Widget changes — no dedicated frontend store yet.
+				upsertChannelWidget(data as ChannelWidget);
 				break;
+				break;
+			case 'CHANNEL_WIDGET_DELETE': {
+				const widgetData = data as { channel_id?: string; widget_id?: string; id?: string };
+				const widgetId = widgetData.widget_id ?? widgetData.id;
+				if (widgetData.channel_id && widgetId) {
+					removeStoredChannelWidget(widgetData.channel_id, widgetId);
+				}
+				break;
+			}
 
 			// --- Message reaction events ---
 			case 'MESSAGE_REACTION_ADD':
 			case 'MESSAGE_REACTION_REMOVE': {
-				// Reaction events include the full updated reactions array from the backend.
-				// Update the message with the new reaction data.
-				const reaction = data as { channel_id: string; message_id: string; reactions?: unknown[] };
-				if (reaction.reactions !== undefined) {
-					updateMessage({ id: reaction.message_id, channel_id: reaction.channel_id, reactions: reaction.reactions } as Message);
-				}
+				const reaction = data as {
+					channel_id?: string;
+					message_id: string;
+					user_id?: string;
+					emoji?: string;
+					reactions?: Message['reactions'];
+				};
+				applyReactionEvent(
+					reaction,
+					event === 'MESSAGE_REACTION_ADD' ? 'add' : 'remove',
+					get(currentUser)?.id
+				);
 				break;
 			}
 
 			// --- Message embed update (link unfurl) ---
 			case 'MESSAGE_EMBED_UPDATE': {
-				const embed = data as { channel_id: string; message_id: string; embeds?: unknown[] };
+				const embed = data as { channel_id: string; message_id: string; embeds?: Message['embeds'] };
 				if (embed.embeds !== undefined) {
-					updateMessage({ id: embed.message_id, channel_id: embed.channel_id, embeds: embed.embeds } as Message);
+					updateMessage({
+						id: embed.message_id,
+						channel_id: embed.channel_id,
+						embeds: embed.embeds
+					});
 				}
 				break;
 			}
@@ -449,7 +539,6 @@ export function connectGateway(token: string) {
 					const activeChannelId = get(currentChannelId);
 					if (activeChannelId === poll.channel_id) {
 						// Refresh messages in active channel to get updated poll state.
-						clearChannelMessages(poll.channel_id);
 						loadMessages(poll.channel_id);
 					}
 				}

@@ -44,10 +44,12 @@
 <div
 	class="fixed inset-0 z-[150] flex items-center justify-center bg-black/80"
 	onclick={handleBackdrop}
+	onkeydown={handleKeydown}
 	onwheel={handleWheel}
 	transition:fade={{ duration: 150 }}
 	role="dialog"
 	aria-modal="true"
+	tabindex="-1"
 >
 	<!-- Toolbar -->
 	<div class="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-bg-floating/80 px-3 py-1.5 backdrop-blur">

@@ -2,6 +2,7 @@
 	import type { Webhook, Channel } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	// Props
 	let {
@@ -197,7 +198,7 @@
 	}
 
 	async function handleDeleteWebhook(webhookId: string) {
-		if (!confirm('Delete this webhook? This cannot be undone.')) return;
+		if (!(await confirmAction({ title: 'Delete Webhook', message: 'Delete this webhook? This cannot be undone.', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteWebhook(guildId, webhookId);
 			webhooks = webhooks.filter((w) => w.id !== webhookId);
@@ -337,8 +338,8 @@
 
 			<!-- Webhook Type -->
 			<div class="mb-3">
-				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Type</label>
-				<div class="flex gap-3">
+				<div id="webhook-type-label" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Type</div>
+				<div class="flex gap-3" role="radiogroup" aria-labelledby="webhook-type-label">
 					<label class="flex items-center gap-2 text-sm text-text-secondary">
 						<input type="radio" bind:group={newWebhookType} value="incoming" class="accent-brand-500" />
 						Incoming
@@ -359,36 +360,36 @@
 
 			<!-- Name -->
 			<div class="mb-3">
-				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
-				<input type="text" class="input w-full" bind:value={newWebhookName} placeholder="Webhook name" maxlength="80" />
+				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="new-webhook-name">Name</label>
+				<input id="new-webhook-name" type="text" class="input w-full" bind:value={newWebhookName} placeholder="Webhook name" maxlength="80" />
 			</div>
 
 			<!-- Channel -->
 			<div class="mb-3">
-				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel</label>
+				<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="new-webhook-channel">Channel</label>
 				{#if channels.length > 0}
-					<select class="input w-full" bind:value={newWebhookChannel}>
+					<select id="new-webhook-channel" class="input w-full" bind:value={newWebhookChannel}>
 						<option value="">Select a channel</option>
 						{#each channels.filter((c) => c.channel_type === 'text' || c.channel_type === 'announcement') as ch (ch.id)}
 							<option value={ch.id}>#{ch.name}</option>
 						{/each}
 					</select>
 				{:else}
-					<input type="text" class="input w-full" bind:value={newWebhookChannel} placeholder="Channel ID" />
+					<input id="new-webhook-channel" type="text" class="input w-full" bind:value={newWebhookChannel} placeholder="Channel ID" />
 				{/if}
 			</div>
 
 			<!-- Outgoing-specific fields -->
 			{#if newWebhookType === 'outgoing'}
 				<div class="mb-3">
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Outgoing URL</label>
-					<input type="url" class="input w-full" bind:value={newOutgoingUrl} placeholder="https://example.com/webhook" />
+					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="new-webhook-outgoing-url">Outgoing URL</label>
+					<input id="new-webhook-outgoing-url" type="url" class="input w-full" bind:value={newOutgoingUrl} placeholder="https://example.com/webhook" />
 					<p class="mt-1 text-2xs text-text-muted">The URL to POST event data to when matching events occur.</p>
 				</div>
 
 				<div class="mb-3">
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Events to Send</label>
-					<div class="mt-1 grid grid-cols-2 gap-1.5">
+					<div id="new-webhook-events-label" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Events to Send</div>
+					<div class="mt-1 grid grid-cols-2 gap-1.5" role="group" aria-labelledby="new-webhook-events-label">
 						{#each Object.entries(eventLabels) as [event, label] (event)}
 							<label class="flex items-center gap-2 rounded px-2 py-1 text-xs text-text-secondary hover:bg-bg-modifier">
 								<input
@@ -461,8 +462,8 @@
 				</p>
 
 				<div class="mb-3">
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Template</label>
-					<select class="input w-full" bind:value={selectedTemplateId}>
+					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="webhook-template-select">Template</label>
+					<select id="webhook-template-select" class="input w-full" bind:value={selectedTemplateId}>
 						<option value={null}>Select a template</option>
 						{#each templates as tmpl (tmpl.id)}
 							<option value={tmpl.id}>{tmpl.name} ({serviceLabels[tmpl.service] ?? tmpl.service})</option>
@@ -471,8 +472,9 @@
 				</div>
 
 				<div class="mb-3">
-					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Payload (JSON)</label>
+					<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="webhook-preview-payload">Payload (JSON)</label>
 					<textarea
+						id="webhook-preview-payload"
 						class="input w-full font-mono text-xs"
 						rows="8"
 						bind:value={previewPayload}
@@ -514,30 +516,30 @@
 							<!-- Edit Mode -->
 							<div class="space-y-3">
 								<div>
-									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Name</label>
-									<input type="text" class="input w-full" bind:value={editWebhookName} maxlength="80" />
+									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="edit-webhook-name-{wh.id}">Name</label>
+									<input id="edit-webhook-name-{wh.id}" type="text" class="input w-full" bind:value={editWebhookName} maxlength="80" />
 								</div>
 								<div>
-									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel</label>
+									<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="edit-webhook-channel-{wh.id}">Channel</label>
 									{#if channels.length > 0}
-										<select class="input w-full" bind:value={editWebhookChannel}>
+										<select id="edit-webhook-channel-{wh.id}" class="input w-full" bind:value={editWebhookChannel}>
 											{#each channels.filter((c) => c.channel_type === 'text' || c.channel_type === 'announcement') as ch (ch.id)}
 												<option value={ch.id}>#{ch.name}</option>
 											{/each}
 										</select>
 									{:else}
-										<input type="text" class="input w-full" bind:value={editWebhookChannel} />
+										<input id="edit-webhook-channel-{wh.id}" type="text" class="input w-full" bind:value={editWebhookChannel} />
 									{/if}
 								</div>
 
 								{#if editWebhookType === 'outgoing'}
 									<div>
-										<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Outgoing URL</label>
-										<input type="url" class="input w-full" bind:value={editOutgoingUrl} placeholder="https://example.com/webhook" />
+										<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted" for="edit-webhook-outgoing-url-{wh.id}">Outgoing URL</label>
+										<input id="edit-webhook-outgoing-url-{wh.id}" type="url" class="input w-full" bind:value={editOutgoingUrl} placeholder="https://example.com/webhook" />
 									</div>
 									<div>
-										<label class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Events</label>
-										<div class="mt-1 grid grid-cols-2 gap-1.5">
+										<div id="edit-webhook-events-label-{wh.id}" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Events</div>
+										<div class="mt-1 grid grid-cols-2 gap-1.5" role="group" aria-labelledby="edit-webhook-events-label-{wh.id}">
 											{#each Object.entries(eventLabels) as [event, label] (event)}
 												<label class="flex items-center gap-2 rounded px-2 py-1 text-xs text-text-secondary hover:bg-bg-modifier">
 													<input

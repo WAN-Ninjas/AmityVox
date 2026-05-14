@@ -78,21 +78,21 @@ type DiscoveryResponse struct {
 // peering relationship. It includes the sender's protocol versions and
 // capabilities so both sides can negotiate a common feature set.
 type HandshakeRequest struct {
-	SenderID           string   `json:"sender_id"`
-	SenderDomain       string   `json:"sender_domain"`
-	ProtocolVersion    string   `json:"protocol_version"`
-	SupportedVersions  []string `json:"supported_versions"`
-	Capabilities       []string `json:"capabilities"`
-	Timestamp          time.Time `json:"timestamp"`
+	SenderID          string    `json:"sender_id"`
+	SenderDomain      string    `json:"sender_domain"`
+	ProtocolVersion   string    `json:"protocol_version"`
+	SupportedVersions []string  `json:"supported_versions"`
+	Capabilities      []string  `json:"capabilities"`
+	Timestamp         time.Time `json:"timestamp"`
 }
 
 // HandshakeResponse is returned by the receiving instance. NegotiatedVersion
 // is the highest common protocol version both peers support.
 type HandshakeResponse struct {
-	Accepted           bool     `json:"accepted"`
-	NegotiatedVersion  string   `json:"negotiated_version"`
-	Capabilities       []string `json:"capabilities"`
-	Reason             string   `json:"reason,omitempty"`
+	Accepted          bool     `json:"accepted"`
+	NegotiatedVersion string   `json:"negotiated_version"`
+	Capabilities      []string `json:"capabilities"`
+	Reason            string   `json:"reason,omitempty"`
 }
 
 // DeliveryReceipt confirms delivery (or failure) of a federated message.
@@ -169,14 +169,16 @@ func New(cfg Config) *Service {
 		pendingCounters: make(map[string]*counterEntry),
 	}
 
-	// Pre-load federation mode cache at startup.
-	var mode string
-	if err := cfg.Pool.QueryRow(context.Background(),
-		`SELECT federation_mode FROM instances WHERE id = $1`, cfg.InstanceID,
-	).Scan(&mode); err == nil {
-		s.fedModeCache.Set("__local__", mode)
-	} else {
-		cfg.Logger.Debug("could not pre-load federation mode cache", slog.String("error", err.Error()))
+	if cfg.Pool != nil {
+		// Pre-load federation mode cache at startup.
+		var mode string
+		if err := cfg.Pool.QueryRow(context.Background(),
+			`SELECT federation_mode FROM instances WHERE id = $1`, cfg.InstanceID,
+		).Scan(&mode); err == nil {
+			s.fedModeCache.Set("__local__", mode)
+		} else {
+			cfg.Logger.Debug("could not pre-load federation mode cache", slog.String("error", err.Error()))
+		}
 	}
 
 	return s

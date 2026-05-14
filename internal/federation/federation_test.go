@@ -255,6 +255,28 @@ func TestFederatedMessage_JSON(t *testing.T) {
 	}
 }
 
+func TestRequiresFederationGuildID(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		channelID string
+		want      bool
+	}{
+		{"channel event", "TYPING_START", "channel-1", true},
+		{"guild event", "GUILD_UPDATE", "", true},
+		{"message event", "MESSAGE_DELETE", "", true},
+		{"reaction event", "REACTION_ADD", "", true},
+		{"presence event", "PRESENCE_UPDATE", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresFederationGuildID(tt.eventType, tt.channelID); got != tt.want {
+				t.Fatalf("requiresFederationGuildID() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEventTypeToSubject(t *testing.T) {
 	tests := []struct {
 		eventType string

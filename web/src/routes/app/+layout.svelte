@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto, afterNavigate } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import type { Snippet } from 'svelte';
 	import { api } from '$lib/api/client';
@@ -12,6 +12,7 @@
 	import GuildSidebar from '$components/layout/GuildSidebar.svelte';
 	import ChannelSidebar from '$components/layout/ChannelSidebar.svelte';
 	import ToastContainer from '$components/common/ToastContainer.svelte';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import KeyboardShortcuts from '$components/common/KeyboardShortcuts.svelte';
 	import CommandPalette from '$components/common/CommandPalette.svelte';
 	import QuickSwitcher from '$components/common/QuickSwitcher.svelte';
@@ -20,6 +21,7 @@
 	import IncomingCallModal from '$components/common/IncomingCallModal.svelte';
 	import ResizeHandle from '$components/common/ResizeHandle.svelte';
 	import { channelSidebarWidth } from '$lib/stores/layout';
+	import { loadClientConfig } from '$lib/stores/clientConfig';
 
 	interface Props {
 		children: Snippet;
@@ -51,17 +53,11 @@
 		mobileSidebarOpen = false;
 	});
 
-	afterNavigate(({ to }) => {
-		if (!to) return;
-		if (to.url.pathname.startsWith('/app') && to.url.pathname !== '/app') {
-			window.history.replaceState(history.state, '', '/app');
-		}
-	});
-
 	onMount(() => {
 		// Load settings from localStorage immediately.
 		loadSettings();
 		startDndChecker();
+		loadClientConfig();
 
 		initAuth().then(() => {
 			const token = api.getToken();
@@ -98,6 +94,7 @@
 
 <KeyboardShortcuts onToggleSearch={toggleCommandPalette} onToggleQuickSwitcher={toggleQuickSwitcher} />
 <ToastContainer />
+<ConfirmDialog />
 <ModerationModals />
 <IncomingCallModal />
 <CommandPalette bind:open={commandPaletteOpen} />
@@ -111,7 +108,7 @@
 		</div>
 	</div>
 {:else if $currentUser}
-	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => { if (e.button === 2) e.preventDefault(); }}>
+	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => { if (e.button === 2) e.preventDefault(); }} role="application">
 		<div class="accent-stripe"></div>
 		<!-- Reconnecting banner -->
 		{#if !$gatewayConnected}
@@ -140,13 +137,13 @@
 			</button>
 
 			<!-- Mobile backdrop -->
-			{#if mobileSidebarOpen}
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div
-					class="fixed inset-0 z-40 bg-black/50 md:hidden"
-					onclick={closeMobileSidebar}
-				></div>
-			{/if}
+		{#if mobileSidebarOpen}
+			<button
+				class="fixed inset-0 z-40 bg-black/50 md:hidden"
+				aria-label="Close sidebar"
+				onclick={closeMobileSidebar}
+			></button>
+		{/if}
 
 			<!-- Sidebars: hidden on mobile unless open -->
 			<div class="hidden md:contents" class:!contents={mobileSidebarOpen}>

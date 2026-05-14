@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { confirmAction } from '$lib/stores/confirm';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -73,7 +74,7 @@
 	}
 
 	async function handleDeleteTemplate(templateId: string) {
-		if (!confirm('Are you sure you want to delete this template?')) return;
+		if (!(await confirmAction({ title: 'Delete Template', message: 'Are you sure you want to delete this template?', confirmLabel: 'Delete' }))) return;
 		error = '';
 		try {
 			await api.deleteGuildTemplate(guildId, templateId);

@@ -55,10 +55,10 @@ type federatedGuildMessagesRequest struct {
 }
 
 type federatedGuildPostMessageRequest struct {
-	UserID      string   `json:"user_id"`
-	Content     string   `json:"content"`
-	Nonce       string   `json:"nonce,omitempty"`
-	ReplyToIDs  []string `json:"reply_to_ids,omitempty"`
+	UserID     string   `json:"user_id"`
+	Content    string   `json:"content"`
+	Nonce      string   `json:"nonce,omitempty"`
+	ReplyToIDs []string `json:"reply_to_ids,omitempty"`
 }
 
 type federatedGuildMembersRequest struct {
@@ -213,9 +213,9 @@ func (ss *SyncService) HandleFederatedGuildJoin(w http.ResponseWriter, r *http.R
 
 	// Add to guild_members (idempotent).
 	tag, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO guild_members (guild_id, user_id, joined_at)
-		 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
-		guildID, req.UserID,
+		`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+		 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+		guildID, req.UserID, instanceID,
 	)
 	if err != nil {
 		ss.logger.Error("failed to add federated guild member",
@@ -409,9 +409,9 @@ func (ss *SyncService) HandleFederatedGuildInviteAccept(w http.ResponseWriter, r
 
 	// Add to guild_members.
 	tag, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO guild_members (guild_id, user_id, joined_at)
-		 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
-		guildID, req.UserID)
+		`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+		 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+		guildID, req.UserID, instanceID)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
@@ -922,9 +922,9 @@ func (ss *SyncService) HandleFederatedGuildReactionAdd(w http.ResponseWriter, r 
 	}
 
 	if _, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
-		 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
-		messageID, req.UserID, req.Emoji); err != nil {
+		`INSERT INTO reactions (message_id, user_id, emoji, instance_id, created_at)
+		 VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING`,
+		messageID, req.UserID, req.Emoji, senderID); err != nil {
 		ss.logger.Error("failed to add federated reaction", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
@@ -1005,7 +1005,7 @@ func (ss *SyncService) HandleFederatedGuildReactionRemove(w http.ResponseWriter,
 	}
 
 	if _, err := ss.fed.pool.Exec(ctx,
-		`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+		`DELETE FROM reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
 		messageID, req.UserID, req.Emoji); err != nil {
 		ss.logger.Error("failed to remove federated reaction", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -1210,15 +1210,17 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 	// so federated clients can group channels under their parent categories.
 	channels := make([]map[string]interface{}, 0)
 	catRows, err := ss.fed.pool.Query(ctx,
-		`SELECT id, name, position FROM guild_categories WHERE guild_id = $1 ORDER BY position`, guildID)
+		`SELECT id, name, position, created_at FROM guild_categories WHERE guild_id = $1 ORDER BY position`, guildID)
 	if err == nil {
 		defer catRows.Close()
 		for catRows.Next() {
 			var id, name string
 			var position int
-			if catRows.Scan(&id, &name, &position) == nil {
+			var createdAt time.Time
+			if catRows.Scan(&id, &name, &position, &createdAt) == nil {
 				channels = append(channels, map[string]interface{}{
 					"id": id, "channel_type": "category", "name": name, "topic": nil, "position": position, "category_id": nil,
+					"created_at": createdAt,
 				})
 			}
 		}
@@ -1226,7 +1228,16 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 
 	// Load non-private channels only (private channels require explicit access).
 	channelRows, err := ss.fed.pool.Query(ctx,
-		`SELECT id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted FROM channels
+		`SELECT id, channel_type, name, topic, position, category_id, parent_channel_id,
+		        COALESCE(slowmode_seconds, 0), COALESCE(nsfw, false), COALESCE(encrypted, false),
+		        default_permissions, COALESCE(user_limit, 0), COALESCE(bitrate, 0),
+		        COALESCE(read_only, false), COALESCE(read_only_role_ids, '{}'),
+		        COALESCE(default_auto_archive_duration, 0),
+		        COALESCE(archived, false), COALESCE(locked, false),
+		        forum_default_sort, forum_post_guidelines, COALESCE(forum_require_tags, false),
+		        gallery_default_sort, gallery_post_guidelines, COALESCE(gallery_require_tags, false),
+		        COALESCE(pinned, false), COALESCE(reply_count, 0), created_at
+		 FROM channels
 		 WHERE guild_id = $1 AND (channel_type <> 'private' OR channel_type IS NULL)
 		 ORDER BY position`, guildID)
 	if err == nil {
@@ -1237,12 +1248,32 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 			var name, topic *string
 			var position int
 			var categoryID, parentChannelID *string
-			var encrypted bool
-			if channelRows.Scan(&id, &channelType, &name, &topic, &position, &categoryID, &parentChannelID, &encrypted) == nil {
+			var slowmodeSeconds, userLimit, bitrate, defaultAutoArchiveDuration, replyCount int
+			var nsfw, encrypted, readOnly, archived, locked, forumRequireTags, galleryRequireTags, pinned bool
+			var defaultPermissions *int64
+			var readOnlyRoleIDs []string
+			var forumDefaultSort, forumPostGuidelines, galleryDefaultSort, galleryPostGuidelines *string
+			var createdAt time.Time
+			if channelRows.Scan(&id, &channelType, &name, &topic, &position, &categoryID, &parentChannelID,
+				&slowmodeSeconds, &nsfw, &encrypted, &defaultPermissions, &userLimit, &bitrate,
+				&readOnly, &readOnlyRoleIDs, &defaultAutoArchiveDuration,
+				&archived, &locked, &forumDefaultSort, &forumPostGuidelines, &forumRequireTags,
+				&galleryDefaultSort, &galleryPostGuidelines, &galleryRequireTags,
+				&pinned, &replyCount, &createdAt) == nil {
 				channels = append(channels, map[string]interface{}{
 					"id": id, "channel_type": channelType, "name": name, "topic": topic,
 					"position": position, "category_id": categoryID,
 					"parent_channel_id": parentChannelID, "encrypted": encrypted,
+					"slowmode_seconds": slowmodeSeconds, "nsfw": nsfw,
+					"default_permissions": defaultPermissions, "user_limit": userLimit, "bitrate": bitrate,
+					"read_only": readOnly, "read_only_role_ids": readOnlyRoleIDs,
+					"default_auto_archive_duration": defaultAutoArchiveDuration,
+					"archived":                      archived, "locked": locked,
+					"forum_default_sort": forumDefaultSort, "forum_post_guidelines": forumPostGuidelines,
+					"forum_require_tags":   forumRequireTags,
+					"gallery_default_sort": galleryDefaultSort, "gallery_post_guidelines": galleryPostGuidelines,
+					"gallery_require_tags": galleryRequireTags,
+					"pinned":               pinned, "reply_count": replyCount, "created_at": createdAt,
 				})
 			}
 		}
@@ -1254,17 +1285,24 @@ func (ss *SyncService) buildGuildJoinResponse(ctx context.Context, guildID strin
 
 	// Load roles.
 	roleRows, err := ss.fed.pool.Query(ctx,
-		`SELECT id, name, color, position FROM roles WHERE guild_id = $1 ORDER BY position`, guildID)
+		`SELECT id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at
+		 FROM roles WHERE guild_id = $1 ORDER BY position`, guildID)
 	if err == nil {
 		defer roleRows.Close()
 		roles := make([]map[string]interface{}, 0)
 		for roleRows.Next() {
 			var id, name string
 			var color *string
+			var hoist, mentionable bool
 			var position int
-			if roleRows.Scan(&id, &name, &color, &position) == nil {
+			var permissionsAllow, permissionsDeny int64
+			var createdAt time.Time
+			if roleRows.Scan(&id, &name, &color, &hoist, &mentionable, &position,
+				&permissionsAllow, &permissionsDeny, &createdAt) == nil {
 				roles = append(roles, map[string]interface{}{
-					"id": id, "name": name, "color": color, "position": position,
+					"id": id, "name": name, "color": color, "hoist": hoist, "mentionable": mentionable,
+					"position": position, "permissions_allow": permissionsAllow,
+					"permissions_deny": permissionsDeny, "created_at": createdAt,
 				})
 			}
 		}
@@ -1508,9 +1546,9 @@ func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, sender
 		})
 		// Insert the member into guild_members (idempotent).
 		if _, err := ss.fed.pool.Exec(ctx,
-			`INSERT INTO guild_members (guild_id, user_id, joined_at)
-			 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
-			guildID, member.UserID); err != nil {
+			`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+			 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+			guildID, member.UserID, senderID); err != nil {
 			ss.logger.Warn("failed to insert federated guild member from event",
 				slog.String("guild_id", guildID), slog.String("user_id", member.UserID),
 				slog.String("error", err.Error()))
@@ -1648,8 +1686,14 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 		AvatarID:    joinResp.OwnerAvatarID,
 	})
 
-	// Insert guild into real guilds table (idempotent via ON CONFLICT DO UPDATE).
-	if _, err := ss.fed.pool.Exec(ctx,
+	tx, err := ss.fed.pool.Begin(ctx)
+	if err != nil {
+		http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO guilds (id, instance_id, owner_id, name, description, icon_id, member_count, discoverable, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, false, now())
 		 ON CONFLICT (id) DO UPDATE SET
@@ -1660,35 +1704,51 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 	); err != nil {
 		ss.logger.Error("failed to insert federated guild into guilds table",
 			slog.String("guild_id", joinResp.GuildID), slog.String("error", err.Error()))
-		// Still return success to the user — the remote join succeeded.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{"data": joinResp})
+		http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
 		return
 	}
 
 	// Parse and insert channels (categories go to guild_categories, others to channels).
 	var channels []struct {
-		ID              string  `json:"id"`
-		ChannelType     *string `json:"channel_type"`
-		Name            *string `json:"name"`
-		Topic           *string `json:"topic"`
-		Position        int     `json:"position"`
-		CategoryID      *string `json:"category_id"`
-		ParentChannelID *string `json:"parent_channel_id"`
-		Encrypted       bool    `json:"encrypted"`
+		ID                         string   `json:"id"`
+		ChannelType                *string  `json:"channel_type"`
+		Name                       *string  `json:"name"`
+		Topic                      *string  `json:"topic"`
+		Position                   int      `json:"position"`
+		CategoryID                 *string  `json:"category_id"`
+		ParentChannelID            *string  `json:"parent_channel_id"`
+		SlowmodeSeconds            int      `json:"slowmode_seconds"`
+		NSFW                       bool     `json:"nsfw"`
+		Encrypted                  bool     `json:"encrypted"`
+		DefaultPermissions         *int64   `json:"default_permissions"`
+		UserLimit                  int      `json:"user_limit"`
+		Bitrate                    int      `json:"bitrate"`
+		ReadOnly                   bool     `json:"read_only"`
+		ReadOnlyRoleIDs            []string `json:"read_only_role_ids"`
+		DefaultAutoArchiveDuration int      `json:"default_auto_archive_duration"`
+		Archived                   bool     `json:"archived"`
+		Locked                     bool     `json:"locked"`
+		ForumDefaultSort           *string  `json:"forum_default_sort"`
+		ForumPostGuidelines        *string  `json:"forum_post_guidelines"`
+		ForumRequireTags           bool     `json:"forum_require_tags"`
+		GalleryDefaultSort         *string  `json:"gallery_default_sort"`
+		GalleryPostGuidelines      *string  `json:"gallery_post_guidelines"`
+		GalleryRequireTags         bool     `json:"gallery_require_tags"`
+		Pinned                     bool     `json:"pinned"`
+		ReplyCount                 int      `json:"reply_count"`
 	}
 	if json.Unmarshal(joinResp.ChannelsJSON, &channels) == nil {
 		// Insert categories first (channels may reference them via category_id FK).
 		for _, ch := range channels {
 			if ch.ChannelType != nil && *ch.ChannelType == "category" {
-				if _, err := ss.fed.pool.Exec(ctx,
+				if _, err := tx.Exec(ctx,
 					`INSERT INTO guild_categories (id, guild_id, name, position)
 					 VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET
 					 name = EXCLUDED.name, position = EXCLUDED.position`,
 					ch.ID, joinResp.GuildID, ch.Name, ch.Position); err != nil {
-					ss.logger.Warn("failed to insert federated category",
-						slog.String("id", ch.ID), slog.String("error", err.Error()))
+					ss.logger.Error("failed to insert federated category", slog.String("id", ch.ID), slog.String("error", err.Error()))
+					http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
+					return
 				}
 			}
 		}
@@ -1699,16 +1759,43 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 				if ch.ChannelType != nil {
 					chType = *ch.ChannelType
 				}
-				if _, err := ss.fed.pool.Exec(ctx,
-					`INSERT INTO channels (id, guild_id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted)
-					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO channels (id, guild_id, instance_id, channel_type, name, topic, position,
+					                       category_id, parent_channel_id, slowmode_seconds, nsfw, encrypted,
+					                       default_permissions, user_limit, bitrate, read_only, read_only_role_ids,
+					                       default_auto_archive_duration, archived, locked,
+					                       forum_default_sort, forum_post_guidelines, forum_require_tags,
+					                       gallery_default_sort, gallery_post_guidelines, gallery_require_tags,
+					                       pinned, reply_count)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+					         $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+					 ON CONFLICT (id) DO UPDATE SET
 					 name = EXCLUDED.name, topic = EXCLUDED.topic, position = EXCLUDED.position,
 					 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id,
-					 encrypted = EXCLUDED.encrypted`,
-					ch.ID, joinResp.GuildID, chType, ch.Name, ch.Topic, ch.Position,
-					ch.CategoryID, ch.ParentChannelID, ch.Encrypted); err != nil {
-					ss.logger.Warn("failed to insert federated channel",
-						slog.String("id", ch.ID), slog.String("error", err.Error()))
+					 slowmode_seconds = EXCLUDED.slowmode_seconds, nsfw = EXCLUDED.nsfw,
+					 encrypted = EXCLUDED.encrypted, default_permissions = EXCLUDED.default_permissions,
+					 user_limit = EXCLUDED.user_limit, bitrate = EXCLUDED.bitrate,
+					 read_only = EXCLUDED.read_only, read_only_role_ids = EXCLUDED.read_only_role_ids,
+					 default_auto_archive_duration = EXCLUDED.default_auto_archive_duration,
+					 archived = EXCLUDED.archived, locked = EXCLUDED.locked,
+					 forum_default_sort = EXCLUDED.forum_default_sort,
+					 forum_post_guidelines = EXCLUDED.forum_post_guidelines,
+					 forum_require_tags = EXCLUDED.forum_require_tags,
+					 gallery_default_sort = EXCLUDED.gallery_default_sort,
+					 gallery_post_guidelines = EXCLUDED.gallery_post_guidelines,
+					 gallery_require_tags = EXCLUDED.gallery_require_tags,
+					 pinned = EXCLUDED.pinned, reply_count = EXCLUDED.reply_count,
+					 instance_id = EXCLUDED.instance_id`,
+					ch.ID, joinResp.GuildID, remoteInstanceID, chType, ch.Name, ch.Topic, ch.Position,
+					ch.CategoryID, ch.ParentChannelID, ch.SlowmodeSeconds, ch.NSFW, ch.Encrypted,
+					ch.DefaultPermissions, ch.UserLimit, ch.Bitrate, ch.ReadOnly, ch.ReadOnlyRoleIDs,
+					ch.DefaultAutoArchiveDuration, ch.Archived, ch.Locked,
+					ch.ForumDefaultSort, ch.ForumPostGuidelines, ch.ForumRequireTags,
+					ch.GalleryDefaultSort, ch.GalleryPostGuidelines, ch.GalleryRequireTags,
+					ch.Pinned, ch.ReplyCount); err != nil {
+					ss.logger.Error("failed to insert federated channel", slog.String("id", ch.ID), slog.String("error", err.Error()))
+					http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
+					return
 				}
 			}
 		}
@@ -1716,31 +1803,48 @@ func (ss *SyncService) HandleProxyJoinFederatedGuild(w http.ResponseWriter, r *h
 
 	// Parse and insert roles.
 	var roles []struct {
-		ID       string  `json:"id"`
-		Name     string  `json:"name"`
-		Color    *string `json:"color"`
-		Position int     `json:"position"`
+		ID               string  `json:"id"`
+		Name             string  `json:"name"`
+		Color            *string `json:"color"`
+		Hoist            bool    `json:"hoist"`
+		Mentionable      bool    `json:"mentionable"`
+		Position         int     `json:"position"`
+		PermissionsAllow int64   `json:"permissions_allow"`
+		PermissionsDeny  int64   `json:"permissions_deny"`
 	}
 	if json.Unmarshal(joinResp.RolesJSON, &roles) == nil {
 		for _, role := range roles {
-			if _, err := ss.fed.pool.Exec(ctx,
-				`INSERT INTO roles (id, guild_id, name, color, position)
-				 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET
-				 name = EXCLUDED.name, color = EXCLUDED.color, position = EXCLUDED.position`,
-				role.ID, joinResp.GuildID, role.Name, role.Color, role.Position); err != nil {
-				ss.logger.Warn("failed to insert federated role",
-					slog.String("id", role.ID), slog.String("error", err.Error()))
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO roles (id, guild_id, instance_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO UPDATE SET
+				 name = EXCLUDED.name, color = EXCLUDED.color, hoist = EXCLUDED.hoist,
+				 mentionable = EXCLUDED.mentionable, position = EXCLUDED.position,
+				 permissions_allow = EXCLUDED.permissions_allow, permissions_deny = EXCLUDED.permissions_deny,
+				 instance_id = EXCLUDED.instance_id`,
+				role.ID, joinResp.GuildID, remoteInstanceID, role.Name, role.Color, role.Hoist,
+				role.Mentionable, role.Position, role.PermissionsAllow, role.PermissionsDeny); err != nil {
+				ss.logger.Error("failed to insert federated role", slog.String("id", role.ID), slog.String("error", err.Error()))
+				http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
+				return
 			}
 		}
 	}
 
 	// Add the joining user as a guild member (idempotent).
-	if _, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO guild_members (guild_id, user_id, joined_at)
-		 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
-		joinResp.GuildID, userID); err != nil {
-		ss.logger.Warn("failed to insert local user as federated guild member",
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+		 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+		joinResp.GuildID, userID, ss.fed.instanceID); err != nil {
+		ss.logger.Error("failed to insert local user as federated guild member",
 			slog.String("guild_id", joinResp.GuildID), slog.String("error", err.Error()))
+		http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		ss.logger.Error("failed to commit federated guild mirror",
+			slog.String("guild_id", joinResp.GuildID), slog.String("error", err.Error()))
+		http.Error(w, "Failed to store federated guild", http.StatusInternalServerError)
+		return
 	}
 
 	// Register this instance as a peer for the guild's channels so events route here.
@@ -1799,13 +1903,12 @@ func (ss *SyncService) HandleProxyLeaveFederatedGuild(w http.ResponseWriter, r *
 		`DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2`, guildID, userID)
 
 	// If no local members remain in this federated guild, clean up the local guild data.
-	// Local users have NULL instance_id, so use IS NULL instead of matching instance_id.
 	var remainingLocalMembers int
 	if err := ss.fed.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM guild_members gm
 		 JOIN users u ON u.id = gm.user_id
-		 WHERE gm.guild_id = $1 AND u.instance_id IS NULL`,
-		guildID,
+		 WHERE gm.guild_id = $1 AND (u.instance_id = $2 OR u.instance_id IS NULL)`,
+		guildID, ss.fed.instanceID,
 	).Scan(&remainingLocalMembers); err != nil {
 		ss.logger.Warn("failed to count remaining local members in federated guild",
 			slog.String("guild_id", guildID), slog.String("error", err.Error()))
@@ -1816,8 +1919,9 @@ func (ss *SyncService) HandleProxyLeaveFederatedGuild(w http.ResponseWriter, r *
 			 WHERE instance_id = $1 AND channel_id IN (SELECT id FROM channels WHERE guild_id = $2)`,
 			ss.fed.instanceID, guildID)
 		// Delete the federated guild and its cascaded data (channels, categories, roles, members).
-		// Only delete if instance_id IS NOT NULL to prevent accidentally deleting local guilds.
-		ss.fed.pool.Exec(ctx, `DELETE FROM guilds WHERE id = $1 AND instance_id IS NOT NULL`, guildID)
+		ss.fed.pool.Exec(ctx,
+			`DELETE FROM guilds WHERE id = $1 AND instance_id IS NOT NULL AND instance_id <> $2`,
+			guildID, ss.fed.instanceID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -2626,7 +2730,7 @@ func (ss *SyncService) HandleAggregatedDiscover(w http.ResponseWriter, r *http.R
 
 	ctx := r.Context()
 
-	// 1. Query local discoverable guilds (instance_id IS NULL = local only).
+	// 1. Query local discoverable guilds.
 	localGuilds := ss.queryLocalDiscoverableGuilds(ctx, query, tag, limit)
 
 	// 2. Get all active federation peers.
@@ -2778,15 +2882,15 @@ func (ss *SyncService) HandleAggregatedDiscover(w http.ResponseWriter, r *http.R
 }
 
 // queryLocalDiscoverableGuilds queries the local database for discoverable
-// guilds that are owned by this instance (instance_id IS NULL).
+// guilds that are owned by this instance.
 func (ss *SyncService) queryLocalDiscoverableGuilds(ctx context.Context, query, tag string, limit int) []aggregatedDiscoverGuild {
 	baseSQL := `SELECT g.id, g.name, g.description, g.icon_id, g.banner_id,
 	            g.tags, g.member_count, g.created_at
 	     FROM guilds g
-	     WHERE g.discoverable = true AND g.instance_id IS NULL`
+	     WHERE g.discoverable = true AND (g.instance_id = $1 OR g.instance_id IS NULL)`
 
-	argN := 1
-	var args []interface{}
+	argN := 2
+	args := []interface{}{ss.fed.instanceID}
 	if query != "" {
 		baseSQL += fmt.Sprintf(` AND g.name ILIKE '%%' || $%d || '%%'`, argN)
 		args = append(args, query)

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { confirmAction } from '$lib/stores/confirm';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import {
 		instanceProfiles,
@@ -49,7 +50,8 @@
 		const result = await addOp.run(
 			() => api.createInstanceProfile({
 				instance_url: newInstanceUrl.trim(),
-				instance_name: newInstanceName.trim() || null,
+				token: '',
+				display_name: newInstanceName.trim() || undefined,
 			}),
 			msg => addToast('Failed to add instance: ' + msg, 'error')
 		);
@@ -71,7 +73,7 @@
 	}
 
 	async function removeInstance(profile: InstanceProfile) {
-		if (!confirm(`Remove ${profile.instance_name || profile.instance_url}?`)) return;
+		if (!(await confirmAction({ title: 'Remove Instance', message: `Remove ${profile.instance_name || profile.instance_url}?`, confirmLabel: 'Remove' }))) return;
 		try {
 			await api.deleteInstanceProfile(profile.id);
 			removeInstanceProfile(profile.instance_url);

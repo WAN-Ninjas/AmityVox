@@ -1,31 +1,8 @@
 <!-- Transcription.svelte — Voice channel transcription UI with opt-in toggle and live transcript display. -->
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type TranscriptionEntry, type TranscriptionSettings } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { currentUser } from '$lib/stores/auth';
-
-	interface TranscriptionEntry {
-		id: string;
-		channel_id: string;
-		user_id: string;
-		content: string;
-		confidence?: number;
-		language: string;
-		duration_ms: number;
-		started_at: string;
-		ended_at: string;
-		created_at: string;
-		username: string;
-		display_name?: string;
-		avatar_id?: string;
-	}
-
-	interface TranscriptionSettings {
-		channel_id: string;
-		user_id: string;
-		enabled: boolean;
-		language: string;
-	}
 
 	interface Props {
 		channelId: string;
@@ -86,10 +63,7 @@
 
 	async function loadSettings() {
 		try {
-			const data = await api.request<TranscriptionSettings>(
-				'GET',
-				`/channels/${channelId}/experimental/transcription/settings`
-			);
+			const data = await api.getTranscriptionSettings(channelId);
 			if (data) {
 				settings = data;
 			}
@@ -101,14 +75,10 @@
 	async function updateSettings(enabled: boolean, language?: string) {
 		error = '';
 		const data = await saveOp.run(
-			() => api.request<TranscriptionSettings>(
-				'PATCH',
-				`/channels/${channelId}/experimental/transcription/settings`,
-				{
-					enabled,
-					language: language ?? settings?.language ?? 'en'
-				}
-			),
+			() => api.updateTranscriptionSettings(channelId, {
+				enabled,
+				language: language ?? settings?.language ?? 'en'
+			}),
 			msg => (error = msg)
 		);
 		if (data) settings = data;
@@ -116,10 +86,7 @@
 
 	async function loadTranscriptions() {
 		const data = await loadOp.run(
-			() => api.request<TranscriptionEntry[]>(
-				'GET',
-				`/channels/${channelId}/experimental/transcriptions`
-			)
+			() => api.getTranscriptions(channelId)
 		);
 		if (data) transcriptions = data.reverse(); // chronological order
 	}
@@ -203,6 +170,7 @@
 						class="relative w-10 h-5 rounded-full transition-colors {settings?.enabled ? 'bg-brand-500' : 'bg-bg-tertiary'}"
 						role="switch"
 						aria-checked={settings?.enabled}
+						aria-label="Enable transcription"
 						disabled={saveOp.loading}
 						onclick={() => updateSettings(!settings?.enabled)}
 					>

@@ -1,22 +1,8 @@
 <!-- CodeSnippet.svelte — Code sharing with syntax highlighting and a Run button. -->
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { untrack } from 'svelte';
+	import { api, type CodeSnippet as CodeSnippetData } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
-
-	interface CodeSnippetData {
-		id: string;
-		channel_id: string;
-		author_id: string;
-		title?: string;
-		language: string;
-		code: string;
-		stdin?: string;
-		output?: string;
-		output_error?: string;
-		exit_code?: number;
-		runtime_ms?: number;
-		runnable: boolean;
-	}
 
 	interface Props {
 		channelId: string;
@@ -34,12 +20,12 @@
 	let runnable = $state(false);
 	let createOp = $state(createAsyncOp());
 	let runOp = $state(createAsyncOp());
-	let output = $state<string | null>(snippet?.output ?? null);
-	let outputError = $state<string | null>(snippet?.output_error ?? null);
-	let exitCode = $state<number | null>(snippet?.exit_code ?? null);
-	let runtimeMs = $state<number | null>(snippet?.runtime_ms ?? null);
+	let output = $state<string | null>(untrack(() => snippet?.output ?? null));
+	let outputError = $state<string | null>(untrack(() => snippet?.output_error ?? null));
+	let exitCode = $state<number | null>(untrack(() => snippet?.exit_code ?? null));
+	let runtimeMs = $state<number | null>(untrack(() => snippet?.runtime_ms ?? null));
 	let copied = $state(false);
-	let showCreateForm = $state(!snippet);
+	let showCreateForm = $state(untrack(() => !snippet));
 	let lineNumbers = $derived(
 		(snippet?.code ?? code).split('\n').map((_, i) => i + 1)
 	);
@@ -117,7 +103,7 @@
 			createOp.error = 'Code content is required';
 			return;
 		}
-		await createOp.run(() => api.request('POST', `/channels/${channelId}/experimental/code-snippets`, {
+		await createOp.run(() => api.createCodeSnippet(channelId, {
 			title: title || undefined,
 			language,
 			code,
@@ -131,12 +117,7 @@
 
 	async function runSnippet() {
 		if (!snippet) return;
-		const result = await runOp.run(() => api.request<{
-			output: string;
-			output_error?: string;
-			exit_code: number;
-			runtime_ms: number;
-		}>('POST', `/channels/${channelId}/experimental/code-snippets/${snippet.id}/run`));
+		const result = await runOp.run(() => api.runCodeSnippet(channelId, snippet.id));
 		if (!runOp.error && result) {
 			output = result.output;
 			outputError = result.output_error ?? null;
@@ -162,7 +143,7 @@
 		<div class="flex items-center justify-between px-3 py-2 bg-bg-tertiary border-b border-border-primary">
 			<span class="text-text-primary text-sm font-medium">New Code Snippet</span>
 			{#if onclose}
-				<button type="button" class="text-text-muted hover:text-text-primary" onclick={onclose}>
+				<button type="button" class="text-text-muted hover:text-text-primary" onclick={onclose} aria-label="Close code snippet form">
 					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 					</svg>

@@ -63,8 +63,8 @@ function makeRole(id: string, name: string, position: number, opts: Partial<Role
 		hoist: opts.hoist ?? false,
 		mentionable: false,
 		position,
-		permissions_allow: 0,
-		permissions_deny: 0,
+		permissions_allow: '0',
+		permissions_deny: '0',
 		created_at: '2024-01-01T00:00:00Z',
 		...opts,
 	};
