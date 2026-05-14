@@ -715,9 +715,9 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	}
 
 	_, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO messages (id, channel_id, author_id, content, reply_to_ids, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		msgID, channelID, req.UserID, req.Content, replyToIDs, now)
+		`INSERT INTO messages (id, channel_id, author_id, instance_id, content, reply_to_ids, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		msgID, channelID, req.UserID, senderID, req.Content, replyToIDs, now)
 	if err != nil {
 		ss.logger.Error("failed to create federated guild message", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -756,7 +756,7 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 
 	msg := map[string]interface{}{
 		"id": msgID, "channel_id": channelID, "guild_id": guildID,
-		"author_id": req.UserID, "content": req.Content, "created_at": now,
+		"author_id": req.UserID, "instance_id": senderID, "content": req.Content, "created_at": now,
 		"reply_to_ids": replyToIDs, "author": authorObj,
 	}
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", channelID, msg)
@@ -1411,12 +1411,12 @@ func (ss *SyncService) updateFederatedGuildFromEvent(ctx context.Context, sender
 			}
 		} else {
 			if _, err := ss.fed.pool.Exec(ctx,
-				`INSERT INTO channels (id, guild_id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET
+				`INSERT INTO channels (id, guild_id, instance_id, channel_type, name, topic, position, category_id, parent_channel_id, encrypted)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO UPDATE SET
 				 name = EXCLUDED.name, topic = EXCLUDED.topic, position = EXCLUDED.position,
 				 category_id = EXCLUDED.category_id, parent_channel_id = EXCLUDED.parent_channel_id,
-					 encrypted = EXCLUDED.encrypted`,
-				ch.ID, guildID, ch.ChannelType, ch.Name, ch.Topic, ch.Position,
+				 encrypted = EXCLUDED.encrypted, instance_id = EXCLUDED.instance_id`,
+				ch.ID, guildID, senderID, ch.ChannelType, ch.Name, ch.Topic, ch.Position,
 				ch.CategoryID, ch.ParentChannelID, ch.Encrypted); err != nil {
 				ss.logger.Warn("failed to insert federated channel from event",
 					slog.String("id", ch.ID), slog.String("error", err.Error()))

@@ -198,9 +198,9 @@ func (ss *SyncService) HandleInviteAccept(w http.ResponseWriter, r *http.Request
 
 	// Add to guild_members (idempotent).
 	tag, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO guild_members (guild_id, user_id, joined_at)
-		 VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
-		guildID, req.UserID,
+		`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+		 VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`,
+		guildID, req.UserID, instanceID,
 	)
 	if err != nil {
 		ss.logger.Error("failed to add federated guild member via invite",

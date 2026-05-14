@@ -159,6 +159,89 @@ func TestFederatedDMMessageRequest_WithAttachments(t *testing.T) {
 	}
 }
 
+func TestFederatedDMMessageUpdateRequest_JSON(t *testing.T) {
+	editedAt := time.Now().UTC().Truncate(time.Second)
+	req := federatedDMMessageRequest{
+		RemoteChannelID: "remote-dm-1",
+		Message: federatedMessageData{
+			ID:             "msg-3",
+			AuthorID:       "user-3",
+			Content:        "edited content",
+			MentionUserIDs: []string{"user-4"},
+			MentionHere:    true,
+			EditedAt:       &editedAt,
+		},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded federatedDMMessageRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.RemoteChannelID != "remote-dm-1" {
+		t.Errorf("RemoteChannelID = %q, want %q", decoded.RemoteChannelID, "remote-dm-1")
+	}
+	if decoded.Message.ID != "msg-3" || decoded.Message.Content != "edited content" {
+		t.Errorf("Message = %+v, want msg-3/edited content", decoded.Message)
+	}
+	if decoded.Message.EditedAt == nil || !decoded.Message.EditedAt.Equal(editedAt) {
+		t.Errorf("EditedAt = %v, want %v", decoded.Message.EditedAt, editedAt)
+	}
+	if len(decoded.Message.MentionUserIDs) != 1 || decoded.Message.MentionUserIDs[0] != "user-4" {
+		t.Errorf("MentionUserIDs = %v, want [user-4]", decoded.Message.MentionUserIDs)
+	}
+}
+
+func TestFederatedDMMessageDeleteRequest_JSON(t *testing.T) {
+	req := federatedDMMessageDeleteRequest{
+		RemoteChannelID: "remote-dm-2",
+		MessageID:       "msg-4",
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded federatedDMMessageDeleteRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.RemoteChannelID != "remote-dm-2" || decoded.MessageID != "msg-4" {
+		t.Errorf("decoded = %+v, want remote-dm-2/msg-4", decoded)
+	}
+}
+
+func TestFederatedDMReactionRequest_JSON(t *testing.T) {
+	req := federatedDMReactionRequest{
+		RemoteChannelID: "remote-dm-3",
+		MessageID:       "msg-5",
+		UserID:          "user-5",
+		Emoji:           ":+1:",
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded federatedDMReactionRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if decoded.RemoteChannelID != req.RemoteChannelID || decoded.MessageID != req.MessageID ||
+		decoded.UserID != req.UserID || decoded.Emoji != req.Emoji {
+		t.Errorf("decoded = %+v, want %+v", decoded, req)
+	}
+}
+
 func TestFederatedDMRecipientRequest_JSON(t *testing.T) {
 	req := federatedDMRecipientRequest{
 		RemoteChannelID: "ch-200",

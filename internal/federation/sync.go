@@ -822,8 +822,16 @@ func (ss *SyncService) storeFederationEvent(ctx context.Context, instanceID, eve
 func stableFederationEventID(instanceID, eventType, guildID, channelID string, ts HLCTimestamp, payload json.RawMessage) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00", instanceID, eventType, guildID, channelID, ts.WallMs, ts.Counter)
-	h.Write(payload)
+	h.Write(canonicalFederationPayload(payload))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func canonicalFederationPayload(payload json.RawMessage) []byte {
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, payload); err != nil {
+		return payload
+	}
+	return compacted.Bytes()
 }
 
 func stableFederatedEmbedID(messageID string, index int, embed federatedEmbed) string {
@@ -1399,22 +1407,13 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	}
 }
 
+type dmPeerTarget struct {
+	remoteChannelID string
+	peerID          string
+	domain          string
+}
+
 func (ss *SyncService) routeDMEvent(ctx context.Context, event events.Event) {
-	if event.Type != "MESSAGE_CREATE" {
-		ss.logger.Debug("skipping unsupported federated DM event",
-			slog.String("type", event.Type),
-			slog.String("channel_id", event.ChannelID))
-		return
-	}
-
-	var msg models.Message
-	if err := json.Unmarshal(event.Data, &msg); err != nil {
-		ss.logger.Warn("failed to unmarshal DM message event for federation",
-			slog.String("channel_id", event.ChannelID),
-			slog.String("error", err.Error()))
-		return
-	}
-
 	rows, err := ss.fed.pool.Query(ctx,
 		`SELECT fdm.remote_channel_id, fp.peer_id, i.domain
 		 FROM federation_dm_channel_map fdm
@@ -1433,11 +1432,6 @@ func (ss *SyncService) routeDMEvent(ctx context.Context, event events.Event) {
 	}
 	defer rows.Close()
 
-	type dmPeerTarget struct {
-		remoteChannelID string
-		peerID          string
-		domain          string
-	}
 	var peers []dmPeerTarget
 	for rows.Next() {
 		var p dmPeerTarget
@@ -1450,70 +1444,130 @@ func (ss *SyncService) routeDMEvent(ctx context.Context, event events.Event) {
 		return
 	}
 
+	sourceInstanceID := federatedDMEventSourceInstance(event.Data)
 	for _, peer := range peers {
+		if sourceInstanceID != "" && sourceInstanceID == peer.peerID {
+			continue
+		}
 		p := peer
 		go func() {
 			ss.deliverySem <- struct{}{}
 			defer func() { <-ss.deliverySem }()
-			ss.deliverDMMessageToPeer(ctx, p.domain, p.peerID, p.remoteChannelID, msg)
+			ss.deliverDMEventToPeer(ctx, event, p)
 		}()
 	}
 }
 
-func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
-	content := ""
-	if msg.Content != nil {
-		content = *msg.Content
+func (ss *SyncService) deliverDMEventToPeer(ctx context.Context, event events.Event, peer dmPeerTarget) {
+	switch event.Type {
+	case "MESSAGE_CREATE":
+		var msg models.Message
+		if err := json.Unmarshal(event.Data, &msg); err != nil {
+			ss.logger.Warn("failed to unmarshal DM message create event for federation",
+				slog.String("channel_id", event.ChannelID),
+				slog.String("error", err.Error()))
+			return
+		}
+		ss.deliverDMMessageToPeer(ctx, peer.domain, peer.peerID, peer.remoteChannelID, msg)
+	case "MESSAGE_UPDATE":
+		var msg models.Message
+		if err := json.Unmarshal(event.Data, &msg); err != nil {
+			ss.logger.Warn("failed to unmarshal DM message update event for federation",
+				slog.String("channel_id", event.ChannelID),
+				slog.String("error", err.Error()))
+			return
+		}
+		ss.deliverDMMessageUpdateToPeer(ctx, peer.domain, peer.peerID, peer.remoteChannelID, msg)
+	case "MESSAGE_DELETE":
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil || payload.ID == "" {
+			ss.logger.Warn("failed to unmarshal DM message delete event for federation",
+				slog.String("channel_id", event.ChannelID))
+			return
+		}
+		ss.deliverDMMessageDeleteToPeer(ctx, peer.domain, peer.peerID, peer.remoteChannelID, payload.ID)
+	case "MESSAGE_REACTION_ADD", "REACTION_ADD":
+		var payload federatedDMReactionRequest
+		if err := json.Unmarshal(event.Data, &payload); err != nil || payload.MessageID == "" || payload.UserID == "" || payload.Emoji == "" {
+			ss.logger.Warn("failed to unmarshal DM reaction add event for federation",
+				slog.String("channel_id", event.ChannelID))
+			return
+		}
+		payload.RemoteChannelID = peer.remoteChannelID
+		ss.deliverDMReactionToPeer(ctx, peer.domain, peer.peerID, "/federation/v1/dm/reaction/add", payload)
+	case "MESSAGE_REACTION_REMOVE", "REACTION_REMOVE":
+		var payload federatedDMReactionRequest
+		if err := json.Unmarshal(event.Data, &payload); err != nil || payload.MessageID == "" || payload.UserID == "" || payload.Emoji == "" {
+			ss.logger.Warn("failed to unmarshal DM reaction remove event for federation",
+				slog.String("channel_id", event.ChannelID))
+			return
+		}
+		payload.RemoteChannelID = peer.remoteChannelID
+		ss.deliverDMReactionToPeer(ctx, peer.domain, peer.peerID, "/federation/v1/dm/reaction/remove", payload)
+	default:
+		ss.logger.Debug("skipping unsupported federated DM event",
+			slog.String("type", event.Type),
+			slog.String("channel_id", event.ChannelID))
 	}
+}
+
+func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
 	req := federatedDMMessageRequest{
 		RemoteChannelID: remoteChannelID,
-		Message: federatedMessageData{
-			ID:                  msg.ID,
-			AuthorID:            msg.AuthorID,
-			Content:             content,
-			Nonce:               msg.Nonce,
-			MessageType:         msg.MessageType,
-			Flags:               msg.Flags,
-			ReplyToIDs:          msg.ReplyToIDs,
-			MentionUserIDs:      msg.MentionUserIDs,
-			MentionRoleIDs:      msg.MentionRoleIDs,
-			MentionHere:         msg.MentionHere,
-			ThreadID:            msg.ThreadID,
-			MasqueradeName:      msg.MasqueradeName,
-			MasqueradeAvatar:    msg.MasqueradeAvatar,
-			MasqueradeColor:     msg.MasqueradeColor,
-			Encrypted:           msg.Encrypted,
-			EncryptionSessionID: msg.EncryptionSessionID,
-			VoiceDurationMs:     msg.VoiceDurationMs,
-			VoiceWaveform:       msg.VoiceWaveform,
-			Attachments:         federationAttachmentsFromModels(msg.Attachments),
-			Embeds:              federationEmbedsFromModels(msg.Embeds),
-			CreatedAt:           msg.CreatedAt,
-		},
+		Message:         federatedMessageDataFromModel(msg),
 	}
-	signed, err := ss.fed.Sign(req)
+	ss.deliverSignedDMRequestToPeer(ctx, domain, peerID, "/federation/v1/dm/message", req, "message", msg.ID)
+}
+
+func (ss *SyncService) deliverDMMessageUpdateToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
+	req := federatedDMMessageRequest{
+		RemoteChannelID: remoteChannelID,
+		Message:         federatedMessageDataFromModel(msg),
+	}
+	ss.deliverSignedDMRequestToPeer(ctx, domain, peerID, "/federation/v1/dm/message/update", req, "message_update", msg.ID)
+}
+
+func (ss *SyncService) deliverDMMessageDeleteToPeer(ctx context.Context, domain, peerID, remoteChannelID, messageID string) {
+	req := federatedDMMessageDeleteRequest{
+		RemoteChannelID: remoteChannelID,
+		MessageID:       messageID,
+	}
+	ss.deliverSignedDMRequestToPeer(ctx, domain, peerID, "/federation/v1/dm/message/delete", req, "message_delete", messageID)
+}
+
+func (ss *SyncService) deliverDMReactionToPeer(ctx context.Context, domain, peerID, path string, req federatedDMReactionRequest) {
+	ss.deliverSignedDMRequestToPeer(ctx, domain, peerID, path, req, "reaction", req.MessageID)
+}
+
+func (ss *SyncService) deliverSignedDMRequestToPeer(ctx context.Context, domain, peerID, path string, payload interface{}, action, entityID string) {
+	signed, err := ss.fed.Sign(payload)
 	if err != nil {
-		ss.logger.Error("failed to sign federated DM message",
+		ss.logger.Error("failed to sign federated DM request",
 			slog.String("peer_id", peerID),
-			slog.String("message_id", msg.ID),
+			slog.String("action", action),
+			slog.String("entity_id", entityID),
 			slog.String("error", err.Error()))
 		return
 	}
 	body, err := json.Marshal(signed)
 	if err != nil {
-		ss.logger.Error("failed to marshal federated DM message",
+		ss.logger.Error("failed to marshal federated DM request",
 			slog.String("peer_id", peerID),
-			slog.String("message_id", msg.ID),
+			slog.String("action", action),
+			slog.String("entity_id", entityID),
 			slog.String("error", err.Error()))
 		return
 	}
 
-	url := fmt.Sprintf("https://%s/federation/v1/dm/message", domain)
+	url := fmt.Sprintf("https://%s%s", domain, path)
 	reqHTTP, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		ss.logger.Error("failed to create federated DM request",
 			slog.String("peer_id", peerID),
-			slog.String("message_id", msg.ID),
+			slog.String("action", action),
+			slog.String("entity_id", entityID),
 			slog.String("error", err.Error()))
 		return
 	}
@@ -1522,21 +1576,64 @@ func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerI
 
 	resp, err := ss.client.Do(reqHTTP)
 	if err != nil {
-		ss.logger.Error("failed to deliver federated DM message",
+		ss.logger.Error("failed to deliver federated DM request",
 			slog.String("peer_id", peerID),
-			slog.String("message_id", msg.ID),
+			slog.String("action", action),
+			slog.String("entity_id", entityID),
 			slog.String("error", err.Error()))
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		ss.logger.Warn("federated DM message rejected",
+		ss.logger.Warn("federated DM request rejected",
 			slog.String("peer_id", peerID),
-			slog.String("message_id", msg.ID),
+			slog.String("action", action),
+			slog.String("entity_id", entityID),
 			slog.Int("status", resp.StatusCode),
 			slog.String("body", string(respBody)))
 	}
+}
+
+func federatedMessageDataFromModel(msg models.Message) federatedMessageData {
+	content := ""
+	if msg.Content != nil {
+		content = *msg.Content
+	}
+	return federatedMessageData{
+		ID:                  msg.ID,
+		AuthorID:            msg.AuthorID,
+		Content:             content,
+		Nonce:               msg.Nonce,
+		MessageType:         msg.MessageType,
+		Flags:               msg.Flags,
+		ReplyToIDs:          msg.ReplyToIDs,
+		MentionUserIDs:      msg.MentionUserIDs,
+		MentionRoleIDs:      msg.MentionRoleIDs,
+		MentionHere:         msg.MentionHere,
+		ThreadID:            msg.ThreadID,
+		MasqueradeName:      msg.MasqueradeName,
+		MasqueradeAvatar:    msg.MasqueradeAvatar,
+		MasqueradeColor:     msg.MasqueradeColor,
+		Encrypted:           msg.Encrypted,
+		EncryptionSessionID: msg.EncryptionSessionID,
+		VoiceDurationMs:     msg.VoiceDurationMs,
+		VoiceWaveform:       msg.VoiceWaveform,
+		Attachments:         federationAttachmentsFromModels(msg.Attachments),
+		Embeds:              federationEmbedsFromModels(msg.Embeds),
+		CreatedAt:           msg.CreatedAt,
+		EditedAt:            msg.EditedAt,
+	}
+}
+
+func federatedDMEventSourceInstance(data json.RawMessage) string {
+	var payload struct {
+		InstanceID *string `json:"instance_id"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.InstanceID == nil {
+		return ""
+	}
+	return *payload.InstanceID
 }
 
 func federationAttachmentsFromModels(attachments []models.Attachment) []federatedAttachment {

@@ -369,15 +369,15 @@ func (ss *SyncService) manageChannelCreate(ctx context.Context, w http.ResponseW
 
 	var channel models.Channel
 	err := ss.fed.pool.QueryRow(ctx,
-		`INSERT INTO channels (id, guild_id, category_id, channel_type, name, topic, position, nsfw, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-		 RETURNING id, guild_id, category_id, channel_type, name, topic, position,
+		`INSERT INTO channels (id, guild_id, instance_id, category_id, channel_type, name, topic, position, nsfw, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		 RETURNING id, guild_id, instance_id, category_id, channel_type, name, topic, position,
 		           slowmode_seconds, nsfw, encrypted, last_message_id, owner_id,
 		           default_permissions, user_limit, bitrate, locked, locked_by, locked_at,
 		           archived, parent_channel_id, last_activity_at, created_at`,
-		channelID, guildID, req.CategoryID, req.ChannelType, req.Name, req.Topic, position, nsfw,
+		channelID, guildID, ss.fed.instanceID, req.CategoryID, req.ChannelType, req.Name, req.Topic, position, nsfw,
 	).Scan(
-		&channel.ID, &channel.GuildID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
+		&channel.ID, &channel.GuildID, &channel.InstanceID, &channel.CategoryID, &channel.ChannelType, &channel.Name,
 		&channel.Topic, &channel.Position, &channel.SlowmodeSeconds, &channel.NSFW, &channel.Encrypted,
 		&channel.LastMessageID, &channel.OwnerID, &channel.DefaultPermissions,
 		&channel.UserLimit, &channel.Bitrate,
@@ -632,12 +632,12 @@ func (ss *SyncService) manageRoleCreate(ctx context.Context, w http.ResponseWrit
 
 	var role models.Role
 	err := ss.fed.pool.QueryRow(ctx,
-		`INSERT INTO roles (id, guild_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
-		 RETURNING id, guild_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at`,
-		roleID, guildID, req.Name, req.Color, hoist, mentionable, position, permAllow, permDeny,
+		`INSERT INTO roles (id, guild_id, instance_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		 RETURNING id, guild_id, instance_id, name, color, hoist, mentionable, position, permissions_allow, permissions_deny, created_at`,
+		roleID, guildID, ss.fed.instanceID, req.Name, req.Color, hoist, mentionable, position, permAllow, permDeny,
 	).Scan(
-		&role.ID, &role.GuildID, &role.Name, &role.Color, &role.Hoist, &role.Mentionable,
+		&role.ID, &role.GuildID, &role.InstanceID, &role.Name, &role.Color, &role.Hoist, &role.Mentionable,
 		&role.Position, &role.PermissionsAllow, &role.PermissionsDeny, &role.CreatedAt,
 	)
 	if err != nil {
@@ -1440,9 +1440,9 @@ func (ss *SyncService) manageMemberJoin(ctx context.Context, w http.ResponseWrit
 	// Add to guild_members.
 	now := time.Now().UTC()
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO guild_members (guild_id, user_id, joined_at)
-		 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-		guildID, userID, now)
+		`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+		 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		guildID, userID, senderInstanceID, now)
 	if err != nil {
 		writeManageError(w, http.StatusInternalServerError, "Failed to add member")
 		return

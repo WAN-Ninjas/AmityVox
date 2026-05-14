@@ -366,6 +366,10 @@ func runServe() error {
 	// Federation DM endpoints (signed, no rate limit).
 	srv.Router.Post("/federation/v1/dm/create", syncSvc.HandleFederatedDMCreate)
 	srv.Router.Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
+	srv.Router.Post("/federation/v1/dm/message/update", syncSvc.HandleFederatedDMMessageUpdate)
+	srv.Router.Post("/federation/v1/dm/message/delete", syncSvc.HandleFederatedDMMessageDelete)
+	srv.Router.Post("/federation/v1/dm/reaction/add", syncSvc.HandleFederatedDMReactionAdd)
+	srv.Router.Post("/federation/v1/dm/reaction/remove", syncSvc.HandleFederatedDMReactionRemove)
 	srv.Router.Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
 	srv.Router.Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
 
