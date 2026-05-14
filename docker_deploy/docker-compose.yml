@@ -7,6 +7,12 @@
 #   cp .env.example .env   # Edit with your settings
 #   docker compose up -d
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+
 services:
   # ============================================================
   # AmityVox Core Server
@@ -15,6 +21,7 @@ services:
     image: ghcr.io/wan-ninjas/amityvox:${AMITYVOX_TAG:-latest}
     container_name: amityvox
     restart: unless-stopped
+    logging: *default-logging
     environment:
       AMITYVOX_DATABASE_URL: "postgres://${POSTGRES_USER:-amityvox}:${POSTGRES_PASSWORD:-amityvox}@postgresql:5432/${POSTGRES_DB:-amityvox}?sslmode=disable"
       AMITYVOX_NATS_URL: "nats://nats:4222"
@@ -70,6 +77,7 @@ services:
   web-init:
     image: ghcr.io/wan-ninjas/amityvox:${AMITYVOX_TAG:-latest}
     container_name: amityvox-web-init
+    logging: *default-logging
     entrypoint: ["sh", "-c", "rm -rf /srv/_app && cp -r /srv/web/* /srv/public/"]
     volumes:
       - web_build:/srv/public
@@ -84,6 +92,7 @@ services:
     image: postgres:16-alpine
     container_name: amityvox-postgresql
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-amityvox}
       POSTGRES_USER: ${POSTGRES_USER:-amityvox}
@@ -105,6 +114,7 @@ services:
     image: nats:2-alpine
     container_name: amityvox-nats
     restart: unless-stopped
+    logging: *default-logging
     command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
     volumes:
       - nats_data:/data
@@ -123,6 +133,7 @@ services:
     image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27
     container_name: amityvox-dragonflydb
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - dragonfly_data:/data
     healthcheck:
@@ -140,6 +151,7 @@ services:
     image: dxflrs/garage:v1.0.1
     container_name: amityvox-garage
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - garage_data:/var/lib/garage/data
       - garage_meta:/var/lib/garage/meta
@@ -158,6 +170,7 @@ services:
     image: livekit/livekit-server:v1.8
     container_name: amityvox-livekit
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "443:443/udp"
       - "50000-50100:50000-50100/udp"
@@ -177,6 +190,7 @@ services:
     image: getmeili/meilisearch:v1.35
     container_name: amityvox-meilisearch
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - meili_data:/meili_data
     environment:
@@ -197,6 +211,7 @@ services:
     image: libretranslate/libretranslate:${LIBRETRANSLATE_TAG:-v1.8.4}
     container_name: amityvox-libretranslate
     restart: unless-stopped
+    logging: *default-logging
     environment:
       LT_LOAD_ONLY: "${LT_LOAD_ONLY:-en,es,fr,de,it,pt,ru,ja,ko,zh,ar,hi,nl,pl,tr,uk}"
       LT_DISABLE_WEB_UI: "true"
@@ -218,6 +233,7 @@ services:
     image: caddy:2-alpine
     container_name: amityvox-caddy
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"

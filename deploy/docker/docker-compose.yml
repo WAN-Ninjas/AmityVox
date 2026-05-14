@@ -7,6 +7,12 @@
 #   make docker-up         # Start all services
 #   make docker-down       # Stop all services
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+
 services:
   # ============================================================
   # AmityVox Core Server
@@ -17,6 +23,7 @@ services:
       dockerfile: deploy/docker/Dockerfile
     container_name: amityvox
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ../../.env
     environment:
@@ -59,6 +66,7 @@ services:
     image: postgres:16-alpine
     container_name: amityvox-postgresql
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-amityvox}
       POSTGRES_USER: ${POSTGRES_USER:-amityvox}
@@ -80,6 +88,7 @@ services:
     image: nats:2-alpine
     container_name: amityvox-nats
     restart: unless-stopped
+    logging: *default-logging
     command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
     volumes:
       - nats_data:/data
@@ -98,6 +107,7 @@ services:
     image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
     container_name: amityvox-dragonflydb
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - dragonfly_data:/data
     healthcheck:
@@ -115,6 +125,7 @@ services:
     image: dxflrs/garage:v1.0.1
     container_name: amityvox-garage
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - garage_data:/var/lib/garage/data
       - garage_meta:/var/lib/garage/meta
@@ -131,6 +142,7 @@ services:
     image: livekit/livekit-server:latest
     container_name: amityvox-livekit
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "443:443/udp"
       - "50000-50100:50000-50100/udp"
@@ -149,6 +161,7 @@ services:
     image: getmeili/meilisearch:v1.35
     container_name: amityvox-meilisearch
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - meili_data:/meili_data
     environment:
@@ -169,6 +182,7 @@ services:
     image: libretranslate/libretranslate:${LIBRETRANSLATE_TAG:-v1.8.4}
     container_name: amityvox-libretranslate
     restart: unless-stopped
+    logging: *default-logging
     entrypoint: ["/fixes/entrypoint.sh"]
     environment:
       LT_LOAD_ONLY: "${LT_LOAD_ONLY:-en,es,fr,de,it,pt,ru,ja,ko,zh,ar,hi,nl,pl,tr,uk}"
@@ -192,6 +206,7 @@ services:
     image: caddy:2-alpine
     container_name: amityvox-caddy
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -217,6 +232,7 @@ services:
       dockerfile: deploy/docker/Dockerfile
       target: frontend
     container_name: amityvox-web-init
+    logging: *default-logging
     entrypoint: ["sh", "-c", "rm -rf /srv/_app && cp -r /web/build/* /srv/"]
     volumes:
       - web_build:/srv
@@ -232,6 +248,7 @@ services:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.test
     container_name: amityvox-test-frontend
+    logging: *default-logging
     working_dir: /app
     command: ["npm", "run", "test"]
     profiles:
