@@ -25,15 +25,15 @@
     "@types/node": "^22.0.0",
     "autoprefixer": "^10.4.16",
     "eslint": "^9.0.0",
-    "happy-dom": "^20.6.1",
-    "postcss": "^8.4.32",
+    "happy-dom": "^20.9.0",
+    "postcss": "^8.5.14",
     "prettier": "^3.8.0",
     "prettier-plugin-svelte": "^3.1.0",
     "svelte": "^5.50.0",
     "svelte-check": "^4.0.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.9.0",
-    "vite": "^7.0.0",
+    "vite": "^7.3.3",
     "vitest": "^4.0.18"
   },
   "dependencies": {
