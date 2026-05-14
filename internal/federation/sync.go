@@ -3,6 +3,8 @@ package federation
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -754,9 +756,9 @@ func (ss *SyncService) upsertFederatedAttachments(ctx context.Context, tx pgx.Tx
 }
 
 func (ss *SyncService) upsertFederatedEmbeds(ctx context.Context, tx pgx.Tx, remoteInstanceID, messageID string, embeds []federatedEmbed) error {
-	for _, embed := range embeds {
+	for i, embed := range embeds {
 		if embed.ID == "" {
-			embed.ID = models.NewULID().String()
+			embed.ID = stableFederatedEmbedID(messageID, i, embed)
 		}
 		if embed.EmbedType == "" {
 			embed.EmbedType = "rich"
@@ -794,13 +796,26 @@ func (ss *SyncService) storeFederationEvent(ctx context.Context, instanceID, eve
 		`INSERT INTO federation_events (id, instance_id, event_type, guild_id, channel_id, hlc_wall_ms, hlc_counter, payload)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 ON CONFLICT (id) DO NOTHING`,
-		models.NewULID().String(), instanceID, eventType, guildID, channelID,
+		stableFederationEventID(instanceID, eventType, guildID, channelID, ts, payload), instanceID, eventType, guildID, channelID,
 		ts.WallMs, ts.Counter, payload); err != nil {
 		ss.logger.Warn("failed to store federation event for backfill",
 			slog.String("event_type", eventType),
 			slog.String("instance_id", instanceID),
 			slog.String("error", err.Error()))
 	}
+}
+
+func stableFederationEventID(instanceID, eventType, guildID, channelID string, ts HLCTimestamp, payload json.RawMessage) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00", instanceID, eventType, guildID, channelID, ts.WallMs, ts.Counter)
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func stableFederatedEmbedID(messageID string, index int, embed federatedEmbed) string {
+	normalized, _ := json.Marshal(embed)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", messageID, index, normalized)))
+	return hex.EncodeToString(sum[:])
 }
 
 // persistInboundPresence updates the local user stub's presence when a
@@ -1241,6 +1256,10 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 			guildID = *nullableGuildID
 		}
 	}
+	if guildID == "" && event.ChannelID != "" {
+		ss.routeDMEvent(ctx, event)
+		return
+	}
 
 	// Only the home instance should forward guild events to peers. If this
 	// guild is owned by a different instance, the event originated from a
@@ -1336,6 +1355,203 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	} else {
 		ss.DeliverToAllPeers(ctx, msg)
 	}
+}
+
+func (ss *SyncService) routeDMEvent(ctx context.Context, event events.Event) {
+	if event.Type != "MESSAGE_CREATE" {
+		ss.logger.Debug("skipping unsupported federated DM event",
+			slog.String("type", event.Type),
+			slog.String("channel_id", event.ChannelID))
+		return
+	}
+
+	var msg models.Message
+	if err := json.Unmarshal(event.Data, &msg); err != nil {
+		ss.logger.Warn("failed to unmarshal DM message event for federation",
+			slog.String("channel_id", event.ChannelID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	rows, err := ss.fed.pool.Query(ctx,
+		`SELECT fdm.remote_channel_id, fp.peer_id, i.domain
+		 FROM federation_dm_channel_map fdm
+		 JOIN federation_peers fp
+		   ON fp.peer_id = fdm.remote_instance_id
+		  AND fp.instance_id = $1
+		  AND fp.status = 'active'
+		 JOIN instances i ON i.id = fp.peer_id
+		 WHERE fdm.local_channel_id = $2`,
+		ss.fed.instanceID, event.ChannelID)
+	if err != nil {
+		ss.logger.Error("failed to query federated DM peers",
+			slog.String("channel_id", event.ChannelID),
+			slog.String("error", err.Error()))
+		return
+	}
+	defer rows.Close()
+
+	type dmPeerTarget struct {
+		remoteChannelID string
+		peerID          string
+		domain          string
+	}
+	var peers []dmPeerTarget
+	for rows.Next() {
+		var p dmPeerTarget
+		if err := rows.Scan(&p.remoteChannelID, &p.peerID, &p.domain); err == nil {
+			peers = append(peers, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		ss.logger.Error("failed to iterate federated DM peers", slog.String("error", err.Error()))
+		return
+	}
+
+	for _, peer := range peers {
+		p := peer
+		go func() {
+			ss.deliverySem <- struct{}{}
+			defer func() { <-ss.deliverySem }()
+			ss.deliverDMMessageToPeer(ctx, p.domain, p.peerID, p.remoteChannelID, msg)
+		}()
+	}
+}
+
+func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
+	content := ""
+	if msg.Content != nil {
+		content = *msg.Content
+	}
+	req := federatedDMMessageRequest{
+		RemoteChannelID: remoteChannelID,
+		Message: federatedMessageData{
+			ID:                  msg.ID,
+			AuthorID:            msg.AuthorID,
+			Content:             content,
+			Nonce:               msg.Nonce,
+			MessageType:         msg.MessageType,
+			Flags:               msg.Flags,
+			ReplyToIDs:          msg.ReplyToIDs,
+			MentionUserIDs:      msg.MentionUserIDs,
+			MentionRoleIDs:      msg.MentionRoleIDs,
+			MentionHere:         msg.MentionHere,
+			ThreadID:            msg.ThreadID,
+			MasqueradeName:      msg.MasqueradeName,
+			MasqueradeAvatar:    msg.MasqueradeAvatar,
+			MasqueradeColor:     msg.MasqueradeColor,
+			Encrypted:           msg.Encrypted,
+			EncryptionSessionID: msg.EncryptionSessionID,
+			VoiceDurationMs:     msg.VoiceDurationMs,
+			VoiceWaveform:       msg.VoiceWaveform,
+			Attachments:         federationAttachmentsFromModels(msg.Attachments),
+			Embeds:              federationEmbedsFromModels(msg.Embeds),
+			CreatedAt:           msg.CreatedAt,
+		},
+	}
+	signed, err := ss.fed.Sign(req)
+	if err != nil {
+		ss.logger.Error("failed to sign federated DM message",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+	body, err := json.Marshal(signed)
+	if err != nil {
+		ss.logger.Error("failed to marshal federated DM message",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	url := fmt.Sprintf("https://%s/federation/v1/dm/message", domain)
+	reqHTTP, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		ss.logger.Error("failed to create federated DM request",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+	reqHTTP.Header.Set("Content-Type", "application/json")
+	reqHTTP.Header.Set("User-Agent", "AmityVox/1.0 (+federation)")
+
+	resp, err := ss.client.Do(reqHTTP)
+	if err != nil {
+		ss.logger.Error("failed to deliver federated DM message",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		ss.logger.Warn("federated DM message rejected",
+			slog.String("peer_id", peerID),
+			slog.String("message_id", msg.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.String("body", string(respBody)))
+	}
+}
+
+func federationAttachmentsFromModels(attachments []models.Attachment) []federatedAttachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]federatedAttachment, 0, len(attachments))
+	for _, att := range attachments {
+		var duration *float64
+		if att.DurationSeconds != nil {
+			v := float64(*att.DurationSeconds)
+			duration = &v
+		}
+		out = append(out, federatedAttachment{
+			ID:              att.ID,
+			UploaderID:      att.UploaderID,
+			Filename:        att.Filename,
+			ContentType:     att.ContentType,
+			SizeBytes:       att.SizeBytes,
+			Width:           att.Width,
+			Height:          att.Height,
+			DurationSeconds: duration,
+			S3Bucket:        att.S3Bucket,
+			S3Key:           att.S3Key,
+			Blurhash:        att.Blurhash,
+			AltText:         att.AltText,
+			NSFW:            att.NSFW,
+			Description:     att.Description,
+		})
+	}
+	return out
+}
+
+func federationEmbedsFromModels(embeds []models.Embed) []federatedEmbed {
+	if len(embeds) == 0 {
+		return nil
+	}
+	out := make([]federatedEmbed, 0, len(embeds))
+	for _, embed := range embeds {
+		out = append(out, federatedEmbed{
+			ID:          embed.ID,
+			EmbedType:   embed.EmbedType,
+			URL:         embed.URL,
+			Title:       embed.Title,
+			Description: embed.Description,
+			SiteName:    embed.SiteName,
+			IconURL:     embed.IconURL,
+			Color:       embed.Color,
+			ImageURL:    embed.ImageURL,
+			ImageWidth:  embed.ImageWidth,
+			ImageHeight: embed.ImageHeight,
+			VideoURL:    embed.VideoURL,
+			SpecialType: embed.SpecialType,
+			SpecialID:   embed.SpecialID,
+		})
+	}
+	return out
 }
 
 // ProcessRetryQueue is a no-op — retry processing is handled by the JetStream
