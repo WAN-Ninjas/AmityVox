@@ -1,6 +1,6 @@
 # Current Work Backlog
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 This is the active cleanup checklist. It reflects the code as it works now, not old plans or aspirational notes.
 
@@ -25,9 +25,9 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
   - Federated DM create/message/update/delete/reaction mirrors now carry stable ownership and route through dedicated DM endpoints.
   - Invite/manage member paths, channel-create replay, and remote guild post messages now write explicit ownership.
 - [x] Reject malformed federation envelopes that omit required `guild_id`.
-- [ ] Record replayable federation events for host-side guild/channel/role/member/message mutations.
+- [x] Record replayable federation events for host-side guild/channel/role/member/message mutations.
   - Host-side events are now recorded, and replay IDs now use deterministic compacted-payload hashes.
-  - Remaining gap: broader integration coverage for repeated cross-instance backfill.
+  - DB-backed sync coverage now verifies authorized replay ordering and duplicate canonical event IDs.
 - [x] Fix federation media URL handling so local media with local `instance_id` does not route through the federation proxy.
 
 ### P1 - Core App Reliability
@@ -44,10 +44,10 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 - [x] Show client-side slowmode countdown and block sends before upload work.
 - [x] Merge guild/channel snapshot loads instead of replacing whole stores.
 - [x] Fix cross-guild role mention unread detection.
-- [ ] Add a true missed-event/backfill sync after reconnect.
+- [x] Add a true missed-event/backfill sync after reconnect.
   - Reconnect now reconciles each loaded channel against the latest server message window, pages forward from the latest visible message, and refreshes active guild/channel, member-list, read-state, DM, notification, and permission snapshots.
   - Member add/remove gateway events now update the active guild roster.
-  - Remaining gap: deeper event-log style reconciliation for state older than the refreshed message window.
+  - Loaded channels now also page backward through visible history so older visible edits/deletes outside the latest page are refreshed after reconnect.
 - [x] Add focused regression tests for high-risk cleanup paths.
   - Added coverage for message backfill merging, local-vs-remote media URL selection, API error extraction, and strict federation `guild_id` requirements.
 
@@ -79,17 +79,18 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
    - Done: persist federated DM messages with `messages.instance_id`, rich fields, attachments, and embeds.
    - Done: route local DM `MESSAGE_CREATE` events through the dedicated DM federation endpoint instead of the guild inbox.
    - Done: federate DM message edits, deletes, reaction adds, and reaction removals through signed dedicated DM endpoints.
-2. [ ] Make federation event replay idempotent.
+2. [x] Make federation event replay idempotent.
    - Done: stored federation events now use a deterministic ID derived from instance, event type, guild/channel, HLC, and payload.
    - Done: anonymous federated embeds now get deterministic IDs during replay.
    - Done: event ID hashing now compacts JSON payloads so whitespace-only replay differences do not duplicate rows.
-   - Remaining: broader integration coverage for repeated cross-instance backfill.
+   - Done: event ID hashing now canonicalizes JSON object key order so semantically identical replay payloads dedupe.
+   - Done: added DB-backed sync backfill coverage for authorized peer replay ordering and duplicate canonical event IDs.
 3. [x] Close remaining federation `instance_id` write gaps.
    - Done: remote guild post messages, channel-create replay, invite accept membership, manage-created channels/roles, and manage member joins now write explicit ownership.
-4. [ ] Replace frontend reconnect message-only fetch with real missed-event reconciliation.
+4. [x] Replace frontend reconnect message-only fetch with real missed-event reconciliation.
    - Done: loaded channels now reconcile latest server windows for edits, deletes, reactions, pins, and missed creates beyond one page.
+   - Done: loaded channels now page backward through visible history so older visible edits/deletes outside the latest page are refreshed after reconnect.
    - Done: reconnect refreshes active guild channels, members, and permissions in addition to guilds, DMs, read state, channel-guild map, and notifications.
-   - Remaining: deeper event-log style reconciliation for old state outside the refreshed windows.
 5. [x] Finish API error standardization across high-traffic routes and settings panes.
    - Done: login, setup, registration, invite acceptance, friends, discovery, bookmarks, user settings, admin dashboard/tabs, plugin install, member-list action, guild overview, invite, ban, emoji, role-delete, guild settings, layout sidebars/groups, message actions, video recorder, instance switcher, common profile/group/status/GIF/sticker, gallery/channel tools, embeds, bump, and voice-control flows use the shared API error formatter.
    - Remaining grep hits are registration/admin settings copy fields, not exception handling.
@@ -100,11 +101,17 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
    - Done: active member roster, soundboard playback, voice broadcasts, screen-share badges, location shares, and activity/game invalidation now have explicit gateway ownership.
    - Done: bot component interaction events are documented as backend/bot-worker events; client-visible changes flow through message updates.
 8. [ ] Continue large Svelte component reduction using `docs/large-svelte-file-inventory.md`.
-   - In progress: `ChannelSidebar.svelte` reduced from 1697 to 1078 lines by extracting sidebar modals and channel/DM/guild/thread context menus. Extracted components are below the 200-line target.
+   - In progress: `ChannelSidebar.svelte` reduced from 1697 to 739 lines by extracting sidebar modals, context menus, DM/events/voice/header sections, text channel rows, and forum/gallery channel rows. Extracted components are below the 200-line target.
+   - In progress: `ChannelGroups.svelte` reduced from 905 to 850 lines by extracting the channel group create modal.
    - In progress: `MessageInput.svelte` reduced from 1170 to 976 lines by extracting pending-file preview, encrypted passphrase prompt, status bars, and schedule picker. Extracted components are below the 200-line target.
    - In progress: `MessageItem.svelte` reduced from 1172 to 989 lines by extracting attachments, embeds/reactions, and the message context menu. Extracted components are below the 200-line target.
-9. [ ] Add multi-instance federation integration tests for guild join, DM, media, and backfill behavior.
-10. [ ] Update stale federation/codebase docs after each completed tranche.
+9. [x] Add multi-instance federation integration tests for guild join, DM, media, and backfill behavior.
+   - Done: DB-backed federation sync backfill test covers authorized peer replay ordering and duplicate canonical event IDs.
+   - Done: signed inbound guild join coverage verifies remote member ownership, channel-peer creation, and duplicate join idempotency.
+   - Done: signed inbound DM coverage verifies mirror creation, recipient rows, duplicate create/message idempotency, and remote attachment ownership.
+   - Note: guild message attachment federation remains a product gap; current media coverage is for federated DM media, which is the implemented attachment path.
+10. [x] Update stale federation/codebase docs after each completed tranche.
+   - Done: current backlog and large Svelte inventory reflect this tranche's federation tests and component reductions.
 
 ## Archived Docs
 
@@ -114,8 +121,8 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 ## Verification Targets
 
 - Frontend: `cd web && npm run check`
-  - Last result: pass, 0 errors and 0 warnings on 2026-05-17.
+  - Last result: pass, 0 errors and 0 warnings on 2026-05-18.
 - Focused frontend tests: `cd web && npm test -- --run src/lib/stores/__tests__/messages.test.ts src/lib/stores/__tests__/channels.test.ts src/lib/stores/__tests__/guilds.test.ts src/lib/stores/__tests__/channelWidgets.test.ts src/lib/stores/__tests__/guildEvents.test.ts src/lib/stores/__tests__/presence.test.ts src/lib/stores/__tests__/activityEvents.test.ts src/lib/stores/__tests__/voiceBroadcasts.test.ts src/lib/stores/__tests__/locationShares.test.ts src/lib/utils/__tests__/dm.test.ts src/lib/components/__tests__/ModerationModals.test.ts src/lib/components/__tests__/RoleHierarchy.test.ts src/lib/components/__tests__/MembersPanel.test.ts src/lib/components/__tests__/StatusPicker.test.ts src/lib/components/__tests__/RoleEditor.test.ts`
-  - Last result: pass, 173 tests across 15 files on 2026-05-17.
-- Backend compile/federation smoke: `docker run --rm -v /docker/AmityVox:/build -w /build -e GOTOOLCHAIN=local golang:1.26-alpine go test -run '^$' ./internal/federation ./internal/api/... ./internal/models ./internal/database`
-  - Last result: pass on 2026-05-17.
+  - Last result: pass, 174 tests across 15 files on 2026-05-18.
+- Backend compile/federation smoke: `docker run --rm -v /docker/AmityVox:/build -w /build -e GOTOOLCHAIN=local golang:1.26-alpine go test -run '^$' ./internal/federation ./internal/api/... ./internal/models ./internal/database ./internal/integration`
+  - Last result: pass on 2026-05-18.

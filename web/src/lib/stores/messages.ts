@@ -63,6 +63,7 @@ export async function loadMessages(channelId: string, before?: string) {
 interface ReconcileLoadedChannelsOptions {
 	limit?: number;
 	maxAfterPages?: number;
+	maxBeforePages?: number;
 }
 
 export async function backfillLoadedChannels(limit = 100) {
@@ -72,34 +73,56 @@ export async function backfillLoadedChannels(limit = 100) {
 export async function reconcileLoadedChannels(options: ReconcileLoadedChannelsOptions = {}) {
 	const limit = options.limit ?? 100;
 	const maxAfterPages = options.maxAfterPages ?? 5;
+	const maxBeforePages = options.maxBeforePages ?? 5;
 	const snapshot = get(messagesByChannel);
-	await Promise.all(
-		Array.from(snapshot.entries()).map(async ([channelId, messages]) => {
-			try {
-				const latest = messages.at(-1);
-				const [latestWindow, missed] = await Promise.all([
-					api.getMessages(channelId, { limit }),
-					latest ? loadMessagesAfter(channelId, latest.id, limit, maxAfterPages) : Promise.resolve([])
-				]);
-				messagesByChannel.update((map) => {
-					const existing = map.get(channelId) ?? [];
-					const sortedWindow = sortMessages(latestWindow);
-					const oldestWindowId = sortedWindow[0]?.id;
-					const retainedOlder = oldestWindowId
-						? existing.filter((message) => message.id < oldestWindowId)
-						: [];
-					const merged = new Map<string, Message>();
-					for (const message of retainedOlder) merged.set(message.id, message);
-					for (const message of sortedWindow) merged.set(message.id, message);
-					for (const message of missed) merged.set(message.id, message);
-					map.set(channelId, sortMessages(Array.from(merged.values())));
-					return new Map(map);
-				});
-			} catch (error) {
-				console.warn('Failed to reconcile channel messages after reconnect', { channelId, error });
-			}
-		})
-	);
+	for (const [channelId, messages] of snapshot.entries()) {
+		try {
+			const latest = messages.at(-1);
+			const oldest = messages[0];
+			const latestWindow = await loadVisibleWindow(channelId, oldest?.id, limit, maxBeforePages);
+			const missed = latest ? await loadMessagesAfter(channelId, latest.id, limit, maxAfterPages) : [];
+			messagesByChannel.update((map) => {
+				const existing = map.get(channelId) ?? [];
+				const sortedWindow = sortMessages(latestWindow);
+				const oldestWindowId = sortedWindow[0]?.id;
+				const retainedOlder = oldestWindowId
+					? existing.filter((message) => message.id < oldestWindowId)
+					: [];
+				const merged = new Map<string, Message>();
+				for (const message of retainedOlder) merged.set(message.id, message);
+				for (const message of sortedWindow) merged.set(message.id, message);
+				for (const message of missed) merged.set(message.id, message);
+				map.set(channelId, sortMessages(Array.from(merged.values())));
+				return new Map(map);
+			});
+		} catch (error) {
+			console.warn('Failed to reconcile channel messages after reconnect', { channelId, error });
+		}
+	}
+}
+
+async function loadVisibleWindow(
+	channelId: string,
+	oldestLoadedId: string | undefined,
+	limit: number,
+	maxBeforePages: number
+): Promise<Message[]> {
+	const latestWindow = sortMessages(await api.getMessages(channelId, { limit }));
+	if (!oldestLoadedId || latestWindow.length === 0) return latestWindow;
+	if (latestWindow.some((message) => message.id <= oldestLoadedId)) return latestWindow;
+
+	const all = [...latestWindow];
+	let cursor = latestWindow[0].id;
+	for (let page = 0; page < maxBeforePages; page += 1) {
+		const older = sortMessages(await api.getMessages(channelId, { before: cursor, limit }));
+		if (older.length === 0) break;
+		all.push(...older);
+		if (older.some((message) => message.id <= oldestLoadedId)) break;
+		const nextCursor = older[0]?.id;
+		if (!nextCursor || nextCursor === cursor || older.length < limit) break;
+		cursor = nextCursor;
+	}
+	return all;
 }
 
 async function loadMessagesAfter(

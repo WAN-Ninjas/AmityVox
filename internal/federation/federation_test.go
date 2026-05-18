@@ -377,6 +377,18 @@ func TestStableFederationEventID_CompactsJSONPayload(t *testing.T) {
 	}
 }
 
+func TestStableFederationEventID_CanonicalizesJSONObjectOrder(t *testing.T) {
+	ts := HLCTimestamp{WallMs: 1234, Counter: 2}
+	firstPayload := json.RawMessage(`{"id":"msg-1","content":"hello","nested":{"z":2,"a":1}}`)
+	secondPayload := json.RawMessage(`{"nested":{"a":1,"z":2},"content":"hello","id":"msg-1"}`)
+
+	first := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, firstPayload)
+	second := stableFederationEventID("inst-a", "MESSAGE_CREATE", "guild-1", "channel-1", ts, secondPayload)
+	if first != second {
+		t.Fatalf("stable event ID should ignore JSON object key order: %q != %q", first, second)
+	}
+}
+
 func TestStableFederatedEmbedID(t *testing.T) {
 	embed := federatedEmbed{URL: testPtr("https://example.test"), Title: testPtr("Example")}
 	first := stableFederatedEmbedID("msg-1", 0, embed)

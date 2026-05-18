@@ -302,15 +302,34 @@ describe('messages store', () => {
 		appendMessage(createMockMessage({ id: 'msg-1', channel_id: 'ch-1' }));
 		vi.mocked(api.getMessages)
 			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1' })])
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-1', channel_id: 'ch-1' })])
 			.mockResolvedValueOnce([createMockMessage({ id: 'msg-2', channel_id: 'ch-1' })])
 			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1' })])
 			.mockResolvedValueOnce([]);
 
 		await reconcileLoadedChannels({ limit: 1, maxAfterPages: 3 });
 
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { before: 'msg-3', limit: 1 });
 		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-1', limit: 1 });
 		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-2', limit: 1 });
 		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-3', limit: 1 });
 		expect(get(messagesByChannel).get('ch-1')?.map((message) => message.id)).toEqual(['msg-1', 'msg-2', 'msg-3']);
+	});
+
+	it('reconcileLoadedChannels pages backward to refresh older visible edits and deletes', async () => {
+		appendMessage(createMockMessage({ id: 'msg-1', channel_id: 'ch-1', content: 'Old original' }));
+		appendMessage(createMockMessage({ id: 'msg-2', channel_id: 'ch-1', content: 'Deleted stale' }));
+		appendMessage(createMockMessage({ id: 'msg-3', channel_id: 'ch-1', content: 'Latest original' }));
+		vi.mocked(api.getMessages)
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1', content: 'Latest edited' })])
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-1', channel_id: 'ch-1', content: 'Old edited' })])
+			.mockResolvedValueOnce([]);
+
+		await reconcileLoadedChannels({ limit: 1, maxBeforePages: 3 });
+
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { before: 'msg-3', limit: 1 });
+		expect(get(messagesByChannel).get('ch-1')?.map((message) => message.id)).toEqual(['msg-1', 'msg-3']);
+		expect(get(messagesByChannel).get('ch-1')?.[0].content).toBe('Old edited');
+		expect(get(messagesByChannel).get('ch-1')?.[1].content).toBe('Latest edited');
 	});
 });

@@ -827,11 +827,17 @@ func stableFederationEventID(instanceID, eventType, guildID, channelID string, t
 }
 
 func canonicalFederationPayload(payload json.RawMessage) []byte {
-	var compacted bytes.Buffer
-	if err := json.Compact(&compacted, payload); err != nil {
+	var decoded interface{}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
 		return payload
 	}
-	return compacted.Bytes()
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return payload
+	}
+	return canonical
 }
 
 func stableFederatedEmbedID(messageID string, index int, embed federatedEmbed) string {
