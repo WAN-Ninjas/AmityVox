@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { OnboardingConfig } from '$lib/types';
 
 	interface Props {
@@ -93,8 +94,8 @@
 			await api.completeOnboarding(guildId, promptResponses);
 			open = false;
 			onComplete();
-		} catch (err: any) {
-			error = err.message || 'Failed to complete onboarding';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to complete onboarding');
 		} finally {
 			submitting = false;
 		}

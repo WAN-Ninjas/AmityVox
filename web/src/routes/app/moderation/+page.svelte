@@ -4,6 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { currentUser } from '$lib/stores/auth';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type {
 		ModerationStats,
 		ModerationMessageReport,
@@ -19,21 +20,21 @@
 
 	// --- Dashboard ---
 	let stats = $state<ModerationStats | null>(null);
-	let loadingStats = $state(false);
+	let statsOp = $state(createAsyncOp());
 
 	// --- Message Reports ---
 	let messageReports = $state<ModerationMessageReport[]>([]);
-	let loadingMessageReports = $state(false);
+	let messageReportsOp = $state(createAsyncOp());
 	let messageReportsLoaded = $state(false);
 
 	// --- User Reports ---
 	let userReports = $state<UserReport[]>([]);
-	let loadingUserReports = $state(false);
+	let userReportsOp = $state(createAsyncOp());
 	let userReportsLoaded = $state(false);
 
 	// --- Issues ---
 	let issues = $state<ReportedIssue[]>([]);
-	let loadingIssues = $state(false);
+	let issuesOp = $state(createAsyncOp());
 	let issuesLoaded = $state(false);
 	let issueFilter = $state<IssueFilter>('');  // '' = active (open+in_progress), 'all', 'open', 'in_progress', 'resolved', 'dismissed'
 
@@ -52,49 +53,31 @@
 	];
 
 	async function loadStats() {
-		loadingStats = true;
-		try {
-			stats = await api.getModerationStats();
-		} catch {
-			addToast('Failed to load moderation stats', 'error');
-		} finally {
-			loadingStats = false;
-		}
+		const result = await statsOp.run(() => api.getModerationStats(), msg => addToast(msg, 'error'), 'Failed to load moderation stats');
+		if (result) stats = result;
 	}
 
 	async function loadMessageReports() {
-		loadingMessageReports = true;
-		try {
-			messageReports = await api.getModerationMessageReports();
+		const result = await messageReportsOp.run(() => api.getModerationMessageReports(), msg => addToast(msg, 'error'), 'Failed to load message reports');
+		if (result) {
+			messageReports = result;
 			messageReportsLoaded = true;
-		} catch {
-			addToast('Failed to load message reports', 'error');
-		} finally {
-			loadingMessageReports = false;
 		}
 	}
 
 	async function loadUserReports() {
-		loadingUserReports = true;
-		try {
-			userReports = await api.getModerationUserReports();
+		const result = await userReportsOp.run(() => api.getModerationUserReports(), msg => addToast(msg, 'error'), 'Failed to load user reports');
+		if (result) {
+			userReports = result;
 			userReportsLoaded = true;
-		} catch {
-			addToast('Failed to load user reports', 'error');
-		} finally {
-			loadingUserReports = false;
 		}
 	}
 
 	async function loadIssues() {
-		loadingIssues = true;
-		try {
-			issues = await api.getModerationIssues(issueFilter || undefined);
+		const result = await issuesOp.run(() => api.getModerationIssues(issueFilter || undefined), msg => addToast(msg, 'error'), 'Failed to load issues');
+		if (result) {
+			issues = result;
 			issuesLoaded = true;
-		} catch {
-			addToast('Failed to load issues', 'error');
-		} finally {
-			loadingIssues = false;
 		}
 	}
 
@@ -229,12 +212,12 @@
 			{#if currentTab === 'dashboard'}
 				<div class="mb-6 flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-text-primary">Moderation Dashboard</h1>
-					<button class="btn-secondary text-sm" onclick={loadStats} disabled={loadingStats}>
-						{loadingStats ? 'Loading...' : 'Refresh'}
+					<button class="btn-secondary text-sm" onclick={loadStats} disabled={statsOp.loading}>
+						{statsOp.loading ? 'Loading...' : 'Refresh'}
 					</button>
 				</div>
 
-				{#if loadingStats && !stats}
+				{#if statsOp.loading && !stats}
 					<p class="text-text-muted">Loading stats...</p>
 				{:else if stats}
 					<div class="grid gap-4 sm:grid-cols-3">
@@ -263,12 +246,12 @@
 			{:else if currentTab === 'message_reports'}
 				<div class="mb-6 flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-text-primary">Message Reports</h1>
-					<button class="btn-secondary text-sm" onclick={loadMessageReports} disabled={loadingMessageReports}>
-						{loadingMessageReports ? 'Loading...' : 'Refresh'}
+					<button class="btn-secondary text-sm" onclick={loadMessageReports} disabled={messageReportsOp.loading}>
+						{messageReportsOp.loading ? 'Loading...' : 'Refresh'}
 					</button>
 				</div>
 
-				{#if loadingMessageReports && messageReports.length === 0}
+				{#if messageReportsOp.loading && messageReports.length === 0}
 					<p class="text-text-muted">Loading message reports...</p>
 				{:else if messageReports.length === 0}
 					<p class="text-text-muted">No message reports found.</p>
@@ -307,12 +290,12 @@
 			{:else if currentTab === 'user_reports'}
 				<div class="mb-6 flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-text-primary">User Reports</h1>
-					<button class="btn-secondary text-sm" onclick={loadUserReports} disabled={loadingUserReports}>
-						{loadingUserReports ? 'Loading...' : 'Refresh'}
+					<button class="btn-secondary text-sm" onclick={loadUserReports} disabled={userReportsOp.loading}>
+						{userReportsOp.loading ? 'Loading...' : 'Refresh'}
 					</button>
 				</div>
 
-				{#if loadingUserReports && userReports.length === 0}
+				{#if userReportsOp.loading && userReports.length === 0}
 					<p class="text-text-muted">Loading user reports...</p>
 				{:else if userReports.length === 0}
 					<p class="text-text-muted">No user reports found.</p>
@@ -357,8 +340,8 @@
 			{:else if currentTab === 'issues'}
 				<div class="mb-4 flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-text-primary">Reported Issues</h1>
-					<button class="btn-secondary text-sm" onclick={loadIssues} disabled={loadingIssues}>
-						{loadingIssues ? 'Loading...' : 'Refresh'}
+					<button class="btn-secondary text-sm" onclick={loadIssues} disabled={issuesOp.loading}>
+						{issuesOp.loading ? 'Loading...' : 'Refresh'}
 					</button>
 				</div>
 				<div class="mb-4 flex flex-wrap gap-1.5">
@@ -372,7 +355,7 @@
 					{/each}
 				</div>
 
-				{#if loadingIssues && issues.length === 0}
+				{#if issuesOp.loading && issues.length === 0}
 					<p class="text-text-muted">Loading issues...</p>
 				{:else if issues.length === 0}
 					<p class="text-text-muted">No reported issues found.</p>

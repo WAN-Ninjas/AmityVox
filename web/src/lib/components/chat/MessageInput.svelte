@@ -16,6 +16,11 @@
 	import StickerPicker from '$components/common/StickerPicker.svelte';
 	import VoiceMessageRecorder from '$components/chat/VoiceMessageRecorder.svelte';
 	import MentionAutocomplete from '$components/chat/MentionAutocomplete.svelte';
+	import ChannelPassphrasePrompt from '$components/chat/ChannelPassphrasePrompt.svelte';
+	import MessageInputStatusBars from '$components/chat/MessageInputStatusBars.svelte';
+	import PendingFilesPreview from '$components/chat/PendingFilesPreview.svelte';
+	import ScheduleMessagePicker from '$components/chat/ScheduleMessagePicker.svelte';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Sticker } from '$lib/types';
 
 	let content = $state('');
@@ -214,7 +219,7 @@
 
 	function handleSendError(err: unknown, fallback: string) {
 		if (err instanceof ApiRequestError && err.code === 'slowmode') {
-			addToast(err.message, 'error');
+			addToast(getErrorMessage(err, fallback), 'error');
 			return;
 		}
 		addToast(fallback, 'error');
@@ -286,36 +291,6 @@
 			content = msg;
 			handleSendError(e, 'Failed to send message');
 		}
-	}
-
-	function getSchedulePresets(): { label: string; getTime: () => Date }[] {
-		return [
-			{
-				label: 'In 15 minutes',
-				getTime: () => new Date(Date.now() + 15 * 60 * 1000)
-			},
-			{
-				label: 'In 30 minutes',
-				getTime: () => new Date(Date.now() + 30 * 60 * 1000)
-			},
-			{
-				label: 'In 1 hour',
-				getTime: () => new Date(Date.now() + 60 * 60 * 1000)
-			},
-			{
-				label: 'In 4 hours',
-				getTime: () => new Date(Date.now() + 4 * 60 * 60 * 1000)
-			},
-			{
-				label: 'Tomorrow 9:00 AM',
-				getTime: () => {
-					const d = new Date();
-					d.setDate(d.getDate() + 1);
-					d.setHours(9, 0, 0, 0);
-					return d;
-				}
-			}
-		];
 	}
 
 	async function handleSchedule(scheduledFor: Date) {
@@ -733,171 +708,31 @@
 	<div class="border-t border-bg-floating px-4 pb-4 pt-2">
 		<!-- Passphrase prompt for encrypted channels without a key -->
 		{#if needsPassphrase}
-			<div class="mb-2 flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 px-3 py-2">
-				<svg class="h-4 w-4 shrink-0 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-				</svg>
-				<span class="text-xs text-yellow-400">Enter passphrase to send messages</span>
-				<input
-					type="password"
-					class="ml-auto min-w-0 flex-1 max-w-48 rounded border border-bg-modifier bg-bg-primary px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
-					placeholder="Channel passphrase"
-					bind:value={channelPassphrase}
-					onkeydown={(e) => e.key === 'Enter' && handleSetPassphrase()}
-				/>
-				<button
-					class="shrink-0 rounded bg-brand-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
-					onclick={handleSetPassphrase}
-					disabled={settingPassphrase || !channelPassphrase.trim()}
-				>
-					{settingPassphrase ? '...' : 'Unlock'}
-				</button>
-			</div>
+			<ChannelPassphrasePrompt bind:passphrase={channelPassphrase} loading={settingPassphrase} onunlock={handleSetPassphrase} />
 		{/if}
 
-		<!-- Reply bar -->
-		{#if $replyingTo}
-			<div class="mb-2 flex items-center gap-2 rounded-t-lg bg-bg-secondary px-3 py-2 text-sm">
-				<svg class="h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M3 10h10a5 5 0 015 5v6M3 10l6 6m-6-6l6-6" />
-				</svg>
-				<span class="text-text-muted">Replying to</span>
-				<span class="font-medium text-text-primary">
-					{$replyingTo.author?.display_name ?? $replyingTo.author?.username ?? 'Unknown'}
-				</span>
-				<span class="flex-1 truncate text-text-muted">{$replyingTo.content?.slice(0, 60)}</span>
-				<button
-					class="shrink-0 text-text-muted hover:text-text-primary"
-					onclick={cancelReply}
-					title="Cancel reply"
-				>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-		{/if}
-
-		<!-- Edit bar -->
-		{#if $editingMessage}
-			<div class="mb-2 flex items-center gap-2 rounded-t-lg bg-yellow-500/10 px-3 py-2 text-sm">
-				<svg class="h-4 w-4 shrink-0 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-				</svg>
-				<span class="text-yellow-500">Editing message</span>
-				<span class="flex-1"></span>
-				<button
-					class="shrink-0 text-text-muted hover:text-text-primary"
-					onclick={() => { cancelEdit(); content = ''; }}
-					title="Cancel edit"
-				>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-		{/if}
-
-		<!-- Silent mode indicator -->
-		{#if silentMode && !isEditing}
-			<div class="mb-2 flex items-center gap-2 rounded-t-lg bg-bg-secondary px-3 py-1.5 text-xs text-text-muted">
-				<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-					<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-				</svg>
-				<span>Silent mode -- recipients will not be notified</span>
-				<button
-					class="ml-auto text-text-muted hover:text-text-primary"
-					onclick={() => (silentMode = false)}
-					title="Disable silent mode"
-				>
-					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-		{/if}
+		<MessageInputStatusBars
+			replyingTo={$replyingTo}
+			editingMessage={$editingMessage}
+			bind:silentMode
+			{slowmodeRemainingSeconds}
+			oncancelreply={cancelReply}
+			oncanceledit={() => { cancelEdit(); content = ''; }}
+		/>
 
 		<!-- Pending files preview -->
 		{#if pendingFiles.length > 0}
-			<div class="mb-2 rounded-lg bg-bg-secondary p-3">
-				<div class="mb-2 flex items-center justify-between">
-					<span class="text-xs font-semibold text-text-muted">
-						{pendingFiles.length} file{pendingFiles.length > 1 ? 's' : ''} attached
-						<span class="ml-1 font-normal text-text-muted">
-							(max {formatFileSize(maxFileSizeBytes)})
-						</span>
-					</span>
-					<div class="flex items-center gap-2">
-						<button
-							class="text-xs text-text-muted hover:text-text-primary"
-							onclick={clearPendingFiles}
-						>
-							Clear all
-						</button>
-						<button
-							class="btn-primary text-xs px-3 py-1"
-							onclick={uploadPendingFiles}
-							disabled={uploading || hasOversizedFiles || slowmodeBlocked || !fileUploadsEnabled}
-						>
-							{uploading ? 'Uploading...' : slowmodeBlocked ? `${slowmodeRemainingSeconds}s` : 'Send'}
-						</button>
-					</div>
-				</div>
-				<div class="space-y-1.5">
-					{#each pendingFiles as file, i (file.name + i)}
-						{@const overLimit = isFileOverLimit(file)}
-						{@const isImage = file.type.startsWith('image/')}
-						<div class="rounded {overLimit ? 'bg-red-500/10' : 'bg-bg-primary'}">
-							<div class="flex items-center gap-2 px-2 py-1.5">
-								<svg class="h-4 w-4 shrink-0 {overLimit ? 'text-red-400' : 'text-text-muted'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-									<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-									<polyline points="14 2 14 8 20 8" />
-								</svg>
-								<span class="flex-1 truncate text-xs {overLimit ? 'text-red-400' : 'text-text-primary'}">
-									{file.name}
-								</span>
-								<span class="shrink-0 text-2xs {overLimit ? 'font-semibold text-red-400' : 'text-text-muted'}">
-									{formatFileSize(file.size)}
-									{#if overLimit}
-										-- exceeds limit
-									{/if}
-								</span>
-								<button
-									class="shrink-0 text-text-muted hover:text-text-primary"
-									onclick={() => removePendingFile(i)}
-									title="Remove file"
-								>
-									<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-										<path d="M6 18L18 6M6 6l12 12" />
-									</svg>
-								</button>
-							</div>
-							{#if isImage}
-								<div class="px-2 pb-1.5">
-									<input
-										type="text"
-										class="w-full rounded border border-bg-floating bg-bg-secondary px-2 py-1 text-2xs text-text-primary outline-none placeholder:text-text-muted focus:border-text-link"
-										placeholder="Alt text (describe this image for accessibility)"
-										value={pendingAltTexts[i] ?? ''}
-										oninput={(e) => { pendingAltTexts = { ...pendingAltTexts, [i]: (e.target as HTMLInputElement).value }; }}
-									/>
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			</div>
-		{/if}
-
-		{#if slowmodeBlocked}
-			<div class="mb-2 flex items-center gap-2 rounded bg-bg-secondary px-3 py-2 text-xs text-text-muted">
-				<svg class="h-4 w-4 shrink-0 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M12 8v4l3 3" />
-					<circle cx="12" cy="12" r="9" />
-				</svg>
-				<span>Slowmode active. You can send again in {slowmodeRemainingSeconds}s.</span>
-			</div>
+			<PendingFilesPreview
+				files={pendingFiles}
+				bind:altTexts={pendingAltTexts}
+				{maxFileSizeBytes}
+				{uploading}
+				sendDisabled={uploading || hasOversizedFiles || slowmodeBlocked || !fileUploadsEnabled}
+				sendLabel={slowmodeBlocked ? `${slowmodeRemainingSeconds}s` : 'Send'}
+				onclear={clearPendingFiles}
+				onremove={removePendingFile}
+				onsend={uploadPendingFiles}
+			/>
 		{/if}
 
 		<!-- Voice recorder (replaces the input bar when active) -->
@@ -986,35 +821,7 @@
 								<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
 							</svg>
 						</button>
-						{#if showSchedulePicker}
-							<div class="fixed inset-x-0 bottom-0 z-50 rounded-t-xl border-t border-bg-floating bg-bg-primary p-3 shadow-lg md:absolute md:inset-auto md:bottom-10 md:right-0 md:w-64 md:rounded-lg md:border">
-								<div class="mb-2 text-xs font-semibold uppercase text-text-muted">Schedule Message</div>
-								<div class="flex flex-col gap-1">
-									{#each getSchedulePresets() as preset}
-										<button
-											class="rounded px-3 py-1.5 text-left text-sm text-text-primary hover:bg-bg-modifier"
-											onclick={() => handleSchedule(preset.getTime())}
-										>
-											{preset.label}
-										</button>
-									{/each}
-								</div>
-								<div class="my-2 border-t border-bg-floating"></div>
-								<div class="text-xs font-semibold uppercase text-text-muted mb-1.5">Custom</div>
-								<input
-									type="datetime-local"
-									bind:value={customDatetime}
-									class="mb-2 w-full rounded border border-bg-floating bg-bg-secondary px-2 py-1 text-sm text-text-primary outline-none focus:border-text-link"
-								/>
-								<button
-									class="w-full rounded bg-text-link px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-									disabled={!customDatetime}
-									onclick={handleCustomSchedule}
-								>
-									Schedule
-								</button>
-							</div>
-						{/if}
+						<ScheduleMessagePicker bind:open={showSchedulePicker} bind:customDatetime onpreset={handleSchedule} oncustom={handleCustomSchedule} />
 					</div>
 
 				<!-- GIF picker button — desktop only -->

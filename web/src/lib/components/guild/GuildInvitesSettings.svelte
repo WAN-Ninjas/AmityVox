@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Invite } from '$lib/types';
 
 	interface Props {
@@ -10,8 +12,8 @@
 	let { guildId }: Props = $props();
 
 	let invites = $state<Invite[]>([]);
-	let loadingInvites = $state(false);
-	let creatingInvite = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
 	let newInviteMaxUses = $state(0);
 	let newInviteExpiry = $state(86400);
 	let loadedGuildId = $state<string | null>(null);
@@ -27,36 +29,31 @@
 	];
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingInvites) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadInvites();
 		}
 	});
 
 	async function loadInvites() {
-		loadingInvites = true;
-		try {
-			invites = await api.getGuildInvites(guildId);
+		const result = await loadOp.run(() => api.getGuildInvites(guildId));
+		if (result) {
+			invites = result;
 			loadedGuildId = guildId;
-		} catch {
+		} else {
 			invites = [];
-		} finally {
-			loadingInvites = false;
 		}
 	}
 
 	async function handleCreateInvite() {
-		creatingInvite = true;
-		try {
+		const invite = await createOp.run(async () => {
 			const opts: { max_uses?: number; max_age_seconds?: number } = {};
 			if (newInviteMaxUses > 0) opts.max_uses = newInviteMaxUses;
 			if (newInviteExpiry > 0) opts.max_age_seconds = newInviteExpiry;
-			const invite = await api.createInvite(guildId, opts);
+			return await api.createInvite(guildId, opts);
+		}, msg => addToast(msg, 'error'), 'Failed to create invite');
+		if (invite) {
 			invites = [invite, ...invites];
 			addToast('Invite created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create invite', 'error');
-		} finally {
-			creatingInvite = false;
 		}
 	}
 
@@ -65,8 +62,8 @@
 			await api.deleteInvite(code);
 			invites = invites.filter((invite) => invite.code !== code);
 			addToast('Invite revoked', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to revoke invite', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to revoke invite'), 'error');
 		}
 	}
 
@@ -106,12 +103,12 @@
 			<input id="newInviteMaxUses" type="number" min="0" max="100" bind:value={newInviteMaxUses} class="input w-full" />
 		</div>
 	</div>
-	<button class="btn-primary" onclick={handleCreateInvite} disabled={creatingInvite}>
-		{creatingInvite ? 'Creating...' : 'Create Invite'}
+	<button class="btn-primary" onclick={handleCreateInvite} disabled={createOp.loading}>
+		{createOp.loading ? 'Creating...' : 'Create Invite'}
 	</button>
 </div>
 
-{#if loadingInvites}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading invites...</p>
 {:else if invites.length === 0}
 	<p class="text-sm text-text-muted">No active invites.</p>

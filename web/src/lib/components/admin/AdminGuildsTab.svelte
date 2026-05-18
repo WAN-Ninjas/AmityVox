@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
 
@@ -27,29 +29,23 @@
 	}
 
 	let adminGuilds = $state<AdminGuild[]>([]);
-	let loadingGuilds = $state(false);
 	let guildSearch = $state('');
 	let guildSort = $state('newest');
 	let guildSearchTimeout: ReturnType<typeof setTimeout> | null = null;
 	let selectedGuildDetail = $state<AdminGuildDetail | null>(null);
 	let guildDetailModalOpen = $state(false);
-	let loadingGuildDetail = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let detailOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (adminGuilds.length === 0 && !loadingGuilds) {
+		if (adminGuilds.length === 0 && !loadOp.loading) {
 			loadGuilds();
 		}
 	});
 
 	async function loadGuilds() {
-		loadingGuilds = true;
-		try {
-			adminGuilds = await api.getAdminGuilds({ query: guildSearch, sort: guildSort, limit: 100 });
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load servers', 'error');
-		} finally {
-			loadingGuilds = false;
-		}
+		const result = await loadOp.run(() => api.getAdminGuilds({ query: guildSearch, sort: guildSort, limit: 100 }), msg => addToast(msg, 'error'), 'Failed to load servers');
+		if (result) adminGuilds = result;
 	}
 
 	function handleGuildSearch() {
@@ -59,14 +55,11 @@
 
 	async function viewGuildDetail(guildId: string) {
 		guildDetailModalOpen = true;
-		loadingGuildDetail = true;
-		try {
-			selectedGuildDetail = await api.getAdminGuildDetails(guildId);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load server details', 'error');
+		const result = await detailOp.run(() => api.getAdminGuildDetails(guildId), msg => addToast(msg, 'error'), 'Failed to load server details');
+		if (result) {
+			selectedGuildDetail = result;
+		} else {
 			guildDetailModalOpen = false;
-		} finally {
-			loadingGuildDetail = false;
 		}
 	}
 
@@ -77,16 +70,16 @@
 			adminGuilds = adminGuilds.filter((guild) => guild.id !== guildId);
 			guildDetailModalOpen = false;
 			addToast(`Server "${guildName}" deleted.`, 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete server', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete server'), 'error');
 		}
 	}
 </script>
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-bold text-text-primary">Server Management</h1>
-	<button class="btn-secondary text-sm" onclick={loadGuilds} disabled={loadingGuilds}>
-		{loadingGuilds ? 'Loading...' : 'Refresh'}
+	<button class="btn-secondary text-sm" onclick={loadGuilds} disabled={loadOp.loading}>
+		{loadOp.loading ? 'Loading...' : 'Refresh'}
 	</button>
 </div>
 <div class="mb-4 flex gap-3">
@@ -106,7 +99,7 @@
 	</select>
 </div>
 
-{#if loadingGuilds}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading servers...</p>
 {:else if adminGuilds.length === 0}
 	<p class="text-sm text-text-muted">No servers found.</p>
@@ -136,7 +129,7 @@
 {/if}
 
 <Modal open={guildDetailModalOpen} title="Server Details" onclose={() => (guildDetailModalOpen = false)}>
-	{#if loadingGuildDetail}
+	{#if detailOp.loading}
 		<p class="text-sm text-text-muted">Loading server details...</p>
 	{:else if selectedGuildDetail}
 		<div class="space-y-4">

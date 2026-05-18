@@ -4,6 +4,7 @@
 	import { api } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		onclose: () => void;
@@ -23,7 +24,7 @@
 			error = '';
 			api.getPins(channelId)
 				.then((p) => (pins = p))
-				.catch((e) => (error = e.message || 'Failed to load pins'))
+				.catch((err: unknown) => (error = getErrorMessage(err, 'Failed to load pins')))
 				.finally(() => (loading = false));
 		}
 	});

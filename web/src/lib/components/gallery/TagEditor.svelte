@@ -2,6 +2,7 @@
 	import type { MediaTag } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		guildId: string;
@@ -29,8 +30,8 @@
 			tags = [...tags, tag];
 			newTagName = '';
 			addToast('Tag created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create tag', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create tag'), 'error');
 		} finally {
 			adding = false;
 		}

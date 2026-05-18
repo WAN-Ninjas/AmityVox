@@ -1,21 +1,23 @@
 <script lang="ts">
 	import { api, type AdminBotWithDetails } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { User } from '$lib/types';
 
 	let allBots = $state<AdminBotWithDetails[]>([]);
 	let botsLoaded = $state(false);
-	let loadingAllBots = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let expandedBotId = $state<string | null>(null);
 
 	$effect(() => {
-		if (!botsLoaded && !loadingAllBots) {
+		if (!botsLoaded && !loadOp.loading) {
 			loadAllBots();
 		}
 	});
 
 	async function loadAllBots() {
-		loadingAllBots = true;
+		loadOp.loading = true;
+		loadOp.error = null;
 		try {
 			allBots = await api.getAdminBots();
 			botsLoaded = true;
@@ -34,7 +36,7 @@
 				allBots = [];
 			}
 		} finally {
-			loadingAllBots = false;
+			loadOp.loading = false;
 		}
 	}
 
@@ -62,7 +64,7 @@
 	<p class="mt-1 text-sm text-text-muted">Review bot accounts, guild permissions, event subscriptions, and limits.</p>
 </div>
 
-{#if loadingAllBots}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading bots...</p>
 {:else if allBots.length === 0}
 	<p class="text-sm text-text-muted">No bots found.</p>

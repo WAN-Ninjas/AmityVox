@@ -3,56 +3,56 @@
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
 	import Modal from '$components/common/Modal.svelte';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { RegistrationSettings, RegistrationToken } from '$lib/types';
 
 	let regSettings = $state<RegistrationSettings | null>(null);
 	let regTokens = $state<RegistrationToken[]>([]);
-	let loadingReg = $state(false);
-	let savingReg = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let regMode = $state<'open' | 'invite_only' | 'closed'>('open');
 	let regMessage = $state('');
 	let createTokenModalOpen = $state(false);
 	let newTokenMaxUses = $state(1);
 	let newTokenNote = $state('');
 	let newTokenExpiryHours = $state(0);
-	let creatingToken = $state(false);
+	let createTokenOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (!regSettings && !loadingReg) {
+		if (!regSettings && !loadOp.loading) {
 			loadRegistration();
 		}
 	});
 
 	async function loadRegistration() {
-		loadingReg = true;
-		try {
-			const [settings, tokens] = await Promise.all([
+		const result = await loadOp.run(() => Promise.all([
 				api.getRegistrationSettings(),
 				api.getRegistrationTokens()
-			]);
+			]));
+		if (result) {
+			const [settings, tokens] = result;
 			regSettings = settings;
 			regMode = settings.mode;
 			regMessage = settings.message ?? '';
 			regTokens = tokens;
-		} catch {
+		} else {
 			regTokens = [];
-		} finally {
-			loadingReg = false;
 		}
 	}
 
 	async function saveRegistration() {
-		savingReg = true;
-		try {
-			regSettings = await api.updateRegistrationSettings({
+		const result = await saveOp.run(
+			() => api.updateRegistrationSettings({
 				mode: regMode,
 				message: regMessage || null
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to save registration settings'
+		);
+		if (result) {
+			regSettings = result;
 			addToast('Registration settings saved', 'success');
-		} catch {
-			addToast('Failed to save registration settings', 'error');
-		} finally {
-			savingReg = false;
 		}
 	}
 
@@ -64,20 +64,19 @@
 	}
 
 	async function handleCreateToken() {
-		creatingToken = true;
-		try {
-			const token = await api.createRegistrationToken({
+		const token = await createTokenOp.run(
+			() => api.createRegistrationToken({
 				max_uses: newTokenMaxUses || undefined,
 				note: newTokenNote || undefined,
 				expires_in_hours: newTokenExpiryHours || undefined
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to create token'
+		);
+		if (token) {
 			regTokens = [...regTokens, token];
 			createTokenModalOpen = false;
 			addToast('Registration token created', 'success');
-		} catch {
-			addToast('Failed to create token', 'error');
-		} finally {
-			creatingToken = false;
 		}
 	}
 
@@ -87,8 +86,8 @@
 			await api.deleteRegistrationToken(tokenId);
 			regTokens = regTokens.filter((token) => token.id !== tokenId);
 			addToast('Token deleted', 'success');
-		} catch {
-			addToast('Failed to delete token', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete token'), 'error');
 		}
 	}
 
@@ -114,7 +113,7 @@
 	<button class="btn-primary text-sm" onclick={openCreateTokenModal}>Create Token</button>
 </div>
 
-{#if loadingReg}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading registration settings...</p>
 {:else}
 	<div class="grid gap-6 lg:grid-cols-2">
@@ -130,8 +129,8 @@
 			</div>
 			<label for="admin-registration-message" class="mt-4 mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Registration Message</label>
 			<textarea id="admin-registration-message" class="input min-h-24 w-full" bind:value={regMessage}></textarea>
-			<button class="btn-primary mt-4 text-sm" onclick={saveRegistration} disabled={savingReg}>
-				{savingReg ? 'Saving...' : 'Save Settings'}
+			<button class="btn-primary mt-4 text-sm" onclick={saveRegistration} disabled={saveOp.loading}>
+				{saveOp.loading ? 'Saving...' : 'Save Settings'}
 			</button>
 		</div>
 		<div class="rounded-lg bg-bg-secondary p-4">
@@ -178,8 +177,8 @@
 		</div>
 		<div class="flex justify-end gap-2">
 			<button class="btn-secondary text-sm" onclick={() => (createTokenModalOpen = false)}>Cancel</button>
-			<button class="btn-primary text-sm" onclick={handleCreateToken} disabled={creatingToken}>
-				{creatingToken ? 'Creating...' : 'Create Token'}
+			<button class="btn-primary text-sm" onclick={handleCreateToken} disabled={createTokenOp.loading}>
+				{createTokenOp.loading ? 'Creating...' : 'Create Token'}
 			</button>
 		</div>
 	</div>

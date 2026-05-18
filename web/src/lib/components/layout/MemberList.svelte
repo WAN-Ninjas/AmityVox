@@ -15,7 +15,7 @@
 	import { addDMChannel } from '$lib/stores/dms';
 	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
 	import { addToast } from '$lib/stores/toast';
-	import { guildMembers, setGuildMembers, setGuildRoles, memberTimeouts } from '$lib/stores/members';
+	import { guildMembers, fetchGuildMembersAndRoles, setGuildMembers, setGuildRoles, memberTimeouts } from '$lib/stores/members';
 	import { getMemberRoleColor } from '$lib/utils/roleColor';
 	import { canKickMembers, canBanMembers, canTimeoutMembers, canAssignRoles } from '$lib/stores/permissions';
 	import { kickModalTarget, banModalTarget } from '$lib/stores/moderation';
@@ -24,6 +24,7 @@
 	import { goto } from '$app/navigation';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	// Members are derived from the guildMembers store so real-time updates
 	// (e.g. avatar changes via USER_UPDATE) are reflected immediately.
@@ -55,19 +56,16 @@
 		const guildId = $currentGuildId;
 		if (guildId) {
 			loadingGuildId = guildId;
-			Promise.all([
-				api.getMembers(guildId),
-				api.getRoles(guildId),
-			]).then(([m, r]) => {
+			fetchGuildMembersAndRoles(guildId).then(({ members: loadedMembers, roles }) => {
 				if (loadingGuildId === guildId) {
-					setGuildMembers(m);
-					allGuildRoles = r;
-					setGuildRoles(r);
+					setGuildMembers(loadedMembers);
+					setGuildRoles(roles);
+					allGuildRoles = roles;
 				}
 			}).catch(() => {});
 		} else {
 			loadingGuildId = null;
-			setGuildMembers([]);
+			guildMembers.clear();
 			allGuildRoles = [];
 		}
 	});
@@ -195,8 +193,8 @@
 			addDMChannel(channel);
 			closeContextMenu();
 			goto(`/app/dms/${channel.id}`);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create DM', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create DM'), 'error');
 			closeContextMenu();
 		}
 	}
@@ -207,8 +205,8 @@
 			const rel = await api.addFriend(member.user_id);
 			addOrUpdateRelationship(rel);
 			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to send friend request', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to send friend request'), 'error');
 		}
 	}
 
@@ -267,8 +265,8 @@
 				memberRoleIds.add(roleId);
 				memberRoleIds = new Set(memberRoleIds);
 			}
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update role', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update role'), 'error');
 		}
 	}
 
@@ -286,8 +284,8 @@
 		try {
 			await api.updateMember(guildId, member.user_id, { timeout_until: until });
 			addToast(`Timed out ${getMemberName(member)} for ${formatDuration(seconds)}`, 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to timeout member', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to timeout member'), 'error');
 		}
 		closeContextMenu();
 	}

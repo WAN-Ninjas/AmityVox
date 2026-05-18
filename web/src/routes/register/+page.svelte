@@ -4,6 +4,8 @@
 	import { page } from '$app/stores';
 	import { api, ApiRequestError } from '$lib/api/client';
 	import { register } from '$lib/stores/auth';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { RegistrationSettings } from '$lib/types';
 
 	let username = $state('');
@@ -13,7 +15,7 @@
 	let registrationToken = $state('');
 	let error = $state('');
 	let notice = $state('');
-	let loading = $state(false);
+	let registerOp = $state(createAsyncOp());
 	let tokenFromUrl = $state(false);
 	let loadedUrlToken = $state('');
 	let registrationSettings = $state<RegistrationSettings | null>(null);
@@ -79,32 +81,34 @@
 			return;
 		}
 
-		loading = true;
-
-		try {
-			await register(username, email, password, registrationToken.trim() || undefined);
-			goto(redirectUrl);
-		} catch (err: any) {
-			if (err instanceof ApiRequestError) {
-				switch (err.code) {
-					case 'token_required':
-						error = 'This instance is invite-only. Enter a registration token to create an account.';
-						break;
-					case 'invalid_token':
-						error = 'That registration token is invalid or expired.';
-						break;
-					case 'registration_closed':
-					case 'registration_disabled':
-						error = err.message || 'Registration is currently closed on this instance.';
-						break;
-					default:
-						error = err.message || 'Registration failed';
-				}
-			} else {
-				error = err.message || 'Registration failed';
+		await registerOp.run(async () => {
+			try {
+				await register(username, email, password, registrationToken.trim() || undefined);
+				goto(redirectUrl);
+			} catch (err: unknown) {
+				handleRegisterError(err);
 			}
-		} finally {
-			loading = false;
+		});
+	}
+
+	function handleRegisterError(err: unknown) {
+		if (err instanceof ApiRequestError) {
+			switch (err.code) {
+				case 'token_required':
+					error = 'This instance is invite-only. Enter a registration token to create an account.';
+					break;
+				case 'invalid_token':
+					error = 'That registration token is invalid or expired.';
+					break;
+				case 'registration_closed':
+				case 'registration_disabled':
+					error = getErrorMessage(err, 'Registration is currently closed on this instance.');
+					break;
+				default:
+					error = getErrorMessage(err, 'Registration failed');
+			}
+		} else {
+			error = getErrorMessage(err, 'Registration failed');
 		}
 	}
 </script>
@@ -217,8 +221,8 @@
 					</p>
 				</div>
 
-				<button type="submit" class="btn-primary w-full" disabled={loading || !canSubmit}>
-					{loading ? 'Creating account...' : 'Register'}
+				<button type="submit" class="btn-primary w-full" disabled={registerOp.loading || !canSubmit}>
+					{registerOp.loading ? 'Creating account...' : 'Register'}
 				</button>
 			</form>
 

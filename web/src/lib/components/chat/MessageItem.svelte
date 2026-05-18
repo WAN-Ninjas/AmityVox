@@ -3,17 +3,16 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import ContextMenu from '$components/common/ContextMenu.svelte';
 	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
-	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import UserPopover from '$components/common/UserPopover.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
 	import ImageLightbox from '$components/common/ImageLightbox.svelte';
 	import EditHistoryModal from '$components/chat/EditHistoryModal.svelte';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
-	import AudioPlayer from '$components/chat/AudioPlayer.svelte';
-	import VideoPlayer from '$components/chat/VideoPlayer.svelte';
+	import MessageAttachments from '$components/chat/MessageAttachments.svelte';
+	import MessageContextMenu from '$components/chat/MessageContextMenu.svelte';
+	import MessageEmbedsAndReactions from '$components/chat/MessageEmbedsAndReactions.svelte';
 	import TranslateButton from '$components/chat/TranslateButton.svelte';
 	import CrossChannelQuote from '$components/chat/CrossChannelQuote.svelte';
-	import EncryptedAttachment from '$components/encryption/EncryptedAttachment.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import { api } from '$lib/api/client';
@@ -34,6 +33,7 @@
 	import { isEmojiOnly } from '$lib/utils/emoji';
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 	import { clientConfig, isExperimentalEnabled } from '$lib/stores/clientConfig';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		message: Message;
@@ -167,16 +167,6 @@
 	const isOwnMessage = $derived($currentUser?.id === message.author_id);
 	const isAuthorOwner = $derived(message.author_id === $currentGuild?.owner_id);
 	const canModerateAuthor = $derived(!isOwnMessage && !isAuthorOwner && !!$currentChannel?.guild_id);
-	const hasAnyAuthorModPerm = $derived($canKickMembers || $canBanMembers || $canTimeoutMembers);
-
-	// Timeout presets for message context menu
-	const msgTimeoutPresets = [
-		{ label: '1 minute', seconds: 60 },
-		{ label: '5 minutes', seconds: 300 },
-		{ label: '15 minutes', seconds: 900 },
-		{ label: '1 hour', seconds: 3600 },
-	];
-	let showMsgTimeoutSubmenu = $state(false);
 
 	async function applyMsgTimeout(seconds: number) {
 		const guildId = $currentChannel?.guild_id;
@@ -185,8 +175,8 @@
 		try {
 			await api.updateMember(guildId, message.author_id, { timeout_until: until });
 			addToast(`Timed out ${message.author?.display_name ?? message.author?.username ?? 'user'}`, 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to timeout member', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to timeout member'), 'error');
 		}
 		contextMenu = null;
 	}
@@ -291,7 +281,6 @@
 
 	function handleContextMenu(e: MouseEvent) {
 		e.preventDefault();
-		showMsgTimeoutSubmenu = false;
 		contextMenu = { x: e.clientX, y: e.clientY };
 	}
 
@@ -316,8 +305,8 @@
 		try {
 			await api.deleteMessage(message.channel_id, message.id);
 			addToast('Message deleted', 'success');
-		} catch (err: any) {
-			addToast('Failed to delete message', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete message'), 'error');
 		}
 	}
 
@@ -331,8 +320,8 @@
 				await api.pinMessage(message.channel_id, message.id);
 				addToast('Message pinned', 'success');
 			}
-		} catch (err: any) {
-			addToast('Failed to pin/unpin message', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to pin/unpin message'), 'error');
 		}
 	}
 
@@ -351,6 +340,11 @@
 		addToast('Link copied', 'info');
 	}
 
+	function handleCopyUserId() {
+		navigator.clipboard.writeText(message.author_id);
+		contextMenu = null;
+	}
+
 	function handleCreateThread() {
 		contextMenu = null;
 		newThreadName = message.content?.slice(0, 50)?.trim() || 'New Thread';
@@ -367,8 +361,8 @@
 			showCreateThread = false;
 			addToast('Thread created', 'success');
 			onopenthread?.(threadChannel, message);
-		} catch (err: any) {
-			addToast('Failed to create thread', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create thread'), 'error');
 		} finally {
 			creatingThread = false;
 		}
@@ -394,8 +388,8 @@
 			} else {
 				await api.addReaction(message.channel_id, message.id, emoji);
 			}
-		} catch (err: any) {
-			addToast('Failed to toggle reaction', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to toggle reaction'), 'error');
 		}
 	}
 
@@ -424,8 +418,8 @@
 		try {
 			await api.createBookmark(message.id);
 			addToast('Message bookmarked', 'success');
-		} catch (err: any) {
-			addToast('Failed to bookmark message', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to bookmark message'), 'error');
 		}
 	}
 
@@ -475,8 +469,8 @@
 			addToast('Quote sent', 'success');
 			showQuoteInChannel = false;
 			quoteTargetChannelId = '';
-		} catch (err: any) {
-			addToast('Failed to send quote', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to send quote'), 'error');
 		} finally {
 			quotingInChannel = false;
 		}
@@ -490,8 +484,8 @@
 			addToast('Message forwarded', 'success');
 			showForward = false;
 			forwardTargetId = '';
-		} catch (err: any) {
-			addToast('Failed to forward message', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to forward message'), 'error');
 		} finally {
 			forwarding = false;
 		}
@@ -729,149 +723,17 @@
 			{/if}
 
 			<!-- Attachments -->
-			{#if message.attachments?.length > 0 && (!message.encrypted || hasEncryptionKey === true)}
-				<div class="mt-1 flex flex-wrap gap-2">
-					{#each message.attachments as attachment (attachment.id)}
-						{#if message.encrypted && attachment.filename?.endsWith('.enc')}
-							<!-- Encrypted attachment: decrypt client-side before rendering -->
-							<EncryptedAttachment
-								{attachment}
-								channelId={message.channel_id}
-								onlightbox={(src) => (lightboxSrc = src)}
-								oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-							/>
-							{:else if attachment.content_type?.startsWith('image/')}
-								{#if shouldBlurImage(attachment.id)}
-									<button
-										type="button"
-										class="relative max-h-80 max-w-md cursor-pointer overflow-hidden rounded"
-										onclick={() => revealImage(attachment.id)}
-										aria-label="Reveal NSFW image"
-									>
-										<img
-										src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-										alt={attachment.alt_text || attachment.filename}
-										class="max-h-80 max-w-md rounded transition-[filter]"
-										style="filter: blur(20px);"
-										loading="lazy"
-									/>
-									<div class="absolute inset-0 flex items-center justify-center bg-black/30">
-										<span class="rounded bg-bg-floating/80 px-3 py-1.5 text-xs font-medium text-text-primary">
-												Click to reveal NSFW image
-											</span>
-										</div>
-									</button>
-								{:else if isStickerMessage}
-									<button
-										type="button"
-										class="block"
-										onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
-										oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-										aria-label="Open {attachment.alt_text || attachment.filename}"
-									>
-										<img
-											src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-											alt={attachment.alt_text || attachment.filename}
-											class="h-40 w-40 object-contain transition-transform hover:scale-105"
-											loading="lazy"
-										/>
-									</button>
-								{:else}
-									<div class="inline-flex flex-col">
-										<button
-											type="button"
-											class="block"
-											onclick={() => (lightboxSrc = fileUrl(attachment.id, attachment.instance_id || undefined))}
-											oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-											aria-label="Open {attachment.alt_text || attachment.filename}"
-										>
-											<img
-												src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-												alt={attachment.alt_text || attachment.filename}
-												class="max-h-80 max-w-md rounded transition-[filter] hover:brightness-90"
-												loading="lazy"
-											/>
-										</button>
-									{#if attachment.alt_text}
-										<span class="mt-0.5 max-w-md text-2xs text-text-muted">{attachment.alt_text}</span>
-									{/if}
-								</div>
-							{/if}
-						{:else if attachment.content_type?.startsWith('audio/')}
-							<AudioPlayer
-								src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-								waveform={message.voice_waveform}
-								durationMs={message.voice_duration_ms}
-							/>
-						{:else if attachment.content_type?.startsWith('video/')}
-							<VideoPlayer
-								src={fileUrl(attachment.id, attachment.instance_id || undefined)}
-								width={attachment.width ?? undefined}
-								height={attachment.height ?? undefined}
-								filename={attachment.filename}
-							/>
-						{:else}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<a
-								href={fileUrl(attachment.id, attachment.instance_id || undefined)}
-								class="flex items-center gap-2 rounded bg-bg-secondary px-3 py-2 text-sm text-text-link hover:underline"
-								download={attachment.filename}
-								oncontextmenu={(e) => handleAttachmentContextMenu(e, attachment)}
-							>
-								<svg class="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-									<path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z" />
-								</svg>
-								{attachment.filename}
-								<span class="text-xs text-text-muted">
-									({(attachment.size_bytes / 1024).toFixed(0)} KB)
-								</span>
-							</a>
-						{/if}
-					{/each}
-				</div>
-			{/if}
+			<MessageAttachments
+				{message}
+				{hasEncryptionKey}
+				{isStickerMessage}
+				{shouldBlurImage}
+				onrevealimage={revealImage}
+				onlightbox={(src) => (lightboxSrc = src)}
+				oncontextmenu={handleAttachmentContextMenu}
+			/>
 
-		<!-- Embeds -->
-		{#if message.embeds?.length > 0}
-			{#each message.embeds as embed}
-				<div class="mt-1 max-w-md overflow-hidden rounded border-l-4 border-brand-500 bg-bg-secondary p-3">
-					{#if embed.provider_name}
-						<p class="text-xs text-text-muted">{embed.provider_name}</p>
-					{/if}
-					{#if embed.title}
-						<p class="font-semibold text-text-link">
-							{#if embed.url}
-								<a href={embed.url} target="_blank" rel="noopener" class="hover:underline">{embed.title}</a>
-							{:else}
-								{embed.title}
-							{/if}
-						</p>
-					{/if}
-					{#if embed.description}
-						<p class="mt-1 text-sm text-text-secondary">{embed.description}</p>
-					{/if}
-					{#if embed.thumbnail_url}
-						<img src={embed.thumbnail_url} alt="" class="mt-2 max-h-60 rounded" loading="lazy" />
-					{/if}
-				</div>
-			{/each}
-		{/if}
-
-		<!-- Reactions -->
-		{#if message.reactions?.length > 0}
-			<div class="mt-1 flex flex-wrap gap-1">
-				{#each message.reactions as reaction (reaction.emoji)}
-					<button
-						class="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors {reaction.me ? 'border-brand-500 bg-brand-500/10' : 'border-bg-modifier hover:border-brand-500'}"
-						onclick={() => toggleReaction(reaction.emoji)}
-						title="{reaction.count} reaction{reaction.count !== 1 ? 's' : ''}"
-					>
-						<span>{reaction.emoji}</span>
-						<span class="text-text-muted">{reaction.count}</span>
-					</button>
-				{/each}
-			</div>
-		{/if}
+		<MessageEmbedsAndReactions embeds={message.embeds} reactions={message.reactions} ontogglereaction={toggleReaction} />
 		{/if}
 	</div>
 
@@ -939,80 +801,36 @@
 
 <!-- Message context menu -->
 {#if contextMenu}
-	<ContextMenu x={contextMenu.x} y={contextMenu.y} onclose={() => contextMenu = null}>
-		<ContextMenuItem label="View Profile" onclick={() => { userPopover = { x: contextMenu!.x, y: contextMenu!.y }; contextMenu = null; }} />
-		<ContextMenuDivider />
-		<ContextMenuItem label="Reply" onclick={handleReply} />
-		{#if message.content}
-			<ContextMenuItem label="Copy Text" onclick={handleCopyText} />
-		{/if}
-		{#if isOwnMessage}
-			<ContextMenuItem label="Edit Message" onclick={handleEdit} />
-		{/if}
-		{#if isOwnMessage || $canManageMessages}
-			<ContextMenuItem label={message.pinned ? 'Unpin Message' : 'Pin Message'} onclick={handlePin} />
-		{/if}
-		{#if !message.thread_id}
-			{#if $canCreateThreads}
-				<ContextMenuItem label="Create Thread" onclick={handleCreateThread} />
-			{/if}
-		{:else}
-			<ContextMenuItem label="View Thread" onclick={handleViewThread} />
-		{/if}
-		<ContextMenuItem label="Copy Message Link" onclick={handleCopyLink} />
-		<ContextMenuItem label="Copy User ID" onclick={() => { navigator.clipboard.writeText(message.author_id); contextMenu = null; }} />
-		<ContextMenuItem label="Bookmark" onclick={handleBookmark} />
-		<ContextMenuItem label="Forward" onclick={handleForward} />
-		{#if message.content}
-			<ContextMenuItem label="Quote in Channel" onclick={handleQuoteInChannel} />
-		{/if}
-		{#if !isOwnMessage}
-			<ContextMenuDivider />
-			<ContextMenuItem label="Report Message" danger onclick={handleReportMessage} />
-		{/if}
-		{#if canModerateAuthor && hasAnyAuthorModPerm}
-			<ContextMenuDivider />
-			{#if $canTimeoutMembers}
-				<div class="relative">
-					<button
-						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-primary hover:bg-brand-500 hover:text-white"
-						onclick={(e) => { e.stopPropagation(); showMsgTimeoutSubmenu = !showMsgTimeoutSubmenu; }}
-					>
-						Timeout User
-						<svg class="ml-auto h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M9 5l7 7-7 7" />
-						</svg>
-					</button>
-					{#if showMsgTimeoutSubmenu && contextMenu}
-						{@const submenuLeft = contextMenu.x + 360 < window.innerWidth}
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div
-							class="absolute top-0 min-w-[140px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}"
-							onclick={(e) => e.stopPropagation()}
-							onkeydown={() => {}}
-						>
-							{#each msgTimeoutPresets as preset}
-								<button
-									class="flex w-full items-center rounded px-2 py-1.5 text-sm text-text-primary hover:bg-brand-500 hover:text-white"
-									onclick={() => applyMsgTimeout(preset.seconds)}
-								>{preset.label}</button>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			{/if}
-			{#if $canKickMembers}
-				<ContextMenuItem label="Kick User" danger onclick={openAuthorKickModal} />
-			{/if}
-			{#if $canBanMembers}
-				<ContextMenuItem label="Ban User" danger onclick={openAuthorBanModal} />
-			{/if}
-		{/if}
-		{#if isOwnMessage || $canManageMessages}
-			<ContextMenuDivider />
-			<ContextMenuItem label="Delete Message" danger onclick={handleDelete} />
-		{/if}
-	</ContextMenu>
+	<MessageContextMenu
+		x={contextMenu.x}
+		y={contextMenu.y}
+		{message}
+		{isOwnMessage}
+		canManageMessages={$canManageMessages}
+		canCreateThreads={$canCreateThreads}
+		{canModerateAuthor}
+		canTimeoutMembers={$canTimeoutMembers}
+		canKickMembers={$canKickMembers}
+		canBanMembers={$canBanMembers}
+		onclose={() => (contextMenu = null)}
+		onviewprofile={() => { userPopover = { x: contextMenu!.x, y: contextMenu!.y }; contextMenu = null; }}
+		onreply={handleReply}
+		oncopytext={handleCopyText}
+		onedit={handleEdit}
+		onpin={handlePin}
+		oncreatethread={handleCreateThread}
+		onviewthread={handleViewThread}
+		oncopylink={handleCopyLink}
+		oncopyuserid={handleCopyUserId}
+		onbookmark={handleBookmark}
+		onforward={handleForward}
+		onquote={handleQuoteInChannel}
+		onreport={handleReportMessage}
+		ontimeout={applyMsgTimeout}
+		onkick={openAuthorKickModal}
+		onban={openAuthorBanModal}
+		ondelete={handleDelete}
+	/>
 {/if}
 
 <!-- Report message modal -->

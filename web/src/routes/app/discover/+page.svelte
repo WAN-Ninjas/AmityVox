@@ -5,14 +5,15 @@
 	import { addToast } from '$lib/stores/toast';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Guild, FederationPeer } from '$lib/types';
 
 	type DiscoverTab = 'local' | 'federated' | 'instances';
 
 	let activeTab = $state<DiscoverTab>('local');
 	let guilds = $state<Guild[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let localOp = $state(createAsyncOp(true));
 	let search = $state('');
 	let joining = $state<string | null>(null);
 
@@ -24,24 +25,20 @@
 
 	// Federation state
 	let peers = $state<FederationPeer[]>([]);
-	let peersLoading = $state(false);
 	let selectedPeerId = $state<string>('__all__');
 	let remoteGuilds = $state<(Guild & { instance_domain?: string })[]>([]);
-	let remoteLoading = $state(false);
-	let remoteError = $state('');
+	let remoteOp = $state(createAsyncOp());
+	let peersOp = $state(createAsyncOp());
 
 	async function loadGuilds() {
-		loading = true;
-		error = '';
-		try {
+		const result = await localOp.run(async () => {
 			const params: Record<string, string> = { limit: '100' };
 			if (search.trim()) params.q = search.trim();
 			if (selectedCategory !== 'All') params.tag = selectedCategory;
-			guilds = await api.discoverGuilds(params);
-		} catch (err: any) {
-			error = err.message || 'Failed to load servers';
-		} finally {
-			loading = false;
+			return api.discoverGuilds(params);
+		});
+		if (result) {
+			guilds = result;
 		}
 	}
 
@@ -72,8 +69,8 @@
 			// must always succeed after a successful join.
 			reloadGuilds().catch(() => {});
 			goto(`/app/guilds/${guild.id}`);
-		} catch (err: any) {
-			error = err.message || 'Failed to join server';
+		} catch (err: unknown) {
+			localOp.error = getErrorMessage(err, 'Failed to join server');
 		} finally {
 			joining = null;
 		}
@@ -89,29 +86,25 @@
 			reloadGuilds().catch(() => {});
 			addToast(`Joined ${guild.name} on ${guild.instance_domain}!`, 'success');
 			goto(`/app/guilds/${resp.guild_id}`);
-		} catch (err: any) {
-			remoteError = err.message || 'Failed to join federated server';
+		} catch (err: unknown) {
+			remoteOp.error = getErrorMessage(err, 'Failed to join federated server');
 		} finally {
 			joining = null;
 		}
 	}
 
 	async function loadPeers() {
-		peersLoading = true;
-		try {
-			peers = await api.getPublicFederationPeers();
-		} catch {
+		const result = await peersOp.run(() => api.getPublicFederationPeers());
+		if (result) {
+			peers = result;
+		} else {
 			peers = [];
-		} finally {
-			peersLoading = false;
 		}
 	}
 
 	async function loadRemoteGuilds() {
 		if (!selectedPeerId) return;
-		remoteLoading = true;
-		remoteError = '';
-		try {
+		const result = await remoteOp.run(async () => {
 			const params: Record<string, string> = { limit: '50' };
 			if (search.trim()) params.q = search.trim();
 			if (selectedCategory !== 'All') params.tag = selectedCategory;
@@ -127,20 +120,19 @@
 						allGuilds.push(...(result.value as any));
 					}
 				}
-				remoteGuilds = allGuilds;
+				return allGuilds;
 			} else {
-				remoteGuilds = await api.discoverRemoteGuilds(selectedPeerId, params) as any;
+				return await api.discoverRemoteGuilds(selectedPeerId, params) as any;
 			}
-		} catch (err: any) {
-			remoteError = err.message || 'Failed to load remote servers';
-		} finally {
-			remoteLoading = false;
+		});
+		if (result) {
+			remoteGuilds = result;
 		}
 	}
 
 	$effect(() => {
 		if (activeTab === 'federated' || activeTab === 'instances') {
-			if (peers.length === 0 && !peersLoading) loadPeers();
+			if (peers.length === 0 && !peersOp.loading) loadPeers();
 		}
 	});
 
@@ -266,15 +258,15 @@
 		<div class="mx-auto max-w-4xl">
 			{#if activeTab === 'local'}
 				<!-- LOCAL SERVERS TAB -->
-				{#if loading}
+				{#if localOp.loading}
 					<div class="flex items-center justify-center py-20">
 						<svg class="h-6 w-6 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
 							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
 						</svg>
 					</div>
-				{:else if error}
-					<p class="py-10 text-center text-sm text-red-400">{error}</p>
+				{:else if localOp.error}
+					<p class="py-10 text-center text-sm text-red-400">{localOp.error}</p>
 				{:else if filteredGuilds().length === 0}
 					<div class="flex flex-col items-center justify-center py-20 text-center">
 						<svg class="mb-4 h-16 w-16 text-text-muted opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
@@ -344,15 +336,15 @@
 
 			{:else if activeTab === 'federated'}
 				<!-- FEDERATED SERVERS TAB -->
-				{#if remoteLoading}
+				{#if remoteOp.loading}
 					<div class="flex items-center justify-center py-20">
 						<svg class="h-6 w-6 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
 							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
 						</svg>
 					</div>
-				{:else if remoteError}
-					<p class="py-10 text-center text-sm text-red-400">{remoteError}</p>
+				{:else if remoteOp.error}
+					<p class="py-10 text-center text-sm text-red-400">{remoteOp.error}</p>
 				{:else if remoteGuilds.length === 0}
 					<div class="flex flex-col items-center justify-center py-20 text-center">
 						<svg class="mb-4 h-16 w-16 text-text-muted opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
@@ -425,7 +417,7 @@
 
 			{:else}
 				<!-- FEDERATED INSTANCES TAB -->
-				{#if peersLoading}
+				{#if peersOp.loading}
 					<div class="flex items-center justify-center py-20">
 						<svg class="h-6 w-6 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
 							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

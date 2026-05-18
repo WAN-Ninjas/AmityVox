@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api, type ChannelTemplate } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import GuildTemplates from '$lib/components/guild/GuildTemplates.svelte';
 
 	interface Props {
@@ -10,8 +12,6 @@
 	let { guildId }: Props = $props();
 
 	let channelTemplates = $state<ChannelTemplate[]>([]);
-	let loadingTemplates = $state(false);
-	let creatingTemplate = $state(false);
 	let loadedGuildId = $state<string | null>(null);
 
 	let newTemplateName = $state('');
@@ -21,30 +21,27 @@
 	let newTemplateNsfw = $state(false);
 	let applyingTemplateId = $state<string | null>(null);
 	let applyChannelName = $state('');
-	let applyingTemplate = $state(false);
+
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
+	let applyOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingTemplates) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadChannelTemplates();
 		}
 	});
 
 	async function loadChannelTemplates() {
-		loadingTemplates = true;
-		try {
+		await loadOp.run(async () => {
 			channelTemplates = await api.getChannelTemplates(guildId);
 			loadedGuildId = guildId;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load templates', 'error');
-		} finally {
-			loadingTemplates = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to load templates');
 	}
 
 	async function handleCreateTemplate() {
 		if (!newTemplateName.trim()) return;
-		creatingTemplate = true;
-		try {
+		await createOp.run(async () => {
 			const template = await api.createChannelTemplate(guildId, {
 				name: newTemplateName.trim(),
 				channel_type: newTemplateChannelType,
@@ -59,11 +56,7 @@
 			newTemplateNsfw = false;
 			newTemplateChannelType = 'text';
 			addToast('Channel template created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create template', 'error');
-		} finally {
-			creatingTemplate = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to create template');
 	}
 
 	async function handleDeleteTemplate(templateId: string) {
@@ -71,26 +64,22 @@
 			await api.deleteChannelTemplate(guildId, templateId);
 			channelTemplates = channelTemplates.filter((template) => template.id !== templateId);
 			addToast('Template deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete template', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete template'), 'error');
 		}
 	}
 
 	async function handleApplyTemplate() {
 		if (!applyingTemplateId || !applyChannelName.trim()) return;
-		applyingTemplate = true;
-		try {
-			const channel = await api.applyChannelTemplate(guildId, applyingTemplateId, {
+		const templateId = applyingTemplateId;
+		await applyOp.run(async () => {
+			const channel = await api.applyChannelTemplate(guildId, templateId, {
 				name: applyChannelName.trim()
 			});
 			applyingTemplateId = null;
 			applyChannelName = '';
 			addToast(`Channel "${channel.name}" created from template`, 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to apply template', 'error');
-		} finally {
-			applyingTemplate = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to apply template');
 	}
 
 	function cancelApplyTemplate() {
@@ -161,13 +150,13 @@
 				NSFW
 			</label>
 		</div>
-		<button class="btn-primary text-sm" onclick={handleCreateTemplate} disabled={creatingTemplate || !newTemplateName.trim()}>
-			{creatingTemplate ? 'Creating...' : 'Create Template'}
+		<button class="btn-primary text-sm" onclick={handleCreateTemplate} disabled={createOp.loading || !newTemplateName.trim()}>
+			{createOp.loading ? 'Creating...' : 'Create Template'}
 		</button>
 	</div>
 </div>
 
-{#if loadingTemplates}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading templates...</p>
 {:else if channelTemplates.length === 0}
 	<p class="text-sm text-text-muted">No templates yet. Create one above.</p>
@@ -202,8 +191,8 @@
 									bind:value={applyChannelName}
 									maxlength="100"
 								/>
-								<button class="btn-primary text-xs" onclick={handleApplyTemplate} disabled={applyingTemplate || !applyChannelName.trim()}>
-									{applyingTemplate ? 'Creating...' : 'Create'}
+								<button class="btn-primary text-xs" onclick={handleApplyTemplate} disabled={applyOp.loading || !applyChannelName.trim()}>
+									{applyOp.loading ? 'Creating...' : 'Create'}
 								</button>
 								<button class="btn-secondary text-xs" onclick={cancelApplyTemplate}>
 									Cancel

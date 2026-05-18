@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	// Props
 	let {
@@ -207,8 +208,8 @@
 				executionLogs = [];
 			}
 			onSuccess('Webhook deleted');
-		} catch (err: any) {
-			onError(err.message || 'Failed to delete webhook');
+		} catch (err: unknown) {
+			onError(getErrorMessage(err, 'Failed to delete webhook'));
 		}
 	}
 

@@ -4,10 +4,12 @@
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
 	import Modal from '$components/common/Modal.svelte';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Announcement, AnnouncementSeverity } from '$lib/types';
 
 	let announcements = $state<Announcement[]>([]);
-	let loadingAnnouncements = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let createAnnouncementModalOpen = $state(false);
 	let editAnnouncementModalOpen = $state(false);
 	let editingAnnouncement = $state<Announcement | null>(null);
@@ -15,20 +17,18 @@
 	let announcementContent = $state('');
 	let announcementSeverity = $state<AnnouncementSeverity>('info');
 	let announcementExpiryHours = $state(0);
-	let savingAnnouncement = $state(false);
+	let saveOp = $state(createAsyncOp());
 
 	onMount(() => {
 		loadAnnouncements();
 	});
 
 	async function loadAnnouncements() {
-		loadingAnnouncements = true;
-		try {
-			announcements = await api.getAdminAnnouncements();
-		} catch {
+		const result = await loadOp.run(() => api.getAdminAnnouncements());
+		if (result) {
+			announcements = result;
+		} else {
 			announcements = [];
-		} finally {
-			loadingAnnouncements = false;
 		}
 	}
 
@@ -49,40 +49,38 @@
 
 	async function handleCreateAnnouncement() {
 		if (!announcementTitle.trim() || !announcementContent.trim()) return;
-		savingAnnouncement = true;
-		try {
-			const announcement = await api.createAnnouncement({
+		const announcement = await saveOp.run(
+			() => api.createAnnouncement({
 				title: announcementTitle.trim(),
 				content: announcementContent.trim(),
 				severity: announcementSeverity,
 				expires_in_hours: announcementExpiryHours || undefined
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to create announcement'
+		);
+		if (announcement) {
 			announcements = [announcement, ...announcements];
 			createAnnouncementModalOpen = false;
 			addToast('Announcement created', 'success');
-		} catch {
-			addToast('Failed to create announcement', 'error');
-		} finally {
-			savingAnnouncement = false;
 		}
 	}
 
 	async function handleUpdateAnnouncement() {
 		if (!editingAnnouncement) return;
-		savingAnnouncement = true;
-		try {
-			const updated = await api.updateAnnouncement(editingAnnouncement.id, {
+		const updated = await saveOp.run(
+			() => api.updateAnnouncement(editingAnnouncement!.id, {
 				title: announcementTitle.trim(),
 				content: announcementContent.trim()
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to update announcement'
+		);
+		if (updated) {
 			announcements = announcements.map((announcement) => announcement.id === updated.id ? updated : announcement);
 			editAnnouncementModalOpen = false;
 			editingAnnouncement = null;
 			addToast('Announcement updated', 'success');
-		} catch {
-			addToast('Failed to update announcement', 'error');
-		} finally {
-			savingAnnouncement = false;
 		}
 	}
 
@@ -91,8 +89,8 @@
 			const updated = await api.updateAnnouncement(announcement.id, { active: !announcement.active });
 			announcements = announcements.map((value) => value.id === updated.id ? updated : value);
 			addToast(updated.active ? 'Announcement activated' : 'Announcement deactivated', 'success');
-		} catch {
-			addToast('Failed to update announcement', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update announcement'), 'error');
 		}
 	}
 
@@ -102,8 +100,8 @@
 			await api.deleteAnnouncement(id);
 			announcements = announcements.filter((announcement) => announcement.id !== id);
 			addToast('Announcement deleted', 'success');
-		} catch {
-			addToast('Failed to delete announcement', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete announcement'), 'error');
 		}
 	}
 
@@ -127,7 +125,7 @@
 	</button>
 </div>
 
-{#if loadingAnnouncements}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading announcements...</p>
 {:else if announcements.length === 0}
 	<div class="rounded-lg bg-bg-secondary p-6 text-center">
@@ -219,9 +217,9 @@
 			<button
 				class="btn-primary text-sm"
 				onclick={handleCreateAnnouncement}
-				disabled={savingAnnouncement || !announcementTitle.trim() || !announcementContent.trim()}
+				disabled={saveOp.loading || !announcementTitle.trim() || !announcementContent.trim()}
 			>
-				{savingAnnouncement ? 'Creating...' : 'Create Announcement'}
+				{saveOp.loading ? 'Creating...' : 'Create Announcement'}
 			</button>
 		</div>
 	</div>
@@ -243,9 +241,9 @@
 			<button
 				class="btn-primary text-sm"
 				onclick={handleUpdateAnnouncement}
-				disabled={savingAnnouncement || !announcementTitle.trim() || !announcementContent.trim()}
+				disabled={saveOp.loading || !announcementTitle.trim() || !announcementContent.trim()}
 			>
-				{savingAnnouncement ? 'Saving...' : 'Save Changes'}
+				{saveOp.loading ? 'Saving...' : 'Save Changes'}
 			</button>
 		</div>
 	</div>

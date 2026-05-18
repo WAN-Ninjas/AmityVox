@@ -6,6 +6,7 @@
 	import { unreadCounts, getLastReadId } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import MessageItem from './MessageItem.svelte';
 
 	interface Props {
@@ -68,8 +69,8 @@
 			selectedMessages = new Set();
 			selectionMode = false;
 			lastSelectedIndex = null;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete messages', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete messages'), 'error');
 		} finally {
 			bulkDeleting = false;
 			showBulkConfirm = false;

@@ -1,6 +1,6 @@
 # Current Work Backlog
 
-Last updated: 2026-05-14
+Last updated: 2026-05-17
 
 This is the active cleanup checklist. It reflects the code as it works now, not old plans or aspirational notes.
 
@@ -20,13 +20,14 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
   - Current truth: local `users` and `guilds` use the local instance ID, not `NULL`.
   - Federated leave cleanup, MLS local guild/user checks, aggregated discover local guild query, guild member writes, and stale comments now match the current ownership model.
 - [x] Make federated guild join mirror writes transactional.
-- [ ] Store full federated channel, role, member, DM, and message data instead of partial mirrors.
+- [x] Store full federated channel, role, member, DM, and message data instead of partial mirrors.
   - Guild join mirrors now store richer channel/role/member data.
   - Federated DM create/message/update/delete/reaction mirrors now carry stable ownership and route through dedicated DM endpoints.
-  - Remaining gaps: invite/manage member paths, channel-create replay, and remote guild post messages.
+  - Invite/manage member paths, channel-create replay, and remote guild post messages now write explicit ownership.
 - [x] Reject malformed federation envelopes that omit required `guild_id`.
 - [ ] Record replayable federation events for host-side guild/channel/role/member/message mutations.
-  - Host-side events are now recorded, but replay idempotency still needs stable event identity/dedupe.
+  - Host-side events are now recorded, and replay IDs now use deterministic compacted-payload hashes.
+  - Remaining gap: broader integration coverage for repeated cross-instance backfill.
 - [x] Fix federation media URL handling so local media with local `instance_id` does not route through the federation proxy.
 
 ### P1 - Core App Reliability
@@ -44,8 +45,9 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 - [x] Merge guild/channel snapshot loads instead of replacing whole stores.
 - [x] Fix cross-guild role mention unread detection.
 - [ ] Add a true missed-event/backfill sync after reconnect.
-  - Current frontend reconnect backfill catches newly-created messages after the latest visible ID only.
-  - Remaining gap: missed edits, deletes, reactions, pins, read-state, role/member, and guild/channel state.
+  - Reconnect now reconciles each loaded channel against the latest server message window, pages forward from the latest visible message, and refreshes active guild/channel, member-list, read-state, DM, notification, and permission snapshots.
+  - Member add/remove gateway events now update the active guild roster.
+  - Remaining gap: deeper event-log style reconciliation for state older than the refreshed message window.
 - [x] Add focused regression tests for high-risk cleanup paths.
   - Added coverage for message backfill merging, local-vs-remote media URL selection, API error extraction, and strict federation `guild_id` requirements.
 
@@ -58,12 +60,16 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 - [x] Split many guild settings tabs into focused components.
 - [ ] Continue splitting any route/component files still above the repo's 200-line target.
   - The finite bug backlog work is complete. Remaining legacy large-file inventory is tracked separately in `docs/large-svelte-file-inventory.md` because reducing every old file below 200 lines is an ongoing refactor stream, not a single bug.
-- [ ] Standardize API error display so validation, auth, permission, upload, federation, and network failures show useful messages.
-  - Helper exists and some flows were converted; many components still use direct `err.message` fallbacks.
-- [ ] Introduce a small reusable async-state pattern for search/theme/plugin/admin pages.
-  - Helper exists; plugin page uses it. Search/theme/admin/discover still need consolidation.
-- [ ] Convert remaining visible gateway no-ops into store/component updates.
-  - Core message/guild/widget/event paths improved; activity, soundboard, broadcast, screen share, location, and component interaction events still need explicit ownership.
+- [x] Standardize API error display so validation, auth, permission, upload, federation, and network failures show useful messages.
+  - Shared formatter now covers main routes, setup/registration/invites, friends, discovery, bookmarks, user settings, admin surfaces, guild/settings surfaces, layout sidebars/groups, chat actions, channel/gallery tools, voice controls, member-list action, and common guild management flows.
+  - Remaining grep hits are registration/admin settings copy fields, not exception handling.
+- [x] Introduce a small reusable async-state pattern for search/theme/plugin/admin pages.
+  - Helper exists; plugin, search modal, theme gallery, discover, bookmarks, admin dashboard, admin federation, bridge admin, admin utility tabs, admin guild/registration/captcha/rate-limit/content-safety/domain/retention panels, profile/security/privacy/notification/voice/bot settings, auth/setup/invite routes, moderation route panes, and guild boost/insights/invite/widget/webhook/role/moderation/raid/audit/category/invite/ban/ban-list/template/retention/plugin/emoji/sticker/automod/onboarding/member panels use it.
+  - Remaining broad manual async flags are now outside this backlog scope, mostly older chat/gallery/common components and large-file refactor candidates tracked separately.
+- [x] Convert remaining visible gateway no-ops into store/component updates.
+  - Core message/guild/member/widget/event paths improved.
+  - Soundboard, broadcast, screen share, location, and activity/game gateway events now have store/component ownership.
+  - Bot component interactions are intentionally backend/bot-worker events; visible changes are expected through `MESSAGE_UPDATE`.
 - [x] Hide or clearly gate incomplete experimental features that still lack stable backend behavior.
 
 ## Reopened Feature-Completion Backlog
@@ -81,10 +87,22 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 3. [x] Close remaining federation `instance_id` write gaps.
    - Done: remote guild post messages, channel-create replay, invite accept membership, manage-created channels/roles, and manage member joins now write explicit ownership.
 4. [ ] Replace frontend reconnect message-only fetch with real missed-event reconciliation.
-5. [ ] Finish API error standardization across high-traffic routes and settings panes.
-6. [ ] Finish async-state consolidation for search, theme, discover, and admin surfaces.
-7. [ ] Assign or implement remaining gateway event no-op owners.
+   - Done: loaded channels now reconcile latest server windows for edits, deletes, reactions, pins, and missed creates beyond one page.
+   - Done: reconnect refreshes active guild channels, members, and permissions in addition to guilds, DMs, read state, channel-guild map, and notifications.
+   - Remaining: deeper event-log style reconciliation for old state outside the refreshed windows.
+5. [x] Finish API error standardization across high-traffic routes and settings panes.
+   - Done: login, setup, registration, invite acceptance, friends, discovery, bookmarks, user settings, admin dashboard/tabs, plugin install, member-list action, guild overview, invite, ban, emoji, role-delete, guild settings, layout sidebars/groups, message actions, video recorder, instance switcher, common profile/group/status/GIF/sticker, gallery/channel tools, embeds, bump, and voice-control flows use the shared API error formatter.
+   - Remaining grep hits are registration/admin settings copy fields, not exception handling.
+6. [x] Finish async-state consolidation for search, theme, discover, and admin surfaces.
+   - Done: search modal, theme gallery, discover including federation peers, bookmarks, admin dashboard, admin federation, bridge admin, admin utility tabs, admin guild/registration/captcha/rate-limit/content-safety/domain/retention panels, profile/security/privacy/notification/voice/bot settings, auth/setup/invite routes, moderation route panes, and the remaining lower-traffic guild settings panes use the shared async helper.
+   - Follow-up refactor stream: older chat/gallery/common components still have local async flags and should be handled with large-component reduction rather than this admin/settings backlog item.
+7. [x] Assign or implement remaining gateway event no-op owners.
+   - Done: active member roster, soundboard playback, voice broadcasts, screen-share badges, location shares, and activity/game invalidation now have explicit gateway ownership.
+   - Done: bot component interaction events are documented as backend/bot-worker events; client-visible changes flow through message updates.
 8. [ ] Continue large Svelte component reduction using `docs/large-svelte-file-inventory.md`.
+   - In progress: `ChannelSidebar.svelte` reduced from 1697 to 1078 lines by extracting sidebar modals and channel/DM/guild/thread context menus. Extracted components are below the 200-line target.
+   - In progress: `MessageInput.svelte` reduced from 1170 to 976 lines by extracting pending-file preview, encrypted passphrase prompt, status bars, and schedule picker. Extracted components are below the 200-line target.
+   - In progress: `MessageItem.svelte` reduced from 1172 to 989 lines by extracting attachments, embeds/reactions, and the message context menu. Extracted components are below the 200-line target.
 9. [ ] Add multi-instance federation integration tests for guild join, DM, media, and backfill behavior.
 10. [ ] Update stale federation/codebase docs after each completed tranche.
 
@@ -96,8 +114,8 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 ## Verification Targets
 
 - Frontend: `cd web && npm run check`
-  - Last result: pass, 0 errors and 0 warnings on 2026-05-14.
-- Focused frontend tests: `cd web && npm test -- --run src/lib/stores/__tests__/messages.test.ts src/lib/stores/__tests__/channels.test.ts src/lib/stores/__tests__/guilds.test.ts src/lib/stores/__tests__/channelWidgets.test.ts src/lib/stores/__tests__/guildEvents.test.ts src/lib/utils/__tests__/dm.test.ts src/lib/components/__tests__/ModerationModals.test.ts src/lib/components/__tests__/RoleHierarchy.test.ts`
-  - Last result: pass, 127 tests across 11 files on 2026-05-14.
+  - Last result: pass, 0 errors and 0 warnings on 2026-05-17.
+- Focused frontend tests: `cd web && npm test -- --run src/lib/stores/__tests__/messages.test.ts src/lib/stores/__tests__/channels.test.ts src/lib/stores/__tests__/guilds.test.ts src/lib/stores/__tests__/channelWidgets.test.ts src/lib/stores/__tests__/guildEvents.test.ts src/lib/stores/__tests__/presence.test.ts src/lib/stores/__tests__/activityEvents.test.ts src/lib/stores/__tests__/voiceBroadcasts.test.ts src/lib/stores/__tests__/locationShares.test.ts src/lib/utils/__tests__/dm.test.ts src/lib/components/__tests__/ModerationModals.test.ts src/lib/components/__tests__/RoleHierarchy.test.ts src/lib/components/__tests__/MembersPanel.test.ts src/lib/components/__tests__/StatusPicker.test.ts src/lib/components/__tests__/RoleEditor.test.ts`
+  - Last result: pass, 173 tests across 15 files on 2026-05-17.
 - Backend compile/federation smoke: `docker run --rm -v /docker/AmityVox:/build -w /build -e GOTOOLCHAIN=local golang:1.26-alpine go test -run '^$' ./internal/federation ./internal/api/... ./internal/models ./internal/database`
-  - Last result: pass on 2026-05-14.
+  - Last result: pass on 2026-05-17.

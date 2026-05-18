@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api, type AutoRoleRule } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Role } from '$lib/types';
 
 	let { guildId }: { guildId: string } = $props();
@@ -59,8 +60,8 @@
 		try {
 			const updated = await api.updateAutoRole(guildId, rule.id, { enabled: !rule.enabled });
 			autoRoles = autoRoles.map(ar => ar.id === updated.id ? updated : ar);
-		} catch (err: any) {
-			error = err.message || 'Failed to update auto role';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to update auto role');
 		}
 	}
 
@@ -68,8 +69,8 @@
 		try {
 			await api.deleteAutoRole(guildId, id);
 			autoRoles = autoRoles.filter(ar => ar.id !== id);
-		} catch (err: any) {
-			error = err.message || 'Failed to delete auto role';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to delete auto role');
 		}
 	}
 

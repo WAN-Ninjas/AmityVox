@@ -8,6 +8,7 @@
 	} from '$lib/stores/channelWidgets';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		channelId: string;
@@ -75,8 +76,8 @@
 			await api.deleteChannelWidget(channelId, widgetId);
 			removeStoredChannelWidget(channelId, widgetId);
 			addToast('Widget removed', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to remove widget', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to remove widget'), 'error');
 		}
 	}
 
@@ -86,8 +87,8 @@
 				active: !widget.active
 			});
 			upsertChannelWidget(updated);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to toggle widget', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to toggle widget'), 'error');
 		}
 	}
 </script>

@@ -10,6 +10,8 @@
 	import Avatar from '$lib/components/common/Avatar.svelte';
 	import { currentUser } from '$lib/stores/auth';
 	import { getDMDisplayName } from '$lib/utils/dm';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import { pendingIncomingCount } from '$lib/stores/relationships';
 
 	type Tab = 'all' | 'online' | 'pending' | 'blocked' | 'add';
@@ -17,9 +19,9 @@
 
 	let relationships = $state<Relationship[]>([]);
 	let blockedUsers = $state<{ id: string; user_id: string; target_id: string; reason: string | null; created_at: string; user?: User }[]>([]);
-	let loading = $state(true);
 	let dmChannels = $state<Channel[]>([]);
-	let loadingDMs = $state(true);
+	let relationshipsOp = $state(createAsyncOp(true));
+	let dmsOp = $state(createAsyncOp(true));
 
 	// Add friend state
 	let handleInput = $state('');
@@ -43,24 +45,19 @@
 	});
 
 	async function loadRelationships() {
-		loading = true;
-		try {
+		await relationshipsOp.run(async () => {
 			const [relsRes, blockedRes] = await Promise.allSettled([
 				api.getFriends(),
 				api.getBlockedUsers()
 			]);
 			relationships = relsRes.status === 'fulfilled' ? relsRes.value : [];
 			blockedUsers = blockedRes.status === 'fulfilled' ? blockedRes.value : [];
-		} finally {
-			loading = false;
-		}
+		});
 	}
 
-	function loadDMs() {
-		api.getMyDMs()
-			.then((dms) => (dmChannels = dms))
-			.catch((e) => console.error('Failed to load DMs:', e))
-			.finally(() => (loadingDMs = false));
+	async function loadDMs() {
+		const dms = await dmsOp.run(() => api.getMyDMs());
+		dmChannels = dms ?? [];
 	}
 
 	async function sendFriendRequest() {
@@ -78,8 +75,8 @@
 			addSuccess = `Friend request sent to ${user.display_name ?? user.username}!`;
 			handleInput = '';
 			await loadRelationships();
-		} catch (err: any) {
-			const code = err?.code || '';
+		} catch (err: unknown) {
+			const code = (err as { code?: string } | null)?.code || '';
 			if (code === 'already_friends') {
 				addError = 'You are already friends with this user.';
 			} else if (code === 'already_pending') {
@@ -91,7 +88,7 @@
 			} else if (code === 'blocked') {
 				addError = 'Cannot send a friend request to this user.';
 			} else {
-				addError = 'Failed to send friend request. Check the handle and try again.';
+				addError = getErrorMessage(err, 'Failed to send friend request. Check the handle and try again.');
 			}
 		} finally {
 			resolving = false;
@@ -215,7 +212,7 @@
 	<div class="flex flex-1 overflow-hidden">
 		<!-- Friends list (left) -->
 		<div class="flex flex-1 flex-col overflow-y-auto">
-			{#if loading}
+			{#if relationshipsOp.loading}
 				<div class="flex flex-1 items-center justify-center">
 					<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 				</div>
@@ -456,7 +453,7 @@
 		<div class="w-60 shrink-0 border-l border-bg-floating bg-bg-secondary">
 			<div class="p-3">
 				<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Direct Messages</h3>
-				{#if loadingDMs}
+				{#if dmsOp.loading}
 					<p class="text-xs text-text-muted">Loading...</p>
 				{:else if dmChannels.length === 0}
 					<p class="text-xs text-text-muted">No active DMs.</p>

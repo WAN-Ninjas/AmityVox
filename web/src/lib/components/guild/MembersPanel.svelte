@@ -4,6 +4,8 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import UserPopover from '$components/common/UserPopover.svelte';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let {
 		guildId,
@@ -20,10 +22,11 @@
 	let members = $state<GuildMember[]>([]);
 	let allRoles = $state<Role[]>([]);
 	let memberRoles = $state<Map<string, string[]>>(new Map());
-	let loading = $state(true);
 	let searchQuery = $state('');
 	let expandedMemberId = $state<string | null>(null);
-	let loadingMemberRoles = $state(false);
+	let loadedGuildId = $state<string | null>(null);
+	let loadOp = $state(createAsyncOp());
+	let memberRolesOp = $state(createAsyncOp());
 
 	// User popover state
 	let popover = $state<{ userId: string; x: number; y: number } | null>(null);
@@ -56,32 +59,25 @@
 	// --- Data loading ---
 
 	async function loadData() {
-		loading = true;
-		try {
+		await loadOp.run(async () => {
 			const [m, r] = await Promise.all([
 				api.getMembers(guildId),
 				api.getRoles(guildId)
 			]);
 			members = m;
 			allRoles = r;
-		} catch (err: any) {
-			onError(err.message || 'Failed to load members');
-		} finally {
-			loading = false;
-		}
+			loadedGuildId = guildId;
+		}, onError, 'Failed to load members');
 	}
 
 	async function loadMemberRoles(memberId: string) {
-		loadingMemberRoles = true;
-		try {
-			const roles = await api.getMemberRoles(guildId, memberId);
+		const roles = await memberRolesOp.run(() => api.getMemberRoles(guildId, memberId));
+		if (roles) {
 			memberRoles = new Map(memberRoles);
 			memberRoles.set(memberId, roles.map((r: Role) => r.id));
-		} catch {
+		} else {
 			memberRoles = new Map(memberRoles);
 			memberRoles.set(memberId, []);
-		} finally {
-			loadingMemberRoles = false;
 		}
 	}
 
@@ -114,8 +110,8 @@
 				memberRoles = new Map(memberRoles);
 				memberRoles.set(memberId, [...currentRoles, roleId]);
 			}
-		} catch (err: any) {
-			onError(err.message || 'Failed to update role');
+		} catch (err: unknown) {
+			onError(getErrorMessage(err, 'Failed to update role'));
 		} finally {
 			togglingRole = false;
 		}
@@ -137,8 +133,8 @@
 			);
 			timeoutDuration = '';
 			onSuccess('Timeout applied');
-		} catch (err: any) {
-			onError(err.message || 'Failed to apply timeout');
+		} catch (err: unknown) {
+			onError(getErrorMessage(err, 'Failed to apply timeout'));
 		} finally {
 			applyingTimeout = false;
 		}
@@ -151,8 +147,8 @@
 				m.user_id === memberId ? { ...m, timeout_until: null } : m
 			);
 			onSuccess('Timeout cleared');
-		} catch (err: any) {
-			onError(err.message || 'Failed to clear timeout');
+		} catch (err: unknown) {
+			onError(getErrorMessage(err, 'Failed to clear timeout'));
 		}
 	}
 
@@ -163,8 +159,8 @@
 			expandedMemberId = null;
 			kickConfirmId = null;
 			onSuccess('Member kicked');
-		} catch (err: any) {
-			onError(err.message || 'Failed to kick member');
+		} catch (err: unknown) {
+			onError(getErrorMessage(err, 'Failed to kick member'));
 		}
 	}
 
@@ -193,7 +189,9 @@
 
 	// Load on mount
 	$effect(() => {
-		loadData();
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
+			loadData();
+		}
 	});
 </script>
 
@@ -209,7 +207,7 @@
 	</div>
 
 	<!-- Member list -->
-	{#if loading}
+	{#if loadOp.loading}
 		<p class="text-sm text-text-muted">Loading members...</p>
 	{:else if filteredMembers.length === 0}
 		<p class="text-sm text-text-muted">
@@ -271,7 +269,7 @@
 							<!-- Role checkboxes -->
 							<div>
 								<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Roles</h4>
-								{#if loadingMemberRoles}
+								{#if memberRolesOp.loading}
 									<p class="text-xs text-text-muted">Loading roles...</p>
 								{:else}
 									<div class="grid grid-cols-2 gap-1.5 sm:grid-cols-3">

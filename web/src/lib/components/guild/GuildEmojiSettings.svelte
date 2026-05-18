@@ -3,6 +3,8 @@
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { CustomEmoji } from '$lib/types';
 
 	interface Props {
@@ -13,27 +15,25 @@
 	let { guildId, instanceId = null }: Props = $props();
 
 	let emoji = $state<CustomEmoji[]>([]);
-	let loadingEmoji = $state(false);
 	let emojiFile = $state<File | null>(null);
 	let emojiName = $state('');
-	let uploadingEmoji = $state(false);
 	let loadedGuildId = $state<string | null>(null);
+	let loadOp = $state(createAsyncOp());
+	let uploadOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingEmoji) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadEmoji();
 		}
 	});
 
 	async function loadEmoji() {
-		loadingEmoji = true;
-		try {
-			emoji = await api.getGuildEmoji(guildId);
+		const result = await loadOp.run(() => api.getGuildEmoji(guildId));
+		if (result) {
+			emoji = result;
 			loadedGuildId = guildId;
-		} catch {
+		} else {
 			emoji = [];
-		} finally {
-			loadingEmoji = false;
 		}
 	}
 
@@ -43,8 +43,8 @@
 			await api.deleteGuildEmoji(guildId, emojiId);
 			emoji = emoji.filter((value) => value.id !== emojiId);
 			addToast('Emoji deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete emoji', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete emoji'), 'error');
 		}
 	}
 
@@ -57,18 +57,14 @@
 
 	async function handleUploadEmoji() {
 		if (!emojiFile || !emojiName.trim()) return;
-		uploadingEmoji = true;
-		try {
-			const newEmoji = await api.uploadEmoji(guildId, emojiName.trim(), emojiFile);
+		const file = emojiFile;
+		await uploadOp.run(async () => {
+			const newEmoji = await api.uploadEmoji(guildId, emojiName.trim(), file);
 			emoji = [...emoji, newEmoji];
 			emojiFile = null;
 			emojiName = '';
 			addToast('Emoji uploaded', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to upload emoji', 'error');
-		} finally {
-			uploadingEmoji = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to upload emoji');
 	}
 </script>
 
@@ -86,12 +82,12 @@
 			<input id="emojiName" type="text" class="input w-full" bind:value={emojiName} placeholder="emoji_name" maxlength="32" pattern="[a-zA-Z0-9_]+" />
 		</div>
 	</div>
-	<button class="btn-primary" onclick={handleUploadEmoji} disabled={uploadingEmoji || !emojiFile || !emojiName.trim()}>
-		{uploadingEmoji ? 'Uploading...' : 'Upload Emoji'}
+	<button class="btn-primary" onclick={handleUploadEmoji} disabled={uploadOp.loading || !emojiFile || !emojiName.trim()}>
+		{uploadOp.loading ? 'Uploading...' : 'Upload Emoji'}
 	</button>
 </div>
 
-{#if loadingEmoji}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading emoji...</p>
 {:else if emoji.length === 0}
 	<p class="text-sm text-text-muted">No custom emoji yet. Upload one above!</p>

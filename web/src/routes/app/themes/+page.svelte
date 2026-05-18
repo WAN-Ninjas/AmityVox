@@ -3,10 +3,11 @@
 	import { onMount } from 'svelte';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let themes = $state<SharedTheme[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp(true));
 	let sort = $state<'newest' | 'downloads' | 'likes'>('newest');
 	let search = $state('');
 	let searchTimeout: ReturnType<typeof setTimeout>;
@@ -19,14 +20,11 @@
 	let sharing = $state(false);
 
 	async function loadThemes() {
-		loading = true;
-		error = '';
-		try {
-			themes = await api.listThemes({ sort, limit: 60, q: search.trim() || undefined });
-		} catch (err: any) {
-			error = err.message || 'Failed to load themes';
-		} finally {
-			loading = false;
+		const result = await loadOp.run(() =>
+			api.listThemes({ sort, limit: 60, q: search.trim() || undefined })
+		);
+		if (result) {
+			themes = result;
 		}
 	}
 
@@ -59,11 +57,11 @@
 			} else {
 				await api.likeTheme(theme.id);
 			}
-		} catch (err: any) {
+		} catch (err: unknown) {
 			themes = themes.map(t =>
 				t.id === theme.id ? { ...t, liked: wasLiked, like_count: theme.like_count } : t
 			);
-			addToast(err.message || 'Failed to update like', 'error');
+			addToast(getErrorMessage(err, 'Failed to update like'), 'error');
 		}
 	}
 
@@ -133,8 +131,8 @@
 			shareName = '';
 			shareDescription = '';
 			loadThemes();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to share theme', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to share theme'), 'error');
 		} finally {
 			sharing = false;
 		}
@@ -146,8 +144,8 @@
 			await api.deleteTheme(themeId);
 			themes = themes.filter(t => t.id !== themeId);
 			addToast('Theme deleted', 'info');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete theme', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete theme'), 'error');
 		}
 	}
 
@@ -227,13 +225,13 @@
 
 	<!-- Theme grid -->
 	<div class="flex-1 overflow-y-auto p-6">
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="flex items-center justify-center py-20">
 				<p class="text-sm text-text-muted">Loading themes...</p>
 			</div>
-		{:else if error}
+		{:else if loadOp.error}
 			<div class="flex items-center justify-center py-20">
-				<p class="text-sm text-red-400">{error}</p>
+				<p class="text-sm text-red-400">{loadOp.error}</p>
 			</div>
 		{:else if themes.length === 0}
 			<div class="flex flex-col items-center justify-center py-20 text-center">

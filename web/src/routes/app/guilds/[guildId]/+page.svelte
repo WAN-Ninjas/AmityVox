@@ -8,6 +8,7 @@
 	import type { BumpStatus, GuideStep } from '$lib/api/client';
 	import type { OnboardingConfig } from '$lib/types';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import OnboardingModal from '$lib/components/guild/OnboardingModal.svelte';
 
 	let eventsLoading = $state(true);
@@ -200,8 +201,8 @@
 				last_bump: new Date().toISOString(),
 				bump_count_24h: (bumpStatus?.bump_count_24h ?? 0) + 1
 			};
-		} catch (err: any) {
-			bumpMessage = err.message || 'Failed to bump guild';
+		} catch (err: unknown) {
+			bumpMessage = getErrorMessage(err, 'Failed to bump guild');
 		} finally {
 			bumpLoading = false;
 			// Clear the message after a few seconds.

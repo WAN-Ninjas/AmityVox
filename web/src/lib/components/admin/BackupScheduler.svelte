@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import { confirmAction } from '$lib/stores/confirm';
 
 	interface BackupSchedule {
@@ -118,8 +119,8 @@
 			if (historyScheduleId === scheduleId) {
 				await loadHistory(scheduleId);
 			}
-		} catch (e: any) {
-			addToast(e?.message || 'Failed to trigger backup', 'error');
+		} catch (e: unknown) {
+			addToast(getErrorMessage(e, 'Failed to trigger backup'), 'error');
 		}
 		triggeringId = '';
 	}

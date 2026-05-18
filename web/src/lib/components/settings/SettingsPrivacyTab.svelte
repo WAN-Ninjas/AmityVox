@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { removeBlockedUser, updateBlockedUserLevel, type BlockLevel } from '$lib/stores/blocked';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import Avatar from '$components/common/Avatar.svelte';
 	import type { User } from '$lib/types';
 
@@ -12,12 +14,13 @@
 	let dmPrivacy = $state<DmPrivacy>('everyone');
 	let friendRequestPrivacy = $state<FriendRequestPrivacy>('everyone');
 	let nsfwContentFilter = $state<NsfwContentFilter>('blur_all');
-	let privacyLoading = $state(false);
 	let privacySuccess = $state('');
 	let privacyError = $state('');
 	let blockedList = $state<Array<{ target_id: string; level: string; created_at: string; user?: User }>>([]);
-	let blockedLoading = $state(false);
 	let updatingBlock = $state<string | null>(null);
+	let privacyOp = $state(createAsyncOp());
+	let blockedOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let loaded = false;
 
 	$effect(() => {
@@ -29,24 +32,20 @@
 	});
 
 	async function loadPrivacy() {
-		try {
+		await privacyOp.run(async () => {
 			const settings = await api.getUserSettings();
 			dmPrivacy = settings.dm_privacy ?? 'everyone';
 			friendRequestPrivacy = settings.friend_request_privacy ?? 'everyone';
 			nsfwContentFilter = settings.nsfw_content_filter ?? 'blur_all';
-		} catch {
-			// Use defaults if settings do not exist yet.
-		}
+		});
 	}
 
 	async function loadBlockedList() {
-		blockedLoading = true;
-		try {
-			blockedList = await api.getBlockedUsers();
-		} catch {
+		const result = await blockedOp.run(() => api.getBlockedUsers());
+		if (result) {
+			blockedList = result;
+		} else {
 			blockedList = [];
-		} finally {
-			blockedLoading = false;
 		}
 	}
 
@@ -57,8 +56,8 @@
 			await api.updateBlockLevel(targetId, level);
 			updateBlockedUserLevel(targetId, level);
 			blockedList = blockedList.map((blocked) => blocked.target_id === targetId ? { ...blocked, level } : blocked);
-		} catch (err: any) {
-			privacyError = err.message || 'Failed to update blocked user';
+		} catch (err: unknown) {
+			privacyError = getErrorMessage(err, 'Failed to update blocked user');
 		} finally {
 			updatingBlock = null;
 		}
@@ -71,18 +70,17 @@
 			await api.unblockUser(targetId);
 			removeBlockedUser(targetId);
 			blockedList = blockedList.filter((blocked) => blocked.target_id !== targetId);
-		} catch (err: any) {
-			privacyError = err.message || 'Failed to unblock user';
+		} catch (err: unknown) {
+			privacyError = getErrorMessage(err, 'Failed to unblock user');
 		} finally {
 			updatingBlock = null;
 		}
 	}
 
 	async function savePrivacy() {
-		privacyLoading = true;
 		privacySuccess = '';
 		privacyError = '';
-		try {
+		await saveOp.run(async () => {
 			await api.updateUserSettings({
 				dm_privacy: dmPrivacy,
 				friend_request_privacy: friendRequestPrivacy,
@@ -91,11 +89,9 @@
 			localStorage.setItem('av-nsfw-filter', nsfwContentFilter);
 			privacySuccess = 'Privacy settings saved!';
 			setTimeout(() => (privacySuccess = ''), 3000);
-		} catch (err: any) {
-			privacyError = err.message || 'Failed to save privacy settings';
-		} finally {
-			privacyLoading = false;
-		}
+		}, msg => {
+			privacyError = msg;
+		}, 'Failed to save privacy settings');
 	}
 </script>
 
@@ -162,15 +158,15 @@
 		</div>
 	</div>
 
-	<button class="btn-primary" onclick={savePrivacy} disabled={privacyLoading}>
-		{privacyLoading ? 'Saving...' : 'Save Privacy Settings'}
+	<button class="btn-primary" onclick={savePrivacy} disabled={saveOp.loading}>
+		{saveOp.loading ? 'Saving...' : 'Save Privacy Settings'}
 	</button>
 
 	<div class="mt-2 rounded-lg bg-bg-secondary p-4">
 		<h3 class="mb-1 text-sm font-semibold text-text-primary">Blocked Users</h3>
 		<p class="mb-3 text-xs text-text-muted">Manage users you've blocked or ignored.</p>
 
-		{#if blockedLoading}
+		{#if blockedOp.loading}
 			<div class="flex items-center justify-center py-4">
 				<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>

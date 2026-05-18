@@ -2,6 +2,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Channel, Role, ForumTag, GalleryTag } from '$lib/types';
 
 	let {
@@ -99,8 +100,8 @@
 			await api.deleteForumTag(channel.id, tagId);
 			forumTags = forumTags.filter((t) => t.id !== tagId);
 			addToast('Tag deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete tag', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete tag'), 'error');
 		}
 	}
 
@@ -128,8 +129,8 @@
 			await api.deleteGalleryTag(channel.id, tagId);
 			galleryTags = galleryTags.filter((t) => t.id !== tagId);
 			addToast('Tag deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete tag', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete tag'), 'error');
 		}
 	}
 

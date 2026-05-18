@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import {
 		type FavoriteGif,
 		loadFavorites,
@@ -77,11 +78,11 @@
 		try {
 			const data = await api.getTrendingGiphy(25);
 			gifs = data?.data ?? [];
-		} catch (e: any) {
-			if (e.status === 503) {
+		} catch (err: unknown) {
+			if ((err as { status?: number } | null)?.status === 503) {
 				error = 'GIF search is not enabled on this instance';
 			} else {
-				error = 'Failed to load GIFs';
+				error = getErrorMessage(err, 'Failed to load GIFs');
 			}
 		} finally {
 			loading = false;
@@ -111,8 +112,8 @@
 		try {
 			const data = await api.searchGiphy(query.trim());
 			gifs = data?.data ?? [];
-		} catch {
-			error = 'Search failed';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Search failed');
 		} finally {
 			loading = false;
 		}
@@ -125,8 +126,8 @@
 		try {
 			const data = await api.searchGiphy(categoryName, 25);
 			gifs = data?.data ?? [];
-		} catch {
-			error = 'Failed to load category';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to load category');
 		} finally {
 			loading = false;
 		}

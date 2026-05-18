@@ -1,0 +1,44 @@
+import { api, type VoiceBroadcast } from '$lib/api/client';
+import { createMapStore } from '$lib/stores/mapHelpers';
+
+export const voiceBroadcastsByChannel = createMapStore<string, VoiceBroadcast>();
+
+export async function loadVoiceBroadcast(channelId: string): Promise<VoiceBroadcast | null> {
+	const broadcast = await api.getVoiceBroadcast(channelId);
+	if (broadcast) {
+		voiceBroadcastsByChannel.setEntry(channelId, broadcast);
+	} else {
+		voiceBroadcastsByChannel.removeEntry(channelId);
+	}
+	return broadcast;
+}
+
+export function upsertVoiceBroadcast(broadcast: VoiceBroadcast) {
+	voiceBroadcastsByChannel.setEntry(broadcast.channel_id, broadcast);
+}
+
+export function handleVoiceBroadcastStart(data: {
+	broadcast_id?: string;
+	id?: string;
+	guild_id: string;
+	channel_id: string;
+	broadcaster_id: string;
+	title?: string;
+	started_at?: string;
+	listener_count?: number;
+}) {
+	upsertVoiceBroadcast({
+		id: data.broadcast_id ?? data.id ?? `${data.channel_id}:${data.broadcaster_id}`,
+		guild_id: data.guild_id,
+		channel_id: data.channel_id,
+		broadcaster_id: data.broadcaster_id,
+		title: data.title || 'Live Broadcast',
+		started_at: data.started_at ?? new Date().toISOString(),
+		ended_at: null,
+		listener_count: data.listener_count ?? 0
+	});
+}
+
+export function handleVoiceBroadcastEnd(data: { channel_id: string }) {
+	voiceBroadcastsByChannel.removeEntry(data.channel_id);
+}

@@ -7,18 +7,25 @@ import { api } from '$lib/api/client';
 import { currentUser } from './auth';
 import { loadGuilds, updateGuild, removeGuild, currentGuildId } from './guilds';
 import { updateChannel, removeChannel, loadChannels, channels as channelsStore, currentChannelId } from './channels';
-import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages, applyReactionEvent, backfillLoadedChannels } from './messages';
+import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages, applyReactionEvent, reconcileLoadedChannels } from './messages';
 import { updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs, updateDMChannel, dmChannels } from './dms';
 import { incrementUnread, incrementMention, loadReadState, loadChannelGuildMap, registerChannelGuild, channelGuildMap } from './unreads';
 import { handleNotificationCreate, handleNotificationUpdate, handleNotificationDelete, loadNotifications } from './notifications';
 import { initPushNotifications } from '$lib/utils/pushNotifications';
-import { handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
+import { handleScreenShareEvent, handleSoundboardPlay, handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
 import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
 import { loadPermissions, invalidatePermissions } from './permissions';
 import { loadChannelMutePrefs, isChannelMuted, isGuildMuted } from './muting';
-import { updateGuildMember, updateUserInMembers, guildMembers } from './members';
+import {
+	loadGuildMembersAndRoles,
+	removeGuildMember,
+	updateGuildMember,
+	updateUserInMembers,
+	upsertGuildMember,
+	guildMembers
+} from './members';
 import { startIdleDetection, stopIdleDetection, setManualStatus } from '$lib/utils/idle';
 import { addToast } from './toast';
 import { addAnnouncement, updateAnnouncement, removeAnnouncement } from './announcements';
@@ -26,8 +33,11 @@ import { upsertGuildEvent, removeGuildEvent as removeStoredGuildEvent } from './
 import { upsertChannelWidget, removeChannelWidget as removeStoredChannelWidget } from './channelWidgets';
 import { addIncomingCall, dismissIncomingCall, clearIncomingCalls } from './callRing';
 import { clearChannelUnreads } from './unreads';
+import { handleLocationShareChanged, removeLocationShare } from './locationShares';
+import { handleVoiceBroadcastEnd, handleVoiceBroadcastStart } from './voiceBroadcasts';
+import { invalidateChannelActivity } from './activityEvents';
 import type { ChannelWidget } from '$lib/api/client';
-import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship, ServerNotification, GuildEvent } from '$lib/types';
+import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship, ServerNotification, GuildEvent, GuildMember } from '$lib/types';
 
 export const gatewayConnected = writable(false);
 
@@ -136,8 +146,8 @@ export function connectGateway(token: string) {
 				const isReconnect = hasReceivedReady;
 				hasReceivedReady = true;
 				if (isReconnect) {
-					backfillLoadedChannels().catch((err) => {
-						console.warn('Failed to backfill missed messages after reconnect', err);
+					reconcileLoadedChannels().catch((err) => {
+						console.warn('Failed to reconcile missed channel events after reconnect', err);
 					});
 					const activeChannelId = get(currentChannelId);
 					if (activeChannelId) {
@@ -148,6 +158,14 @@ export function connectGateway(token: string) {
 					loadReadState();
 					loadChannelGuildMap();
 					loadNotifications();
+					const activeGuildId = get(currentGuildId);
+					if (activeGuildId) {
+						loadChannels(activeGuildId);
+						loadPermissions(activeGuildId);
+						loadGuildMembersAndRoles(activeGuildId).catch((err) => {
+							console.warn('Failed to refresh guild members after reconnect', err);
+						});
+					}
 					addToast('Reconnected to server', 'success', 3000);
 				}
 				break;
@@ -346,7 +364,12 @@ export function connectGateway(token: string) {
 			// --- Relationship events (friend requests) ---
 			// --- Guild member events ---
 			case 'GUILD_MEMBER_UPDATE': {
-				const memberData = data as { guild_id: string; user_id: string; action?: string; roles?: string[] };
+				const memberData = data as {
+					guild_id: string;
+					user_id: string;
+					action?: string;
+					roles?: string[];
+				} & Partial<GuildMember>;
 				// When the current user's roles/member data changes, reload permissions.
 				let selfId: string | undefined;
 				currentUser.subscribe((u) => (selfId = u?.id))();
@@ -357,8 +380,8 @@ export function connectGateway(token: string) {
 					}
 				}
 				// Update member store for real-time role display.
-				if (memberData.roles !== undefined) {
-					updateGuildMember(memberData.user_id, { roles: memberData.roles });
+				if (memberData.guild_id === get(currentGuildId)) {
+					updateGuildMember(memberData.user_id, memberData);
 				}
 				break;
 			}
@@ -402,6 +425,11 @@ export function connectGateway(token: string) {
 					loadGuilds();
 					loadPermissions(member.guild_id);
 				}
+				if (member.guild_id === get(currentGuildId)) {
+					api.getMember(member.guild_id, member.user_id)
+						.then(upsertGuildMember)
+						.catch(() => loadGuildMembersAndRoles(member.guild_id).catch(() => {}));
+				}
 				break;
 			}
 			case 'GUILD_MEMBER_REMOVE': {
@@ -413,6 +441,9 @@ export function connectGateway(token: string) {
 					removeGuild(removed.guild_id);
 					selfRoleIdsByGuild.delete(removed.guild_id);
 					invalidatePermissions(removed.guild_id);
+				}
+				if (removed.guild_id === get(currentGuildId)) {
+					removeGuildMember(removed.user_id);
 				}
 				break;
 			}
@@ -487,7 +518,6 @@ export function connectGateway(token: string) {
 			case 'CHANNEL_WIDGET_CREATE':
 			case 'CHANNEL_WIDGET_UPDATE':
 				upsertChannelWidget(data as ChannelWidget);
-				break;
 				break;
 			case 'CHANNEL_WIDGET_DELETE': {
 				const widgetData = data as { channel_id?: string; widget_id?: string; id?: string };
@@ -574,31 +604,52 @@ export function connectGateway(token: string) {
 			case 'GAME_SESSION_CREATE':
 			case 'GAME_PLAYER_JOIN':
 			case 'GAME_MOVE':
-				// Activity/game events — handled by activity-specific components
-				// via their own event subscriptions when mounted.
+				invalidateChannelActivity((data as { channel_id?: string }).channel_id);
 				break;
 
 			// --- Soundboard events ---
 			case 'SOUNDBOARD_PLAY':
-				// Soundboard play — handled by voice panel component.
+				handleSoundboardPlay(data as {
+					channel_id: string;
+					file_url: string;
+					volume?: number;
+					user_id?: string;
+				}, get(currentUser)?.id);
 				break;
 
 			// --- Voice broadcast events ---
 			case 'VOICE_BROADCAST_START':
+				handleVoiceBroadcastStart(data as {
+					broadcast_id?: string;
+					id?: string;
+					guild_id: string;
+					channel_id: string;
+					broadcaster_id: string;
+					title?: string;
+					started_at?: string;
+					listener_count?: number;
+				});
+				break;
 			case 'VOICE_BROADCAST_END':
-				// Voice broadcast lifecycle — handled by voice components.
+				handleVoiceBroadcastEnd(data as { channel_id: string });
 				break;
 
 			// --- Screen share events ---
 			case 'SCREEN_SHARE_START':
+				handleScreenShareEvent(data as { channel_id: string; user_id: string }, true);
+				break;
 			case 'SCREEN_SHARE_END':
-				// Screen share lifecycle — handled by voice components.
+				handleScreenShareEvent(data as { channel_id: string; user_id: string }, false);
 				break;
 
 			// --- Location share events ---
+			case 'LOCATION_SHARE_CREATE':
 			case 'LOCATION_SHARE_UPDATE':
+				handleLocationShareChanged(data as { id?: string; channel_id?: string });
+				break;
+			case 'LOCATION_SHARE_STOP':
 			case 'LOCATION_SHARE_END':
-				// Location share — handled by LocationShare component.
+				removeLocationShare(data as { id?: string; channel_id?: string });
 				break;
 
 			// --- Bot presence ---
@@ -610,7 +661,9 @@ export function connectGateway(token: string) {
 
 			// --- Component interaction (for bots) ---
 			case 'COMPONENT_INTERACTION':
-				// Bot component interaction — handled by message components.
+				// Bot component interactions are published for bot workers. The
+				// initiating client already receives the HTTP response, and any
+				// visible message changes arrive through MESSAGE_UPDATE.
 				break;
 
 			// --- Announcement events (instance-wide) ---

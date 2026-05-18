@@ -1,30 +1,34 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { BotToken, SlashCommand, User } from '$lib/types';
 
 	let myBots = $state<User[]>([]);
-	let loadingBots = $state(false);
 	let newBotName = $state('');
 	let newBotDescription = $state('');
-	let creatingBot = $state(false);
 	let botError = $state('');
 	let botSuccess = $state('');
 	let expandedBotId = $state<string | null>(null);
 	let botTokens = $state<Record<string, BotToken[]>>({});
 	let botCommands = $state<Record<string, SlashCommand[]>>({});
-	let loadingBotTokens = $state<string | null>(null);
-	let loadingBotCommands = $state<string | null>(null);
+	let tokenLoadTargetId = $state<string | null>(null);
+	let commandLoadTargetId = $state<string | null>(null);
 	let newTokenName = $state('');
 	let createdTokenRaw = $state<string | null>(null);
-	let creatingToken = $state(false);
 	let editingBotId = $state<string | null>(null);
 	let editBotName = $state('');
 	let editBotDescription = $state('');
-	let savingBot = $state(false);
 	let newCommandName = $state('');
 	let newCommandDescription = $state('');
-	let creatingCommand = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let createBotOp = $state(createAsyncOp());
+	let tokenLoadOp = $state(createAsyncOp());
+	let commandLoadOp = $state(createAsyncOp());
+	let createTokenOp = $state(createAsyncOp());
+	let saveBotOp = $state(createAsyncOp());
+	let createCommandOp = $state(createAsyncOp());
 	let loaded = false;
 
 	$effect(() => {
@@ -35,35 +39,31 @@
 	});
 
 	async function loadBots() {
-		loadingBots = true;
 		botError = '';
-		try {
-			myBots = await api.getMyBots();
-		} catch (err: any) {
-			botError = err.message || 'Failed to load bots';
+		const bots = await loadOp.run(() => api.getMyBots(), msg => {
+			botError = msg;
+		}, 'Failed to load bots');
+		if (bots) {
+			myBots = bots;
+		} else {
 			myBots = [];
-		} finally {
-			loadingBots = false;
 		}
 	}
 
 	async function handleCreateBot() {
 		if (!newBotName.trim()) return;
-		creatingBot = true;
 		botError = '';
 		botSuccess = '';
-		try {
+		await createBotOp.run(async () => {
 			const bot = await api.createBot(newBotName.trim(), newBotDescription.trim() || undefined);
 			myBots = [bot, ...myBots];
 			newBotName = '';
 			newBotDescription = '';
 			botSuccess = `Bot "${bot.username}" created!`;
 			setTimeout(() => (botSuccess = ''), 3000);
-		} catch (err: any) {
-			botError = err.message || 'Failed to create bot';
-		} finally {
-			creatingBot = false;
-		}
+		}, msg => {
+			botError = msg;
+		}, 'Failed to create bot');
 	}
 
 	async function handleDeleteBot(botId: string) {
@@ -74,8 +74,8 @@
 			if (expandedBotId === botId) expandedBotId = null;
 			botSuccess = 'Bot deleted.';
 			setTimeout(() => (botSuccess = ''), 3000);
-		} catch (err: any) {
-			botError = err.message || 'Failed to delete bot';
+		} catch (err: unknown) {
+			botError = getErrorMessage(err, 'Failed to delete bot');
 		}
 	}
 
@@ -93,10 +93,10 @@
 
 	async function handleSaveBot() {
 		if (!editingBotId || !editBotName.trim()) return;
-		savingBot = true;
+		const botId = editingBotId;
 		botError = '';
-		try {
-			const updated = await api.updateBot(editingBotId, {
+		await saveBotOp.run(async () => {
+			const updated = await api.updateBot(botId, {
 				name: editBotName.trim(),
 				description: editBotDescription.trim() || undefined
 			});
@@ -104,11 +104,9 @@
 			editingBotId = null;
 			botSuccess = 'Bot updated.';
 			setTimeout(() => (botSuccess = ''), 3000);
-		} catch (err: any) {
-			botError = err.message || 'Failed to update bot';
-		} finally {
-			savingBot = false;
-		}
+		}, msg => {
+			botError = msg;
+		}, 'Failed to update bot');
 	}
 
 	async function toggleBotExpand(botId: string) {
@@ -120,58 +118,52 @@
 		expandedBotId = botId;
 		createdTokenRaw = null;
 		if (!botTokens[botId]) {
-			loadingBotTokens = botId;
-			try {
-				const tokens = await api.getBotTokens(botId);
+			tokenLoadTargetId = botId;
+			const tokens = await tokenLoadOp.run(() => api.getBotTokens(botId));
+			if (tokens) {
 				botTokens = { ...botTokens, [botId]: tokens };
-			} catch {
+			} else {
 				botTokens = { ...botTokens, [botId]: [] };
-			} finally {
-				loadingBotTokens = null;
 			}
+			tokenLoadTargetId = null;
 		}
 		if (!botCommands[botId]) {
-			loadingBotCommands = botId;
-			try {
-				const cmds = await api.getBotCommands(botId);
+			commandLoadTargetId = botId;
+			const cmds = await commandLoadOp.run(() => api.getBotCommands(botId));
+			if (cmds) {
 				botCommands = { ...botCommands, [botId]: cmds };
-			} catch {
+			} else {
 				botCommands = { ...botCommands, [botId]: [] };
-			} finally {
-				loadingBotCommands = null;
 			}
+			commandLoadTargetId = null;
 		}
 	}
 
 	async function handleCreateToken(botId: string) {
-		creatingToken = true;
 		botError = '';
-		try {
+		await createTokenOp.run(async () => {
 			const token = await api.createBotToken(botId, newTokenName.trim() || undefined);
 			createdTokenRaw = token.token ?? null;
 			botTokens = { ...botTokens, [botId]: [token, ...(botTokens[botId] ?? [])] };
 			newTokenName = '';
-		} catch (err: any) {
-			botError = err.message || 'Failed to create token';
-		} finally {
-			creatingToken = false;
-		}
+		}, msg => {
+			botError = msg;
+		}, 'Failed to create token');
 	}
 
 	async function handleDeleteToken(botId: string, tokenId: string) {
 		try {
 			await api.deleteBotToken(botId, tokenId);
 			botTokens = { ...botTokens, [botId]: (botTokens[botId] ?? []).filter((token) => token.id !== tokenId) };
-		} catch (err: any) {
-			botError = err.message || 'Failed to delete token';
+		} catch (err: unknown) {
+			botError = getErrorMessage(err, 'Failed to delete token');
 		}
 	}
 
 	async function handleRegisterCommand(botId: string) {
 		if (!newCommandName.trim() || !newCommandDescription.trim()) return;
-		creatingCommand = true;
 		botError = '';
-		try {
+		await createCommandOp.run(async () => {
 			const cmd = await api.registerBotCommand(botId, {
 				name: newCommandName.trim().toLowerCase(),
 				description: newCommandDescription.trim()
@@ -181,19 +173,17 @@
 			newCommandDescription = '';
 			botSuccess = `Command "/${cmd.name}" registered.`;
 			setTimeout(() => (botSuccess = ''), 3000);
-		} catch (err: any) {
-			botError = err.message || 'Failed to register command';
-		} finally {
-			creatingCommand = false;
-		}
+		}, msg => {
+			botError = msg;
+		}, 'Failed to register command');
 	}
 
 	async function handleDeleteCommand(botId: string, commandId: string) {
 		try {
 			await api.deleteBotCommand(botId, commandId);
 			botCommands = { ...botCommands, [botId]: (botCommands[botId] ?? []).filter((cmd) => cmd.id !== commandId) };
-		} catch (err: any) {
-			botError = err.message || 'Failed to delete command';
+		} catch (err: unknown) {
+			botError = getErrorMessage(err, 'Failed to delete command');
 		}
 	}
 
@@ -240,12 +230,12 @@
 			bind:value={newBotDescription}
 		/>
 	</div>
-	<button class="btn-primary" onclick={handleCreateBot} disabled={creatingBot || !newBotName.trim()}>
-		{creatingBot ? 'Creating...' : 'Create Bot'}
+	<button class="btn-primary" onclick={handleCreateBot} disabled={createBotOp.loading || !newBotName.trim()}>
+		{createBotOp.loading ? 'Creating...' : 'Create Bot'}
 	</button>
 </div>
 
-{#if loadingBots}
+{#if loadOp.loading}
 	<div class="flex items-center gap-2 py-4">
 		<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		<span class="text-sm text-text-muted">Loading bots...</span>
@@ -277,8 +267,8 @@
 										placeholder="Description"
 										maxlength="128"
 									/>
-									<button class="text-xs text-brand-400 hover:text-brand-300" onclick={handleSaveBot} disabled={savingBot}>
-										{savingBot ? 'Saving...' : 'Save'}
+									<button class="text-xs text-brand-400 hover:text-brand-300" onclick={handleSaveBot} disabled={saveBotOp.loading}>
+										{saveBotOp.loading ? 'Saving...' : 'Save'}
 									</button>
 									<button class="text-xs text-text-muted hover:text-text-primary" onclick={cancelEditBot}>
 										Cancel
@@ -333,12 +323,12 @@
 									maxlength="64"
 									bind:value={newTokenName}
 								/>
-								<button class="btn-primary text-xs" onclick={() => handleCreateToken(bot.id)} disabled={creatingToken}>
-									{creatingToken ? 'Generating...' : 'Generate Token'}
+								<button class="btn-primary text-xs" onclick={() => handleCreateToken(bot.id)} disabled={createTokenOp.loading}>
+									{createTokenOp.loading ? 'Generating...' : 'Generate Token'}
 								</button>
 							</div>
 
-							{#if loadingBotTokens === bot.id}
+							{#if tokenLoadTargetId === bot.id && tokenLoadOp.loading}
 								<p class="text-xs text-text-muted">Loading tokens...</p>
 							{:else if (botTokens[bot.id] ?? []).length === 0}
 								<p class="text-xs text-text-muted">No tokens yet. Generate one to authenticate your bot.</p>
@@ -393,13 +383,13 @@
 								<button
 									class="btn-primary text-xs"
 									onclick={() => handleRegisterCommand(bot.id)}
-									disabled={creatingCommand || !newCommandName.trim() || !newCommandDescription.trim()}
+									disabled={createCommandOp.loading || !newCommandName.trim() || !newCommandDescription.trim()}
 								>
-									{creatingCommand ? 'Adding...' : 'Add'}
+									{createCommandOp.loading ? 'Adding...' : 'Add'}
 								</button>
 							</div>
 
-							{#if loadingBotCommands === bot.id}
+							{#if commandLoadTargetId === bot.id && commandLoadOp.loading}
 								<p class="text-xs text-text-muted">Loading commands...</p>
 							{:else if (botCommands[bot.id] ?? []).length === 0}
 								<p class="text-xs text-text-muted">No slash commands registered.</p>

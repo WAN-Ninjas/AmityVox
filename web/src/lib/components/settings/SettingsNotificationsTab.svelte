@@ -19,13 +19,14 @@
 	} from '$lib/stores/settings';
 	import { SOUND_PRESETS, playNotificationSound } from '$lib/utils/sounds';
 	import { ALL_NOTIFICATION_TYPES, NOTIFICATION_TYPE_LABELS, NOTIFICATION_CATEGORIES } from '$lib/utils/notificationHelpers';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { NotificationTypePreference, ServerNotificationType } from '$lib/types';
 
 	let desktopNotifications = $state(true);
 	let notificationSounds = $state(true);
 	let soundPreset = $state('default');
 	let soundVolume = $state(80);
-	let notifLoading = $state(false);
 	let notifSuccess = $state('');
 	let notifError = $state('');
 	let dndEnabled = $state(false);
@@ -33,14 +34,15 @@
 	let dndStartMinute = $state(0);
 	let dndEndHour = $state(7);
 	let dndEndMinute = $state(0);
-	let dndSaving = $state(false);
 	let dndSuccess = $state('');
 	let typePrefs = $state<Map<string, NotificationTypePreference>>(new Map());
-	let typePrefsLoading = $state(false);
 	let typePrefsLoaded = $state(false);
 	let typePrefsLoadFailed = $state(false);
-	let typePrefsSaving = $state(false);
 	let typePrefsSuccess = $state('');
+	let notifOp = $state(createAsyncOp());
+	let dndOp = $state(createAsyncOp());
+	let typePrefsOp = $state(createAsyncOp());
+	let typePrefsSaveOp = $state(createAsyncOp());
 	let loaded = false;
 
 	$effect(() => {
@@ -68,23 +70,19 @@
 	}
 
 	async function loadTypePrefs() {
-		if (typePrefsLoaded || typePrefsLoading) return;
-		typePrefsLoading = true;
+		if (typePrefsLoaded || typePrefsOp.loading) return;
 		typePrefsLoadFailed = false;
 		notifError = '';
-		try {
+		await typePrefsOp.run(async () => {
 			const prefs = await api.getNotificationTypePreferences();
 			const map = new Map<string, NotificationTypePreference>();
 			for (const pref of prefs) map.set(pref.type, pref);
 			typePrefs = map;
 			typePrefsLoaded = true;
-		} catch (err) {
-			console.warn('Failed to load notification type preferences:', err);
-			notifError = 'Failed to load notification type preferences. Please try again.';
+		}, msg => {
+			notifError = msg;
 			typePrefsLoadFailed = true;
-		} finally {
-			typePrefsLoading = false;
-		}
+		}, 'Failed to load notification type preferences. Please try again.');
 	}
 
 	async function saveTypePrefs() {
@@ -92,19 +90,16 @@
 			notifError = 'Type preferences have not loaded yet.';
 			return;
 		}
-		typePrefsSaving = true;
 		typePrefsSuccess = '';
 		notifError = '';
-		try {
+		await typePrefsSaveOp.run(async () => {
 			const prefs = ALL_NOTIFICATION_TYPES.map((type) => getTypePref(type));
 			await api.updateNotificationTypePreferences(prefs);
 			typePrefsSuccess = 'Notification type preferences saved!';
 			setTimeout(() => (typePrefsSuccess = ''), 3000);
-		} catch (err: any) {
-			notifError = err.message || 'Failed to save type preferences';
-		} finally {
-			typePrefsSaving = false;
-		}
+		}, msg => {
+			notifError = msg;
+		}, 'Failed to save type preferences');
 	}
 
 	async function loadUserSettings() {
@@ -120,10 +115,9 @@
 	}
 
 	async function saveNotifications() {
-		notifLoading = true;
 		notifSuccess = '';
 		notifError = '';
-		try {
+		await notifOp.run(async () => {
 			await api.updateUserSettings({
 				desktop_notifications: desktopNotifications,
 				notification_sounds: notificationSounds,
@@ -144,18 +138,15 @@
 			if (desktopNotifications && 'Notification' in window && Notification.permission === 'default') {
 				await Notification.requestPermission();
 			}
-		} catch (err: any) {
-			notifError = err.message || 'Failed to save notification preferences';
-		} finally {
-			notifLoading = false;
-		}
+		}, msg => {
+			notifError = msg;
+		}, 'Failed to save notification preferences');
 	}
 
 	async function saveDnd() {
-		dndSaving = true;
 		dndSuccess = '';
 		notifError = '';
-		try {
+		await dndOp.run(async () => {
 			const schedule = {
 				enabled: dndEnabled,
 				startHour: dndStartHour,
@@ -168,11 +159,9 @@
 			await syncSettingsToApi();
 			dndSuccess = 'Do Not Disturb schedule saved!';
 			setTimeout(() => (dndSuccess = ''), 3000);
-		} catch (err: any) {
-			notifError = err.message || 'Failed to save DND schedule';
-		} finally {
-			dndSaving = false;
-		}
+		}, msg => {
+			notifError = msg;
+		}, 'Failed to save DND schedule');
 	}
 
 	function toggleManualDnd() {
@@ -263,8 +252,8 @@
 					{/if}
 				</div>
 
-				<button class="btn-primary" onclick={saveNotifications} disabled={notifLoading}>
-					{notifLoading ? 'Saving...' : 'Save Notification Preferences'}
+				<button class="btn-primary" onclick={saveNotifications} disabled={notifOp.loading}>
+					{notifOp.loading ? 'Saving...' : 'Save Notification Preferences'}
 				</button>
 
 				<!-- ==================== PER-TYPE PREFERENCES ==================== -->
@@ -280,7 +269,7 @@
 						<div class="mb-4 rounded bg-green-500/10 px-3 py-2 text-sm text-green-400">{typePrefsSuccess}</div>
 					{/if}
 
-					{#if typePrefsLoading}
+					{#if typePrefsOp.loading}
 						<div class="flex items-center justify-center py-8">
 							<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 						</div>
@@ -337,8 +326,8 @@
 							</div>
 						{/each}
 
-						<button class="btn-primary" onclick={saveTypePrefs} disabled={typePrefsSaving || !typePrefsLoaded}>
-							{typePrefsSaving ? 'Saving...' : 'Save Type Preferences'}
+						<button class="btn-primary" onclick={saveTypePrefs} disabled={typePrefsSaveOp.loading || !typePrefsLoaded}>
+							{typePrefsSaveOp.loading ? 'Saving...' : 'Save Type Preferences'}
 						</button>
 					{/if}
 				</div>
@@ -469,8 +458,8 @@
 							</div>
 						{/if}
 
-						<button class="btn-primary mt-4" onclick={saveDnd} disabled={dndSaving}>
-							{dndSaving ? 'Saving...' : 'Save DND Schedule'}
+						<button class="btn-primary mt-4" onclick={saveDnd} disabled={dndOp.loading}>
+							{dndOp.loading ? 'Saving...' : 'Save DND Schedule'}
 						</button>
 					</div>
 				</div>

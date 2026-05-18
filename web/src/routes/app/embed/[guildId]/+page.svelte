@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { avatarUrl as buildAvatarUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface WidgetData {
 		id: string;
@@ -22,8 +24,9 @@
 
 	let guildId = $derived($page.params.guildId);
 	let widget = $state<WidgetData | null>(null);
-	let loading = $state(true);
 	let error = $state('');
+	let loadedGuildId = $state<string | null>(null);
+	let loadOp = $state(createAsyncOp());
 
 	const statusColors: Record<string, string> = {
 		online: 'bg-green-500',
@@ -32,25 +35,23 @@
 	};
 
 	$effect(() => {
-		if (guildId) loadWidget(guildId);
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) loadWidget(guildId);
 	});
 
 	async function loadWidget(id: string) {
-		loading = true;
 		error = '';
-		try {
+		await loadOp.run(async () => {
 			const resp = await fetch(`/api/v1/guilds/${id}/widget.json`);
 			if (!resp.ok) {
 				const err = await resp.json();
-				throw new Error(err?.error?.message || 'Widget not available');
+				throw new Error(getErrorMessage(err, 'Widget not available'));
 			}
 			const data = await resp.json();
 			widget = data.data;
-		} catch (err: any) {
-			error = err.message || 'Failed to load widget';
-		} finally {
-			loading = false;
-		}
+			loadedGuildId = id;
+		}, msg => {
+			error = msg;
+		}, 'Failed to load widget');
 	}
 
 	function getAvatarUrl(avatarId: string | null): string {
@@ -67,7 +68,7 @@
 </svelte:head>
 
 <div class="flex min-h-screen items-center justify-center bg-transparent p-4">
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex flex-col items-center gap-3">
 			<span class="inline-block h-8 w-8 animate-spin rounded-full border-3 border-brand-500 border-t-transparent"></span>
 			<p class="text-sm text-text-muted">Loading widget...</p>

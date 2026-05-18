@@ -2,7 +2,9 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
+	import { activityInvalidationsByChannel } from '$lib/stores/activityEvents';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface ActivitySession {
 		id: string;
@@ -60,6 +62,7 @@
 	let selectedCategory = $state('all');
 	let joinOp = $state(createAsyncOp());
 	let iframeEl = $state<HTMLIFrameElement | null>(null);
+	let lastInvalidation = $state(0);
 
 	const categories = [
 		{ id: 'all', label: 'All' },
@@ -142,8 +145,8 @@
 			session = null;
 			participants = [];
 			showBrowser = true;
-		} catch (err: any) {
-			error = err.message || 'Failed to end session';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to end session');
 		}
 	}
 
@@ -169,6 +172,14 @@
 
 	$effect(() => {
 		if (channelId) {
+			loadActiveSession();
+		}
+	});
+
+	$effect(() => {
+		const invalidation = $activityInvalidationsByChannel.get(channelId) ?? 0;
+		if (channelId && invalidation > lastInvalidation) {
+			lastInvalidation = invalidation;
 			loadActiveSession();
 		}
 	});

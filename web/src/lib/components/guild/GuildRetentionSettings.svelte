@@ -3,12 +3,15 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { channels } from '$lib/stores/channels';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let { guildId }: { guildId: string } = $props();
 
 	let policies = $state<RetentionPolicy[]>([]);
-	let loading = $state(true);
-	let creating = $state(false);
+	let loadedGuildId = $state<string | null>(null);
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
 
 	// Create form state.
 	let newScope = $state<'guild' | 'channel'>('guild');
@@ -25,18 +28,16 @@
 	);
 
 	$effect(() => {
-		loadPolicies();
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
+			loadPolicies();
+		}
 	});
 
 	async function loadPolicies() {
-		loading = true;
-		try {
+		await loadOp.run(async () => {
 			policies = await api.getGuildRetentionPolicies(guildId);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load retention policies', 'error');
-		} finally {
-			loading = false;
-		}
+			loadedGuildId = guildId;
+		}, (message) => addToast(message, 'error'), 'Failed to load retention policies');
 	}
 
 	async function handleCreate() {
@@ -44,8 +45,7 @@
 			addToast('Retention period must be at least 1 day', 'warning');
 			return;
 		}
-		creating = true;
-		try {
+		await createOp.run(async () => {
 			const policy = await api.createGuildRetentionPolicy(guildId, {
 				channel_id: newScope === 'channel' ? newChannelId : undefined,
 				max_age_days: newMaxAge,
@@ -55,11 +55,7 @@
 			policies = [policy, ...policies];
 			addToast('Retention policy created', 'success');
 			resetForm();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create policy', 'error');
-		} finally {
-			creating = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to create policy');
 	}
 
 	async function handleToggle(policy: RetentionPolicy) {
@@ -68,8 +64,8 @@
 				enabled: !policy.enabled
 			});
 			policies = policies.map((p) => (p.id === policy.id ? updated : p));
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update policy', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update policy'), 'error');
 		}
 	}
 
@@ -78,8 +74,8 @@
 			await api.deleteGuildRetentionPolicy(guildId, policyId);
 			policies = policies.filter((p) => p.id !== policyId);
 			addToast('Retention policy deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete policy', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete policy'), 'error');
 		}
 	}
 
@@ -171,15 +167,15 @@
 		<button
 			class="rounded-md bg-brand-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
 			onclick={handleCreate}
-			disabled={creating || (newScope === 'channel' && !newChannelId)}
+			disabled={createOp.loading || (newScope === 'channel' && !newChannelId)}
 		>
-			{creating ? 'Creating...' : 'Create Policy'}
+			{createOp.loading ? 'Creating...' : 'Create Policy'}
 		</button>
 	</div>
 </div>
 
 <!-- Policy list -->
-{#if loading}
+{#if loadOp.loading}
 	<div class="flex items-center justify-center py-8">
 		<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 	</div>

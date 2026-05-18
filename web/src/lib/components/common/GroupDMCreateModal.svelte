@@ -6,6 +6,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import Avatar from './Avatar.svelte';
 	import Modal from './Modal.svelte';
 
@@ -69,8 +70,8 @@
 			groupName = '';
 			search = '';
 			goto(`/app/dms/${channel.id}`);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create group DM', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create group DM'), 'error');
 		} finally {
 			creating = false;
 		}

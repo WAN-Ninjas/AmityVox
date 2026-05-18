@@ -24,6 +24,7 @@
 	import { isGuildMuted, muteGuild, unmuteGuild } from '$lib/stores/muting';
 	import { channelGuildMap } from '$lib/stores/unreads';
 	import InviteModal from '$components/guild/InviteModal.svelte';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let showNotificationPopover = $state(false);
 	let showInviteForGuild = $state<string | null>(null);
@@ -85,9 +86,9 @@
 			const positions = reordered.map((g, i) => ({ guild_id: g.id, position: i }));
 			try {
 				await api.reorderGuilds(positions);
-			} catch (err: any) {
+			} catch (err: unknown) {
 				guilds.setAll(prevOrder.map(g => [g.id, g]));
-				addToast(err.message || 'Failed to reorder servers', 'error');
+				addToast(getErrorMessage(err, 'Failed to reorder servers'), 'error');
 			}
 		} finally {
 			reorderingGuilds = false;
@@ -153,8 +154,8 @@
 				goto('/app');
 			}
 			addToast('Left server', 'info');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to leave server', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to leave server'), 'error');
 		}
 		closeGuildContextMenu();
 	}

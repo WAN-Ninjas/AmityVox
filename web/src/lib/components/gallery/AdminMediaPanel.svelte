@@ -2,6 +2,7 @@
 	import type { Attachment } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import GalleryItem from './GalleryItem.svelte';
 	import MediaPreviewModal from './MediaPreviewModal.svelte';
 
@@ -46,8 +47,8 @@
 			selectedItem = null;
 			showPreview = false;
 			addToast('File deleted by admin', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete'), 'error');
 		}
 	}
 </script>

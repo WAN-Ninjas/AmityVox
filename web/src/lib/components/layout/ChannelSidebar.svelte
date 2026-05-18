@@ -5,12 +5,8 @@
 	import { currentUser } from '$lib/stores/auth';
 	import { guildEventsByGuild, loadGuildEvents } from '$lib/stores/guildEvents';
 	import Avatar from '$components/common/Avatar.svelte';
-	import Modal from '$components/common/Modal.svelte';
 	import { presenceMap } from '$lib/stores/presence';
 	import { dmList, removeDMChannel } from '$lib/stores/dms';
-	import ContextMenu from '$components/common/ContextMenu.svelte';
-	import ContextMenuItem from '$components/common/ContextMenuItem.svelte';
-	import ContextMenuDivider from '$components/common/ContextMenuDivider.svelte';
 	import { unreadCounts, mentionCounts, markAllRead, totalUnreads } from '$lib/stores/unreads';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
@@ -19,19 +15,25 @@
 	import { goto } from '$app/navigation';
 	import { onMount, untrack } from 'svelte';
 	import InviteModal from '$components/guild/InviteModal.svelte';
+	import ChannelContextMenu from '$components/layout/ChannelContextMenu.svelte';
 	import ChannelGroups from '$components/layout/ChannelGroups.svelte';
-	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
 	import { e2ee, unlockedChannels } from '$lib/encryption/e2eeManager';
 	import VoiceConnectionBar from '$components/layout/VoiceConnectionBar.svelte';
 	import { getDMDisplayName, getDMRecipient } from '$lib/utils/dm';
 	import { avatarUrl } from '$lib/utils/avatar';
 	import { canManageChannels, canManageGuild, canManageThreads } from '$lib/stores/permissions';
-	import { channelMutePrefs, guildMutePrefs, isChannelMuted, isGuildMuted, muteChannel, unmuteChannel, muteGuild, unmuteGuild } from '$lib/stores/muting';
-	import StatusPicker from '$components/common/StatusPicker.svelte';
+	import { isChannelMuted } from '$lib/stores/muting';
 	import GroupDMCreateModal from '$components/common/GroupDMCreateModal.svelte';
 	import ProfileModal from '$components/common/ProfileModal.svelte';
+	import CreateChannelModal from '$components/layout/CreateChannelModal.svelte';
+	import DMContextMenu from '$components/layout/DMContextMenu.svelte';
+	import EditChannelModal from '$components/layout/EditChannelModal.svelte';
+	import GuildContextMenu from '$components/layout/GuildContextMenu.svelte';
+	import ReportIssueModal from '$components/layout/ReportIssueModal.svelte';
+	import ThreadContextMenu from '$components/layout/ThreadContextMenu.svelte';
+	import UserPanel from '$components/layout/UserPanel.svelte';
 	import type { Channel } from '$lib/types';
-	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import DragHandle from '$components/common/DragHandle.svelte';
 	import FederationBadge from '$components/common/FederationBadge.svelte';
 	import { DragController, calculateInsertionIndex } from '$lib/utils/dragDrop';
@@ -46,33 +48,11 @@
 
 	let { width = 224 }: Props = $props();
 
-	// Status picker
-	let showStatusPicker = $state(false);
-
 	// Group DM creation modal
 	let showGroupDMCreate = $state(false);
 
 	// Report issue modal
 	let showReportIssue = $state(false);
-	let reportIssueTitle = $state('');
-	let reportIssueDescription = $state('');
-	let reportIssueCategory = $state('general');
-	let reportIssueOp = $state(createAsyncOp());
-
-	async function submitReportIssue() {
-		if (!reportIssueTitle.trim() || !reportIssueDescription.trim()) return;
-		await reportIssueOp.run(
-			() => api.createIssue(reportIssueTitle.trim(), reportIssueDescription.trim(), reportIssueCategory),
-			msg => addToast(msg, 'error')
-		);
-		if (!reportIssueOp.error) {
-			addToast('Issue reported successfully', 'success');
-			showReportIssue = false;
-			reportIssueTitle = '';
-			reportIssueDescription = '';
-			reportIssueCategory = 'general';
-		}
-	}
 
 	const upcomingEvents = $derived(
 		$currentGuildId ? ($guildEventsByGuild.get($currentGuildId) ?? []).slice(0, 3) : []
@@ -136,8 +116,6 @@
 	}
 
 	// Move to Group submenu state
-	let showMoveToGroupSubmenu = $state(false);
-
 	async function addChannelToGroup(groupId: string, channelId: string, insertIndex?: number) {
 		const guildId = $currentGuildId;
 		if (!guildId) return;
@@ -151,8 +129,8 @@
 			await api.setChannelGroupChannels(guildId, groupId, existing);
 			addToast('Channel moved to group', 'success');
 			await reloadChannelGroups?.();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to move channel', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to move channel'), 'error');
 		}
 		closeContextMenu();
 	}
@@ -167,8 +145,8 @@
 			addToast('Channel removed from group', 'success');
 			// Reload ChannelGroups so its internal state is in sync.
 			await reloadChannelGroups?.();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to remove channel from group', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to remove channel from group'), 'error');
 		}
 		closeContextMenu();
 	}
@@ -182,8 +160,8 @@
 		try {
 			const updated = await api.updateChannel(channelId, { archived: archive });
 			updateChannelStore(updated);
-		} catch (err: any) {
-			addToast(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} channel`, 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, `Failed to ${archive ? 'archive' : 'unarchive'} channel`), 'error');
 		}
 	}
 
@@ -232,25 +210,10 @@
 
 	// Create channel modal
 	let showCreateChannel = $state(false);
-	let newChannelName = $state('');
-	let newChannelType = $state<'text' | 'voice' | 'forum' | 'gallery'>('text');
-	let createChannelOp = $state(createAsyncOp());
-	let channelError = $state('');
 
 	// Edit channel modal
 	let showEditChannel = $state(false);
-	let editChannelId = $state('');
-	let editChannelName = $state('');
-	let editChannelTopic = $state('');
-	let editChannelNsfw = $state(false);
-	let editChannelEncrypted = $state(false);
-	let editChannelType = $state<'text' | 'voice'>('text');
-	let editChannelUserLimit = $state(0);
-	let editChannelBitrate = $state(64000);
-	let editingChannel = $state(false);
-
-	const userLimitOptions = [0, 5, 10, 15, 20, 25, 50, 99];
-	const bitrateOptions = [32000, 64000, 96000, 128000, 192000, 256000, 384000];
+	let editChannel = $state<Channel | null>(null);
 
 	// Invite modal
 	let showInvite = $state(false);
@@ -261,25 +224,11 @@
 	// Thread context menu
 	let threadContextMenu = $state<{ x: number; y: number; thread: Channel } | null>(null);
 
-	// Show Threads submenu
-	let showThreadFilterSubmenu = $state(false);
-
 	// DM context menu
 	let dmContextMenu = $state<{ x: number; y: number; channel: Channel } | null>(null);
 
 	// Guild context menu
 	let guildContextMenu = $state<{ x: number; y: number } | null>(null);
-
-	// Mute duration submenu state
-	let showMuteSubmenu = $state<'channel' | 'dm' | 'guild' | null>(null);
-
-	const muteDurations = [
-		{ label: '15 Minutes', ms: 15 * 60 * 1000 },
-		{ label: '1 Hour', ms: 60 * 60 * 1000 },
-		{ label: '8 Hours', ms: 8 * 60 * 60 * 1000 },
-		{ label: '24 Hours', ms: 24 * 60 * 60 * 1000 },
-		{ label: 'Until I turn it back on', ms: 0 }
-	];
 
 	// Thread activity filter state — triggers reactivity when changed.
 	let threadFilterVersion = $state(0);
@@ -312,15 +261,14 @@
 	function handleSetThreadFilter(channelId: string, minutes: number | null) {
 		setThreadActivityFilter(channelId, minutes);
 		threadFilterVersion++;
-		showThreadFilterSubmenu = false;
 	}
 
 	async function handleHideThread(thread: Channel) {
 		if (!thread.parent_channel_id) return;
 		try {
 			await hideThreadStore(thread.parent_channel_id, thread.id);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to hide thread', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to hide thread'), 'error');
 		} finally {
 			threadContextMenu = null;
 		}
@@ -330,8 +278,8 @@
 		try {
 			const updated = await api.updateChannel(thread.id, { archived: archive });
 			updateChannelStore(updated);
-		} catch (err: any) {
-			addToast(err.message || `Failed to ${archive ? 'archive' : 'unarchive'} thread`, 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, `Failed to ${archive ? 'archive' : 'unarchive'} thread`), 'error');
 		}
 		threadContextMenu = null;
 	}
@@ -342,8 +290,8 @@
 			await api.deleteChannel(thread.id);
 			removeChannelStore(thread.id);
 			addToast('Thread deleted', 'info');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete thread', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete thread'), 'error');
 		}
 		threadContextMenu = null;
 	}
@@ -367,55 +315,13 @@
 		}
 	}
 
-	async function handleCreateChannel() {
-		const guildId = $currentGuildId;
-		if (!guildId || !newChannelName.trim()) return;
-		channelError = '';
-		const channel = await createChannelOp.run(
-			() => api.createChannel(guildId, newChannelName.trim(), newChannelType)
-		);
-		if (createChannelOp.error) {
-			channelError = createChannelOp.error;
-		} else if (channel) {
-			updateChannelStore(channel);
-			showCreateChannel = false;
-			newChannelName = '';
-			newChannelType = 'text';
-		}
-	}
-
-	async function handleEditChannel() {
-		if (!editChannelId || !editChannelName.trim()) return;
-		editingChannel = true;
-		channelError = '';
-		try {
-			const updateData: Record<string, unknown> = {
-				name: editChannelName.trim(),
-				topic: editChannelTopic || undefined,
-				nsfw: editChannelNsfw
-			};
-			if (editChannelType === 'voice') {
-				updateData.user_limit = editChannelUserLimit;
-				updateData.bitrate = editChannelBitrate;
-			}
-			// Encryption is now managed via EncryptionPanel, not here
-			const updated = await api.updateChannel(editChannelId, updateData as any);
-			updateChannelStore(updated);
-			showEditChannel = false;
-		} catch (err: any) {
-			channelError = err.message || 'Failed to update channel';
-		} finally {
-			editingChannel = false;
-		}
-	}
-
 	async function handleDeleteChannel(channelId: string) {
 		if (!(await confirmAction({ title: 'Delete Channel', message: 'Are you sure you want to delete this channel?', confirmLabel: 'Delete Channel' }))) return;
 		try {
 			await api.deleteChannel(channelId);
 			removeChannelStore(channelId);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete channel', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete channel'), 'error');
 		}
 	}
 
@@ -424,7 +330,6 @@
 		channelContextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived };
 		dmContextMenu = null;
 		threadContextMenu = null;
-		showThreadFilterSubmenu = false;
 	}
 
 	function openThreadContextMenu(e: MouseEvent, thread: Channel) {
@@ -438,9 +343,6 @@
 		channelContextMenu = null;
 		threadContextMenu = null;
 		guildContextMenu = null;
-		showThreadFilterSubmenu = false;
-		showMuteSubmenu = null;
-		showMoveToGroupSubmenu = false;
 	}
 
 	function markDMRead(channelId: string) {
@@ -454,8 +356,8 @@
 			const rel = await api.addFriend(recipient.id);
 			addOrUpdateRelationship(rel);
 			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to send friend request', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to send friend request'), 'error');
 		}
 	}
 
@@ -473,27 +375,14 @@
 	}
 
 	function openEditModal(channelId: string, channelName: string) {
-		editChannelId = channelId;
-		editChannelName = channelName;
-		editChannelTopic = '';
-		channelError = '';
-		// Look up current channel data to pre-populate fields
 		const allChannels = [...$textChannels, ...$voiceChannels];
-		const ch = allChannels.find(c => c.id === channelId);
-		editChannelNsfw = ch?.nsfw ?? false;
-		editChannelEncrypted = ch?.encrypted ?? false;
-		editChannelType = (ch?.channel_type === 'voice' ? 'voice' : 'text');
-		editChannelUserLimit = ch?.user_limit ?? 0;
-		editChannelBitrate = ch?.bitrate ?? 64000;
-		if (ch?.topic) editChannelTopic = ch.topic;
+		editChannel = allChannels.find(c => c.id === channelId) ?? {
+			id: channelId,
+			name: channelName,
+			channel_type: 'text'
+		} as Channel;
 		showEditChannel = true;
 		closeContextMenu();
-	}
-
-	function channelTypeButtonClass(type: 'text' | 'voice' | 'forum' | 'gallery'): string {
-		const base = 'rounded-lg border-2 px-4 py-2 text-sm transition-colors';
-		if (newChannelType === type) return `${base} border-brand-500 bg-brand-500/10 text-text-primary`;
-		return `${base} border-bg-modifier text-text-muted`;
 	}
 
 	// --- Channel Drag Reorder (pointer-based) ---
@@ -670,14 +559,14 @@
 
 		try {
 			await api.reorderChannels(guildId, positions);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to reorder channels', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to reorder channels'), 'error');
 		}
 	}
 </script>
 
 <svelte:window
-	onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; showStatusPicker = false; }}
+	onclick={() => { closeContextMenu(); dmContextMenu = null; guildContextMenu = null; }}
 	onpointermove={(e) => handlePointerMoveWithGroupHighlight(e)}
 	onpointerup={(e) => handlePointerUpWithGroupDetection(e)}
 	onpointercancel={(e) => { clearGroupHighlight(); channelDragController?.handlePointerCancel(e); }}
@@ -746,7 +635,7 @@
 			{#if $canManageChannels}
 				<button
 					class="mb-2 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
-					onclick={() => { showCreateChannel = true; channelError = ''; }}
+					onclick={() => { showCreateChannel = true; }}
 					title="Create Channel"
 				>
 					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -1116,579 +1005,71 @@
 	<VoiceConnectionBar />
 
 	<!-- User panel (bottom) -->
-	{#if $currentUser}
-		{@const myStatus = $presenceMap.get($currentUser.id) ?? $currentUser.status_presence ?? 'online'}
-		<div class="relative border-t border-bg-floating bg-bg-primary/50 p-2">
-			<StatusPicker bind:open={showStatusPicker} onclose={() => (showStatusPicker = false)} />
-			<div class="flex items-center gap-2">
-				<button
-					class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 transition-colors hover:bg-bg-modifier"
-					onclick={(e) => { e.stopPropagation(); showStatusPicker = !showStatusPicker; }}
-					title="Set status"
-				>
-					<Avatar name={$currentUser.display_name ?? $currentUser.username} src={avatarUrl($currentUser.avatar_id)} size="sm" status={myStatus} />
-					<div class="min-w-0 flex-1 text-left">
-						<p class="truncate text-sm font-medium text-text-primary">
-							{$currentUser.display_name ?? $currentUser.username}
-						</p>
-						<p class="truncate text-xs text-text-muted">
-							{$currentUser.status_text ?? myStatus}
-						</p>
-					</div>
-				</button>
-				<button
-					class="rounded-md p-1.5 text-orange-400 hover:bg-bg-modifier hover:text-orange-300"
-					onclick={() => (showReportIssue = true)}
-					title="Report Issue"
-				>
-					<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-						<path d="M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-						<path d="M12 9v4" stroke-linecap="round" />
-						<circle cx="12" cy="16" r="0.5" fill="currentColor" />
-					</svg>
-				</button>
-				<button
-					class="rounded-md p-1.5 text-text-muted hover:bg-bg-modifier hover:text-text-primary"
-					onclick={() => goto('/app/settings')}
-					title="User Settings"
-				>
-					<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-						<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-						<circle cx="12" cy="12" r="3" />
-					</svg>
-				</button>
-			</div>
-		</div>
-	{/if}
+	<UserPanel onreportissue={() => (showReportIssue = true)} />
 </aside>
 
 <!-- Channel context menu -->
 {#if channelContextMenu}
-	<div
-		class="fixed z-50 min-w-[160px] rounded-md bg-bg-floating p-1 shadow-lg"
-		style="left: {channelContextMenu.x}px; top: {channelContextMenu.y}px;"
-		onclick={(e) => e.stopPropagation()}
-		onkeydown={(e) => e.stopPropagation()}
-		role="menu"
-		tabindex="-1"
-	>
-		{#if $canManageChannels}
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-			onclick={() => openEditModal(channelContextMenu!.channelId, channelContextMenu!.channelName)}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-			</svg>
-			Edit Channel
-		</button>
-		{/if}
-		<!-- Show Threads submenu -->
-		<div class="relative">
-			<button
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-				onclick={() => (showThreadFilterSubmenu = !showThreadFilterSubmenu)}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-				</svg>
-				Show Threads
-				<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M9 5l7 7-7 7" />
-				</svg>
-			</button>
-			{#if showThreadFilterSubmenu}
-				{@const currentFilter = getThreadActivityFilter(channelContextMenu.channelId)}
-				{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
-				<div class="absolute top-0 max-h-[50vh] min-w-[140px] overflow-y-auto rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}"
-				>
-					{#each [
-						{ label: 'All', value: null },
-						{ label: 'Last Hour', value: 60 },
-						{ label: 'Last 6 Hours', value: 360 },
-						{ label: 'Last 12 Hours', value: 720 },
-						{ label: 'Last Day', value: 1440 }
-					] as option}
-						<button
-							class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors {currentFilter === option.value ? 'text-brand-400' : 'text-text-secondary'} hover:bg-brand-500 hover:text-white"
-							onclick={() => handleSetThreadFilter(channelContextMenu!.channelId, option.value)}
-						>
-							{option.label}
-						</button>
-					{/each}
-				</div>
-			{/if}
-		</div>
-		<!-- Mute / Unmute -->
-		{#if isChannelMuted(channelContextMenu.channelId)}
-			<button
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-				onclick={() => { unmuteChannel(channelContextMenu!.channelId); closeContextMenu(); }}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-				</svg>
-				Unmute Channel
-			</button>
-		{:else}
-			<div class="relative">
-				<button
-					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-					onclick={() => (showMuteSubmenu = showMuteSubmenu === 'channel' ? null : 'channel')}
-				>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-						<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-					</svg>
-					Mute Channel
-					<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M9 5l7 7-7 7" />
-					</svg>
-				</button>
-				{#if showMuteSubmenu === 'channel'}
-					{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
-					<div class="absolute top-0 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}">
-						{#each muteDurations as opt}
-							<button
-								class="flex w-full items-center rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-								onclick={() => { muteChannel(channelContextMenu!.channelId, opt.ms || undefined); closeContextMenu(); }}
-							>
-								{opt.label}
-							</button>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{/if}
-		<!-- Move to Group / Remove from Group -->
-		{#if channelGroupsData.length > 0}
-			{@const inGroup = findChannelGroup(channelContextMenu.channelId)}
-			{#if inGroup}
-				<button
-					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-					onclick={() => removeChannelFromGroupCtx(channelContextMenu!.channelId)}
-				>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-					</svg>
-					Remove from Group
-				</button>
-			{:else}
-				<div class="relative">
-					<button
-						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-						onclick={() => (showMoveToGroupSubmenu = !showMoveToGroupSubmenu)}
-					>
-						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-						</svg>
-						Move to Group
-						<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M9 5l7 7-7 7" />
-						</svg>
-					</button>
-					{#if showMoveToGroupSubmenu}
-						{@const submenuLeft = channelContextMenu.x + 300 < window.innerWidth}
-						<div class="absolute top-0 min-w-[140px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}">
-							{#each channelGroupsData as group}
-								<button
-									class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-									onclick={() => addChannelToGroup(group.id, channelContextMenu!.channelId)}
-								>
-									<span class="h-2 w-2 rounded-full shrink-0" style="background-color: {group.color}"></span>
-									{group.name}
-								</button>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			{/if}
-		{/if}
-		{#if $canManageChannels}
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
-			onclick={() => { handleDeleteChannel(channelContextMenu!.channelId); closeContextMenu(); }}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-			</svg>
-			Delete Channel
-		</button>
-		{/if}
-	</div>
+	<ChannelContextMenu
+		menu={channelContextMenu}
+		canManageChannels={$canManageChannels}
+		channelGroups={channelGroupsData}
+		getthreadfilter={getThreadActivityFilter}
+		onthreadfilter={handleSetThreadFilter}
+		onedit={openEditModal}
+		onremovefromgroup={removeChannelFromGroupCtx}
+		onaddtogroup={addChannelToGroup}
+		ondelete={handleDeleteChannel}
+		onclose={closeContextMenu}
+	/>
 {/if}
 
 <!-- Thread context menu -->
 {#if threadContextMenu}
-	<div
-		class="fixed z-50 min-w-[160px] rounded-md bg-bg-floating p-1 shadow-lg"
-		style="left: {threadContextMenu.x}px; top: {threadContextMenu.y}px;"
-		onclick={(e) => e.stopPropagation()}
-		onkeydown={(e) => e.stopPropagation()}
-		role="menu"
-		tabindex="-1"
-	>
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-			onclick={() => { handleThreadClick(threadContextMenu!.thread); threadContextMenu = null; }}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-			</svg>
-			Open Thread
-		</button>
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-			onclick={() => handleHideThread(threadContextMenu!.thread)}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-			</svg>
-			Hide Thread
-		</button>
-		{#if $canManageThreads}
-		{#if threadContextMenu.thread.archived}
-			<button
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-				onclick={() => handleArchiveThread(threadContextMenu!.thread, false)}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-				</svg>
-				Unarchive Thread
-			</button>
-		{:else}
-			<button
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-				onclick={() => handleArchiveThread(threadContextMenu!.thread, true)}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-				</svg>
-				Archive Thread
-			</button>
-		{/if}
-		<div class="my-1 border-t border-bg-modifier"></div>
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-red-400 hover:bg-red-500 hover:text-white"
-			onclick={() => handleDeleteThread(threadContextMenu!.thread)}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-			</svg>
-			Delete Thread
-		</button>
-		{/if}
-	</div>
+	<ThreadContextMenu
+		x={threadContextMenu.x}
+		y={threadContextMenu.y}
+		thread={threadContextMenu.thread}
+		canManageThreads={$canManageThreads}
+		onopen={(thread) => { handleThreadClick(thread); threadContextMenu = null; }}
+		onhide={handleHideThread}
+		onarchive={handleArchiveThread}
+		ondelete={handleDeleteThread}
+	/>
 {/if}
 
 <!-- DM context menu -->
 {#if dmContextMenu}
-	<ContextMenu x={dmContextMenu.x} y={dmContextMenu.y} onclose={() => (dmContextMenu = null)}>
-		<ContextMenuItem label="Open Message" onclick={() => { goto(`/app/dms/${dmContextMenu!.channel.id}`); dmContextMenu = null; }} />
-		<ContextMenuItem label="Mark as Read" onclick={() => { markDMRead(dmContextMenu!.channel.id); dmContextMenu = null; }} />
-		{@const dmRecip = getDMRecipient(dmContextMenu.channel, $currentUser?.id)}
-		{#if dmRecip}
-			{@const dmRel = $relationships.get(dmRecip.id)}
-			{#if !dmRel || dmRel.type === 'pending_incoming'}
-				<ContextMenuItem
-					label={dmRel?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
-					onclick={() => { addFriendFromDM(dmContextMenu!.channel); dmContextMenu = null; }}
-				/>
-			{:else if dmRel.type === 'pending_outgoing'}
-				<ContextMenuItem label="Request Sent" disabled />
-			{/if}
-		{/if}
-		<ContextMenuDivider />
-		{@const dmCtxMuted = isChannelMuted(dmContextMenu.channel.id)}
-		{#if dmCtxMuted}
-			<ContextMenuItem label="Unmute Conversation" onclick={() => { unmuteChannel(dmContextMenu!.channel.id); dmContextMenu = null; }} />
-		{:else}
-			<ContextMenuItem label="Mute for 15 Minutes" onclick={() => { muteChannel(dmContextMenu!.channel.id, 15 * 60 * 1000); dmContextMenu = null; }} />
-			<ContextMenuItem label="Mute for 1 Hour" onclick={() => { muteChannel(dmContextMenu!.channel.id, 60 * 60 * 1000); dmContextMenu = null; }} />
-			<ContextMenuItem label="Mute for 8 Hours" onclick={() => { muteChannel(dmContextMenu!.channel.id, 8 * 60 * 60 * 1000); dmContextMenu = null; }} />
-			<ContextMenuItem label="Mute for 24 Hours" onclick={() => { muteChannel(dmContextMenu!.channel.id, 24 * 60 * 60 * 1000); dmContextMenu = null; }} />
-			<ContextMenuItem label="Mute Until I Turn It Back On" onclick={() => { muteChannel(dmContextMenu!.channel.id); dmContextMenu = null; }} />
-		{/if}
-		<ContextMenuDivider />
-		<ContextMenuItem label="Close DM" danger onclick={() => { closeDM(dmContextMenu!.channel.id); dmContextMenu = null; }} />
-	</ContextMenu>
+	<DMContextMenu
+		x={dmContextMenu.x}
+		y={dmContextMenu.y}
+		channel={dmContextMenu.channel}
+		onclose={() => (dmContextMenu = null)}
+		onmarkread={markDMRead}
+		onaddfriend={addFriendFromDM}
+		onclosedm={closeDM}
+	/>
 {/if}
 
 <!-- Guild context menu (mute/unmute) -->
 {#if guildContextMenu && $currentGuild}
-	{@const gMuted = isGuildMuted($currentGuild.id)}
-	<div
-		class="fixed z-50 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg"
-		style="left: {guildContextMenu.x}px; top: {guildContextMenu.y}px;"
-		onclick={(e) => e.stopPropagation()}
-		onkeydown={(e) => e.stopPropagation()}
-		role="menu"
-		tabindex="-1"
-	>
-		{#if gMuted}
-			<button
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-				onclick={() => { unmuteGuild($currentGuild!.id); closeContextMenu(); }}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-				</svg>
-				Unmute Server
-			</button>
-		{:else}
-			<div class="relative">
-				<button
-					class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-					onclick={() => (showMuteSubmenu = showMuteSubmenu === 'guild' ? null : 'guild')}
-				>
-					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-						<path d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-					</svg>
-					Mute Server
-					<svg class="ml-auto h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M9 5l7 7-7 7" />
-					</svg>
-				</button>
-				{#if showMuteSubmenu === 'guild'}
-					{@const submenuLeft = guildContextMenu.x + 300 < window.innerWidth}
-					<div class="absolute top-0 min-w-[180px] rounded-md bg-bg-floating p-1 shadow-lg {submenuLeft ? 'left-full ml-1' : 'right-full mr-1'}">
-						{#each muteDurations as opt}
-							<button
-								class="flex w-full items-center rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-								onclick={() => { muteGuild($currentGuild!.id, opt.ms || undefined); closeContextMenu(); }}
-							>
-								{opt.label}
-							</button>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{/if}
-		<button
-			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-			onclick={() => { showInvite = true; closeContextMenu(); }}
-		>
-			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-			</svg>
-			Invite People
-		</button>
-		{#if $canManageGuild}
-			<button
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
-				onclick={() => { goto(`/app/guilds/${$currentGuild?.id}/settings`); closeContextMenu(); }}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-				</svg>
-				Server Settings
-			</button>
-		{/if}
-	</div>
+	<GuildContextMenu
+		x={guildContextMenu.x}
+		y={guildContextMenu.y}
+		guild={$currentGuild}
+		canManageGuild={$canManageGuild}
+		onclose={closeContextMenu}
+		oninvite={() => (showInvite = true)}
+	/>
 {/if}
 
 <!-- Invite Modal -->
 <InviteModal bind:open={showInvite} onclose={() => (showInvite = false)} />
 
-<!-- Create Channel Modal -->
-<Modal open={showCreateChannel} title="Create Channel" onclose={() => (showCreateChannel = false)}>
-	{#if channelError}
-		<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{channelError}</div>
-	{/if}
+<CreateChannelModal bind:open={showCreateChannel} onclose={() => (showCreateChannel = false)} />
+<EditChannelModal bind:open={showEditChannel} channel={editChannel} onclose={() => (showEditChannel = false)} />
 
-	<div class="mb-4">
-		<div id="channel-type-label" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel Type</div>
-		<div class="flex gap-2" role="group" aria-labelledby="channel-type-label">
-			<button
-				class={channelTypeButtonClass('text')}
-				onclick={() => (newChannelType = 'text')}
-			>
-				# Text
-			</button>
-			<button
-				class={channelTypeButtonClass('voice')}
-				onclick={() => (newChannelType = 'voice')}
-			>
-				Voice
-			</button>
-			<button
-				class={channelTypeButtonClass('forum')}
-				onclick={() => (newChannelType = 'forum')}
-			>
-				Forum
-			</button>
-			<button
-				class={channelTypeButtonClass('gallery')}
-				onclick={() => (newChannelType = 'gallery')}
-			>
-				Gallery
-			</button>
-		</div>
-	</div>
-
-	<div class="mb-4">
-		<label for="channelName" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-			Channel Name
-		</label>
-		<input
-			id="channelName"
-			type="text"
-			class="input w-full"
-			bind:value={newChannelName}
-			placeholder={newChannelType === 'voice' ? 'General' : newChannelType === 'forum' ? 'bug-reports' : newChannelType === 'gallery' ? 'screenshots' : 'new-channel'}
-			maxlength="100"
-			onkeydown={(e) => e.key === 'Enter' && handleCreateChannel()}
-		/>
-	</div>
-
-	<div class="flex justify-end gap-2">
-		<button class="btn-secondary" onclick={() => (showCreateChannel = false)}>Cancel</button>
-		<button class="btn-primary" onclick={handleCreateChannel} disabled={createChannelOp.loading || !newChannelName.trim()}>
-			{createChannelOp.loading ? 'Creating...' : 'Create'}
-		</button>
-	</div>
-</Modal>
-
-<!-- Edit Channel Modal -->
-<Modal open={showEditChannel} title="Edit Channel" onclose={() => (showEditChannel = false)}>
-	{#if channelError}
-		<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{channelError}</div>
-	{/if}
-
-	<div class="mb-4">
-		<label for="editName" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-			Channel Name
-		</label>
-		<input
-			id="editName"
-			type="text"
-			class="input w-full"
-			bind:value={editChannelName}
-			maxlength="100"
-		/>
-	</div>
-
-	<div class="mb-4">
-		<label for="editTopic" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-			Topic
-		</label>
-		<input
-			id="editTopic"
-			type="text"
-			class="input w-full"
-			bind:value={editChannelTopic}
-			placeholder="Set a channel topic"
-			maxlength="1024"
-		/>
-	</div>
-
-	<div class="mb-4">
-		<label class="flex items-center gap-3 cursor-pointer">
-				<button
-					type="button"
-					role="switch"
-					aria-checked={editChannelNsfw}
-					aria-label="NSFW Channel"
-					class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors {editChannelNsfw ? 'bg-red-500' : 'bg-bg-modifier'}"
-				onclick={() => (editChannelNsfw = !editChannelNsfw)}
-			>
-				<span
-					class="pointer-events-none inline-block h-5 w-5 translate-y-0.5 rounded-full bg-white shadow transition-transform {editChannelNsfw ? 'translate-x-5' : 'translate-x-0.5'}"
-				></span>
-			</button>
-			<div>
-				<span class="text-sm font-medium text-text-primary">NSFW Channel</span>
-				<p class="text-xs text-text-muted">Mark this channel as age-restricted. Users will see a warning before viewing.</p>
-			</div>
-		</label>
-	</div>
-
-	<!-- Encryption (text channels only) -->
-	{#if editChannelType === 'text' && editChannelId}
-		<div class="mb-4">
-			<EncryptionPanel
-				channelId={editChannelId}
-				encrypted={editChannelEncrypted}
-				onchange={() => { showEditChannel = false; }}
-			/>
-		</div>
-	{/if}
-
-	{#if editChannelType === 'voice'}
-		<!-- Voice channel configuration -->
-		<div class="mb-4">
-			<label for="editUserLimit" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-				User Limit
-			</label>
-			<select
-				id="editUserLimit"
-				class="input w-full"
-				bind:value={editChannelUserLimit}
-			>
-				{#each userLimitOptions as limit}
-					<option value={limit}>
-						{limit === 0 ? 'No limit' : `${limit} users`}
-					</option>
-				{/each}
-			</select>
-			<p class="mt-1 text-xs text-text-muted">Maximum number of users that can join this voice channel. Set to "No limit" for unlimited.</p>
-		</div>
-
-		<div class="mb-4">
-			<label for="editBitrate" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">
-				Bitrate
-			</label>
-			<select
-				id="editBitrate"
-				class="input w-full"
-				bind:value={editChannelBitrate}
-			>
-				{#each bitrateOptions as rate}
-					<option value={rate}>
-						{Math.floor(rate / 1000)}kbps
-					</option>
-				{/each}
-			</select>
-			<p class="mt-1 text-xs text-text-muted">Higher bitrate means better audio quality but uses more bandwidth.</p>
-		</div>
-	{/if}
-
-	<div class="flex justify-end gap-2">
-		<button class="btn-secondary" onclick={() => (showEditChannel = false)}>Cancel</button>
-		<button class="btn-primary" onclick={handleEditChannel} disabled={editingChannel || !editChannelName.trim()}>
-			{editingChannel ? 'Saving...' : 'Save'}
-		</button>
-	</div>
-</Modal>
-
-<!-- Report Issue Modal -->
-<Modal open={showReportIssue} title="Report Issue" persistent onclose={() => (showReportIssue = false)}>
-	<div class="mb-4">
-		<label for="issueTitle" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Title</label>
-		<input id="issueTitle" type="text" class="input w-full" bind:value={reportIssueTitle} placeholder="Brief summary" maxlength="200" />
-	</div>
-	<div class="mb-4">
-		<label for="issueCategory" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Category</label>
-		<select id="issueCategory" class="input w-full" bind:value={reportIssueCategory}>
-			<option value="general">General</option>
-			<option value="bug">Bug</option>
-			<option value="abuse">Abuse</option>
-			<option value="suggestion">Suggestion</option>
-		</select>
-	</div>
-	<div class="mb-4">
-		<label for="issueDesc" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Description</label>
-		<textarea id="issueDesc" class="input w-full" rows="4" bind:value={reportIssueDescription} placeholder="Describe the issue in detail..."></textarea>
-	</div>
-	<div class="flex justify-end gap-2">
-		<button class="btn-secondary" onclick={() => (showReportIssue = false)}>Cancel</button>
-		<button class="btn-primary" onclick={submitReportIssue} disabled={reportIssueOp.loading || !reportIssueTitle.trim() || !reportIssueDescription.trim()}>
-			{reportIssueOp.loading ? 'Submitting...' : 'Submit'}
-		</button>
-	</div>
-</Modal>
+<ReportIssueModal bind:open={showReportIssue} onclose={() => (showReportIssue = false)} />
 
 <GroupDMCreateModal bind:open={showGroupDMCreate} onclose={() => (showGroupDMCreate = false)} />
 

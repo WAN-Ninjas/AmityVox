@@ -2,23 +2,24 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { InstanceInfo } from '$lib/types';
 
 	let instance = $state<InstanceInfo | null>(null);
-	let loadingInstance = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let instanceName = $state('');
 	let instanceDesc = $state('');
 	let instanceFedMode = $state('');
-	let savingInstance = $state(false);
+	let saveOp = $state(createAsyncOp());
 
 	onMount(() => {
 		loadInstance();
 	});
 
 	async function loadInstance() {
-		loadingInstance = true;
-		try {
-			instance = await api.getAdminInstance();
+		const result = await loadOp.run(() => api.getAdminInstance());
+		if (result) {
+			instance = result;
 			instanceName = instance?.name ?? '';
 			instanceDesc = instance?.description ?? '';
 			const rawMode = instance?.federation_mode ?? 'closed';
@@ -26,33 +27,31 @@
 				rawMode === 'allow' ? 'open' :
 				rawMode === 'deny' || rawMode === 'disabled' ? 'closed' :
 				rawMode;
-		} catch {
+		} else {
 			instance = null;
-		} finally {
-			loadingInstance = false;
 		}
 	}
 
 	async function saveInstance() {
-		savingInstance = true;
-		try {
-			instance = await api.updateAdminInstance({
+		const result = await saveOp.run(
+			() => api.updateAdminInstance({
 				name: instanceName || undefined,
 				description: instanceDesc || undefined,
 				federation_mode: instanceFedMode || undefined
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to save instance settings'
+		);
+		if (result) {
+			instance = result;
 			addToast('Instance settings saved', 'success');
-		} catch {
-			addToast('Failed to save instance settings', 'error');
-		} finally {
-			savingInstance = false;
 		}
 	}
 </script>
 
 <h1 class="mb-6 text-2xl font-bold text-text-primary">Instance Settings</h1>
 
-{#if loadingInstance}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading instance settings...</p>
 {:else}
 	<div class="space-y-4">
@@ -96,8 +95,8 @@
 			</div>
 		{/if}
 
-		<button class="btn-primary" onclick={saveInstance} disabled={savingInstance}>
-			{savingInstance ? 'Saving...' : 'Save Settings'}
+		<button class="btn-primary" onclick={saveInstance} disabled={saveOp.loading}>
+			{saveOp.loading ? 'Saving...' : 'Save Settings'}
 		</button>
 	</div>
 {/if}

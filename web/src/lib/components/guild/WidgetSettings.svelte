@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Channel } from '$lib/types';
 
 	interface GuildWidgetConfig {
@@ -19,8 +21,8 @@
 	let { guildId, channels = [] }: Props = $props();
 
 	let config = $state<GuildWidgetConfig | null>(null);
-	let loading = $state(true);
-	let saving = $state(false);
+	let loadOp = $state(createAsyncOp(true));
+	let saveOp = $state(createAsyncOp());
 	let error = $state('');
 	let copied = $state(false);
 
@@ -40,35 +42,33 @@
 	});
 
 	async function loadWidget(gId: string) {
-		loading = true;
 		error = '';
-		try {
-			const resp = await api.getGuildWidget(gId) as GuildWidgetConfig;
+		const resp = await loadOp.run(
+			() => api.getGuildWidget(gId) as Promise<GuildWidgetConfig>,
+			msg => (error = msg),
+			'Failed to load widget settings'
+		);
+		if (resp) {
 			config = resp;
 			enabled = resp.enabled;
 			inviteChannelId = resp.invite_channel_id || '';
 			style = resp.style || 'banner_1';
-		} catch (err: any) {
-			error = err.message || 'Failed to load widget settings';
-		} finally {
-			loading = false;
 		}
 	}
 
 	async function saveWidget() {
-		saving = true;
-		try {
-			const resp = await api.updateGuildWidget(guildId, {
+		const resp = await saveOp.run(
+			() => api.updateGuildWidget(guildId, {
 				enabled,
 				invite_channel_id: inviteChannelId || null,
 				style
-			}) as GuildWidgetConfig;
+			}) as Promise<GuildWidgetConfig>,
+			msg => addToast(msg, 'error'),
+			'Failed to save widget settings'
+		);
+		if (resp) {
 			config = resp;
 			addToast('Widget settings saved', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to save widget settings', 'error');
-		} finally {
-			saving = false;
 		}
 	}
 
@@ -101,7 +101,7 @@
 		</p>
 	</div>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<span class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></span>
 		</div>
@@ -198,8 +198,8 @@
 		{/if}
 
 		<div class="flex justify-end">
-			<button class="btn-primary" onclick={saveWidget} disabled={saving}>
-				{saving ? 'Saving...' : 'Save Changes'}
+			<button class="btn-primary" onclick={saveWidget} disabled={saveOp.loading}>
+				{saveOp.loading ? 'Saving...' : 'Save Changes'}
 			</button>
 		</div>
 	{/if}

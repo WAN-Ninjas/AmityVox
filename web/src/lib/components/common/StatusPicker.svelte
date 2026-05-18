@@ -6,6 +6,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import { setManualStatus } from '$lib/utils/idle';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		open: boolean;
@@ -60,8 +61,8 @@
 			setManualStatus(status);
 
 			onclose();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update status', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update status'), 'error');
 		}
 	}
 

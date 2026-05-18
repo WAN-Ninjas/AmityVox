@@ -2,6 +2,7 @@
 	import { api, type LevelingConfig, type LevelRole, type MemberXP } from '$lib/api/client';
 	import type { Role, Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -98,8 +99,8 @@
 		try {
 			await api.deleteLevelRole(guildId, id);
 			levelRoles = levelRoles.filter(lr => lr.id !== id);
-		} catch (err: any) {
-			error = err.message || 'Failed to remove level role';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to remove level role');
 		}
 	}
 

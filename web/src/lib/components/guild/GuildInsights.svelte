@@ -1,24 +1,19 @@
 <script lang="ts">
 	import { api, type GuildInsights } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
-	let loading = $state(false);
 	let error = $state('');
 	let insights = $state<GuildInsights | null>(null);
+	let loadOp = $state(createAsyncOp());
 	let days = $state(30);
 	let activeChart = $state<'members' | 'messages' | 'activity'>('members');
 
 	async function loadInsights() {
-		loading = true;
 		error = '';
-		try {
-			insights = await api.getGuildInsights(guildId, days);
-		} catch (err: any) {
-			error = err.message || 'Failed to load insights';
-		} finally {
-			loading = false;
-		}
+		const result = await loadOp.run(() => api.getGuildInsights(guildId, days), msg => (error = msg), 'Failed to load insights');
+		if (result) insights = result;
 	}
 
 	$effect(() => {
@@ -70,7 +65,7 @@
 		</select>
 	</div>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>

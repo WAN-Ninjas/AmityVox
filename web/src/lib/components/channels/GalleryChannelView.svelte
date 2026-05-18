@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { channels } from '$lib/stores/channels';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import GalleryPostCard from './GalleryPostCard.svelte';
 	import GalleryPostCreate from './GalleryPostCreate.svelte';
 
@@ -86,11 +87,11 @@
 				posts = [...posts, ...result];
 			}
 			hasMore = result.length === 25;
-		} catch (err: any) {
+		} catch (err: unknown) {
 			if (reset) {
-				error = err.message || 'Failed to load gallery posts';
+				error = getErrorMessage(err, 'Failed to load gallery posts');
 			} else {
-				addToast('Failed to load more posts', 'error');
+				addToast(getErrorMessage(err, 'Failed to load more posts'), 'error');
 			}
 		} finally {
 			loading = false;

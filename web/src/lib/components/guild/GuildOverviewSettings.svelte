@@ -5,6 +5,8 @@
 	import { updateGuild } from '$lib/stores/guilds';
 	import { addToast } from '$lib/stores/toast';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Guild } from '$lib/types';
 
 	interface Props {
@@ -21,8 +23,8 @@
 	let iconPreview = $state<string | null>(null);
 	let guildTags = $state<string[]>([]);
 	let discoverable = $state(false);
-	let saving = $state(false);
 	let deleteConfirm = $state('');
+	let saveOp = $state(createAsyncOp());
 
 	const availableTags = ['Gaming', 'Music', 'Education', 'Science & Tech', 'Entertainment', 'Art & Creative', 'Community', 'Other'];
 
@@ -45,8 +47,7 @@
 	}
 
 	async function handleSave() {
-		saving = true;
-		try {
+		await saveOp.run(async () => {
 			let iconId: string | undefined;
 			if (iconFile) {
 				const uploaded = await api.uploadFile(iconFile);
@@ -67,11 +68,7 @@
 			iconFile = null;
 			iconPreview = null;
 			addToast('Server updated', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to save server', 'error');
-		} finally {
-			saving = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to save server');
 	}
 
 	async function handleDelete() {
@@ -82,8 +79,8 @@
 		try {
 			await api.deleteGuild(guild.id);
 			goto('/app');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete server', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete server'), 'error');
 		}
 	}
 
@@ -184,8 +181,8 @@
 	</label>
 </div>
 
-<button class="btn-primary" onclick={handleSave} disabled={saving}>
-	{saving ? 'Saving...' : 'Save Changes'}
+<button class="btn-primary" onclick={handleSave} disabled={saveOp.loading}>
+	{saveOp.loading ? 'Saving...' : 'Save Changes'}
 </button>
 
 {#if isOwner}

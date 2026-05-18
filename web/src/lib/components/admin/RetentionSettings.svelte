@@ -3,6 +3,8 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface RetentionPolicy {
 		id: string;
@@ -23,9 +25,9 @@
 		creator_name: string;
 	}
 
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let policies = $state<RetentionPolicy[]>([]);
-	let creating = $state(false);
+	let createOp = $state(createAsyncOp());
 	let showCreateForm = $state(false);
 
 	// Create form state
@@ -41,18 +43,16 @@
 	let runningPolicyId = $state('');
 
 	async function loadPolicies() {
-		loading = true;
-		try {
-			policies = await api.getAdminRetentionPolicies() || [];
-		} catch {
-			addToast('Failed to load retention policies', 'error');
-		}
-		loading = false;
+		const result = await loadOp.run(
+			() => api.getAdminRetentionPolicies(),
+			msg => addToast(msg, 'error'),
+			'Failed to load retention policies'
+		);
+		if (result) policies = result;
 	}
 
 	async function createPolicy() {
-		creating = true;
-		try {
+		const result = await createOp.run(async () => {
 			const body: Record<string, unknown> = {
 				max_age_days: newMaxAgeDays,
 				delete_attachments: newDeleteAttachments,
@@ -65,15 +65,14 @@
 				body.channel_id = newChannelId;
 			}
 
-			await api.createAdminRetentionPolicy(body);
+			return await api.createAdminRetentionPolicy(body);
+		}, msg => addToast(msg, 'error'), 'Failed to create retention policy');
+		if (result !== undefined) {
 			addToast('Retention policy created', 'success');
 			showCreateForm = false;
 			resetForm();
 			await loadPolicies();
-		} catch (e: any) {
-			addToast(e?.message || 'Failed to create retention policy', 'error');
 		}
-		creating = false;
 	}
 
 	async function togglePolicy(policy: RetentionPolicy) {
@@ -105,8 +104,8 @@
 			const result = await api.runAdminRetentionPolicy(policyId);
 			addToast(`Deleted ${result?.messages_deleted || 0} messages`, 'success');
 			await loadPolicies();
-		} catch (e: any) {
-			addToast(e?.message || 'Failed to run retention policy', 'error');
+		} catch (e: unknown) {
+			addToast(getErrorMessage(e, 'Failed to run retention policy'), 'error');
 		}
 		runningPolicyId = '';
 	}
@@ -234,8 +233,8 @@
 					<button class="btn-secondary px-4 py-2 text-sm" onclick={() => { showCreateForm = false; resetForm(); }}>
 						Cancel
 					</button>
-					<button class="btn-primary px-4 py-2 text-sm" onclick={createPolicy} disabled={creating}>
-						{creating ? 'Creating...' : 'Create Policy'}
+					<button class="btn-primary px-4 py-2 text-sm" onclick={createPolicy} disabled={createOp.loading}>
+						{createOp.loading ? 'Creating...' : 'Create Policy'}
 					</button>
 				</div>
 			</div>
@@ -243,7 +242,7 @@
 	{/if}
 
 	<!-- Policies List -->
-	{#if loading && policies.length === 0}
+	{#if loadOp.loading && policies.length === 0}
 		<div class="flex justify-center py-12">
 			<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 		</div>

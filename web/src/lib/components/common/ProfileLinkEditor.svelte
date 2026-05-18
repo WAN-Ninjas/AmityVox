@@ -2,6 +2,7 @@
 	import type { UserLink } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let links = $state<UserLink[]>([]);
 	let loading = $state(true);
@@ -40,8 +41,8 @@
 			newUrl = '';
 			newPlatform = 'website';
 			addToast('Link added', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to add link', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to add link'), 'error');
 		} finally {
 			adding = false;
 		}

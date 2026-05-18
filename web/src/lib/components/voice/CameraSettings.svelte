@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { selfCamera, getRoom } from '$lib/stores/voice';
 	import { api } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let resolution = $state<'360p' | '720p' | '1080p'>('720p');
 	let framerate = $state<15 | 30 | 60>(30);
@@ -55,8 +56,8 @@
 				}, {
 					videoEncoding: getVideoEncoding()
 				});
-		} catch (err: any) {
-			error = err.message || 'Failed to apply camera settings';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to apply camera settings');
 			console.error('[Camera] Settings error:', err);
 		} finally {
 			applying = false;

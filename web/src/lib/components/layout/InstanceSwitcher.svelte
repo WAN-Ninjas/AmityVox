@@ -4,6 +4,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import {
 		instanceProfiles,
 		instanceConnections,
@@ -78,8 +79,8 @@
 			await api.deleteInstanceProfile(profile.id);
 			removeInstanceProfile(profile.instance_url);
 			addToast('Instance removed', 'success');
-		} catch (e: any) {
-			addToast('Failed to remove instance: ' + e.message, 'error');
+		} catch (err: unknown) {
+			addToast('Failed to remove instance: ' + getErrorMessage(err, 'Unknown error'), 'error');
 		}
 	}
 

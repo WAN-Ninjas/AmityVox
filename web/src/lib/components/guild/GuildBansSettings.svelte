@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import Avatar from '$components/common/Avatar.svelte';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Ban } from '$lib/types';
 
 	interface Props {
@@ -11,24 +13,22 @@
 	let { guildId }: Props = $props();
 
 	let bans = $state<Ban[]>([]);
-	let loadingBans = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let loadedGuildId = $state<string | null>(null);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingBans) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadBans();
 		}
 	});
 
 	async function loadBans() {
-		loadingBans = true;
-		try {
-			bans = await api.getGuildBans(guildId);
+		const result = await loadOp.run(() => api.getGuildBans(guildId));
+		if (result) {
+			bans = result;
 			loadedGuildId = guildId;
-		} catch {
+		} else {
 			bans = [];
-		} finally {
-			loadingBans = false;
 		}
 	}
 
@@ -37,15 +37,15 @@
 			await api.unbanUser(guildId, userId);
 			bans = bans.filter((ban) => ban.user_id !== userId);
 			addToast('User unbanned', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to unban', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to unban'), 'error');
 		}
 	}
 </script>
 
 <h1 class="mb-6 text-xl font-bold text-text-primary">Bans</h1>
 
-{#if loadingBans}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading bans...</p>
 {:else if bans.length === 0}
 	<p class="text-sm text-text-muted">No banned users.</p>

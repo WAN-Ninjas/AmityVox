@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api, ApiRequestError } from '$lib/api/client';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let {
 		guildId,
@@ -41,8 +42,8 @@
 			loading = true;
 			error = null;
 			sounds = await api.getSoundboardSounds(guildId) || [];
-		} catch (err: any) {
-			error = err.message || 'Failed to load soundboard sounds';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to load soundboard sounds');
 			console.error('Soundboard load error:', err);
 		} finally {
 			loading = false;
@@ -68,12 +69,12 @@
 				playing = null;
 			}, sound.duration_ms);
 
-		} catch (err: any) {
+		} catch (err: unknown) {
 			if (err instanceof ApiRequestError && err.status === 429) {
 				cooldownActive = true;
 				setTimeout(() => cooldownActive = false, 5000);
 			}
-			error = err.message || 'Failed to play sound';
+			error = getErrorMessage(err, 'Failed to play sound');
 			console.error('Sound play error:', err);
 		} finally {
 			// Clear playing state after a short delay if not already cleared

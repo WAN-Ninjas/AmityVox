@@ -3,6 +3,7 @@
 	import type { GalleryTag } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		channelId: string;
@@ -104,8 +105,8 @@
 			pendingFiles = [];
 			addToast('Gallery post created', 'success');
 			oncreated?.();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create gallery post', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create gallery post'), 'error');
 		} finally {
 			creating = false;
 		}

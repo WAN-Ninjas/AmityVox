@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { StickerPack, Sticker } from '$lib/types';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import { api } from '$lib/api/client';
 	import { currentGuildId } from '$lib/stores/guilds';
 
@@ -48,8 +49,8 @@
 			if (allPacks.length > 0) {
 				activePackId = allPacks[0].id;
 			}
-		} catch (e: any) {
-			error = 'Failed to load sticker packs';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to load sticker packs');
 		} finally {
 			loading = false;
 		}

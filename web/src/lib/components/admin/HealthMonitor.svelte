@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface ServiceHealth {
 		name: string;
@@ -37,18 +38,18 @@
 		trends: Record<string, { time: string; status: string; response_time_ms: number }[]>;
 	}
 
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let health = $state<HealthDashboard | null>(null);
 	let autoRefresh = $state(true);
 	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	async function loadHealth() {
-		try {
-			health = await api.getHealthDashboard();
-		} catch {
-			addToast('Failed to load health data', 'error');
-		}
-		loading = false;
+		const result = await loadOp.run(
+			() => api.getHealthDashboard(),
+			msg => addToast(msg, 'error'),
+			'Failed to load health data'
+		);
+		if (result) health = result;
 	}
 
 	function startAutoRefresh() {
@@ -115,13 +116,13 @@
 				<input type="checkbox" bind:checked={autoRefresh} />
 				Auto-refresh
 			</label>
-			<button class="btn-secondary text-sm px-3 py-1.5" onclick={loadHealth} disabled={loading}>
-				{loading ? 'Refreshing...' : 'Refresh'}
+			<button class="btn-secondary text-sm px-3 py-1.5" onclick={loadHealth} disabled={loadOp.loading}>
+				{loadOp.loading ? 'Refreshing...' : 'Refresh'}
 			</button>
 		</div>
 	</div>
 
-	{#if loading && !health}
+	{#if loadOp.loading && !health}
 		<div class="flex justify-center py-12">
 			<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 		</div>

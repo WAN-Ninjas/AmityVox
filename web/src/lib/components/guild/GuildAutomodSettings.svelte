@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { AutoModAction, AutoModRule, Channel, Role } from '$lib/types';
 
 	interface Props {
@@ -17,11 +19,8 @@
 	let automodActions = $state<AutoModAction[]>([]);
 	let automodGuildRoles = $state<Role[]>([]);
 	let automodGuildChannels = $state<Channel[]>([]);
-	let loadingAutomod = $state(false);
-	let loadingAutomodMeta = $state(false);
 	let loadedGuildId = $state<string | null>(null);
 
-	let creatingRule = $state(false);
 	let newRuleType = $state<AutoModRuleType>('word_filter');
 	let newRuleName = $state('');
 	let newRuleAction = $state<AutoModRuleAction>('delete');
@@ -37,8 +36,10 @@
 	let testRuleConfigText = $state('');
 	let testSampleText = $state('');
 	let testResult = $state<{ matched: boolean; matched_content: string | null } | null>(null);
-	let testingRule = $state(false);
 	let testError = $state('');
+	let loadOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
+	let testOp = $state(createAsyncOp());
 
 	const textChannels = $derived(
 		automodGuildChannels.filter((channel) =>
@@ -49,15 +50,13 @@
 	);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingAutomod) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadAutomod();
 		}
 	});
 
 	async function loadAutomod() {
-		loadingAutomod = true;
-		loadingAutomodMeta = true;
-		try {
+		await loadOp.run(async () => {
 			const [rules, actions, roles, channels] = await Promise.all([
 				api.getAutoModRules(guildId),
 				api.getAutoModActions(guildId),
@@ -69,18 +68,12 @@
 			automodGuildRoles = roles;
 			automodGuildChannels = channels;
 			loadedGuildId = guildId;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load AutoMod settings', 'error');
-		} finally {
-			loadingAutomod = false;
-			loadingAutomodMeta = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to load AutoMod settings');
 	}
 
 	async function handleCreateAutomodRule() {
 		if (!newRuleName.trim()) return;
-		creatingRule = true;
-		try {
+		await createOp.run(async () => {
 			const rule = await api.createAutoModRule(guildId, {
 				name: newRuleName.trim(),
 				rule_type: newRuleType,
@@ -96,19 +89,15 @@
 			newRuleExemptRoles = [];
 			newRuleExemptChannels = [];
 			addToast('AutoMod rule created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create AutoMod rule', 'error');
-		} finally {
-			creatingRule = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to create AutoMod rule');
 	}
 
 	async function handleToggleAutomodRule(rule: AutoModRule) {
 		try {
 			const updated = await api.updateAutoModRule(guildId, rule.id, { enabled: !rule.enabled });
 			automodRules = automodRules.map((candidate) => candidate.id === rule.id ? updated : candidate);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update rule', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update rule'), 'error');
 		}
 	}
 
@@ -119,8 +108,8 @@
 			automodRules = automodRules.filter((rule) => rule.id !== ruleId);
 			if (editingExemptRuleId === ruleId) cancelEditingExemptions();
 			addToast('AutoMod rule deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete rule', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete rule'), 'error');
 		}
 	}
 
@@ -146,8 +135,8 @@
 			automodRules = automodRules.map((rule) => rule.id === editingExemptRuleId ? updated : rule);
 			cancelEditingExemptions();
 			addToast('Exemptions updated', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update exemptions', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update exemptions'), 'error');
 		}
 	}
 
@@ -191,20 +180,17 @@
 
 	async function handleTestAutoModRule() {
 		if (!testSampleText.trim()) return;
-		testingRule = true;
 		testResult = null;
 		testError = '';
-		try {
+		await testOp.run(async () => {
 			testResult = await api.testAutoModRule(guildId, {
 				rule_type: testRuleType,
 				config: buildTestConfig(),
 				sample_text: testSampleText.trim()
 			});
-		} catch (err: any) {
-			testError = err.message || 'Failed to test rule';
-		} finally {
-			testingRule = false;
-		}
+		}, msg => {
+			testError = msg;
+		}, 'Failed to test rule');
 	}
 
 	function formatDate(iso: string): string {
@@ -253,7 +239,7 @@
 	<div class="mb-3">
 		<div class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Exempt Roles</div>
 		<p class="mb-1.5 text-xs text-text-muted">Members with these roles will not be affected by this rule.</p>
-		{#if loadingAutomodMeta}
+		{#if loadOp.loading}
 			<p class="text-xs text-text-muted">Loading roles...</p>
 		{:else if automodGuildRoles.length === 0}
 			<p class="text-xs text-text-muted">No roles available.</p>
@@ -279,7 +265,7 @@
 	<div class="mb-3">
 		<div class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Exempt Channels</div>
 		<p class="mb-1.5 text-xs text-text-muted">Messages in these channels will not be checked by this rule.</p>
-		{#if loadingAutomodMeta}
+		{#if loadOp.loading}
 			<p class="text-xs text-text-muted">Loading channels...</p>
 		{:else if textChannels.length === 0}
 			<p class="text-xs text-text-muted">No channels available.</p>
@@ -302,12 +288,12 @@
 		{/if}
 	</div>
 
-	<button class="btn-primary" onclick={handleCreateAutomodRule} disabled={creatingRule || !newRuleName.trim()}>
-		{creatingRule ? 'Creating...' : 'Create Rule'}
+	<button class="btn-primary" onclick={handleCreateAutomodRule} disabled={createOp.loading || !newRuleName.trim()}>
+		{createOp.loading ? 'Creating...' : 'Create Rule'}
 	</button>
 </div>
 
-{#if loadingAutomod}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading AutoMod rules...</p>
 {:else if automodRules.length === 0}
 	<p class="text-sm text-text-muted">No AutoMod rules configured.</p>
@@ -501,8 +487,8 @@
 		></textarea>
 	</div>
 
-	<button class="btn-primary" onclick={handleTestAutoModRule} disabled={testingRule || !testSampleText.trim()}>
-		{testingRule ? 'Testing...' : 'Test Rule'}
+	<button class="btn-primary" onclick={handleTestAutoModRule} disabled={testOp.loading || !testSampleText.trim()}>
+		{testOp.loading ? 'Testing...' : 'Test Rule'}
 	</button>
 
 	{#if testError}

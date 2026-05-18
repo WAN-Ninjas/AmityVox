@@ -4,15 +4,18 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { updateGuild, loadGuilds } from '$lib/stores/guilds';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
 
 	let guildName = $state('');
 	let guildId = $state('');
 	let memberCount = $state(0);
-	let loading = $state(true);
 	let joining = $state(false);
 	let error = $state('');
 	let loggedIn = $state(!!api.getToken());
+	let loadedCode = $state<string | null>(null);
+	let loadOp = $state(createAsyncOp());
 
 	// Federation state
 	let isFederated = $state(false);
@@ -31,47 +34,50 @@
 	}
 
 	$effect(() => {
-		loadInvite();
+		const code = $page.params.code;
+		if (code && loadedCode !== code && !loadOp.loading) loadInvite(code);
 	});
 
-	async function loadInvite() {
-		const code = $page.params.code;
-		if (!code) return;
-
-		loading = true;
+	async function loadInvite(code: string) {
 		error = '';
 		isFederated = false;
 		notFederated = false;
 
 		if (!loggedIn) {
-			loading = false;
+			loadedCode = code;
 			return;
 		}
 
-		try {
-			const data = await api.getInvite(code);
+		await loadOp.run(async () => {
+			try {
+				const data = await api.getInvite(code);
 
-			if ((data as any).federated) {
-				isFederated = true;
-				instanceDomain = (data as any).instance_domain ?? '';
-				inviteCode = (data as any).invite_code ?? code;
-				guildName = (data as any).guild_name ?? `Server on ${instanceDomain}`;
-				memberCount = (data as any).member_count ?? 0;
-			} else {
-				guildName = (data as any).guild_name ?? 'Unknown Server';
-				guildId = (data as any).guild_id ?? '';
-				memberCount = (data as any).member_count ?? 0;
+				if ((data as any).federated) {
+					isFederated = true;
+					instanceDomain = (data as any).instance_domain ?? '';
+					inviteCode = (data as any).invite_code ?? code;
+					guildName = (data as any).guild_name ?? `Server on ${instanceDomain}`;
+					memberCount = (data as any).member_count ?? 0;
+				} else {
+					guildName = (data as any).guild_name ?? 'Unknown Server';
+					guildId = (data as any).guild_id ?? '';
+					memberCount = (data as any).member_count ?? 0;
+				}
+			} catch (err: unknown) {
+				handleInviteLoadError(err, code);
 			}
-		} catch (err: any) {
-			// Check for not_federated error
-			if (err.code === 'not_federated' || err.message?.includes('not federated')) {
-				notFederated = true;
-				notFederatedDomain = err.domain || extractDomainFromInvite(code) || '';
-			} else {
-				error = err.message || 'Invite not found or has expired';
-			}
-		} finally {
-			loading = false;
+			loadedCode = code;
+		});
+	}
+
+	function handleInviteLoadError(err: unknown, code: string) {
+		const apiError = err as { code?: string; message?: string; domain?: string };
+		// Check for not_federated error
+		if (apiError.code === 'not_federated' || apiError.message?.includes('not federated')) {
+			notFederated = true;
+			notFederatedDomain = apiError.domain || extractDomainFromInvite(code) || '';
+		} else {
+			error = getErrorMessage(err, 'Invite not found or has expired');
 		}
 	}
 
@@ -105,12 +111,13 @@
 					goto(`/app/guilds/${guild.id}`);
 				}
 			}
-		} catch (err: any) {
-			if (err.message?.includes('already a member')) {
+		} catch (err: unknown) {
+			const message = getErrorMessage(err, 'Failed to join server');
+			if (message.includes('already a member')) {
 				addToast('You are already a member of this server', 'info');
 				goto(guildId ? `/app/guilds/${guildId}` : '/app', { replaceState: true });
 			} else {
-				error = err.message || 'Failed to join server';
+				error = message;
 			}
 		} finally {
 			joining = false;
@@ -128,8 +135,8 @@
 			);
 			federationRequested = true;
 			addToast('Federation request submitted!', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to submit request', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to submit request'), 'error');
 		} finally {
 			requestingFederation = false;
 		}
@@ -147,7 +154,7 @@
 
 <div class="flex min-h-screen items-center justify-center bg-bg-primary p-4">
 	<div class="w-full max-w-md rounded-xl bg-bg-secondary p-8 shadow-lg">
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="flex flex-col items-center gap-4">
 				<svg class="h-8 w-8 animate-spin text-brand-400" fill="none" viewBox="0 0 24 24">
 					<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

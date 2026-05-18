@@ -19,6 +19,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import Avatar from '$components/common/Avatar.svelte';
 	import MessageList from '$components/chat/MessageList.svelte';
 	import MessageInput from '$components/chat/MessageInput.svelte';
@@ -63,10 +64,10 @@
 			$participantList.find((p) => p.userId === userId) ?? {
 				userId,
 				username: 'Unknown',
-					displayName: null,
-					avatarId: null,
-					instanceId: null,
-					muted: false,
+				displayName: null,
+				avatarId: null,
+				instanceId: null,
+				muted: false,
 				deafened: false,
 				speaking: false
 			}
@@ -91,8 +92,8 @@
 	async function handleLeave() {
 		try {
 			await leaveVoice();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to leave voice channel', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to leave voice channel'), 'error');
 		}
 	}
 

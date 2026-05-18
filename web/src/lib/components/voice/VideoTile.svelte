@@ -130,7 +130,7 @@
 			<span class="truncate text-xs font-medium text-white">
 				{participant.displayName ?? participant.username}
 			</span>
-			{#if trackInfo?.source === 'screenshare'}
+			{#if trackInfo?.source === 'screenshare' || participant.screenSharing}
 				<span class="shrink-0 rounded-full bg-blue-500/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">
 					Screen
 				</span>

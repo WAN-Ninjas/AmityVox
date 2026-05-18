@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { currentUser } from '$lib/stores/auth';
 	import { api } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { User } from '$lib/types';
 
 	interface Props {
@@ -40,8 +41,8 @@
 			downloadJson(exportData, `amityvox-data-export-${new Date().toISOString().slice(0, 10)}.json`);
 			exportDataSuccess = 'Data exported successfully! Check your downloads.';
 			setTimeout(() => (exportDataSuccess = ''), 5000);
-		} catch (err: any) {
-			exportDataError = err.message || 'Failed to export data';
+		} catch (err: unknown) {
+			exportDataError = getErrorMessage(err, 'Failed to export data');
 		} finally {
 			exportingData = false;
 		}
@@ -56,8 +57,8 @@
 			downloadJson(exportData, `amityvox-account-export-${new Date().toISOString().slice(0, 10)}.json`);
 			exportAccountSuccess = 'Account exported successfully! Check your downloads.';
 			setTimeout(() => (exportAccountSuccess = ''), 5000);
-		} catch (err: any) {
-			exportAccountError = err.message || 'Failed to export account';
+		} catch (err: unknown) {
+			exportAccountError = getErrorMessage(err, 'Failed to export account');
 		} finally {
 			exportingAccount = false;
 		}
@@ -90,11 +91,11 @@
 			onProfileImported?.(user);
 			importAccountSuccess = 'Account data imported successfully! Profile updated.';
 			setTimeout(() => (importAccountSuccess = ''), 5000);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			if (err instanceof SyntaxError) {
 				importAccountError = 'Invalid JSON file. Please select a valid AmityVox account export.';
 			} else {
-				importAccountError = err.message || 'Failed to import account';
+				importAccountError = getErrorMessage(err, 'Failed to import account');
 			}
 		} finally {
 			importingAccount = false;

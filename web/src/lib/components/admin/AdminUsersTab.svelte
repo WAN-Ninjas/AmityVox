@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import Avatar from '$components/common/Avatar.svelte';
 	import Modal from '$components/common/Modal.svelte';
 	import type { User } from '$lib/types';
@@ -16,32 +18,30 @@
 
 	let users = $state<User[]>([]);
 	let usersLoaded = $state(false);
-	let loadingUsers = $state(false);
+	let loadUsersOp = $state(createAsyncOp());
 	let userSearch = $state('');
 	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 	let expandedUserGuilds = $state<string | null>(null);
 	let userGuildsList = $state<AdminUserGuild[]>([]);
-	let loadingUserGuilds = $state(false);
+	let loadGuildsOp = $state(createAsyncOp());
 	let banModalOpen = $state(false);
 	let banTargetUser = $state<User | null>(null);
 	let banReason = $state('');
-	let banning = $state(false);
+	let banOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (!usersLoaded && !loadingUsers) {
+		if (!usersLoaded && !loadUsersOp.loading) {
 			loadUsers();
 		}
 	});
 
 	async function loadUsers(query?: string) {
-		loadingUsers = true;
-		try {
-			users = await api.getAdminUsers({ limit: 50, query });
+		const result = await loadUsersOp.run(() => api.getAdminUsers({ limit: 50, query }));
+		if (result) {
+			users = result;
 			usersLoaded = true;
-		} catch {
+		} else {
 			users = [];
-		} finally {
-			loadingUsers = false;
 		}
 	}
 
@@ -100,14 +100,15 @@
 			return;
 		}
 		expandedUserGuilds = userId;
-		loadingUserGuilds = true;
-		try {
-			userGuildsList = await api.getAdminUserGuilds(userId);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load user servers', 'error');
+		const result = await loadGuildsOp.run(
+			() => api.getAdminUserGuilds(userId),
+			msg => addToast(msg, 'error'),
+			'Failed to load user servers'
+		);
+		if (result) {
+			userGuildsList = result;
+		} else {
 			userGuildsList = [];
-		} finally {
-			loadingUserGuilds = false;
 		}
 	}
 
@@ -119,18 +120,17 @@
 
 	async function handleInstanceBan() {
 		if (!banTargetUser || !banReason.trim()) return;
-		banning = true;
-		try {
-			await api.instanceBanUser(banTargetUser.id, banReason.trim());
+		const result = await banOp.run(
+			() => api.instanceBanUser(banTargetUser!.id, banReason.trim()),
+			msg => addToast(msg, 'error'),
+			'Failed to ban user'
+		);
+		if (result !== undefined) {
 			addToast(`${banTargetUser.display_name ?? banTargetUser.username} has been instance-banned`, 'success');
 			users = users.map((user) => user.id === banTargetUser?.id ? { ...user, flags: user.flags | 1 } : user);
 			banModalOpen = false;
 			banTargetUser = null;
 			banReason = '';
-		} catch {
-			addToast('Failed to ban user', 'error');
-		} finally {
-			banning = false;
 		}
 	}
 </script>
@@ -147,7 +147,7 @@
 	/>
 </div>
 
-{#if loadingUsers}
+{#if loadUsersOp.loading}
 	<p class="text-sm text-text-muted">Loading users...</p>
 {:else if users.length === 0}
 	<p class="text-sm text-text-muted">No users found.</p>
@@ -195,7 +195,7 @@
 				</div>
 				{#if expandedUserGuilds === user.id}
 					<div class="mt-3 rounded bg-bg-primary p-3">
-						{#if loadingUserGuilds}
+						{#if loadGuildsOp.loading}
 							<p class="text-xs text-text-muted">Loading servers...</p>
 						{:else if userGuildsList.length === 0}
 							<p class="text-xs text-text-muted">No servers found.</p>
@@ -236,9 +236,9 @@
 			<button
 				class="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
 				onclick={handleInstanceBan}
-				disabled={banning || !banReason.trim()}
+				disabled={banOp.loading || !banReason.trim()}
 			>
-				{banning ? 'Banning...' : 'Ban User'}
+				{banOp.loading ? 'Banning...' : 'Ban User'}
 			</button>
 		</div>
 	{/if}

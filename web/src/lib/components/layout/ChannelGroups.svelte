@@ -12,6 +12,7 @@
 	import { confirmAction } from '$lib/stores/confirm';
 	import { unlockedChannels } from '$lib/encryption/e2eeManager';
 	import { canManageChannels } from '$lib/stores/permissions';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface ChannelGroup {
 		id: string;
@@ -115,8 +116,8 @@
 			newGroupName = '';
 			newGroupColor = '#5c6bc0';
 			addToast('Channel group created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create group', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create group'), 'error');
 		} finally {
 			creating = false;
 		}
@@ -132,8 +133,8 @@
 			});
 			groups = groups.map(g => g.id === groupId ? updated : g);
 			editingGroupId = null;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update group', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update group'), 'error');
 		}
 	}
 
@@ -144,8 +145,8 @@
 			await api.deleteChannelGroup(guildId, groupId);
 			groups = groups.filter(g => g.id !== groupId);
 			addToast('Channel group deleted', 'info');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete group', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete group'), 'error');
 		}
 	}
 
@@ -160,8 +161,8 @@
 				}
 				return g;
 			});
-		} catch (err: any) {
-			addToast(err.message || 'Failed to remove channel', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to remove channel'), 'error');
 		}
 	}
 
@@ -490,9 +491,9 @@
 
 		try {
 			await api.setChannelGroupChannels(guildId, groupId, channels);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			groups = prevGroups;
-			addToast(err.message || 'Failed to reorder channels', 'error');
+			addToast(getErrorMessage(err, 'Failed to reorder channels'), 'error');
 			await loadGroups();
 		}
 	}
@@ -523,9 +524,9 @@
 				api.setChannelGroupChannels(guildId, fromGroupId, fromChannels),
 				api.setChannelGroupChannels(guildId, toGroupId, toChannels),
 			]);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			groups = prevGroups;
-			addToast(err.message || 'Failed to move channel', 'error');
+			addToast(getErrorMessage(err, 'Failed to move channel'), 'error');
 			await loadGroups();
 		}
 	}
@@ -576,9 +577,9 @@
 			await Promise.all(
 				reordered.map((g, i) => api.updateChannelGroup(guildId, g.id, { position: i }))
 			);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			groups = prevGroups;
-			addToast(err.message || 'Failed to reorder groups', 'error');
+			addToast(getErrorMessage(err, 'Failed to reorder groups'), 'error');
 			await loadGroups();
 		}
 	}

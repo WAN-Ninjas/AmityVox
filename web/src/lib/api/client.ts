@@ -395,6 +395,17 @@ export interface LocationShare {
 	avatar_id?: string;
 }
 
+export interface VoiceBroadcast {
+	id: string;
+	guild_id: string;
+	channel_id: string;
+	broadcaster_id: string;
+	title: string;
+	started_at: string;
+	ended_at: string | null;
+	listener_count: number;
+}
+
 export interface WhiteboardUpdate {
 	state?: string;
 	name?: string;
@@ -2833,11 +2844,11 @@ class ApiClient {
 
 	// --- Voice Broadcast ---
 
-	getVoiceBroadcast(channelId: string): Promise<any> {
+	getVoiceBroadcast(channelId: string): Promise<VoiceBroadcast | null> {
 		return this.get(`/voice/${channelId}/broadcast`);
 	}
 
-	startVoiceBroadcast(channelId: string, data?: { title?: string }): Promise<any> {
+	startVoiceBroadcast(channelId: string, data?: { title?: string }): Promise<VoiceBroadcast> {
 		return this.post(`/voice/${channelId}/broadcast/start`, data);
 	}
 

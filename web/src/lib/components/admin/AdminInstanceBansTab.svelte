@@ -1,27 +1,27 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { InstanceBan } from '$lib/types';
 
 	let instanceBans = $state<InstanceBan[]>([]);
 	let bansLoaded = $state(false);
-	let loadingBans = $state(false);
+	let loadOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (!bansLoaded && !loadingBans) {
+		if (!bansLoaded && !loadOp.loading) {
 			loadInstanceBans();
 		}
 	});
 
 	async function loadInstanceBans() {
-		loadingBans = true;
-		try {
-			instanceBans = await api.getInstanceBans();
+		const result = await loadOp.run(() => api.getInstanceBans());
+		if (result) {
+			instanceBans = result;
 			bansLoaded = true;
-		} catch {
+		} else {
 			instanceBans = [];
-		} finally {
-			loadingBans = false;
 		}
 	}
 
@@ -30,8 +30,8 @@
 			await api.instanceUnbanUser(userId);
 			instanceBans = instanceBans.filter((ban) => ban.user_id !== userId);
 			addToast('User unbanned', 'success');
-		} catch {
-			addToast('Failed to unban user', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to unban user'), 'error');
 		}
 	}
 </script>
@@ -41,7 +41,7 @@
 	<p class="mt-1 text-sm text-text-muted">Users banned from this instance.</p>
 </div>
 
-{#if loadingBans}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading bans...</p>
 {:else if instanceBans.length === 0}
 	<p class="text-sm text-text-muted">No banned users.</p>

@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, ApiRequestError } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let step = $state(1);
 	let totalSteps = 4;
-	let loading = $state(true);
-	let submitting = $state(false);
 	let error = $state('');
 	let setupComplete = $state(false);
 	let alreadyCompleted = $state(false);
+	let loadOp = $state(createAsyncOp(true));
+	let submitOp = $state(createAsyncOp());
 
 	// Step 1: Instance info
 	let instanceName = $state('');
@@ -28,7 +30,7 @@
 	// Step 4: Review
 
 	onMount(async () => {
-		try {
+		await loadOp.run(async () => {
 			const status = await api.getSetupStatus();
 			if (status.completed) {
 				alreadyCompleted = true;
@@ -36,10 +38,7 @@
 			if (status.instance_name) {
 				instanceName = status.instance_name;
 			}
-		} catch {
-			// Setup endpoint may not require auth
-		}
-		loading = false;
+		});
 	});
 
 	function nextStep() {
@@ -74,8 +73,7 @@
 
 	async function completeSetup() {
 		error = '';
-		submitting = true;
-		try {
+		await submitOp.run(async () => {
 			// Step 1: Register admin account if credentials provided.
 			if (adminUsername && adminEmail && adminPassword) {
 				try {
@@ -102,10 +100,9 @@
 			});
 
 			setupComplete = true;
-		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : 'An unexpected error occurred.';
-		}
-		submitting = false;
+		}, msg => {
+			error = msg;
+		}, 'An unexpected error occurred.');
 	}
 
 	function goToApp() {
@@ -115,7 +112,7 @@
 
 <div class="min-h-screen bg-bg-primary flex items-center justify-center p-4">
 	<div class="w-full max-w-2xl">
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="bg-bg-secondary rounded p-12 text-center">
 				<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full mx-auto"></div>
 				<p class="text-text-secondary mt-4">Checking setup status...</p>
@@ -363,7 +360,7 @@
 				<!-- Navigation -->
 				<div class="flex justify-between mt-8">
 					{#if step > 1}
-						<button class="btn-secondary px-6 py-2" onclick={prevStep} disabled={submitting}>
+						<button class="btn-secondary px-6 py-2" onclick={prevStep} disabled={submitOp.loading}>
 							Back
 						</button>
 					{:else}
@@ -378,9 +375,9 @@
 						<button
 							class="btn-primary px-8 py-2"
 							onclick={completeSetup}
-							disabled={submitting}
+							disabled={submitOp.loading}
 						>
-							{#if submitting}
+							{#if submitOp.loading}
 								<span class="inline-block animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>
 								Setting up...
 							{:else}

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { MessageReport } from '$lib/types';
 
 	interface Props {
@@ -10,25 +12,25 @@
 	let { guildId }: Props = $props();
 
 	let reports = $state<MessageReport[]>([]);
-	let loadingReports = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let reportFilter = $state<string>('open');
 	let loadedGuildId = $state<string | null>(null);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingReports) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadReports();
 		}
 	});
 
 	async function loadReports() {
-		loadingReports = true;
-		try {
-			reports = await api.getReports(guildId, { status: reportFilter });
+		const result = await loadOp.run(
+			() => api.getReports(guildId, { status: reportFilter }),
+			msg => addToast(msg, 'error'),
+			'Failed to load reports'
+		);
+		if (result) {
+			reports = result;
 			loadedGuildId = guildId;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load reports', 'error');
-		} finally {
-			loadingReports = false;
 		}
 	}
 
@@ -37,8 +39,8 @@
 			const updated = await api.resolveReport(guildId, reportId, status);
 			reports = reports.map((report) => report.id === reportId ? updated : report);
 			addToast(status === 'resolved' ? 'Report resolved' : 'Report dismissed', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to resolve report', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to resolve report'), 'error');
 		}
 	}
 
@@ -60,7 +62,7 @@
 		</select>
 	</div>
 
-	{#if loadingReports}
+	{#if loadOp.loading}
 		<p class="text-sm text-text-muted">Loading reports...</p>
 	{:else if reports.length === 0}
 		<p class="text-sm text-text-muted">No reports found.</p>

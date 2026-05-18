@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { RaidConfig } from '$lib/types';
 
 	interface Props {
@@ -10,44 +12,45 @@
 	let { guildId }: Props = $props();
 
 	let raidConfig = $state<RaidConfig | null>(null);
-	let loadingRaid = $state(false);
-	let savingRaid = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let loadedGuildId = $state<string | null>(null);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingRaid) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadRaid();
 		}
 	});
 
 	async function loadRaid() {
-		loadingRaid = true;
-		try {
-			raidConfig = await api.getRaidConfig(guildId);
+		const result = await loadOp.run(
+			() => api.getRaidConfig(guildId),
+			msg => addToast(msg, 'error'),
+			'Failed to load raid configuration'
+		);
+		if (result) {
+			raidConfig = result;
 			loadedGuildId = guildId;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load raid configuration', 'error');
-		} finally {
-			loadingRaid = false;
 		}
 	}
 
 	async function handleSaveRaid() {
 		if (!raidConfig) return;
-		savingRaid = true;
-		try {
-			raidConfig = await api.updateRaidConfig(guildId, {
-				enabled: raidConfig.enabled,
-				join_rate_limit: raidConfig.join_rate_limit,
-				join_rate_window: raidConfig.join_rate_window,
-				min_account_age: raidConfig.min_account_age,
-				lockdown_active: raidConfig.lockdown_active
-			});
+		const config = raidConfig;
+		const result = await saveOp.run(
+			() => api.updateRaidConfig(guildId, {
+				enabled: config.enabled,
+				join_rate_limit: config.join_rate_limit,
+				join_rate_window: config.join_rate_window,
+				min_account_age: config.min_account_age,
+				lockdown_active: config.lockdown_active
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to save raid config'
+		);
+		if (result) {
+			raidConfig = result;
 			addToast('Raid protection settings saved', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to save raid config', 'error');
-		} finally {
-			savingRaid = false;
 		}
 	}
 
@@ -58,7 +61,7 @@
 
 <h1 class="mb-6 text-xl font-bold text-text-primary">Raid Protection</h1>
 
-{#if loadingRaid}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading raid configuration...</p>
 {:else if raidConfig}
 	<div class="space-y-6">
@@ -103,8 +106,8 @@
 			</label>
 		</div>
 
-		<button class="btn-primary" onclick={handleSaveRaid} disabled={savingRaid}>
-			{savingRaid ? 'Saving...' : 'Save Raid Settings'}
+		<button class="btn-primary" onclick={handleSaveRaid} disabled={saveOp.loading}>
+			{saveOp.loading ? 'Saving...' : 'Save Raid Settings'}
 		</button>
 	</div>
 {/if}

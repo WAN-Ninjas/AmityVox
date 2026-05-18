@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Channel, OnboardingConfig, OnboardingPrompt, Role } from '$lib/types';
 
 	interface Props {
@@ -21,15 +23,12 @@
 	let onboardingConfig = $state<OnboardingConfig | null>(null);
 	let onboardingChannels = $state<Channel[]>([]);
 	let onboardingRoles = $state<Role[]>([]);
-	let loadingOnboarding = $state(false);
-	let savingOnboarding = $state(false);
 	let loadedGuildId = $state<string | null>(null);
 
 	let newRuleText = $state('');
 	let newPromptTitle = $state('');
 	let newPromptRequired = $state(false);
 	let newPromptSingleSelect = $state(false);
-	let creatingPrompt = $state(false);
 
 	let editingPromptId = $state<string | null>(null);
 	let editingPromptTitle = $state('');
@@ -42,6 +41,9 @@
 	let newOptionEmoji = $state('');
 	let newOptionRoleIds = $state<string[]>([]);
 	let newOptionChannelIds = $state<string[]>([]);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
+	let createPromptOp = $state(createAsyncOp());
 
 	const textChannels = $derived(
 		onboardingChannels.filter((channel) =>
@@ -50,14 +52,13 @@
 	);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingOnboarding) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadOnboarding();
 		}
 	});
 
 	async function loadOnboarding() {
-		loadingOnboarding = true;
-		try {
+		await loadOp.run(async () => {
 			const [config, channels, roles] = await Promise.all([
 				api.getOnboarding(guildId),
 				api.getGuildChannels(guildId),
@@ -67,7 +68,7 @@
 			onboardingChannels = channels;
 			onboardingRoles = roles;
 			loadedGuildId = guildId;
-		} catch {
+		}, async () => {
 			onboardingConfig = { enabled: false, welcome_message: '', rules: [], default_channel_ids: [], prompts: [] };
 			try {
 				const [channels, roles] = await Promise.all([
@@ -77,30 +78,24 @@
 				onboardingChannels = channels;
 				onboardingRoles = roles;
 				loadedGuildId = guildId;
-			} catch (err: any) {
-				addToast(err.message || 'Failed to load onboarding metadata', 'error');
+			} catch (err: unknown) {
+				addToast(getErrorMessage(err, 'Failed to load onboarding metadata'), 'error');
 			}
-		} finally {
-			loadingOnboarding = false;
-		}
+		});
 	}
 
 	async function handleSaveOnboarding() {
 		if (!onboardingConfig) return;
-		savingOnboarding = true;
-		try {
+		const config = onboardingConfig;
+		await saveOp.run(async () => {
 			onboardingConfig = await api.updateOnboarding(guildId, {
-				enabled: onboardingConfig.enabled,
-				welcome_message: onboardingConfig.welcome_message,
-				rules: onboardingConfig.rules,
-				default_channel_ids: onboardingConfig.default_channel_ids
+				enabled: config.enabled,
+				welcome_message: config.welcome_message,
+				rules: config.rules,
+				default_channel_ids: config.default_channel_ids
 			});
 			addToast('Onboarding settings saved', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to save onboarding', 'error');
-		} finally {
-			savingOnboarding = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to save onboarding');
 	}
 
 	function addOnboardingRule() {
@@ -136,8 +131,7 @@
 
 	async function handleCreatePrompt() {
 		if (!newPromptTitle.trim()) return;
-		creatingPrompt = true;
-		try {
+		await createPromptOp.run(async () => {
 			const prompt = await api.createOnboardingPrompt(guildId, {
 				title: newPromptTitle.trim(),
 				required: newPromptRequired,
@@ -151,11 +145,7 @@
 			newPromptRequired = false;
 			newPromptSingleSelect = false;
 			addToast('Prompt created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create prompt', 'error');
-		} finally {
-			creatingPrompt = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to create prompt');
 	}
 
 	function startEditingPrompt(prompt: OnboardingPrompt) {
@@ -190,8 +180,8 @@
 			}
 			cancelEditingPrompt();
 			addToast('Prompt updated', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update prompt', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update prompt'), 'error');
 		}
 	}
 
@@ -205,8 +195,8 @@
 			if (editingPromptId === promptId) cancelEditingPrompt();
 			if (addingOptionToPromptId === promptId) cancelAddingOption();
 			addToast('Prompt deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete prompt', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete prompt'), 'error');
 		}
 	}
 
@@ -257,8 +247,8 @@
 			await loadOnboarding();
 			cancelAddingOption();
 			addToast('Option added', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to add option', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to add option'), 'error');
 		}
 	}
 
@@ -271,8 +261,8 @@
 			await api.updateOnboardingPrompt(guildId, promptId, { options: newOptions as any });
 			await loadOnboarding();
 			addToast('Option removed', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to remove option', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to remove option'), 'error');
 		}
 	}
 
@@ -304,7 +294,7 @@
 	Configure the onboarding flow that new members see when they join your server. You can set a welcome message, rules, and custom prompts to personalize their experience.
 </p>
 
-{#if loadingOnboarding}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading onboarding configuration...</p>
 {:else if onboardingConfig}
 	<label class="mb-6 flex items-center gap-3">
@@ -402,8 +392,8 @@
 		{/if}
 	</div>
 
-	<button class="btn-primary mb-8" onclick={handleSaveOnboarding} disabled={savingOnboarding}>
-		{savingOnboarding ? 'Saving...' : 'Save Onboarding Settings'}
+	<button class="btn-primary mb-8" onclick={handleSaveOnboarding} disabled={saveOp.loading}>
+		{saveOp.loading ? 'Saving...' : 'Save Onboarding Settings'}
 	</button>
 
 	<div class="border-t border-bg-modifier pt-6">
@@ -435,8 +425,8 @@
 					Single select
 				</label>
 			</div>
-			<button class="btn-primary" onclick={handleCreatePrompt} disabled={creatingPrompt || !newPromptTitle.trim()}>
-				{creatingPrompt ? 'Creating...' : 'Create Prompt'}
+			<button class="btn-primary" onclick={handleCreatePrompt} disabled={createPromptOp.loading || !newPromptTitle.trim()}>
+				{createPromptOp.loading ? 'Creating...' : 'Create Prompt'}
 			</button>
 		</div>
 

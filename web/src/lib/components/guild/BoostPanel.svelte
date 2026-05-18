@@ -1,44 +1,37 @@
 <script lang="ts">
 	import { api, type BoostSummary } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let { guildId }: { guildId: string } = $props();
 
-	let loading = $state(false);
 	let error = $state('');
 	let success = $state('');
 	let summary = $state<BoostSummary | null>(null);
-	let boosting = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let boostOp = $state(createAsyncOp());
 
 	async function loadBoosts() {
-		loading = true;
 		error = '';
-		try {
-			summary = await api.getBoosts(guildId);
-		} catch (err: any) {
-			error = err.message || 'Failed to load boosts';
-		} finally {
-			loading = false;
-		}
+		const result = await loadOp.run(() => api.getBoosts(guildId), msg => (error = msg), 'Failed to load boosts');
+		if (result) summary = result;
 	}
 
 	async function toggleBoost() {
-		boosting = true;
 		error = '';
 		success = '';
-		try {
+		const result = await boostOp.run(async () => {
 			if (summary?.user_boosted) {
 				await api.unboostGuild(guildId);
-				success = 'Boost removed';
+				return 'Boost removed';
 			} else {
 				await api.boostGuild(guildId);
-				success = 'Server boosted!';
+				return 'Server boosted!';
 			}
+		}, msg => (error = msg), 'Failed to update boost');
+		if (result) {
+			success = result;
 			await loadBoosts();
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to update boost';
-		} finally {
-			boosting = false;
 		}
 	}
 
@@ -75,7 +68,7 @@
 		<h2 class="text-lg font-semibold text-text-primary">Server Boosts</h2>
 	</div>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
@@ -116,9 +109,9 @@
 				class:bg-red-500={summary.user_boosted}
 				class:hover:bg-red-600={summary.user_boosted}
 				onclick={toggleBoost}
-				disabled={boosting}
+				disabled={boostOp.loading}
 			>
-				{#if boosting}
+				{#if boostOp.loading}
 					Processing...
 				{:else if summary.user_boosted}
 					Remove Boost

@@ -2,6 +2,7 @@
 	import { getRoom } from '$lib/stores/voice';
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let {
 		channelId,
@@ -80,12 +81,15 @@
 
 			isSharing = true;
 			showSettings = false;
-		} catch (err: any) {
+		} catch (err: unknown) {
 			// User cancelled the picker — not an error
-			if (err.name === 'NotAllowedError' || err.message?.includes('cancelled')) {
+			if (
+				(err instanceof DOMException && err.name === 'NotAllowedError') ||
+				(err instanceof Error && err.message.includes('cancelled'))
+			) {
 				error = null;
 			} else {
-				error = err.message || 'Failed to start screen share';
+				error = getErrorMessage(err, 'Failed to start screen share');
 				console.error('Screen share error:', err);
 			}
 		} finally {

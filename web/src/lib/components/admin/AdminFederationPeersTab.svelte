@@ -3,40 +3,39 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { FederationPeer } from '$lib/types';
 
 	let peers = $state<FederationPeer[]>([]);
-	let loadingPeers = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let newPeerDomain = $state('');
-	let addingPeer = $state(false);
+	let addOp = $state(createAsyncOp());
 
 	onMount(() => {
 		loadPeers();
 	});
 
 	async function loadPeers() {
-		loadingPeers = true;
-		try {
-			peers = await api.getFederationPeers();
-		} catch {
+		const result = await loadOp.run(() => api.getFederationPeers());
+		if (result) {
+			peers = result;
+		} else {
 			peers = [];
-		} finally {
-			loadingPeers = false;
 		}
 	}
 
 	async function handleAddPeer() {
 		if (!newPeerDomain.trim()) return;
-		addingPeer = true;
-		try {
-			const peer = await api.addFederationPeer(newPeerDomain.trim());
+		const peer = await addOp.run(
+			() => api.addFederationPeer(newPeerDomain.trim()),
+			msg => addToast(msg, 'error'),
+			'Failed to add peer'
+		);
+		if (peer) {
 			peers = [...peers, peer];
 			newPeerDomain = '';
 			addToast('Peer added', 'success');
-		} catch {
-			addToast('Failed to add peer', 'error');
-		} finally {
-			addingPeer = false;
 		}
 	}
 
@@ -46,8 +45,8 @@
 			await api.removeFederationPeer(peerId);
 			peers = peers.filter((peer) => peer.id !== peerId);
 			addToast('Peer removed', 'success');
-		} catch {
-			addToast('Failed to remove peer', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to remove peer'), 'error');
 		}
 	}
 </script>
@@ -67,12 +66,12 @@
 		bind:value={newPeerDomain}
 		onkeydown={(e) => e.key === 'Enter' && handleAddPeer()}
 	/>
-	<button class="btn-primary" onclick={handleAddPeer} disabled={addingPeer || !newPeerDomain.trim()}>
-		{addingPeer ? 'Adding...' : 'Add Peer'}
+	<button class="btn-primary" onclick={handleAddPeer} disabled={addOp.loading || !newPeerDomain.trim()}>
+		{addOp.loading ? 'Adding...' : 'Add Peer'}
 	</button>
 </div>
 
-{#if loadingPeers}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading peers...</p>
 {:else if peers.length === 0}
 	<div class="rounded-lg bg-bg-secondary p-6 text-center">

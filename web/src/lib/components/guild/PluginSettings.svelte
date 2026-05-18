@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface GuildPlugin {
 		id: string;
@@ -27,10 +29,10 @@
 	let { guildId }: Props = $props();
 
 	let plugins = $state<GuildPlugin[]>([]);
-	let loading = $state(true);
 	let error = $state('');
 	let configuring = $state<string | null>(null);
 	let configJson = $state('');
+	let loadOp = $state(createAsyncOp(true));
 
 	const categoryColors: Record<string, string> = {
 		utility: 'bg-blue-500/10 text-blue-400',
@@ -45,15 +47,12 @@
 	});
 
 	async function loadPlugins(gId: string) {
-		loading = true;
-		error = '';
-		try {
+		await loadOp.run(async () => {
+			error = '';
 			plugins = await api.getGuildPlugins(gId) as GuildPlugin[];
-		} catch (err: any) {
-			error = err.message || 'Failed to load plugins';
-		} finally {
-			loading = false;
-		}
+		}, (message) => {
+			error = message;
+		}, 'Failed to load plugins');
 	}
 
 	async function togglePlugin(plugin: GuildPlugin) {
@@ -65,8 +64,8 @@
 				p.id === plugin.id ? { ...p, enabled: !p.enabled } : p
 			);
 			addToast(`Plugin ${plugin.enabled ? 'disabled' : 'enabled'}`, 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update plugin', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update plugin'), 'error');
 		}
 	}
 
@@ -76,8 +75,8 @@
 			await api.deleteGuildPlugin(guildId, plugin.id);
 			plugins = plugins.filter((p) => p.id !== plugin.id);
 			addToast('Plugin uninstalled', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to uninstall plugin', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to uninstall plugin'), 'error');
 		}
 	}
 
@@ -95,11 +94,11 @@
 			);
 			configuring = null;
 			addToast('Plugin configuration saved', 'success');
-		} catch (err: any) {
+		} catch (err: unknown) {
 			if (err instanceof SyntaxError) {
 				addToast('Invalid JSON configuration', 'error');
 			} else {
-				addToast(err.message || 'Failed to save configuration', 'error');
+				addToast(getErrorMessage(err, 'Failed to save configuration'), 'error');
 			}
 		}
 	}
@@ -119,7 +118,7 @@
 		</a>
 	</div>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-12">
 			<span class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></span>
 		</div>

@@ -7,6 +7,7 @@
 	import Modal from '$components/common/Modal.svelte';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { avatarUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		open?: boolean;
@@ -17,7 +18,7 @@
 
 	let query = $state('');
 	let results = $state<Message[]>([]);
-	let searching = $state(false);
+	let searchOp = $state(createAsyncOp());
 	let searched = $state(false);
 	let searchScope = $state<'guild' | 'channel' | 'all'>('guild');
 	let inputEl: HTMLInputElement;
@@ -35,18 +36,20 @@
 
 	async function handleSearch() {
 		if (!query.trim()) return;
-		searching = true;
 		searched = true;
 		results = [];
 
-		try {
-			const guildId = searchScope === 'guild' ? $currentGuildId ?? undefined : undefined;
-			const channelId = searchScope === 'channel' ? $currentChannelId ?? undefined : undefined;
-			results = await api.searchMessages(query.trim(), guildId, channelId);
-		} catch (err: any) {
-			console.error('Search failed:', err);
-		} finally {
-			searching = false;
+		const data = await searchOp.run(
+			() => {
+				const guildId = searchScope === 'guild' ? $currentGuildId ?? undefined : undefined;
+				const channelId = searchScope === 'channel' ? $currentChannelId ?? undefined : undefined;
+				return api.searchMessages(query.trim(), guildId, channelId);
+			},
+			undefined,
+			'Failed to search messages'
+		);
+		if (data) {
+			results = data;
 		}
 	}
 
@@ -85,8 +88,8 @@
 			bind:value={query}
 			onkeydown={handleKeydown}
 		/>
-		<button class="btn-primary" onclick={handleSearch} disabled={searching || !query.trim()}>
-			{searching ? 'Searching...' : 'Search'}
+		<button class="btn-primary" onclick={handleSearch} disabled={searchOp.loading || !query.trim()}>
+			{searchOp.loading ? 'Searching...' : 'Search'}
 		</button>
 	</div>
 
@@ -124,10 +127,12 @@
 	</div>
 
 	<div class="max-h-80 overflow-y-auto">
-		{#if searching}
+		{#if searchOp.loading}
 			<div class="flex items-center justify-center py-8">
 				<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>
+		{:else if searchOp.error}
+			<p class="py-4 text-center text-sm text-red-400">{searchOp.error}</p>
 		{:else if searched && results.length === 0}
 			<p class="py-4 text-center text-sm text-text-muted">No results found.</p>
 		{:else}

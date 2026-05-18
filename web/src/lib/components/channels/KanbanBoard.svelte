@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { currentUser } from '$lib/stores/auth';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface KanbanCard {
 		id: string;
@@ -131,8 +132,8 @@
 			newColumnColor = '#6366f1';
 			addingColumn = false;
 			await loadBoard();
-		} catch (err: any) {
-			error = err.message || 'Failed to create column';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to create column');
 		}
 	}
 
@@ -144,8 +145,8 @@
 				position
 			});
 			await loadBoard();
-		} catch (err: any) {
-			error = err.message || 'Failed to move card';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to move card');
 		}
 	}
 
@@ -155,8 +156,8 @@
 			await api.deleteKanbanCard(channelId, boardId, cardId);
 			selectedCard = null;
 			await loadBoard();
-		} catch (err: any) {
-			error = err.message || 'Failed to delete card';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to delete card');
 		}
 	}
 

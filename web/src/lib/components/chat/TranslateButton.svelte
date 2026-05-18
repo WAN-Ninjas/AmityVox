@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		channelId: string;
@@ -58,9 +59,8 @@
 			// Save preferred language.
 			localStorage.setItem('av-translate-lang', target);
 			preferredLang = target;
-		} catch (err: any) {
-			const msg = err?.message ?? 'Translation failed';
-			addToast(msg, 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Translation failed'), 'error');
 		} finally {
 			loading = false;
 		}

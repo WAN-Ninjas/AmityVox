@@ -20,6 +20,7 @@ import {
 } from 'livekit-client';
 import { routeAudioThroughNoiseFilter, cleanupNoiseFilter, cleanupAllNoiseFilters } from '$lib/utils/noiseReduction';
 import { routeAudioThroughGain, cleanupUserAudio, cleanupAllAudio, getAudioLevel, computeRmsLevel } from '$lib/utils/voiceVolume';
+import { fileUrl } from '$lib/utils/avatar';
 
 export interface VoiceParticipant {
 	userId: string;
@@ -30,6 +31,7 @@ export interface VoiceParticipant {
 	muted: boolean;
 	deafened: boolean;
 	speaking: boolean;
+	screenSharing?: boolean;
 }
 
 export interface VideoTrackInfo {
@@ -267,6 +269,7 @@ export function handleVoiceStateUpdate(data: {
 	instance_id?: string | null;
 	muted?: boolean;
 	deafened?: boolean;
+	screen_sharing?: boolean;
 	action?: 'join' | 'leave' | 'update';
 }) {
 	const currentChannelId = get(voiceChannelId);
@@ -295,7 +298,8 @@ export function handleVoiceStateUpdate(data: {
 			instanceId: data.instance_id ?? null,
 			muted: data.muted ?? false,
 			deafened: data.deafened ?? false,
-			speaking: false
+			speaking: false,
+			screenSharing: data.screen_sharing ?? false
 		};
 
 		if (data.channel_id === currentChannelId) {
@@ -310,6 +314,50 @@ export function handleVoiceStateUpdate(data: {
 			updateChannelVoiceParticipants(data.channel_id, data.user_id, 'add', participant);
 		}
 	}
+}
+
+export function handleSoundboardPlay(data: {
+	channel_id: string;
+	file_url: string;
+	volume?: number;
+	user_id?: string;
+}, selfUserId?: string) {
+	if (data.channel_id !== get(voiceChannelId)) return;
+	if (selfUserId && data.user_id === selfUserId) return;
+
+	const audio = new Audio(fileUrl(data.file_url));
+	audio.volume = Math.min(Math.max(data.volume ?? 1, 0), 1);
+	audio.play().catch(() => {});
+}
+
+export function handleScreenShareEvent(data: {
+	channel_id: string;
+	user_id: string;
+}, sharing: boolean) {
+	const update = (participant: VoiceParticipant): VoiceParticipant => ({
+		...participant,
+		screenSharing: sharing
+	});
+
+	if (data.channel_id === get(voiceChannelId)) {
+		voiceParticipants.update((map) => {
+			const next = new Map(map);
+			const participant = next.get(data.user_id);
+			if (participant) next.set(data.user_id, update(participant));
+			return next;
+		});
+	}
+
+	channelVoiceUsers.update((outer) => {
+		const next = new Map(outer);
+		const inner = new Map(next.get(data.channel_id) ?? new Map());
+		const participant = inner.get(data.user_id);
+		if (participant) {
+			inner.set(data.user_id, update(participant));
+			next.set(data.channel_id, inner);
+		}
+		return next;
+	});
 }
 
 // --- Channel-level voice participants (for sidebar display) ---

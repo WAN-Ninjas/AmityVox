@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface MediaBreakdown {
 		category: string;
@@ -41,17 +42,16 @@
 		upload_trend_30d: DailyUpload[];
 	}
 
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let storage = $state<StorageData | null>(null);
 
 	async function loadStorage() {
-		loading = true;
-		try {
-			storage = await api.getAdminStorage();
-		} catch {
-			addToast('Failed to load storage data', 'error');
-		}
-		loading = false;
+		const result = await loadOp.run(
+			() => api.getAdminStorage(),
+			msg => addToast(msg, 'error'),
+			'Failed to load storage data'
+		);
+		if (result) storage = result;
 	}
 
 	onMount(() => {
@@ -90,12 +90,12 @@
 			<h2 class="text-xl font-bold text-text-primary">Storage Dashboard</h2>
 			<p class="text-text-muted text-sm">File storage usage and database size breakdown</p>
 		</div>
-		<button class="btn-secondary text-sm px-3 py-1.5" onclick={loadStorage} disabled={loading}>
-			{loading ? 'Loading...' : 'Refresh'}
+		<button class="btn-secondary text-sm px-3 py-1.5" onclick={loadStorage} disabled={loadOp.loading}>
+			{loadOp.loading ? 'Loading...' : 'Refresh'}
 		</button>
 	</div>
 
-	{#if loading && !storage}
+	{#if loadOp.loading && !storage}
 		<div class="flex justify-center py-12">
 			<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 		</div>

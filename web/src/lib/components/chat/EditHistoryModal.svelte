@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import Modal from '$components/common/Modal.svelte';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		open?: boolean;
@@ -21,7 +22,7 @@
 			error = '';
 			api.getMessageEdits(channelId, messageId)
 				.then((data) => (edits = data))
-				.catch((e) => (error = e.message || 'Failed to load edit history'))
+				.catch((err: unknown) => (error = getErrorMessage(err, 'Failed to load edit history')))
 				.finally(() => (loading = false));
 		}
 	});

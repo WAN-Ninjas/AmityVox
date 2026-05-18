@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { BanList, BanListEntry, BanListSubscription } from '$lib/types';
 
 	interface Props {
@@ -14,11 +16,8 @@
 	let banListEntries = $state<Map<string, BanListEntry[]>>(new Map());
 	let banListSubscriptions = $state<BanListSubscription[]>([]);
 	let publicBanLists = $state<BanList[]>([]);
-	let loadingBanLists = $state(false);
-	let loadingBanListEntries = $state(false);
 	let loadedGuildId = $state<string | null>(null);
 
-	let creatingBanList = $state(false);
 	let newBanListName = $state('');
 	let newBanListDescription = $state('');
 	let newBanListPublic = $state(false);
@@ -26,30 +25,33 @@
 
 	let newEntryUserId = $state('');
 	let newEntryReason = $state('');
-	let addingEntry = $state(false);
 
 	let showSubscribePanel = $state(false);
 	let subscribingListId = $state('');
 	let subscribingAutoBan = $state(false);
-	let subscribing = $state(false);
 
 	let importingListId = $state<string | null>(null);
 	let importData = $state('');
-	let importing = $state(false);
+
+	let loadOp = $state(createAsyncOp());
+	let loadEntriesOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
+	let addEntryOp = $state(createAsyncOp());
+	let importOp = $state(createAsyncOp());
+	let subscribeOp = $state(createAsyncOp());
 
 	const subscribablePublicBanLists = $derived(
 		publicBanLists.filter((publicList) => !banListSubscriptions.some((subscription) => subscription.list_id === publicList.id))
 	);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingBanLists) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadBanLists();
 		}
 	});
 
 	async function loadBanLists() {
-		loadingBanLists = true;
-		try {
+		await loadOp.run(async () => {
 			const [lists, subscriptions, publicLists] = await Promise.all([
 				api.getBanLists(guildId),
 				api.getBanListSubscriptions(guildId),
@@ -59,30 +61,20 @@
 			banListSubscriptions = subscriptions;
 			publicBanLists = publicLists;
 			loadedGuildId = guildId;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load ban lists', 'error');
-		} finally {
-			loadingBanLists = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to load ban lists');
 	}
 
 	async function loadBanListEntriesFor(listId: string) {
-		loadingBanListEntries = true;
-		try {
+		await loadEntriesOp.run(async () => {
 			const entries = await api.getBanListEntries(guildId, listId);
 			banListEntries = new Map(banListEntries);
 			banListEntries.set(listId, entries);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load ban list entries', 'error');
-		} finally {
-			loadingBanListEntries = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to load ban list entries');
 	}
 
 	async function handleCreateBanList() {
 		if (!newBanListName.trim()) return;
-		creatingBanList = true;
-		try {
+		await createOp.run(async () => {
 			const list = await api.createBanList(guildId, {
 				name: newBanListName.trim(),
 				description: newBanListDescription.trim() || undefined,
@@ -93,11 +85,7 @@
 			newBanListDescription = '';
 			newBanListPublic = false;
 			addToast('Ban list created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create ban list', 'error');
-		} finally {
-			creatingBanList = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to create ban list');
 	}
 
 	async function handleDeleteBanList(listId: string) {
@@ -108,8 +96,8 @@
 			if (expandedBanListId === listId) expandedBanListId = null;
 			if (importingListId === listId) importingListId = null;
 			addToast('Ban list deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete ban list', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete ban list'), 'error');
 		}
 	}
 
@@ -126,24 +114,20 @@
 
 	async function handleAddBanListEntry() {
 		if (!expandedBanListId || !newEntryUserId.trim()) return;
-		addingEntry = true;
-		try {
-			const entry = await api.addBanListEntry(guildId, expandedBanListId, {
+		const listId = expandedBanListId;
+		await addEntryOp.run(async () => {
+			const entry = await api.addBanListEntry(guildId, listId, {
 				user_id: newEntryUserId.trim(),
 				reason: newEntryReason.trim() || undefined
 			});
-			const existing = banListEntries.get(expandedBanListId) ?? [];
+			const existing = banListEntries.get(listId) ?? [];
 			banListEntries = new Map(banListEntries);
-			banListEntries.set(expandedBanListId, [...existing, entry]);
-			banLists = banLists.map((list) => list.id === expandedBanListId ? { ...list, entry_count: list.entry_count + 1 } : list);
+			banListEntries.set(listId, [...existing, entry]);
+			banLists = banLists.map((list) => list.id === listId ? { ...list, entry_count: list.entry_count + 1 } : list);
 			newEntryUserId = '';
 			newEntryReason = '';
 			addToast('Ban list entry added', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to add entry', 'error');
-		} finally {
-			addingEntry = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to add entry');
 	}
 
 	async function handleRemoveBanListEntry(listId: string, entryId: string) {
@@ -154,8 +138,8 @@
 			banListEntries.set(listId, existing.filter((entry) => entry.id !== entryId));
 			banLists = banLists.map((list) => list.id === listId ? { ...list, entry_count: Math.max(0, list.entry_count - 1) } : list);
 			addToast('Ban list entry removed', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to remove entry', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to remove entry'), 'error');
 		}
 	}
 
@@ -173,33 +157,28 @@
 			document.body.removeChild(anchor);
 			URL.revokeObjectURL(url);
 			addToast('Ban list exported', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to export ban list', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to export ban list'), 'error');
 		}
 	}
 
 	async function handleImportBanList() {
 		if (!importingListId || !importData.trim()) return;
-		importing = true;
-		try {
+		const listId = importingListId;
+		await importOp.run(async () => {
 			const parsed = JSON.parse(importData);
-			await api.importBanList(guildId, importingListId, parsed);
-			await loadBanListEntriesFor(importingListId);
+			await api.importBanList(guildId, listId, parsed);
+			await loadBanListEntriesFor(listId);
 			banLists = await api.getBanLists(guildId);
 			importingListId = null;
 			importData = '';
 			addToast('Ban list imported', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to import ban list (check JSON format)', 'error');
-		} finally {
-			importing = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to import ban list (check JSON format)');
 	}
 
 	async function handleSubscribeBanList() {
 		if (!subscribingListId) return;
-		subscribing = true;
-		try {
+		await subscribeOp.run(async () => {
 			const subscription = await api.subscribeBanList(guildId, {
 				list_id: subscribingListId,
 				auto_ban: subscribingAutoBan
@@ -209,11 +188,7 @@
 			subscribingAutoBan = false;
 			showSubscribePanel = false;
 			addToast('Subscribed to ban list', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to subscribe to ban list', 'error');
-		} finally {
-			subscribing = false;
-		}
+		}, (message) => addToast(message, 'error'), 'Failed to subscribe to ban list');
 	}
 
 	async function handleUnsubscribeBanList(subId: string) {
@@ -222,8 +197,8 @@
 			await api.unsubscribeBanList(guildId, subId);
 			banListSubscriptions = banListSubscriptions.filter((subscription) => subscription.id !== subId);
 			addToast('Unsubscribed from ban list', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to unsubscribe', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to unsubscribe'), 'error');
 		}
 	}
 
@@ -274,12 +249,12 @@
 			Make public (other servers can discover and subscribe)
 		</label>
 	</div>
-	<button class="btn-primary" onclick={handleCreateBanList} disabled={creatingBanList || !newBanListName.trim()}>
-		{creatingBanList ? 'Creating...' : 'Create Ban List'}
+	<button class="btn-primary" onclick={handleCreateBanList} disabled={createOp.loading || !newBanListName.trim()}>
+		{createOp.loading ? 'Creating...' : 'Create Ban List'}
 	</button>
 </div>
 
-{#if loadingBanLists}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading ban lists...</p>
 {:else if banLists.length === 0}
 	<p class="text-sm text-text-muted">No ban lists yet. Create one above.</p>
@@ -328,8 +303,8 @@
 							placeholder="Paste exported ban list JSON here..."
 						></textarea>
 						<div class="flex gap-2">
-							<button class="btn-primary text-xs" onclick={handleImportBanList} disabled={importing || !importData.trim()}>
-								{importing ? 'Importing...' : 'Import'}
+							<button class="btn-primary text-xs" onclick={handleImportBanList} disabled={importOp.loading || !importData.trim()}>
+								{importOp.loading ? 'Importing...' : 'Import'}
 							</button>
 							<button class="btn-secondary text-xs" onclick={() => toggleImportPanel(list.id)}>
 								Cancel
@@ -340,14 +315,14 @@
 
 				{#if expandedBanListId === list.id}
 					<div class="border-t border-bg-modifier px-3 py-3">
-						{#if loadingBanListEntries}
+						{#if loadEntriesOp.loading}
 							<p class="text-xs text-text-muted">Loading entries...</p>
 						{:else}
 							<div class="mb-3 flex gap-2">
 								<input type="text" class="input flex-1 text-sm" placeholder="User ID..." bind:value={newEntryUserId} />
 								<input type="text" class="input flex-1 text-sm" placeholder="Reason (optional)..." bind:value={newEntryReason} />
-								<button class="btn-primary text-xs" onclick={handleAddBanListEntry} disabled={addingEntry || !newEntryUserId.trim()}>
-									{addingEntry ? 'Adding...' : 'Add'}
+								<button class="btn-primary text-xs" onclick={handleAddBanListEntry} disabled={addEntryOp.loading || !newEntryUserId.trim()}>
+									{addEntryOp.loading ? 'Adding...' : 'Add'}
 								</button>
 							</div>
 
@@ -442,8 +417,8 @@
 				</div>
 			{/if}
 			<div class="flex gap-2">
-				<button class="btn-primary text-xs" onclick={handleSubscribeBanList} disabled={subscribing || !subscribingListId}>
-					{subscribing ? 'Subscribing...' : 'Subscribe'}
+				<button class="btn-primary text-xs" onclick={handleSubscribeBanList} disabled={subscribeOp.loading || !subscribingListId}>
+					{subscribeOp.loading ? 'Subscribing...' : 'Subscribe'}
 				</button>
 				<button class="btn-secondary text-xs" onclick={closeSubscribePanel}>
 					Cancel

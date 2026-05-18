@@ -2,21 +2,19 @@
 	import { api } from '$lib/api/client';
 	import { onMount } from 'svelte';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { MessageBookmark } from '$lib/types';
 
 	let bookmarks = $state<MessageBookmark[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp(true));
 	let reminderOpenId = $state<string | null>(null);
 	let customReminderDate = $state('');
 
 	onMount(async () => {
-		try {
-			bookmarks = await api.getBookmarks();
-		} catch (err: any) {
-			error = err.message || 'Failed to load bookmarks';
-		} finally {
-			loading = false;
+		const result = await loadOp.run(() => api.getBookmarks(), undefined, 'Failed to load bookmarks');
+		if (result) {
+			bookmarks = result;
 		}
 	});
 
@@ -24,8 +22,8 @@
 		try {
 			await api.deleteBookmark(messageId);
 			bookmarks = bookmarks.filter(b => b.message_id !== messageId);
-		} catch (err: any) {
-			error = err.message || 'Failed to remove bookmark';
+		} catch (err: unknown) {
+			loadOp.error = getErrorMessage(err, 'Failed to remove bookmark');
 		}
 	}
 
@@ -62,8 +60,8 @@
 			} else {
 				addToast('Reminder cleared', 'info');
 			}
-		} catch (err: any) {
-			addToast('Failed to set reminder', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to set reminder'), 'error');
 		}
 	}
 
@@ -102,10 +100,10 @@
 
 	<div class="flex-1 overflow-y-auto p-6">
 		<div class="mx-auto max-w-2xl">
-			{#if loading}
+			{#if loadOp.loading}
 				<p class="text-sm text-text-muted">Loading saved messages...</p>
-			{:else if error}
-				<p class="text-sm text-red-400">{error}</p>
+			{:else if loadOp.error}
+				<p class="text-sm text-red-400">{loadOp.error}</p>
 			{:else if bookmarks.length === 0}
 				<div class="flex flex-col items-center justify-center py-20 text-center">
 					<svg class="mb-4 h-16 w-16 text-text-muted opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">

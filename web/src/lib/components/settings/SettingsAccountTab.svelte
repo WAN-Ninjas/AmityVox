@@ -7,6 +7,7 @@
 	import ProfileLinkEditor from '$components/common/ProfileLinkEditor.svelte';
 	import ImageCropper from '$components/common/ImageCropper.svelte';
 	import Modal from '$components/common/Modal.svelte';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { User } from '$lib/types';
 
 	interface Props {
@@ -18,9 +19,9 @@
 	let displayName = $state('');
 	let bio = $state('');
 	let statusText = $state('');
-	let saving = $state(false);
 	let error = $state('');
 	let success = $state('');
+	let saveOp = $state(createAsyncOp());
 	let avatarFile = $state<File | null>(null);
 	let avatarPreview = $state<string | null>(null);
 	let accentColor = $state('#5865f2');
@@ -61,11 +62,10 @@
 	}
 
 	async function handleSaveProfile() {
-		saving = true;
 		error = '';
 		success = '';
 
-		try {
+		const updated = await saveOp.run(async () => {
 			let avatarId: string | undefined;
 			if (avatarFile) {
 				const uploaded = await api.uploadFile(avatarFile);
@@ -88,7 +88,10 @@
 			if (bannerId) payload.banner_id = bannerId;
 			if (bannerRemoved && !bannerId) payload.banner_id = null;
 
-			const updated = await api.updateMe(payload as any);
+			return await api.updateMe(payload as any);
+		}, (msg) => (error = msg), 'Failed to save');
+
+		if (updated) {
 			currentUser.set(updated);
 			avatarFile = null;
 			avatarPreview = null;
@@ -97,10 +100,6 @@
 			bannerRemoved = false;
 			success = 'Profile updated!';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to save';
-		} finally {
-			saving = false;
 		}
 	}
 
@@ -238,8 +237,8 @@
 		<textarea id="bio" bind:value={bio} class="input w-full" rows="3" maxlength="190"></textarea>
 	</div>
 
-	<button class="btn-primary" onclick={handleSaveProfile} disabled={saving}>
-		{saving ? 'Saving...' : 'Save Changes'}
+	<button class="btn-primary" onclick={handleSaveProfile} disabled={saveOp.loading}>
+		{saveOp.loading ? 'Saving...' : 'Save Changes'}
 	</button>
 
 	<!-- Profile Links -->

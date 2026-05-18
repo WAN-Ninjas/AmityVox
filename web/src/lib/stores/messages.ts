@@ -60,27 +60,70 @@ export async function loadMessages(channelId: string, before?: string) {
 	}
 }
 
+interface ReconcileLoadedChannelsOptions {
+	limit?: number;
+	maxAfterPages?: number;
+}
+
 export async function backfillLoadedChannels(limit = 100) {
+	return reconcileLoadedChannels({ limit });
+}
+
+export async function reconcileLoadedChannels(options: ReconcileLoadedChannelsOptions = {}) {
+	const limit = options.limit ?? 100;
+	const maxAfterPages = options.maxAfterPages ?? 5;
 	const snapshot = get(messagesByChannel);
 	await Promise.all(
 		Array.from(snapshot.entries()).map(async ([channelId, messages]) => {
-			const latest = messages.at(-1);
-			if (!latest) return;
-			const missed = await api.getMessages(channelId, { after: latest.id, limit });
-			if (missed.length === 0) return;
-			messagesByChannel.update((map) => {
-				const existing = map.get(channelId) ?? [];
-				const merged = new Map<string, Message>();
-				for (const message of existing) merged.set(message.id, message);
-				for (const message of missed) merged.set(message.id, message);
-				map.set(
-					channelId,
-					Array.from(merged.values()).sort((a, b) => a.id.localeCompare(b.id))
-				);
-				return new Map(map);
-			});
+			try {
+				const latest = messages.at(-1);
+				const [latestWindow, missed] = await Promise.all([
+					api.getMessages(channelId, { limit }),
+					latest ? loadMessagesAfter(channelId, latest.id, limit, maxAfterPages) : Promise.resolve([])
+				]);
+				messagesByChannel.update((map) => {
+					const existing = map.get(channelId) ?? [];
+					const sortedWindow = sortMessages(latestWindow);
+					const oldestWindowId = sortedWindow[0]?.id;
+					const retainedOlder = oldestWindowId
+						? existing.filter((message) => message.id < oldestWindowId)
+						: [];
+					const merged = new Map<string, Message>();
+					for (const message of retainedOlder) merged.set(message.id, message);
+					for (const message of sortedWindow) merged.set(message.id, message);
+					for (const message of missed) merged.set(message.id, message);
+					map.set(channelId, sortMessages(Array.from(merged.values())));
+					return new Map(map);
+				});
+			} catch (error) {
+				console.warn('Failed to reconcile channel messages after reconnect', { channelId, error });
+			}
 		})
 	);
+}
+
+async function loadMessagesAfter(
+	channelId: string,
+	after: string,
+	limit: number,
+	maxPages: number
+): Promise<Message[]> {
+	const all: Message[] = [];
+	let cursor = after;
+	for (let page = 0; page < maxPages; page += 1) {
+		const messages = await api.getMessages(channelId, { after: cursor, limit });
+		if (messages.length === 0) break;
+		const sorted = sortMessages(messages);
+		all.push(...sorted);
+		const nextCursor = sorted.at(-1)?.id;
+		if (!nextCursor || nextCursor === cursor || messages.length < limit) break;
+		cursor = nextCursor;
+	}
+	return all;
+}
+
+function sortMessages(messages: Message[]) {
+	return [...messages].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function setChannelLoading(channelId: string, loading: boolean) {

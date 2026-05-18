@@ -3,12 +3,14 @@
 	import { api, type ContentScanLogEntry, type ContentScanRule } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import Modal from '$components/common/Modal.svelte';
 
 	let contentScanRules = $state<ContentScanRule[]>([]);
 	let contentScanLog = $state<ContentScanLogEntry[]>([]);
-	let loadingContentRules = $state(false);
-	let loadingContentLog = $state(false);
+	let rulesOp = $state(createAsyncOp());
+	let logOp = $state(createAsyncOp());
 	let createRuleModalOpen = $state(false);
 	let editRuleModalOpen = $state(false);
 	let editingRule = $state<ContentScanRule | null>(null);
@@ -17,7 +19,7 @@
 	let ruleAction = $state<'block' | 'flag' | 'log'>('log');
 	let ruleTarget = $state<'filename' | 'content_type' | 'text_content'>('filename');
 	let ruleEnabled = $state(true);
-	let savingRule = $state(false);
+	let saveRuleOp = $state(createAsyncOp());
 	let contentLogSubTab = $state<'rules' | 'log'>('rules');
 
 	onMount(() => {
@@ -25,24 +27,20 @@
 	});
 
 	async function loadContentScanRules() {
-		loadingContentRules = true;
-		try {
-			contentScanRules = await api.getContentScanRules();
-		} catch {
+		const result = await rulesOp.run(() => api.getContentScanRules());
+		if (result) {
+			contentScanRules = result;
+		} else {
 			contentScanRules = [];
-		} finally {
-			loadingContentRules = false;
 		}
 	}
 
 	async function loadContentScanLog() {
-		loadingContentLog = true;
-		try {
-			contentScanLog = await api.getContentScanLog({ limit: 50 });
-		} catch {
+		const result = await logOp.run(() => api.getContentScanLog({ limit: 50 }));
+		if (result) {
+			contentScanLog = result;
+		} else {
 			contentScanLog = [];
-		} finally {
-			loadingContentLog = false;
 		}
 	}
 
@@ -67,44 +65,42 @@
 
 	async function handleCreateRule() {
 		if (!ruleName.trim() || !rulePattern.trim()) return;
-		savingRule = true;
-		try {
-			const rule = await api.createContentScanRule({
+		const rule = await saveRuleOp.run(
+			() => api.createContentScanRule({
 				name: ruleName.trim(),
 				pattern: rulePattern.trim(),
 				action: ruleAction,
 				target: ruleTarget,
 				enabled: ruleEnabled
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to create rule'
+		);
+		if (rule) {
 			contentScanRules = [rule, ...contentScanRules];
 			createRuleModalOpen = false;
 			addToast('Content scan rule created', 'success');
-		} catch (err: any) {
-			addToast(err.message ?? 'Failed to create rule', 'error');
-		} finally {
-			savingRule = false;
 		}
 	}
 
 	async function handleUpdateRule() {
 		if (!editingRule) return;
-		savingRule = true;
-		try {
-			const updated = await api.updateContentScanRule(editingRule.id, {
+		const updated = await saveRuleOp.run(
+			() => api.updateContentScanRule(editingRule!.id, {
 				name: ruleName.trim(),
 				pattern: rulePattern.trim(),
 				action: ruleAction,
 				target: ruleTarget,
 				enabled: ruleEnabled
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to update rule'
+		);
+		if (updated) {
 			contentScanRules = contentScanRules.map((rule) => rule.id === editingRule?.id ? updated : rule);
 			editRuleModalOpen = false;
 			editingRule = null;
 			addToast('Content scan rule updated', 'success');
-		} catch (err: any) {
-			addToast(err.message ?? 'Failed to update rule', 'error');
-		} finally {
-			savingRule = false;
 		}
 	}
 
@@ -176,7 +172,7 @@
 		</button>
 	</div>
 
-	{#if loadingContentRules}
+	{#if rulesOp.loading}
 		<p class="text-sm text-text-muted">Loading content scan rules...</p>
 	{:else if contentScanRules.length === 0}
 		<div class="rounded-lg bg-bg-secondary p-6 text-center">
@@ -233,12 +229,12 @@
 	<!-- Scan Log Sub-tab -->
 	<div class="mb-4 flex items-center justify-between">
 		<p class="text-sm text-text-muted">Recent content scan matches from all rules.</p>
-		<button class="btn-secondary text-sm" onclick={loadContentScanLog} disabled={loadingContentLog}>
-			{loadingContentLog ? 'Loading...' : 'Refresh'}
+		<button class="btn-secondary text-sm" onclick={loadContentScanLog} disabled={logOp.loading}>
+			{logOp.loading ? 'Loading...' : 'Refresh'}
 		</button>
 	</div>
 
-	{#if loadingContentLog}
+	{#if logOp.loading}
 		<p class="text-sm text-text-muted">Loading scan log...</p>
 	{:else if contentScanLog.length === 0}
 		<div class="rounded-lg bg-bg-secondary p-6 text-center">
@@ -327,9 +323,9 @@
 			<button
 				class="btn-primary text-sm"
 				onclick={handleCreateRule}
-				disabled={savingRule || !ruleName.trim() || !rulePattern.trim()}
+				disabled={saveRuleOp.loading || !ruleName.trim() || !rulePattern.trim()}
 			>
-				{savingRule ? 'Creating...' : 'Create Rule'}
+				{saveRuleOp.loading ? 'Creating...' : 'Create Rule'}
 			</button>
 		</div>
 	</div>
@@ -383,9 +379,9 @@
 			<button
 				class="btn-primary text-sm"
 				onclick={handleUpdateRule}
-				disabled={savingRule || !ruleName.trim() || !rulePattern.trim()}
+				disabled={saveRuleOp.loading || !ruleName.trim() || !rulePattern.trim()}
 			>
-				{savingRule ? 'Saving...' : 'Save Changes'}
+				{saveRuleOp.loading ? 'Saving...' : 'Save Changes'}
 			</button>
 		</div>
 	</div>

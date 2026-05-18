@@ -2,6 +2,7 @@
 	import Modal from '$components/common/Modal.svelte';
 	import { api } from '$lib/api/client';
 	import { currentGuildId } from '$lib/stores/guilds';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Invite } from '$lib/types';
 
 	interface Props {
@@ -13,8 +14,8 @@
 	let { open = $bindable(false), guildId = null, onclose }: Props = $props();
 
 	let invite = $state<Invite | null>(null);
-	let loading = $state(false);
 	let error = $state('');
+	let createOp = $state(createAsyncOp());
 	let copied = $state(false);
 
 	let maxUses = $state(0);
@@ -23,20 +24,18 @@
 	async function generateInvite() {
 		const resolvedGuildId = guildId || $currentGuildId;
 		if (!resolvedGuildId) return;
-		loading = true;
 		error = '';
 		invite = null;
 
-		try {
-			invite = await api.createInvite(resolvedGuildId, {
+		const result = await createOp.run(
+			() => api.createInvite(resolvedGuildId, {
 				max_uses: maxUses || undefined,
 				max_age_seconds: maxAge
-			});
-		} catch (err: any) {
-			error = err.message || 'Failed to create invite';
-		} finally {
-			loading = false;
-		}
+			}),
+			msg => (error = msg),
+			'Failed to create invite'
+		);
+		if (result) invite = result;
 	}
 
 	function copyInvite() {
@@ -113,8 +112,8 @@
 
 		<div class="flex justify-end gap-2">
 			<button class="btn-secondary" onclick={onclose}>Cancel</button>
-			<button class="btn-primary" onclick={generateInvite} disabled={loading}>
-				{loading ? 'Creating...' : 'Generate Invite'}
+			<button class="btn-primary" onclick={generateInvite} disabled={createOp.loading}>
+				{createOp.loading ? 'Creating...' : 'Generate Invite'}
 			</button>
 		</div>
 	{/if}

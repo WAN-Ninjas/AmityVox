@@ -15,6 +15,7 @@
 	import { clientNicknames, setClientNickname } from '$lib/stores/nicknames';
 	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		userId: string;
@@ -61,8 +62,8 @@
 			await api.blockUser(userId, level);
 			addBlockedUser(userId, level);
 			addToast(level === 'ignore' ? 'User ignored' : 'User blocked', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to block user', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to block user'), 'error');
 		} finally {
 			blockingUser = false;
 		}
@@ -75,8 +76,8 @@
 			await api.unblockUser(userId);
 			removeBlockedUser(userId);
 			addToast('User unblocked', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to unblock user', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to unblock user'), 'error');
 		} finally {
 			blockingUser = false;
 		}
@@ -89,8 +90,8 @@
 			const rel = await api.addFriend(userId);
 			addOrUpdateRelationship(rel);
 			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to send friend request', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to send friend request'), 'error');
 		} finally {
 			addingFriend = false;
 		}
@@ -107,7 +108,7 @@
 	$effect(() => {
 		api.getUser(userId)
 			.then((u) => (user = u))
-			.catch((e) => (error = e.message || 'Failed to load user'))
+			.catch((e: unknown) => (error = getErrorMessage(e, 'Failed to load user')))
 			.finally(() => (loading = false));
 
 		if (!isSelf) {
@@ -151,8 +152,8 @@
 			addDMChannel(channel);
 			onclose();
 			goto(`/app/dms/${channel.id}`);
-		} catch (err: any) {
-			addToast('Failed to create DM', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create DM'), 'error');
 		}
 	}
 
@@ -161,8 +162,8 @@
 		noteSaving = true;
 		try {
 			await api.setUserNote(userId, note);
-		} catch (err: any) {
-			addToast('Failed to save note', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to save note'), 'error');
 		} finally {
 			noteSaving = false;
 		}

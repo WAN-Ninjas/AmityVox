@@ -2,6 +2,8 @@
 	import RoleEditor from '$components/guild/RoleEditor.svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Role } from '$lib/types';
 
 	interface Props {
@@ -11,31 +13,31 @@
 	let { guildId }: Props = $props();
 
 	let roles = $state<Role[]>([]);
-	let loadingRoles = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let loadedGuildId = $state<string | null>(null);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingRoles) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadRoles();
 		}
 	});
 
 	async function loadRoles() {
-		loadingRoles = true;
-		try {
-			roles = await api.getRoles(guildId);
+		const result = await loadOp.run(
+			() => api.getRoles(guildId),
+			msg => addToast(msg, 'error'),
+			'Failed to load roles'
+		);
+		if (result) {
+			roles = result;
 			loadedGuildId = guildId;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to load roles', 'error');
-		} finally {
-			loadingRoles = false;
 		}
 	}
 </script>
 
 <h1 class="mb-6 text-xl font-bold text-text-primary">Roles</h1>
 
-{#if loadingRoles}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading roles...</p>
 {:else}
 	<RoleEditor

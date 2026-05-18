@@ -4,6 +4,8 @@
 	import { page } from '$app/stores';
 	import { api, ApiRequestError } from '$lib/api/client';
 	import { login } from '$lib/stores/auth';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { RegistrationSettings } from '$lib/types';
 
 	let username = $state('');
@@ -11,7 +13,7 @@
 	let totpCode = $state('');
 	let totpRequired = $state(false);
 	let error = $state('');
-	let loading = $state(false);
+	let loginOp = $state(createAsyncOp());
 	let registrationSettings = $state<RegistrationSettings | null>(null);
 	let registrationSettingsLoaded = $state(false);
 	const inviteToken = $derived($page.url.searchParams.get('token') || $page.url.searchParams.get('registration_token') || '');
@@ -39,23 +41,26 @@
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
 		error = '';
-		loading = true;
 
-		try {
-			await login(username, password, totpRequired ? totpCode.trim() : undefined);
-			goto(redirectUrl);
-		} catch (err: any) {
-			if (err instanceof ApiRequestError && err.code === 'totp_required') {
-				totpRequired = true;
-				error = '';
-			} else if (err instanceof ApiRequestError && err.code === 'invalid_totp') {
-				error = 'Invalid two-factor authentication code';
-				totpCode = '';
-			} else {
-				error = err.message || 'Login failed';
+		await loginOp.run(async () => {
+			try {
+				await login(username, password, totpRequired ? totpCode.trim() : undefined);
+				goto(redirectUrl);
+			} catch (err: unknown) {
+				handleLoginError(err);
 			}
-		} finally {
-			loading = false;
+		});
+	}
+
+	function handleLoginError(err: unknown) {
+		if (err instanceof ApiRequestError && err.code === 'totp_required') {
+			totpRequired = true;
+			error = '';
+		} else if (err instanceof ApiRequestError && err.code === 'invalid_totp') {
+			error = 'Invalid two-factor authentication code';
+			totpCode = '';
+		} else {
+			error = getErrorMessage(err, 'Login failed');
 		}
 	}
 
@@ -148,8 +153,8 @@
 					</div>
 				{/if}
 
-				<button type="submit" class="btn-primary w-full" disabled={loading}>
-					{loading ? 'Logging in...' : totpRequired ? 'Verify and Log In' : 'Log In'}
+				<button type="submit" class="btn-primary w-full" disabled={loginOp.loading}>
+					{loginOp.loading ? 'Logging in...' : totpRequired ? 'Verify and Log In' : 'Log In'}
 				</button>
 			</form>
 

@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		channelId: string;
@@ -96,11 +97,11 @@
 			recording = true;
 			paused = false;
 			startTimer();
-		} catch (err: any) {
-			if (err.name === 'NotAllowedError') {
+		} catch (err: unknown) {
+			if (err instanceof DOMException && err.name === 'NotAllowedError') {
 				error = 'Permission denied. Please allow screen/camera access.';
 			} else {
-				error = err.message || 'Failed to start recording';
+				error = getErrorMessage(err, 'Failed to start recording');
 			}
 		}
 	}
@@ -187,8 +188,8 @@
 			addToast('Recording saved successfully!', 'success');
 			discardRecording();
 			if (onclose) onclose();
-		} catch (err: any) {
-			error = err.message || 'Failed to save recording';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to save recording');
 		} finally {
 			uploading = false;
 		}

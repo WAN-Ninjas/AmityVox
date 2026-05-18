@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Category } from '$lib/types';
 
 	interface Props {
@@ -11,43 +13,40 @@
 	let { guildId }: Props = $props();
 
 	let categories = $state<Category[]>([]);
-	let loadingCategories = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let newCategoryName = $state('');
-	let creatingCategory = $state(false);
+	let createOp = $state(createAsyncOp());
 	let editingCategoryId = $state<string | null>(null);
 	let editingCategoryName = $state('');
 	let loadedGuildId = $state<string | null>(null);
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingCategories) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadCategories();
 		}
 	});
 
 	async function loadCategories() {
-		loadingCategories = true;
-		try {
-			categories = await api.getCategories(guildId);
+		const result = await loadOp.run(() => api.getCategories(guildId));
+		if (result) {
+			categories = result;
 			loadedGuildId = guildId;
-		} catch {
+		} else {
 			categories = [];
-		} finally {
-			loadingCategories = false;
 		}
 	}
 
 	async function handleCreateCategory() {
 		if (!newCategoryName.trim()) return;
-		creatingCategory = true;
-		try {
-			const category = await api.createCategory(guildId, newCategoryName.trim());
+		const category = await createOp.run(
+			() => api.createCategory(guildId, newCategoryName.trim()),
+			msg => addToast(msg, 'error'),
+			'Failed to create category'
+		);
+		if (category) {
 			categories = [...categories, category];
 			newCategoryName = '';
 			addToast('Category created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create category', 'error');
-		} finally {
-			creatingCategory = false;
 		}
 	}
 
@@ -59,8 +58,8 @@
 			editingCategoryId = null;
 			editingCategoryName = '';
 			addToast('Category renamed', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to rename category', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to rename category'), 'error');
 		}
 	}
 
@@ -70,8 +69,8 @@
 			await api.deleteCategory(guildId, categoryId);
 			categories = categories.filter((category) => category.id !== categoryId);
 			addToast('Category deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete category', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete category'), 'error');
 		}
 	}
 </script>
@@ -84,12 +83,12 @@
 		bind:value={newCategoryName} maxlength="100"
 		onkeydown={(e) => e.key === 'Enter' && handleCreateCategory()}
 	/>
-	<button class="btn-primary" onclick={handleCreateCategory} disabled={creatingCategory || !newCategoryName.trim()}>
-		{creatingCategory ? 'Creating...' : 'Create Category'}
+	<button class="btn-primary" onclick={handleCreateCategory} disabled={createOp.loading || !newCategoryName.trim()}>
+		{createOp.loading ? 'Creating...' : 'Create Category'}
 	</button>
 </div>
 
-{#if loadingCategories}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading categories...</p>
 {:else if categories.length === 0}
 	<p class="text-sm text-text-muted">No categories yet. Channels will appear uncategorized.</p>

@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import {
+		loadVoiceBroadcast,
+		upsertVoiceBroadcast,
+		voiceBroadcastsByChannel
+	} from '$lib/stores/voiceBroadcasts';
 
 	let {
 		channelId,
@@ -14,18 +19,6 @@
 		currentUserId: string;
 	} = $props();
 
-	interface Broadcast {
-		id: string;
-		guild_id: string;
-		channel_id: string;
-		broadcaster_id: string;
-		title: string;
-		started_at: string;
-		ended_at: string | null;
-		listener_count: number;
-	}
-
-	let activeBroadcast = $state<Broadcast | null>(null);
 	let loadOp = $state(createAsyncOp());
 	let startOp = $state(createAsyncOp());
 	let stopOp = $state(createAsyncOp());
@@ -34,6 +27,7 @@
 	let elapsed = $state('00:00');
 	let elapsedInterval: ReturnType<typeof setInterval> | null = null;
 
+	const activeBroadcast = $derived($voiceBroadcastsByChannel.get(channelId) ?? null);
 	let isBroadcaster = $derived(activeBroadcast?.broadcaster_id === currentUserId);
 
 	// Load active broadcast on mount and when channel changes
@@ -69,13 +63,13 @@
 	});
 
 	async function loadBroadcast() {
-		activeBroadcast = await loadOp.run(() => api.getVoiceBroadcast(channelId)) ?? null;
+		await loadOp.run(() => loadVoiceBroadcast(channelId));
 	}
 
 	async function startBroadcast() {
 		const result = await startOp.run(() => api.startVoiceBroadcast(channelId, { title: title || 'Live Broadcast' }));
-		if (!startOp.error) {
-			activeBroadcast = result!;
+		if (result) {
+			upsertVoiceBroadcast(result);
 			showStartForm = false;
 			title = '';
 		}
@@ -84,7 +78,7 @@
 	async function stopBroadcast() {
 		await stopOp.run(() => api.stopVoiceBroadcast(channelId));
 		if (!stopOp.error) {
-			activeBroadcast = null;
+			voiceBroadcastsByChannel.removeEntry(channelId);
 		}
 	}
 </script>

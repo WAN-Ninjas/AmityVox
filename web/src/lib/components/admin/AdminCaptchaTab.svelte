@@ -2,10 +2,12 @@
 	import { onMount } from 'svelte';
 	import { api, type CaptchaConfig } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let captchaConfig = $state<CaptchaConfig | null>(null);
-	let loadingCaptcha = $state(false);
-	let savingCaptcha = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let captchaProvider = $state<'none' | 'hcaptcha' | 'recaptcha'>('none');
 	let captchaSiteKey = $state('');
 	let captchaSecretKey = $state('');
@@ -15,33 +17,29 @@
 	});
 
 	async function loadCaptchaConfig() {
-		loadingCaptcha = true;
-		try {
-			captchaConfig = await api.getCaptchaConfig();
+		const result = await loadOp.run(() => api.getCaptchaConfig());
+		if (result) {
+			captchaConfig = result;
 			captchaProvider = (captchaConfig?.provider ?? 'none') as 'none' | 'hcaptcha' | 'recaptcha';
 			captchaSiteKey = captchaConfig?.site_key ?? '';
 			captchaSecretKey = '';
-		} catch {
+		} else {
 			captchaConfig = null;
-		} finally {
-			loadingCaptcha = false;
 		}
 	}
 
 	async function saveCaptchaConfig() {
-		savingCaptcha = true;
-		try {
+		const result = await saveOp.run(async () => {
 			const body: { provider: 'none' | 'hcaptcha' | 'recaptcha'; site_key?: string; secret_key?: string } = { provider: captchaProvider };
 			if (captchaSiteKey) body.site_key = captchaSiteKey;
 			if (captchaSecretKey) body.secret_key = captchaSecretKey;
-			captchaConfig = await api.updateCaptchaConfig(body);
+			return await api.updateCaptchaConfig(body);
+		}, msg => addToast(msg, 'error'), 'Failed to save CAPTCHA settings');
+		if (result) {
+			captchaConfig = result;
 			captchaSiteKey = captchaConfig.site_key ?? '';
 			captchaSecretKey = '';
 			addToast('CAPTCHA settings saved', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to save CAPTCHA settings', 'error');
-		} finally {
-			savingCaptcha = false;
 		}
 	}
 </script>
@@ -51,7 +49,7 @@
 	Configure CAPTCHA verification for user registration. When enabled, new users must complete a CAPTCHA challenge before creating an account.
 </p>
 
-{#if loadingCaptcha}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading CAPTCHA settings...</p>
 {:else}
 	<div class="space-y-6">
@@ -135,8 +133,8 @@
 			</div>
 		{/if}
 
-		<button class="btn-primary" onclick={saveCaptchaConfig} disabled={savingCaptcha}>
-			{savingCaptcha ? 'Saving...' : 'Save CAPTCHA Settings'}
+		<button class="btn-primary" onclick={saveCaptchaConfig} disabled={saveOp.loading}>
+			{saveOp.loading ? 'Saving...' : 'Save CAPTCHA Settings'}
 		</button>
 	</div>
 {/if}

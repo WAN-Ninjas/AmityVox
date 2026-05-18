@@ -7,6 +7,8 @@
 	import { ackChannel } from '$lib/stores/unreads';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import TopBar from '$components/layout/TopBar.svelte';
 	import MemberList from '$components/layout/MemberList.svelte';
 	import ResizeHandle from '$components/common/ResizeHandle.svelte';
@@ -35,10 +37,10 @@
 	const isArchived = $derived($currentChannel?.archived ?? false);
 	// --- Channel Followers (announcement channels) ---
 	let followers = $state<ChannelFollower[]>([]);
-	let loadingFollowers = $state(false);
 	let followTargetChannelId = $state('');
-	let following = $state(false);
 	let guildChannelsForFollow = $state<Channel[]>([]);
+	let followersOp = $state(createAsyncOp());
+	let followOp = $state(createAsyncOp());
 
 	function isNsfwAcceptedForChannel(channelId: string): boolean {
 		try {
@@ -172,32 +174,25 @@
 	async function loadFollowers() {
 		const channelId = $currentChannelId;
 		if (!channelId) return;
-		loadingFollowers = true;
-		try {
+		await followersOp.run(async () => {
 			const [f, channels] = await Promise.all([
 				api.getChannelFollowers(channelId),
 				$currentGuild ? api.getGuildChannels($currentGuild.id) : Promise.resolve([])
 			]);
 			followers = f;
 			guildChannelsForFollow = channels.filter(c => c.channel_type === 'text');
-		} catch {}
-		finally { loadingFollowers = false; }
+		});
 	}
 
 	async function handleFollowChannel() {
 		const channelId = $currentChannelId;
 		if (!channelId || !followTargetChannelId) return;
-		following = true;
-		try {
+		await followOp.run(async () => {
 			const follower = await api.followChannel(channelId, { target_channel_id: followTargetChannelId });
 			followers = [...followers, follower];
 			followTargetChannelId = '';
 			addToast('Channel followed! Announcements will be forwarded.', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to follow channel', 'error');
-		} finally {
-			following = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to follow channel');
 	}
 
 	async function handleUnfollowChannel(followerId: string) {
@@ -207,8 +202,8 @@
 			await api.unfollowChannel(channelId, followerId);
 			followers = followers.filter(f => f.id !== followerId);
 			addToast('Unfollowed channel', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to unfollow', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to unfollow'), 'error');
 		}
 	}
 </script>
@@ -343,7 +338,7 @@
 			</div>
 
 			<div class="flex-1 overflow-y-auto p-4">
-				{#if loadingFollowers}
+				{#if followersOp.loading}
 					<p class="text-sm text-text-muted">Loading followers...</p>
 				{:else}
 					<!-- Follow form -->
@@ -361,9 +356,9 @@
 						<button
 							class="btn-primary w-full text-xs"
 							onclick={handleFollowChannel}
-							disabled={following || !followTargetChannelId}
+							disabled={followOp.loading || !followTargetChannelId}
 						>
-							{following ? 'Following...' : 'Follow'}
+							{followOp.loading ? 'Following...' : 'Follow'}
 						</button>
 					</div>
 

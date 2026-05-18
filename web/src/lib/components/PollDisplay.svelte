@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Poll } from '$lib/types';
 
 	interface Props {
@@ -42,8 +43,8 @@
 			poll.total_votes = updated.total_votes;
 			poll.user_votes = updated.user_votes;
 			poll.closed = updated.closed;
-		} catch (err: any) {
-			voteError = err.message || 'Failed to vote';
+		} catch (err: unknown) {
+			voteError = getErrorMessage(err, 'Failed to vote');
 		} finally {
 			voting = false;
 		}

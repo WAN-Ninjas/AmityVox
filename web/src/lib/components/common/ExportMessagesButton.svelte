@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let { channelId }: { channelId: string } = $props();
 
@@ -22,8 +23,8 @@
 			URL.revokeObjectURL(url);
 			success = 'Messages exported!';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to export messages';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to export messages');
 			setTimeout(() => (error = ''), 5000);
 		} finally {
 			exporting = false;

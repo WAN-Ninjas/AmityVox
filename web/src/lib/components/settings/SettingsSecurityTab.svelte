@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Session } from '$lib/types';
 
 	let currentPassword = $state('');
@@ -21,8 +23,8 @@
 	let totpStep = $state<'idle' | 'setup' | 'verify' | 'done'>('idle');
 
 	let sessions = $state<Session[]>([]);
-	let loadingSessions = $state(false);
 	let revokingSession = $state<string | null>(null);
+	let sessionsOp = $state(createAsyncOp());
 
 	onMount(() => {
 		loadSessions();
@@ -49,8 +51,8 @@
 			confirmPassword = '';
 			passwordSuccess = 'Password changed successfully!';
 			setTimeout(() => (passwordSuccess = ''), 3000);
-		} catch (err: any) {
-			passwordError = err.message || 'Failed to change password';
+		} catch (err: unknown) {
+			passwordError = getErrorMessage(err, 'Failed to change password');
 		} finally {
 			changingPassword = false;
 		}
@@ -64,8 +66,8 @@
 			totpSecret = result.secret;
 			totpQrUrl = result.qr_url;
 			totpStep = 'setup';
-		} catch (err: any) {
-			totpError = err.message || 'Failed to enable 2FA';
+		} catch (err: unknown) {
+			totpError = getErrorMessage(err, 'Failed to enable 2FA');
 		} finally {
 			enablingTotp = false;
 		}
@@ -83,8 +85,8 @@
 			backupCodes = result.backup_codes;
 			totpStep = 'done';
 			totpCode = '';
-		} catch (err: any) {
-			totpError = err.message || 'Invalid code';
+		} catch (err: unknown) {
+			totpError = getErrorMessage(err, 'Invalid code');
 		} finally {
 			verifyingTotp = false;
 		}
@@ -100,13 +102,11 @@
 	}
 
 	async function loadSessions() {
-		loadingSessions = true;
-		try {
-			sessions = await api.getSessions();
-		} catch {
+		const result = await sessionsOp.run(() => api.getSessions());
+		if (result) {
+			sessions = result;
+		} else {
 			sessions = [];
-		} finally {
-			loadingSessions = false;
 		}
 	}
 
@@ -115,8 +115,8 @@
 		try {
 			await api.deleteSession(sessionId);
 			sessions = sessions.filter((session) => session.id !== sessionId);
-		} catch (err: any) {
-			addToast(err.message || 'Failed to revoke session', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to revoke session'), 'error');
 		} finally {
 			revokingSession = null;
 		}
@@ -253,7 +253,7 @@
 <div class="rounded-lg bg-bg-secondary p-6">
 	<h3 class="mb-4 text-sm font-semibold text-text-primary">Active Sessions</h3>
 
-	{#if loadingSessions}
+	{#if sessionsOp.loading}
 		<div class="flex items-center gap-2 py-4">
 			<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			<span class="text-sm text-text-muted">Loading sessions...</span>

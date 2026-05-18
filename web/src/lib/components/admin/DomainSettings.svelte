@@ -3,6 +3,8 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface CustomDomain {
 		id: string;
@@ -16,10 +18,10 @@
 		guild_name: string;
 	}
 
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let domains = $state<CustomDomain[]>([]);
 	let showAddForm = $state(false);
-	let adding = $state(false);
+	let addOp = $state(createAsyncOp());
 	let verifyingId = $state('');
 
 	// Add form
@@ -30,13 +32,12 @@
 	let showInstructions = $state<string | null>(null);
 
 	async function loadDomains() {
-		loading = true;
-		try {
-			domains = await api.getAdminDomains() || [];
-		} catch {
-			addToast('Failed to load custom domains', 'error');
-		}
-		loading = false;
+		const result = await loadOp.run(
+			() => api.getAdminDomains(),
+			msg => addToast(msg, 'error'),
+			'Failed to load custom domains'
+		);
+		if (result) domains = result;
 	}
 
 	async function addDomain() {
@@ -44,18 +45,18 @@
 			addToast('Server ID and domain are required', 'error');
 			return;
 		}
-		adding = true;
-		try {
-			await api.addAdminDomain({ guild_id: newGuildId, domain: newDomain });
+		const result = await addOp.run(
+			() => api.addAdminDomain({ guild_id: newGuildId, domain: newDomain }),
+			msg => addToast(msg, 'error'),
+			'Failed to add domain'
+		);
+		if (result !== undefined) {
 			addToast('Domain added. Configure DNS to verify.', 'success');
 			showAddForm = false;
 			newGuildId = '';
 			newDomain = '';
 			await loadDomains();
-		} catch (e: any) {
-			addToast(e?.message || 'Failed to add domain', 'error');
 		}
-		adding = false;
 	}
 
 	async function verifyDomain(domainId: string) {
@@ -64,8 +65,8 @@
 			await api.verifyAdminDomain(domainId);
 			addToast('Domain verified successfully', 'success');
 			await loadDomains();
-		} catch (e: any) {
-			addToast(e?.message || 'Failed to verify domain', 'error');
+		} catch (e: unknown) {
+			addToast(getErrorMessage(e, 'Failed to verify domain'), 'error');
 		}
 		verifyingId = '';
 	}
@@ -143,8 +144,8 @@
 					<button class="btn-secondary px-4 py-2 text-sm" onclick={() => { showAddForm = false; newGuildId = ''; newDomain = ''; }}>
 						Cancel
 					</button>
-					<button class="btn-primary px-4 py-2 text-sm" onclick={addDomain} disabled={adding}>
-						{adding ? 'Adding...' : 'Add Domain'}
+					<button class="btn-primary px-4 py-2 text-sm" onclick={addDomain} disabled={addOp.loading}>
+						{addOp.loading ? 'Adding...' : 'Add Domain'}
 					</button>
 				</div>
 			</div>
@@ -152,7 +153,7 @@
 	{/if}
 
 	<!-- Domains List -->
-	{#if loading && domains.length === 0}
+	{#if loadOp.loading && domains.length === 0}
 		<div class="flex justify-center py-12">
 			<div class="animate-spin w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 		</div>

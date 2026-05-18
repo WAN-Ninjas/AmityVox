@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { AuditLogEntry } from '$lib/types';
 
 	interface Props {
@@ -9,7 +10,7 @@
 	let { guildId }: Props = $props();
 
 	let auditLog = $state<AuditLogEntry[]>([]);
-	let loadingAudit = $state(false);
+	let loadOp = $state(createAsyncOp());
 	let loadedGuildId = $state<string | null>(null);
 
 	const actionTypeLabels: Record<string, string> = {
@@ -31,20 +32,18 @@
 	};
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingAudit) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadAudit();
 		}
 	});
 
 	async function loadAudit() {
-		loadingAudit = true;
-		try {
-			auditLog = await api.getAuditLog(guildId, { limit: 50 });
+		const result = await loadOp.run(() => api.getAuditLog(guildId, { limit: 50 }));
+		if (result) {
+			auditLog = result;
 			loadedGuildId = guildId;
-		} catch {
+		} else {
 			auditLog = [];
-		} finally {
-			loadingAudit = false;
 		}
 	}
 
@@ -55,7 +54,7 @@
 
 <h1 class="mb-6 text-xl font-bold text-text-primary">Audit Log</h1>
 
-{#if loadingAudit}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading audit log...</p>
 {:else if auditLog.length === 0}
 	<p class="text-sm text-text-muted">No audit log entries.</p>

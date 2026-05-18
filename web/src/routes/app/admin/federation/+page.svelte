@@ -10,6 +10,8 @@
 		type AdminFederationSearchConfig
 	} from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { KeyAuditEntry } from '$lib/types';
 
 	interface PendingPeer {
@@ -25,8 +27,7 @@
 
 	// --- State ---
 	let currentTab = $state<Tab>('overview');
-	let loading = $state(true);
-	let error = $state('');
+	let dashboardOp = $state(createAsyncOp(true));
 
 	let dashboard = $state<AdminFederationDashboard | null>(null);
 	let controls = $state<AdminFederationPeerControl[]>([]);
@@ -40,10 +41,10 @@
 		dashboard?.peers.filter(p => p.federation_status === 'pending') ?? []
 	);
 
-	let loadingControls = $state(false);
-	let loadingDelivery = $state(false);
-	let loadingSecurity = $state(false);
-	let savingSearch = $state(false);
+	let controlsOp = $state(createAsyncOp());
+	let deliveryOp = $state(createAsyncOp());
+	let securityOp = $state(createAsyncOp());
+	let saveSearchOp = $state(createAsyncOp());
 	let deliveryFilter = $state('');
 
 	// Config form state
@@ -52,18 +53,21 @@
 	let configVoiceMode = $state('direct');
 	let configName = $state('');
 	let configDescription = $state('');
-	let savingConfig = $state(false);
+	let saveConfigOp = $state(createAsyncOp());
+
+	function toastError(error: unknown, fallback: string) {
+		addToast(getErrorMessage(error, fallback), 'error');
+	}
 
 	// --- Data loading ---
 	async function loadDashboard() {
-		loading = true;
-		error = '';
-		try {
-			dashboard = await api.getAdminFederationDashboard();
-		} catch (e: any) {
-			error = e.message || 'Failed to load federation dashboard';
-		} finally {
-			loading = false;
+		const result = await dashboardOp.run(
+			() => api.getAdminFederationDashboard(),
+			undefined,
+			'Failed to load federation dashboard'
+		);
+		if (result) {
+			dashboard = result;
 		}
 	}
 
@@ -81,43 +85,45 @@
 	}
 
 	async function saveConfig() {
-		savingConfig = true;
-		try {
-			await api.updateAdminInstance({
-				federation_mode: configFedMode,
-				shorthand: configShorthand || null,
-				voice_mode: configVoiceMode,
-				name: configName || null,
-				description: configDescription || null,
-			});
+		const result = await saveConfigOp.run(
+			async () => {
+				await api.updateAdminInstance({
+					federation_mode: configFedMode,
+					shorthand: configShorthand || null,
+					voice_mode: configVoiceMode,
+					name: configName || null,
+					description: configDescription || null,
+				});
+				return true;
+			},
+			msg => addToast(msg, 'error'),
+			'Failed to save config'
+		);
+		if (result) {
 			addToast('Federation config saved', 'success');
 			await loadDashboard();
-		} catch (e: any) {
-			addToast(e.message || 'Failed to save config', 'error');
-		} finally {
-			savingConfig = false;
 		}
 	}
 
 	async function loadControls() {
-		loadingControls = true;
-		try {
-			controls = await api.getAdminFederationPeerControls();
-		} catch (e: any) {
-			addToast('Failed to load peer controls: ' + e.message, 'error');
-		} finally {
-			loadingControls = false;
+		const result = await controlsOp.run(
+			() => api.getAdminFederationPeerControls(),
+			msg => addToast(msg, 'error'),
+			'Failed to load peer controls'
+		);
+		if (result) {
+			controls = result;
 		}
 	}
 
 	async function loadDeliveryReceipts() {
-		loadingDelivery = true;
-		try {
-			deliveryReceipts = await api.getAdminFederationDeliveryReceipts(deliveryFilter || undefined);
-		} catch (e: any) {
-			addToast('Failed to load delivery receipts: ' + e.message, 'error');
-		} finally {
-			loadingDelivery = false;
+		const result = await deliveryOp.run(
+			() => api.getAdminFederationDeliveryReceipts(deliveryFilter || undefined),
+			msg => addToast(msg, 'error'),
+			'Failed to load delivery receipts'
+		);
+		if (result) {
+			deliveryReceipts = result;
 		}
 	}
 
@@ -132,19 +138,19 @@
 	async function loadProtocol() {
 		try {
 			protocolInfo = await api.getAdminFederationProtocol();
-		} catch (e: any) {
-			addToast('Failed to load protocol info: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to load protocol info');
 		}
 	}
 
 	async function loadKeyAudit() {
-		loadingSecurity = true;
-		try {
-			keyAuditEntries = await api.getKeyAudit();
-		} catch (e: any) {
-			addToast('Failed to load key audit: ' + e.message, 'error');
-		} finally {
-			loadingSecurity = false;
+		const result = await securityOp.run(
+			() => api.getKeyAudit(),
+			msg => addToast(msg, 'error'),
+			'Failed to load key audit'
+		);
+		if (result) {
+			keyAuditEntries = result;
 		}
 	}
 
@@ -153,8 +159,8 @@
 			await api.approveFederationPeer(peerId);
 			addToast('Peer approved', 'success');
 			await loadDashboard();
-		} catch (e: any) {
-			addToast('Failed to approve peer: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to approve peer');
 		}
 	}
 
@@ -163,8 +169,8 @@
 			await api.rejectFederationPeer(peerId);
 			addToast('Peer rejected', 'success');
 			await loadDashboard();
-		} catch (e: any) {
-			addToast('Failed to reject peer: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to reject peer');
 		}
 	}
 
@@ -173,8 +179,8 @@
 			await api.acknowledgeKeyChange(auditId);
 			addToast('Key change acknowledged', 'success');
 			await loadKeyAudit();
-		} catch (e: any) {
-			addToast('Failed to acknowledge: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to acknowledge key change');
 		}
 	}
 
@@ -185,8 +191,8 @@
 			addToast(`Peer ${action === 'block' ? 'blocked' : action === 'allow' ? 'allowed' : 'muted'} successfully`, 'success');
 			await loadDashboard();
 			await loadControls();
-		} catch (e: any) {
-			addToast('Failed to update peer control: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to update peer control');
 		}
 	}
 
@@ -195,20 +201,22 @@
 			await api.retryAdminFederationDelivery(receiptId);
 			addToast('Retry queued', 'success');
 			await loadDeliveryReceipts();
-		} catch (e: any) {
-			addToast('Failed to retry: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to retry delivery');
 		}
 	}
 
 	async function saveSearchConfig() {
-		savingSearch = true;
-		try {
-			await api.updateAdminFederationSearchConfig(searchConfig);
+		const result = await saveSearchOp.run(
+			async () => {
+				await api.updateAdminFederationSearchConfig(searchConfig);
+				return true;
+			},
+			msg => addToast(msg, 'error'),
+			'Failed to save search config'
+		);
+		if (result) {
 			addToast('Search config updated', 'success');
-		} catch (e: any) {
-			addToast('Failed to save search config: ' + e.message, 'error');
-		} finally {
-			savingSearch = false;
 		}
 	}
 
@@ -291,12 +299,12 @@
 			{/each}
 		</div>
 
-		{#if loading && currentTab === 'overview'}
+		{#if dashboardOp.loading && currentTab === 'overview'}
 			<div class="flex items-center justify-center py-16">
 				<div class="animate-spin h-8 w-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 			</div>
-		{:else if error}
-			<div class="bg-red-500/10 text-red-400 p-4 rounded-lg">{error}</div>
+		{:else if dashboardOp.error}
+			<div class="bg-red-500/10 text-red-400 p-4 rounded-lg">{dashboardOp.error}</div>
 		{:else if currentTab === 'overview' && dashboard}
 			<!-- Stats Cards -->
 			<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -371,9 +379,9 @@
 					</div>
 				</div>
 				<div class="mt-4 flex justify-end">
-					<button onclick={saveConfig} disabled={savingConfig}
+					<button onclick={saveConfig} disabled={saveConfigOp.loading}
 						class="rounded-md bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50">
-						{savingConfig ? 'Saving...' : 'Save Config'}
+						{saveConfigOp.loading ? 'Saving...' : 'Save Config'}
 					</button>
 				</div>
 			</div>
@@ -460,7 +468,7 @@
 
 		{:else if currentTab === 'controls'}
 			<h2 class="text-lg font-semibold text-text-primary mb-4">Peer Access Controls</h2>
-			{#if loadingControls}
+			{#if controlsOp.loading}
 				<div class="flex items-center justify-center py-8">
 					<div class="animate-spin h-6 w-6 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 				</div>
@@ -523,7 +531,7 @@
 				</div>
 			</div>
 
-			{#if loadingDelivery}
+			{#if deliveryOp.loading}
 				<div class="flex items-center justify-center py-8">
 					<div class="animate-spin h-6 w-6 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 				</div>
@@ -613,9 +621,9 @@
 					<button
 						class="btn-primary"
 						onclick={saveSearchConfig}
-						disabled={savingSearch}
+						disabled={saveSearchOp.loading}
 					>
-						{savingSearch ? 'Saving...' : 'Save Configuration'}
+						{saveSearchOp.loading ? 'Saving...' : 'Save Configuration'}
 					</button>
 				</div>
 			</div>
@@ -672,7 +680,7 @@
 			<div class="space-y-6">
 				<div>
 					<h2 class="text-lg font-semibold text-text-primary mb-3">Blocked Instances</h2>
-					{#if loadingControls}
+					{#if controlsOp.loading}
 						<div class="flex items-center justify-center py-8">
 							<div class="animate-spin h-6 w-6 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 						</div>
@@ -781,7 +789,7 @@
 					<p class="text-sm text-text-muted mb-4">
 						Detected public key changes from federated instances. Key changes may indicate a server migration or a potential security issue.
 					</p>
-					{#if loadingSecurity}
+					{#if securityOp.loading}
 						<div class="flex items-center justify-center py-8">
 							<div class="animate-spin h-6 w-6 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 						</div>

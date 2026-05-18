@@ -2,14 +2,16 @@
 	import { onMount } from 'svelte';
 	import { api, type RateLimitLogEntry, type RateLimitStats } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let rateLimitStats = $state<RateLimitStats | null>(null);
 	let rateLimitLog = $state<RateLimitLogEntry[]>([]);
-	let loadingRateLimits = $state(false);
-	let loadingRateLimitLog = $state(false);
+	let statsOp = $state(createAsyncOp());
+	let logOp = $state(createAsyncOp());
 	let rateLimitLogFilter = $state<'all' | 'blocked'>('all');
 	let rateLimitIPFilter = $state('');
-	let savingRateLimitConfig = $state(false);
+	let saveOp = $state(createAsyncOp());
 	let editReqsPerWindow = $state('100');
 	let editWindowSeconds = $state('60');
 
@@ -18,40 +20,39 @@
 	});
 
 	async function loadRateLimitStats() {
-		loadingRateLimits = true;
-		try {
-			rateLimitStats = await api.getRateLimitStats();
+		const result = await statsOp.run(() => api.getRateLimitStats());
+		if (result) {
+			rateLimitStats = result;
 			editReqsPerWindow = rateLimitStats?.requests_per_window ?? '100';
 			editWindowSeconds = rateLimitStats?.window_seconds ?? '60';
-		} catch {
+		} else {
 			rateLimitStats = null;
-		} finally {
-			loadingRateLimits = false;
 		}
 	}
 
 	async function loadRateLimitLog() {
-		loadingRateLimitLog = true;
-		try {
-			rateLimitLog = await api.getRateLimitLog({
+		const result = await logOp.run(() => api.getRateLimitLog({
 				limit: 50,
 				blocked: rateLimitLogFilter === 'blocked',
 				ip: rateLimitIPFilter.trim() || undefined
-			});
-		} catch {
+			}));
+		if (result) {
+			rateLimitLog = result;
+		} else {
 			rateLimitLog = [];
-		} finally {
-			loadingRateLimitLog = false;
 		}
 	}
 
 	async function saveRateLimitConfig() {
-		savingRateLimitConfig = true;
-		try {
-			await api.updateRateLimitConfig({
+		const result = await saveOp.run(
+			() => api.updateRateLimitConfig({
 				requests_per_window: editReqsPerWindow,
 				window_seconds: editWindowSeconds
-			});
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to save rate limit configuration'
+		);
+		if (result !== undefined) {
 			if (rateLimitStats) {
 				rateLimitStats = {
 					...rateLimitStats,
@@ -60,22 +61,18 @@
 				};
 			}
 			addToast('Rate limit configuration saved', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to save rate limit configuration', 'error');
-		} finally {
-			savingRateLimitConfig = false;
 		}
 	}
 </script>
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-bold text-text-primary">Rate Limiting</h1>
-	<button class="btn-secondary text-sm" onclick={loadRateLimitStats} disabled={loadingRateLimits}>
-		{loadingRateLimits ? 'Loading...' : 'Refresh'}
+	<button class="btn-secondary text-sm" onclick={loadRateLimitStats} disabled={statsOp.loading}>
+		{statsOp.loading ? 'Loading...' : 'Refresh'}
 	</button>
 </div>
 
-{#if loadingRateLimits && !rateLimitStats}
+{#if statsOp.loading && !rateLimitStats}
 	<p class="text-sm text-text-muted">Loading rate limit data...</p>
 {:else if rateLimitStats}
 	<!-- Summary Cards -->
@@ -107,8 +104,8 @@
 				<input id="admin-rate-limit-window" type="text" class="input w-full" bind:value={editWindowSeconds} placeholder="60" />
 			</div>
 		</div>
-		<button class="btn-primary mt-4 text-sm" onclick={saveRateLimitConfig} disabled={savingRateLimitConfig}>
-			{savingRateLimitConfig ? 'Saving...' : 'Save Configuration'}
+		<button class="btn-primary mt-4 text-sm" onclick={saveRateLimitConfig} disabled={saveOp.loading}>
+			{saveOp.loading ? 'Saving...' : 'Save Configuration'}
 		</button>
 	</div>
 
@@ -157,8 +154,8 @@
 	<div>
 		<div class="mb-4 flex items-center justify-between">
 			<h2 class="text-sm font-semibold text-text-primary">Rate Limit Log</h2>
-			<button class="btn-secondary text-sm" onclick={loadRateLimitLog} disabled={loadingRateLimitLog}>
-				{loadingRateLimitLog ? 'Loading...' : 'Load Log'}
+			<button class="btn-secondary text-sm" onclick={loadRateLimitLog} disabled={logOp.loading}>
+				{logOp.loading ? 'Loading...' : 'Load Log'}
 			</button>
 		</div>
 		<div class="mb-4 flex gap-2">
@@ -204,7 +201,7 @@
 					</tbody>
 				</table>
 			</div>
-		{:else if !loadingRateLimitLog}
+		{:else if !logOp.loading}
 			<p class="text-sm text-text-muted">Click "Load Log" to view recent rate limit entries.</p>
 		{/if}
 	</div>

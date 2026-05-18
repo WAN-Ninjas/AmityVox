@@ -2,6 +2,7 @@
 	import type { Role } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import { confirmAction } from '$lib/stores/confirm';
 
 	let {
@@ -325,8 +326,8 @@
 			roles = roles.filter((r) => r.id !== selectedRoleId);
 			selectedRoleId = null;
 			onSuccess('Role deleted');
-		} catch (err: any) {
-			onError(err.message || 'Failed to delete role');
+		} catch (err: unknown) {
+			onError(getErrorMessage(err, 'Failed to delete role'));
 		}
 	}
 

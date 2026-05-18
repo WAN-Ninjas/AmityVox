@@ -19,6 +19,7 @@
 	import AdminUsersTab from '$lib/components/admin/AdminUsersTab.svelte';
 	import AdminGuildsTab from '$lib/components/admin/AdminGuildsTab.svelte';
 	import AdminInstanceBansTab from '$lib/components/admin/AdminInstanceBansTab.svelte';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { AdminStats } from '$lib/types';
 
 	type Tab = 'dashboard' | 'users' | 'guilds' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha' | 'health' | 'storage' | 'backups' | 'domains' | 'retention' | 'updates';
@@ -26,29 +27,21 @@
 
 	// --- Dashboard ---
 	let stats = $state<AdminStats | null>(null);
-	let loading = $state(true);
-	let error = $state('');
+	let statsOp = $state(createAsyncOp(true));
 
-	onMount(async () => {
-		try {
-			stats = await api.getAdminStats();
-		} catch (err: any) {
-			error = err.message || 'Failed to load stats. You may not have admin access.';
-		} finally {
-			loading = false;
+	async function loadStats(fallback = 'Failed to load stats. You may not have admin access.') {
+		const result = await statsOp.run(() => api.getAdminStats(), undefined, fallback);
+		if (result) {
+			stats = result;
 		}
+	}
+
+	onMount(() => {
+		loadStats();
 	});
 
 	async function refresh() {
-		loading = true;
-		error = '';
-		try {
-			stats = await api.getAdminStats();
-		} catch (err: any) {
-			error = err.message || 'Failed to refresh stats';
-		} finally {
-			loading = false;
-		}
+		await loadStats('Failed to refresh stats');
 	}
 
 	const tabs: { id: Tab; label: string }[] = [
@@ -106,16 +99,16 @@
 		{#if currentTab === 'dashboard'}
 			<div class="mb-6 flex items-center justify-between">
 				<h1 class="text-2xl font-bold text-text-primary">Admin Dashboard</h1>
-				<button class="btn-secondary text-sm" onclick={refresh} disabled={loading}>
-					{loading ? 'Refreshing...' : 'Refresh'}
+				<button class="btn-secondary text-sm" onclick={refresh} disabled={statsOp.loading}>
+					{statsOp.loading ? 'Refreshing...' : 'Refresh'}
 				</button>
 			</div>
 
-			{#if error}
-				<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>
+			{#if statsOp.error}
+				<div class="mb-4 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">{statsOp.error}</div>
 			{/if}
 
-			{#if loading}
+			{#if statsOp.loading}
 				<p class="text-sm text-text-muted">Loading statistics...</p>
 			{:else if stats}
 				<div class="grid grid-cols-2 gap-4 md:grid-cols-4">

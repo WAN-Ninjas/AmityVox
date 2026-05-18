@@ -20,7 +20,7 @@
 		notify_admins: boolean;
 	}
 
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let updateInfo = $state<UpdateInfo | null>(null);
 	let config = $state<UpdateConfig>({ auto_check: true, channel: 'stable', notify_admins: true });
 	let saveOp = $state(createAsyncOp());
@@ -28,25 +28,26 @@
 	let dismissOp = $state(createAsyncOp());
 
 	async function loadUpdateInfo() {
-		try {
-			updateInfo = await api.getAdminUpdates();
-		} catch {
-			addToast('Failed to load update info', 'error');
-		}
+		const result = await loadOp.run(
+			() => api.getAdminUpdates(),
+			msg => addToast(msg, 'error'),
+			'Failed to load update info'
+		);
+		if (result) updateInfo = result;
 	}
 
 	async function loadConfig() {
-		try {
-			const data = await api.getAdminUpdatesConfig();
+		const data = await loadOp.run(
+			() => api.getAdminUpdatesConfig(),
+			msg => addToast(msg, 'error'),
+			'Failed to load update config'
+		);
+		if (data) {
 			config = {
 				auto_check: data.auto_check ?? true,
 				channel: data.channel ?? 'stable',
 				notify_admins: data.notify_admins ?? true
 			};
-		} catch {
-			addToast('Failed to load update config', 'error');
-		} finally {
-			loading = false;
 		}
 	}
 
@@ -84,7 +85,7 @@
 	Check for new versions of AmityVox and configure automatic update notifications.
 </p>
 
-{#if loading}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading update information...</p>
 {:else}
 	<div class="space-y-6">

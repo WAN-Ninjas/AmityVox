@@ -8,6 +8,8 @@
 	} from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	const BRIDGE_TYPES = [
 		{ id: 'matrix', name: 'Matrix', icon: 'M', description: 'Bridge to Matrix/Element rooms via Appservice' },
@@ -20,20 +22,19 @@
 
 	// --- State ---
 	let bridges = $state<AdminBridgeConfig[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp(true));
 
 	let selectedBridge = $state<AdminBridgeConfig | null>(null);
 	let channelMappings = $state<AdminBridgeChannelMapping[]>([]);
 	let virtualUsers = $state<AdminBridgeVirtualUser[]>([]);
-	let loadingMappings = $state(false);
-	let loadingUsers = $state(false);
+	let mappingsOp = $state(createAsyncOp());
+	let usersOp = $state(createAsyncOp());
 
 	// Create bridge form
 	let showCreateForm = $state(false);
 	let newBridgeType = $state('matrix');
 	let newBridgeName = $state('');
-	let creating = $state(false);
+	let createOp = $state(createAsyncOp());
 
 	// Add mapping form
 	let showAddMapping = $state(false);
@@ -41,60 +42,63 @@
 	let newRemoteChannel = $state('');
 	let newRemoteName = $state('');
 	let newDirection = $state('bidirectional');
-	let addingMapping = $state(false);
+	let addMappingOp = $state(createAsyncOp());
+
+	function toastError(error: unknown, fallback: string) {
+		addToast(getErrorMessage(error, fallback), 'error');
+	}
 
 	// --- Data loading ---
 	async function loadBridges() {
-		loading = true;
-		error = '';
-		try {
-			bridges = await api.getAdminBridges();
-		} catch (e: any) {
-			error = e.message || 'Failed to load bridges';
-		} finally {
-			loading = false;
+		const result = await loadOp.run(() => api.getAdminBridges(), undefined, 'Failed to load bridges');
+		if (result) {
+			bridges = result;
 		}
 	}
 
 	async function loadBridgeDetails(bridge: AdminBridgeConfig) {
 		selectedBridge = bridge;
-		loadingMappings = true;
-		loadingUsers = true;
 
-		try {
-			channelMappings = await api.getAdminBridgeMappings(bridge.id);
-		} catch {
+		const mappings = await mappingsOp.run(
+			() => api.getAdminBridgeMappings(bridge.id),
+			undefined,
+			'Failed to load bridge mappings'
+		);
+		if (mappings) {
+			channelMappings = mappings;
+		} else {
 			channelMappings = [];
-		} finally {
-			loadingMappings = false;
 		}
 
-		try {
-			virtualUsers = await api.getAdminBridgeVirtualUsers(bridge.id);
-		} catch {
+		const users = await usersOp.run(
+			() => api.getAdminBridgeVirtualUsers(bridge.id),
+			undefined,
+			'Failed to load bridge virtual users'
+		);
+		if (users) {
+			virtualUsers = users;
+		} else {
 			virtualUsers = [];
-		} finally {
-			loadingUsers = false;
 		}
 	}
 
 	// --- Actions ---
 	async function createBridge() {
-		creating = true;
-		try {
-			await api.createAdminBridge({
+		const result = await createOp.run(
+			() => api.createAdminBridge({
 				bridge_type: newBridgeType,
 				display_name: newBridgeName || newBridgeType,
-			});
-			addToast('Bridge created successfully', 'success');
-			showCreateForm = false;
-			newBridgeName = '';
-			await loadBridges();
-		} catch (e: any) {
-			addToast('Failed to create bridge: ' + e.message, 'error');
-		} finally {
-			creating = false;
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to create bridge'
+		);
+		if (!result) {
+			return;
 		}
+		addToast('Bridge created successfully', 'success');
+		showCreateForm = false;
+		newBridgeName = '';
+		await loadBridges();
 	}
 
 	async function toggleBridge(bridge: AdminBridgeConfig) {
@@ -105,8 +109,8 @@
 			if (selectedBridge?.id === bridge.id) {
 				selectedBridge = { ...bridge, enabled: !bridge.enabled };
 			}
-		} catch (e: any) {
-			addToast('Failed to toggle bridge: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to toggle bridge');
 		}
 	}
 
@@ -117,32 +121,32 @@
 			addToast('Bridge deleted', 'success');
 			if (selectedBridge?.id === bridgeId) selectedBridge = null;
 			await loadBridges();
-		} catch (e: any) {
-			addToast('Failed to delete bridge: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to delete bridge');
 		}
 	}
 
 	async function addChannelMapping() {
 		if (!selectedBridge || !newLocalChannel || !newRemoteChannel) return;
-		addingMapping = true;
-		try {
-			await api.createAdminBridgeMapping(selectedBridge.id, {
+		const result = await addMappingOp.run(
+			() => api.createAdminBridgeMapping(selectedBridge!.id, {
 				local_channel_id: newLocalChannel,
 				remote_channel_id: newRemoteChannel,
 				remote_channel_name: newRemoteName || undefined,
 				direction: newDirection,
-			});
-			addToast('Channel mapping added', 'success');
-			showAddMapping = false;
-			newLocalChannel = '';
-			newRemoteChannel = '';
-			newRemoteName = '';
-			await loadBridgeDetails(selectedBridge);
-		} catch (e: any) {
-			addToast('Failed to add mapping: ' + e.message, 'error');
-		} finally {
-			addingMapping = false;
+			}),
+			msg => addToast(msg, 'error'),
+			'Failed to add mapping'
+		);
+		if (!result) {
+			return;
 		}
+		addToast('Channel mapping added', 'success');
+		showAddMapping = false;
+		newLocalChannel = '';
+		newRemoteChannel = '';
+		newRemoteName = '';
+		await loadBridgeDetails(selectedBridge);
 	}
 
 	async function deleteMapping(mappingId: string) {
@@ -151,8 +155,8 @@
 			await api.deleteAdminBridgeMapping(selectedBridge.id, mappingId);
 			addToast('Mapping removed', 'success');
 			await loadBridgeDetails(selectedBridge);
-		} catch (e: any) {
-			addToast('Failed to remove mapping: ' + e.message, 'error');
+		} catch (e: unknown) {
+			toastError(e, 'Failed to remove mapping');
 		}
 	}
 
@@ -244,20 +248,20 @@
 					<button
 						class="btn-primary"
 						onclick={createBridge}
-						disabled={creating}
+						disabled={createOp.loading}
 					>
-						{creating ? 'Creating...' : 'Create Bridge'}
+						{createOp.loading ? 'Creating...' : 'Create Bridge'}
 					</button>
 				</div>
 			</div>
 		{/if}
 
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="flex items-center justify-center py-16">
 				<div class="animate-spin h-8 w-8 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 			</div>
-		{:else if error}
-			<div class="bg-red-500/10 text-red-400 p-4 rounded-lg">{error}</div>
+		{:else if loadOp.error}
+			<div class="bg-red-500/10 text-red-400 p-4 rounded-lg">{loadOp.error}</div>
 		{:else}
 			<div class="flex gap-6">
 				<!-- Bridge List -->
@@ -398,14 +402,14 @@
 										<button
 											class="btn-primary text-sm"
 											onclick={addChannelMapping}
-											disabled={addingMapping || !newLocalChannel || !newRemoteChannel}
+											disabled={addMappingOp.loading || !newLocalChannel || !newRemoteChannel}
 										>
-											{addingMapping ? 'Adding...' : 'Add Mapping'}
+											{addMappingOp.loading ? 'Adding...' : 'Add Mapping'}
 										</button>
 									</div>
 								{/if}
 
-								{#if loadingMappings}
+								{#if mappingsOp.loading}
 									<div class="flex items-center justify-center py-4">
 										<div class="animate-spin h-5 w-5 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 									</div>
@@ -444,7 +448,7 @@
 							<!-- Virtual Users -->
 							<div class="bg-bg-secondary p-6 rounded-lg">
 								<h3 class="text-text-primary font-medium mb-4">Virtual Users (Puppets)</h3>
-								{#if loadingUsers}
+								{#if usersOp.loading}
 									<div class="flex items-center justify-center py-4">
 										<div class="animate-spin h-5 w-5 border-2 border-brand-500 border-t-transparent rounded-full"></div>
 									</div>

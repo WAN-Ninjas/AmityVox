@@ -15,6 +15,7 @@ import {
 	clearChannelMessages,
 	getChannelMessages,
 	loadMessages,
+	reconcileLoadedChannels,
 	updateMessage
 } from '../messages';
 import { api } from '$lib/api/client';
@@ -260,18 +261,56 @@ describe('messages store', () => {
 		expect(channelMessages.map((message) => message.id)).toEqual(['newer']);
 	});
 
-	it('backfillLoadedChannels loads messages after each loaded channel latest id', async () => {
+	it('backfillLoadedChannels reconciles latest windows and loads after each channel latest id', async () => {
 		appendMessage(createMockMessage({ id: 'msg-1', channel_id: 'ch-1' }));
 		appendMessage(createMockMessage({ id: 'msg-2', channel_id: 'ch-2' }));
 		vi.mocked(api.getMessages)
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-1', channel_id: 'ch-1' })])
 			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1' })])
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-2', channel_id: 'ch-2' })])
 			.mockResolvedValueOnce([createMockMessage({ id: 'msg-4', channel_id: 'ch-2' })]);
 
 		await backfillLoadedChannels();
 
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { limit: 100 });
 		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-1', limit: 100 });
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-2', { limit: 100 });
 		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-2', { after: 'msg-2', limit: 100 });
 		expect(get(messagesByChannel).get('ch-1')?.map((message) => message.id)).toEqual(['msg-1', 'msg-3']);
 		expect(get(messagesByChannel).get('ch-2')?.map((message) => message.id)).toEqual(['msg-2', 'msg-4']);
+	});
+
+	it('reconcileLoadedChannels refreshes edits and removes deleted messages in the latest window', async () => {
+		appendMessage(createMockMessage({ id: 'msg-1', channel_id: 'ch-1', content: 'Older' }));
+		appendMessage(createMockMessage({ id: 'msg-2', channel_id: 'ch-1', content: 'Deleted' }));
+		appendMessage(createMockMessage({ id: 'msg-3', channel_id: 'ch-1', content: 'Original' }));
+		vi.mocked(api.getMessages)
+			.mockResolvedValueOnce([
+				createMockMessage({ id: 'msg-1', channel_id: 'ch-1', content: 'Older' }),
+				createMockMessage({ id: 'msg-3', channel_id: 'ch-1', content: 'Edited' })
+			])
+			.mockResolvedValueOnce([]);
+
+		await reconcileLoadedChannels();
+
+		const ids = get(messagesByChannel).get('ch-1')?.map((message) => message.id);
+		expect(ids).toEqual(['msg-1', 'msg-3']);
+		expect(get(messagesByChannel).get('ch-1')?.at(-1)?.content).toBe('Edited');
+	});
+
+	it('reconcileLoadedChannels pages forward after reconnect when more than one page was missed', async () => {
+		appendMessage(createMockMessage({ id: 'msg-1', channel_id: 'ch-1' }));
+		vi.mocked(api.getMessages)
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1' })])
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-2', channel_id: 'ch-1' })])
+			.mockResolvedValueOnce([createMockMessage({ id: 'msg-3', channel_id: 'ch-1' })])
+			.mockResolvedValueOnce([]);
+
+		await reconcileLoadedChannels({ limit: 1, maxAfterPages: 3 });
+
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-1', limit: 1 });
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-2', limit: 1 });
+		expect(vi.mocked(api.getMessages)).toHaveBeenCalledWith('ch-1', { after: 'msg-3', limit: 1 });
+		expect(get(messagesByChannel).get('ch-1')?.map((message) => message.id)).toEqual(['msg-1', 'msg-2', 'msg-3']);
 	});
 });

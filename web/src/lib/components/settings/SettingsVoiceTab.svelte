@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { VoicePreferences } from '$lib/types';
 
 	let voicePrefs = $state<VoicePreferences | null>(null);
-	let voiceLoading = $state(false);
-	let voiceSaving = $state(false);
 	let voiceSuccess = $state('');
 	let voiceError = $state('');
 	let inputDeviceId = $state('');
@@ -12,6 +11,8 @@
 	let availableInputDevices = $state<MediaDeviceInfo[]>([]);
 	let availableOutputDevices = $state<MediaDeviceInfo[]>([]);
 	let recordingVoicePTTKey = $state(false);
+	let loadOp = $state(createAsyncOp());
+	let saveOp = $state(createAsyncOp());
 	let loaded = false;
 
 	$effect(() => {
@@ -36,9 +37,8 @@
 	});
 
 	async function loadVoicePreferences() {
-		voiceLoading = true;
 		voiceError = '';
-		try {
+		await loadOp.run(async () => {
 			voicePrefs = await api.getVoicePreferences();
 			inputDeviceId = localStorage.getItem('av-voice-input-device') ?? '';
 			outputDeviceId = localStorage.getItem('av-voice-output-device') ?? '';
@@ -47,43 +47,39 @@
 				availableInputDevices = devices.filter((device) => device.kind === 'audioinput');
 				availableOutputDevices = devices.filter((device) => device.kind === 'audiooutput');
 			}
-		} catch (err: any) {
-			voiceError = err.message || 'Failed to load voice preferences';
-		} finally {
-			voiceLoading = false;
-		}
+		}, msg => {
+			voiceError = msg;
+		}, 'Failed to load voice preferences');
 	}
 
 	async function saveVoicePreferences() {
 		if (!voicePrefs) return;
-		voiceSaving = true;
+		const prefs = voicePrefs;
 		voiceError = '';
 		voiceSuccess = '';
-		try {
+		await saveOp.run(async () => {
 			voicePrefs = await api.updateVoicePreferences({
-				input_mode: voicePrefs.input_mode,
-				ptt_key: voicePrefs.ptt_key,
-				vad_threshold: voicePrefs.vad_threshold,
-				noise_suppression: voicePrefs.noise_suppression,
-				echo_cancellation: voicePrefs.echo_cancellation,
-				auto_gain_control: voicePrefs.auto_gain_control,
-				input_volume: voicePrefs.input_volume,
-				output_volume: voicePrefs.output_volume,
-				camera_resolution: voicePrefs.camera_resolution,
-				camera_framerate: voicePrefs.camera_framerate,
-				screenshare_resolution: voicePrefs.screenshare_resolution,
-				screenshare_framerate: voicePrefs.screenshare_framerate,
-				screenshare_audio: voicePrefs.screenshare_audio
+				input_mode: prefs.input_mode,
+				ptt_key: prefs.ptt_key,
+				vad_threshold: prefs.vad_threshold,
+				noise_suppression: prefs.noise_suppression,
+				echo_cancellation: prefs.echo_cancellation,
+				auto_gain_control: prefs.auto_gain_control,
+				input_volume: prefs.input_volume,
+				output_volume: prefs.output_volume,
+				camera_resolution: prefs.camera_resolution,
+				camera_framerate: prefs.camera_framerate,
+				screenshare_resolution: prefs.screenshare_resolution,
+				screenshare_framerate: prefs.screenshare_framerate,
+				screenshare_audio: prefs.screenshare_audio
 			});
 			localStorage.setItem('av-voice-input-device', inputDeviceId);
 			localStorage.setItem('av-voice-output-device', outputDeviceId);
 			voiceSuccess = 'Voice preferences saved!';
 			setTimeout(() => (voiceSuccess = ''), 3000);
-		} catch (err: any) {
-			voiceError = err.message || 'Failed to save voice preferences';
-		} finally {
-			voiceSaving = false;
-		}
+		}, msg => {
+			voiceError = msg;
+		}, 'Failed to save voice preferences');
 	}
 
 	function formatVoiceKeyName(code: string): string {
@@ -109,7 +105,7 @@
 
 <h1 class="mb-6 text-xl font-bold text-text-primary">Voice & Video</h1>
 
-{#if voiceLoading}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading voice preferences...</p>
 {:else if voicePrefs}
 	{#if voiceError}
@@ -320,9 +316,9 @@
 	<button
 		class="rounded bg-brand-500 px-6 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
 		onclick={saveVoicePreferences}
-		disabled={voiceSaving}
+		disabled={saveOp.loading}
 	>
-		{voiceSaving ? 'Saving...' : 'Save Changes'}
+		{saveOp.loading ? 'Saving...' : 'Save Changes'}
 	</button>
 {:else if voiceError}
 	<div class="rounded-lg bg-red-500/10 px-4 py-2 text-sm text-red-400">{voiceError}</div>

@@ -6,7 +6,7 @@
 	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let plugins = $state<PluginListing[]>([]);
-	let loadOp = $state(createAsyncOp());
+	let loadOp = $state(createAsyncOp(true));
 	let search = $state('');
 	let selectedCategory = $state('');
 	let installing = $state<string | null>(null);

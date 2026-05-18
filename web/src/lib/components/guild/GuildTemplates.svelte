@@ -2,6 +2,7 @@
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { confirmAction } from '$lib/stores/confirm';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -81,8 +82,8 @@
 			templates = templates.filter((t) => t.id !== templateId);
 			success = 'Template deleted.';
 			setTimeout(() => (success = ''), 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to delete template';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to delete template');
 		}
 	}
 

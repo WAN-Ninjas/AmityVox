@@ -1,6 +1,11 @@
 <!-- LocationShare.svelte — Displays GPS coordinates on an interactive map tile. -->
 <script lang="ts">
 	import { api, type LocationShare as LocationData } from '$lib/api/client';
+	import {
+		loadLocationShares,
+		locationSharesByChannel
+	} from '$lib/stores/locationShares';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
 		channelId: string;
@@ -10,12 +15,12 @@
 
 	let { channelId, location, compact = false }: Props = $props();
 
-	let locations = $state<LocationData[]>([]);
 	let loading = $state(false);
 	let sharing = $state(false);
 	let error = $state('');
 	let liveLocationId = $state<string | null>(null);
 	let liveInterval = $state<ReturnType<typeof setInterval> | null>(null);
+	const locations = $derived($locationSharesByChannel.get(channelId) ?? []);
 
 	// Map tile URL using OpenStreetMap (no API key needed).
 	function mapTileUrl(lat: number, lon: number, zoom: number = 15): string {
@@ -51,10 +56,9 @@
 		loading = true;
 		error = '';
 		try {
-			const data = await api.getLocations(channelId);
-			locations = data ?? [];
-		} catch (err: any) {
-			error = err.message || 'Failed to load locations';
+			await loadLocationShares(channelId);
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to load locations');
 		} finally {
 			loading = false;
 		}
@@ -86,11 +90,11 @@
 			}
 
 			await loadLocations();
-		} catch (err: any) {
-			if (err.code === 1) {
+		} catch (err: unknown) {
+			if (err instanceof GeolocationPositionError && err.code === GeolocationPositionError.PERMISSION_DENIED) {
 				error = 'Location permission denied. Please allow location access.';
 			} else {
-				error = err.message || 'Failed to share location';
+				error = getErrorMessage(err, 'Failed to share location');
 			}
 		} finally {
 			sharing = false;

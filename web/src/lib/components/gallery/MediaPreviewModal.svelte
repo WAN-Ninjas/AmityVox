@@ -3,6 +3,7 @@
 	import { fileUrl as buildFileUrl } from '$lib/utils/avatar';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import Modal from '$lib/components/common/Modal.svelte';
 
 	interface Props {
@@ -44,8 +45,8 @@
 			});
 			addToast('Metadata updated', 'success');
 			editingMeta = false;
-		} catch (err: any) {
-			addToast(err.message || 'Failed to update', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update'), 'error');
 		} finally {
 			saving = false;
 		}
@@ -58,8 +59,8 @@
 			addToast('File deleted', 'success');
 			ondelete?.();
 			onclose();
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete'), 'error');
 		}
 	}
 

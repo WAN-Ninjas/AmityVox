@@ -3,6 +3,8 @@
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { fileUrl } from '$lib/utils/avatar';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Sticker, StickerPack } from '$lib/types';
 
 	interface Props {
@@ -14,61 +16,51 @@
 
 	let stickerPacks = $state<StickerPack[]>([]);
 	let stickersByPack = $state<Map<string, Sticker[]>>(new Map());
-	let loadingStickers = $state(false);
 	let expandedPackId = $state<string | null>(null);
-	let loadingPackStickers = $state(false);
 	let newPackName = $state('');
 	let newPackDescription = $state('');
-	let creatingPack = $state(false);
 	let newStickerName = $state('');
 	let newStickerFile = $state<File | null>(null);
-	let uploadingSticker = $state(false);
 	let loadedGuildId = $state<string | null>(null);
+	let loadOp = $state(createAsyncOp());
+	let loadPackOp = $state(createAsyncOp());
+	let createOp = $state(createAsyncOp());
+	let uploadOp = $state(createAsyncOp());
 
 	$effect(() => {
-		if (guildId && loadedGuildId !== guildId && !loadingStickers) {
+		if (guildId && loadedGuildId !== guildId && !loadOp.loading) {
 			loadStickerPacks();
 		}
 	});
 
 	async function loadStickerPacks() {
-		loadingStickers = true;
-		try {
-			stickerPacks = await api.getGuildStickerPacks(guildId);
+		const result = await loadOp.run(() => api.getGuildStickerPacks(guildId));
+		if (result) {
+			stickerPacks = result;
 			loadedGuildId = guildId;
-		} catch {
+		} else {
 			stickerPacks = [];
-		} finally {
-			loadingStickers = false;
 		}
 	}
 
 	async function loadPackStickersData(packId: string) {
-		loadingPackStickers = true;
-		try {
-			const stickers = await api.getPackStickers(guildId, packId);
+		const stickers = await loadPackOp.run(() => api.getPackStickers(guildId, packId));
+		if (stickers) {
 			stickersByPack = new Map([...stickersByPack, [packId, stickers]]);
-		} catch {
+		} else {
 			stickersByPack = new Map([...stickersByPack, [packId, []]]);
-		} finally {
-			loadingPackStickers = false;
 		}
 	}
 
 	async function handleCreateStickerPack() {
 		if (!newPackName.trim()) return;
-		creatingPack = true;
-		try {
+		await createOp.run(async () => {
 			const pack = await api.createGuildStickerPack(guildId, newPackName.trim(), newPackDescription.trim() || undefined);
 			stickerPacks = [...stickerPacks, pack];
 			newPackName = '';
 			newPackDescription = '';
 			addToast('Sticker pack created', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to create sticker pack', 'error');
-		} finally {
-			creatingPack = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to create sticker pack');
 	}
 
 	async function handleDeleteStickerPack(packId: string) {
@@ -79,8 +71,8 @@
 			stickersByPack = new Map([...stickersByPack].filter(([key]) => key !== packId));
 			if (expandedPackId === packId) expandedPackId = null;
 			addToast('Sticker pack deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete sticker pack', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete sticker pack'), 'error');
 		}
 	}
 
@@ -104,13 +96,13 @@
 
 	async function handleUploadSticker(packId: string) {
 		if (!newStickerFile || !newStickerName.trim()) return;
-		uploadingSticker = true;
-		try {
-			const uploaded = await api.uploadFile(newStickerFile);
+		const stickerFile = newStickerFile;
+		await uploadOp.run(async () => {
+			const uploaded = await api.uploadFile(stickerFile);
 			let format = 'png';
-			if (newStickerFile.type === 'image/gif') format = 'gif';
-			else if (newStickerFile.type === 'image/apng') format = 'apng';
-			else if (newStickerFile.type === 'image/png') format = 'png';
+			if (stickerFile.type === 'image/gif') format = 'gif';
+			else if (stickerFile.type === 'image/apng') format = 'apng';
+			else if (stickerFile.type === 'image/png') format = 'png';
 			const sticker = await api.addStickerToGuildPack(guildId, packId, {
 				name: newStickerName.trim(),
 				file_id: uploaded.id,
@@ -122,11 +114,7 @@
 			newStickerName = '';
 			newStickerFile = null;
 			addToast('Sticker uploaded', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to upload sticker', 'error');
-		} finally {
-			uploadingSticker = false;
-		}
+		}, msg => addToast(msg, 'error'), 'Failed to upload sticker');
 	}
 
 	async function handleDeleteSticker(packId: string, stickerId: string) {
@@ -137,8 +125,8 @@
 			stickersByPack = new Map([...stickersByPack, [packId, existing.filter((sticker) => sticker.id !== stickerId)]]);
 			stickerPacks = stickerPacks.map((pack) => pack.id === packId ? { ...pack, sticker_count: Math.max(0, (pack.sticker_count ?? 1) - 1) } : pack);
 			addToast('Sticker deleted', 'success');
-		} catch (err: any) {
-			addToast(err.message || 'Failed to delete sticker', 'error');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete sticker'), 'error');
 		}
 	}
 </script>
@@ -155,12 +143,12 @@
 		<label for="newPackDescription" class="mb-1 block text-xs font-bold uppercase tracking-wide text-text-muted">Description (optional)</label>
 		<input id="newPackDescription" type="text" class="input w-full" bind:value={newPackDescription} placeholder="A collection of custom stickers" maxlength="200" />
 	</div>
-	<button class="btn-primary" onclick={handleCreateStickerPack} disabled={creatingPack || !newPackName.trim()}>
-		{creatingPack ? 'Creating...' : 'Create Pack'}
+	<button class="btn-primary" onclick={handleCreateStickerPack} disabled={createOp.loading || !newPackName.trim()}>
+		{createOp.loading ? 'Creating...' : 'Create Pack'}
 	</button>
 </div>
 
-{#if loadingStickers}
+{#if loadOp.loading}
 	<p class="text-sm text-text-muted">Loading sticker packs...</p>
 {:else if stickerPacks.length === 0}
 	<p class="text-sm text-text-muted">No sticker packs yet. Create one above!</p>
@@ -212,13 +200,13 @@
 							<button
 								class="btn-primary text-xs"
 								onclick={() => handleUploadSticker(pack.id)}
-								disabled={uploadingSticker || !newStickerFile || !newStickerName.trim()}
+								disabled={uploadOp.loading || !newStickerFile || !newStickerName.trim()}
 							>
-								{uploadingSticker ? 'Uploading...' : 'Add Sticker'}
+								{uploadOp.loading ? 'Uploading...' : 'Add Sticker'}
 							</button>
 						</div>
 
-						{#if loadingPackStickers}
+						{#if loadPackOp.loading}
 							<p class="text-xs text-text-muted">Loading stickers...</p>
 						{:else}
 							{@const packStickers = stickersByPack.get(pack.id) ?? []}

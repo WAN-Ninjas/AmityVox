@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	let { guildId }: { guildId: string } = $props();
 
@@ -163,8 +164,8 @@
 			deleteConfirm = null;
 			successMessage = 'Sound deleted';
 			setTimeout(() => successMessage = null, 3000);
-		} catch (err: any) {
-			error = err.message || 'Failed to delete sound';
+		} catch (err: unknown) {
+			error = getErrorMessage(err, 'Failed to delete sound');
 		}
 	}
 

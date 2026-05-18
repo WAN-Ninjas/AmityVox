@@ -1,6 +1,7 @@
 // Members store -- tracks guild member metadata (timeouts, etc.) for the current guild.
 
 import { derived } from 'svelte/store';
+import { api } from '$lib/api/client';
 import type { GuildMember, Role, User } from '$lib/types';
 import { createMapStore } from '$lib/stores/mapHelpers';
 
@@ -22,6 +23,35 @@ export function setGuildMembers(members: GuildMember[]) {
  */
 export function setGuildRoles(roles: Role[]) {
 	guildRolesMap.setAll(roles.map(r => [r.id, r]));
+}
+
+/**
+ * Fetch member/role data for a guild.
+ */
+export async function fetchGuildMembersAndRoles(guildId: string): Promise<{ members: GuildMember[]; roles: Role[] }> {
+	const [members, roles] = await Promise.all([
+		api.getMembers(guildId),
+		api.getRoles(guildId),
+	]);
+	return { members, roles };
+}
+
+/**
+ * Load and replace member/role data for the currently viewed guild.
+ */
+export async function loadGuildMembersAndRoles(guildId: string): Promise<{ members: GuildMember[]; roles: Role[] }> {
+	const { members, roles } = await fetchGuildMembersAndRoles(guildId);
+	setGuildMembers(members);
+	setGuildRoles(roles);
+	return { members, roles };
+}
+
+export function upsertGuildMember(member: GuildMember) {
+	guildMembers.setEntry(member.user_id, member);
+}
+
+export function removeGuildMember(userId: string) {
+	guildMembers.removeEntry(userId);
 }
 
 /**

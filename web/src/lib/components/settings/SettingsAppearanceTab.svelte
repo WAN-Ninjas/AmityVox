@@ -22,6 +22,7 @@
 		type CustomThemeColors,
 		type CustomTheme
 	} from '$lib/stores/settings';
+	import { getErrorMessage } from '$lib/utils/apiError';
 
 	type ThemeName = 'dark' | 'light' | 'amoled' | 'nord' | 'dracula' | 'catppuccin' | 'solarized' | 'high-contrast';
 	type ConnectedAccounts = {
@@ -241,8 +242,8 @@
 			showImportModal = false;
 			editorSuccess = `Theme "${imported.name}" imported!`;
 			setTimeout(() => (editorSuccess = ''), 3000);
-		} catch (err: any) {
-			importError = err.message || 'Failed to import theme.';
+		} catch (err: unknown) {
+			importError = getErrorMessage(err, 'Failed to import theme.');
 		}
 	}
 
@@ -265,8 +266,8 @@
 				showImportModal = false;
 				editorSuccess = `Theme "${imported.name}" imported from file!`;
 				setTimeout(() => (editorSuccess = ''), 3000);
-			} catch (err: any) {
-				importError = err.message || 'Failed to import theme from file.';
+			} catch (err: unknown) {
+				importError = getErrorMessage(err, 'Failed to import theme from file.');
 			}
 		};
 		reader.onerror = () => {
