@@ -1,6 +1,6 @@
 # Current Work Backlog
 
-Last updated: 2026-05-18
+Last updated: 2026-05-22
 
 This is the active cleanup checklist. It reflects the code as it works now, not old plans or aspirational notes.
 
@@ -109,9 +109,11 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
    - Done: DB-backed federation sync backfill test covers authorized peer replay ordering and duplicate canonical event IDs.
    - Done: signed inbound guild join coverage verifies remote member ownership, channel-peer creation, and duplicate join idempotency.
    - Done: signed inbound DM coverage verifies mirror creation, recipient rows, duplicate create/message idempotency, and remote attachment ownership.
-   - Note: guild message attachment federation remains a product gap; current media coverage is for federated DM media, which is the implemented attachment path.
+   - Done: signed inbound guild message coverage verifies remote attachment persistence, response metadata, media `instance_id`, and nonce idempotency.
+   - Done: remote guild message proxy now forwards attachment metadata after validating local upload ownership.
 10. [x] Update stale federation/codebase docs after each completed tranche.
    - Done: current backlog and large Svelte inventory reflect this tranche's federation tests and component reductions.
+   - Done: guild message attachment federation and dependency audit cleanup are reflected here.
 
 ## Archived Docs
 
@@ -121,8 +123,10 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 ## Verification Targets
 
 - Frontend: `cd web && npm run check`
-  - Last result: pass, 0 errors and 0 warnings on 2026-05-18.
+  - Last result: pass, 0 errors and 0 warnings on 2026-05-22.
 - Focused frontend tests: `cd web && npm test -- --run src/lib/stores/__tests__/messages.test.ts src/lib/stores/__tests__/channels.test.ts src/lib/stores/__tests__/guilds.test.ts src/lib/stores/__tests__/channelWidgets.test.ts src/lib/stores/__tests__/guildEvents.test.ts src/lib/stores/__tests__/presence.test.ts src/lib/stores/__tests__/activityEvents.test.ts src/lib/stores/__tests__/voiceBroadcasts.test.ts src/lib/stores/__tests__/locationShares.test.ts src/lib/utils/__tests__/dm.test.ts src/lib/components/__tests__/ModerationModals.test.ts src/lib/components/__tests__/RoleHierarchy.test.ts src/lib/components/__tests__/MembersPanel.test.ts src/lib/components/__tests__/StatusPicker.test.ts src/lib/components/__tests__/RoleEditor.test.ts`
-  - Last result: pass, 174 tests across 15 files on 2026-05-18.
+  - Last result: pass, 174 tests across 15 files on 2026-05-22.
 - Backend compile/federation smoke: `docker run --rm -v /docker/AmityVox:/build -w /build -e GOTOOLCHAIN=local golang:1.26-alpine go test -run '^$' ./internal/federation ./internal/api/... ./internal/models ./internal/database ./internal/integration`
-  - Last result: pass on 2026-05-18.
+  - Last result: pass on 2026-05-22.
+- Frontend dependency audit: `cd web && npm audit --json`
+  - Last result: pass, 0 vulnerabilities on 2026-05-22.

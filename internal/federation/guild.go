@@ -55,10 +55,11 @@ type federatedGuildMessagesRequest struct {
 }
 
 type federatedGuildPostMessageRequest struct {
-	UserID     string   `json:"user_id"`
-	Content    string   `json:"content"`
-	Nonce      string   `json:"nonce,omitempty"`
-	ReplyToIDs []string `json:"reply_to_ids,omitempty"`
+	UserID      string                `json:"user_id"`
+	Content     string                `json:"content"`
+	Nonce       string                `json:"nonce,omitempty"`
+	ReplyToIDs  []string              `json:"reply_to_ids,omitempty"`
+	Attachments []federatedAttachment `json:"attachments,omitempty"`
 }
 
 type federatedGuildMembersRequest struct {
@@ -650,7 +651,7 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
-	if req.UserID == "" || req.Content == "" {
+	if req.UserID == "" || (req.Content == "" && len(req.Attachments) == 0) {
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
@@ -714,19 +715,50 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 		replyToIDs = req.ReplyToIDs
 	}
 
-	_, err := ss.fed.pool.Exec(ctx,
-		`INSERT INTO messages (id, channel_id, author_id, instance_id, content, reply_to_ids, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		msgID, channelID, req.UserID, senderID, req.Content, replyToIDs, now)
+	tx, err := ss.fed.pool.Begin(ctx)
 	if err != nil {
+		ss.logger.Error("failed to begin federated guild message tx", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	msgType := models.MessageTypeDefault
+	if len(replyToIDs) > 0 {
+		msgType = models.MessageTypeReply
+	}
+
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO messages (id, channel_id, author_id, instance_id, content, nonce, message_type, reply_to_ids, created_at)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9)
+		 ON CONFLICT (channel_id, nonce) DO UPDATE SET
+		   content = EXCLUDED.content,
+		   reply_to_ids = EXCLUDED.reply_to_ids,
+		   message_type = EXCLUDED.message_type
+		 RETURNING id, created_at`,
+		msgID, channelID, req.UserID, senderID, req.Content, req.Nonce, msgType, replyToIDs, now,
+	).Scan(&msgID, &now); err != nil {
 		ss.logger.Error("failed to create federated guild message", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	if _, err := ss.fed.pool.Exec(ctx,
+	if err := ss.upsertFederatedAttachments(ctx, tx, senderID, msgID, req.Attachments); err != nil {
+		ss.logger.Error("failed to persist federated guild message attachments",
+			slog.String("message_id", msgID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := tx.Exec(ctx,
 		`UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID); err != nil {
 		ss.logger.Warn("failed to update last_message_id", slog.String("error", err.Error()))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		ss.logger.Error("failed to commit federated guild message tx", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
 	}
 
 	// Fetch author data so the event includes the full author object.
@@ -758,6 +790,12 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 		"id": msgID, "channel_id": channelID, "guild_id": guildID,
 		"author_id": req.UserID, "instance_id": senderID, "content": req.Content, "created_at": now,
 		"reply_to_ids": replyToIDs, "author": authorObj,
+	}
+	if len(req.Attachments) > 0 {
+		for i := range req.Attachments {
+			req.Attachments[i].InstanceID = senderID
+		}
+		msg["attachments"] = req.Attachments
 	}
 	ss.bus.PublishChannelEvent(ctx, events.SubjectMessageCreate, "MESSAGE_CREATE", channelID, msg)
 
@@ -1998,16 +2036,17 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 	}
 
 	var localReq struct {
-		Content    string   `json:"content"`
-		Nonce      string   `json:"nonce"`
-		ReplyToIDs []string `json:"reply_to_ids"`
+		Content       string   `json:"content"`
+		Nonce         string   `json:"nonce"`
+		ReplyToIDs    []string `json:"reply_to_ids"`
+		AttachmentIDs []string `json:"attachment_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&localReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if localReq.Content == "" {
-		http.Error(w, "Message content required", http.StatusBadRequest)
+	if localReq.Content == "" && len(localReq.AttachmentIDs) == 0 {
+		http.Error(w, "Message content or attachments required", http.StatusBadRequest)
 		return
 	}
 
@@ -2027,6 +2066,14 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 	payload := federatedGuildPostMessageRequest{
 		UserID: userID, Content: localReq.Content, Nonce: localReq.Nonce,
 		ReplyToIDs: localReq.ReplyToIDs,
+	}
+	if len(localReq.AttachmentIDs) > 0 {
+		attachments, err := ss.federatedAttachmentsForUploadIDs(ctx, userID, localReq.AttachmentIDs)
+		if err != nil {
+			http.Error(w, "Invalid attachments", http.StatusBadRequest)
+			return
+		}
+		payload.Attachments = attachments
 	}
 
 	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/create",

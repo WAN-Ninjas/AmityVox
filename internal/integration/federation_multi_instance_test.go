@@ -201,6 +201,91 @@ func TestFederatedDMCreateAndMessageWithMediaAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestFederatedGuildPostMessagePersistsAttachments(t *testing.T) {
+	ctx := context.Background()
+	fixture := newFederationFixture(t, "guild-media")
+	guildID := fixture.id("guild")
+	channelID := fixture.id("channel")
+	ownerID := fixture.id("owner")
+	remoteUserID := fixture.id("remote-user")
+	attachmentID := fixture.id("attachment")
+
+	insertUser(t, ctx, ownerID, fixture.localID, "owner-"+ownerID)
+	insertUser(t, ctx, remoteUserID, fixture.remoteID, "remote-"+remoteUserID)
+	insertGuild(t, ctx, guildID, fixture.localID, ownerID, "Media Guild", true)
+	insertChannel(t, ctx, channelID, guildID, fixture.localID, "general")
+	insertGuildMember(t, ctx, guildID, remoteUserID, fixture.remoteID)
+
+	payload := map[string]interface{}{
+		"user_id": remoteUserID,
+		"content": "guild media",
+		"nonce":   fixture.id("nonce"),
+		"attachments": []map[string]interface{}{
+			{
+				"id":           attachmentID,
+				"uploader_id":  remoteUserID,
+				"filename":     "guild-remote.png",
+				"content_type": "image/png",
+				"size_bytes":   2048,
+				"s3_bucket":    "remote-bucket",
+				"s3_key":       "guild/key.png",
+			},
+		},
+	}
+
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		req := signedJSONRequest(t, fixture.remoteFed, http.MethodPost, "/federation/v1/guilds/"+guildID+"/channels/"+channelID+"/messages/create", payload)
+		req = withChiParam(req, "guildID", guildID)
+		req = withChiParam(req, "channelID", channelID)
+
+		fixture.sync.HandleFederatedGuildPostMessage(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("guild message attempt %d status = %d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data struct {
+				ID          string `json:"id"`
+				Attachments []struct {
+					ID         string `json:"id"`
+					InstanceID string `json:"instance_id"`
+				} `json:"attachments"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode guild message response: %v", err)
+		}
+		if body.Data.ID == "" || len(body.Data.Attachments) != 1 {
+			t.Fatalf("guild message response missing id/attachment: %#v", body.Data)
+		}
+		if body.Data.Attachments[0].InstanceID != fixture.remoteID {
+			t.Fatalf("attachment instance_id = %q, want %q", body.Data.Attachments[0].InstanceID, fixture.remoteID)
+		}
+	}
+
+	var messageID string
+	var messageRows int
+	if err := testPool.QueryRow(ctx,
+		`SELECT id, COUNT(*) OVER() FROM messages WHERE channel_id = $1 AND nonce = $2 AND instance_id = $3`,
+		channelID, fixture.id("nonce"), fixture.remoteID).Scan(&messageID, &messageRows); err != nil {
+		t.Fatalf("query federated guild message: %v", err)
+	}
+	if messageRows != 1 {
+		t.Fatalf("message rows = %d, want 1", messageRows)
+	}
+
+	var attachmentRows int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM attachments WHERE id = $1 AND message_id = $2 AND instance_id = $3`,
+		attachmentID, messageID, fixture.remoteID).Scan(&attachmentRows); err != nil {
+		t.Fatalf("query federated guild attachment: %v", err)
+	}
+	if attachmentRows != 1 {
+		t.Fatalf("attachment rows = %d, want 1", attachmentRows)
+	}
+}
+
 type federationFixture struct {
 	localID      string
 	localDomain  string
@@ -273,7 +358,10 @@ func signedJSONRequest(t *testing.T, svc *federation.Service, method, path strin
 }
 
 func withChiParam(req *http.Request, key, value string) *http.Request {
-	rctx := chi.NewRouteContext()
+	rctx := chi.RouteContext(req.Context())
+	if rctx == nil {
+		rctx = chi.NewRouteContext()
+	}
 	rctx.URLParams.Add(key, value)
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
@@ -308,5 +396,16 @@ func insertChannel(t *testing.T, ctx context.Context, id, guildID, instanceID, n
 		id, guildID, instanceID, name)
 	if err != nil {
 		t.Fatalf("insert channel %s: %v", id, err)
+	}
+}
+
+func insertGuildMember(t *testing.T, ctx context.Context, guildID, userID, instanceID string) {
+	t.Helper()
+	_, err := testPool.Exec(ctx,
+		`INSERT INTO guild_members (guild_id, user_id, instance_id, joined_at)
+		 VALUES ($1, $2, $3, now())`,
+		guildID, userID, instanceID)
+	if err != nil {
+		t.Fatalf("insert guild member %s/%s: %v", guildID, userID, err)
 	}
 }

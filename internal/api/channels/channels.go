@@ -629,10 +629,7 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Federation proxy: if channel belongs to a remote guild, forward to home instance.
-	// Only proxy plain text messages — the federation protocol only carries
-	// content/nonce/reply_to_ids. Messages with attachments, encryption, or
-	// silent flags fall through to local handling until protocol parity.
-	canProxy := hasContent && !hasAttachments && !req.Silent && !req.Encrypted
+	canProxy := (hasContent || hasAttachments) && !req.Silent && !req.Encrypted
 	if h.FedProxy != nil && canProxy {
 		opts := map[string]interface{}{}
 		if req.Nonce != nil && *req.Nonce != "" {
@@ -641,7 +638,14 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		if len(req.ReplyToIDs) > 0 {
 			opts["reply_to_ids"] = req.ReplyToIDs
 		}
-		if h.FedProxy.ProxyCreateChannelMessage(w, r, channelID, userID, *req.Content, opts) {
+		if len(req.AttachmentIDs) > 0 {
+			opts["attachment_ids"] = req.AttachmentIDs
+		}
+		content := ""
+		if req.Content != nil {
+			content = *req.Content
+		}
+		if h.FedProxy.ProxyCreateChannelMessage(w, r, channelID, userID, content, opts) {
 			return
 		}
 	}

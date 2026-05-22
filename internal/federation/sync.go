@@ -527,6 +527,7 @@ type federatedMessageAuthor struct {
 type federatedAttachment struct {
 	ID              string   `json:"id"`
 	UploaderID      *string  `json:"uploader_id"`
+	InstanceID      string   `json:"instance_id,omitempty"`
 	Filename        string   `json:"filename"`
 	ContentType     string   `json:"content_type"`
 	SizeBytes       int64    `json:"size_bytes"`
@@ -1656,6 +1657,7 @@ func federationAttachmentsFromModels(attachments []models.Attachment) []federate
 		out = append(out, federatedAttachment{
 			ID:              att.ID,
 			UploaderID:      att.UploaderID,
+			InstanceID:      valueOrEmpty(att.InstanceID),
 			Filename:        att.Filename,
 			ContentType:     att.ContentType,
 			SizeBytes:       att.SizeBytes,
@@ -1671,6 +1673,13 @@ func federationAttachmentsFromModels(attachments []models.Attachment) []federate
 		})
 	}
 	return out
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func federationEmbedsFromModels(embeds []models.Embed) []federatedEmbed {

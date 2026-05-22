@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/models"
 )
 
 // ForwardToHomeInstance sends a signed management request to the guild's home
@@ -428,6 +429,25 @@ func (ss *SyncService) ProxyCreateChannelMessage(
 	if v, ok := opts["reply_to_ids"].([]string); ok {
 		payload.ReplyToIDs = v
 	}
+	if v, ok := opts["attachment_ids"].([]string); ok && len(v) > 0 {
+		attachments, err := ss.federatedAttachmentsForUploadIDs(ctx, userID, v)
+		if err != nil {
+			ss.logger.Warn("invalid attachments for federated message proxy",
+				slog.String("channel_id", channelID),
+				slog.String("user_id", userID),
+				slog.String("error", err.Error()))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]string{
+					"code":    "INVALID_ATTACHMENTS",
+					"message": "One or more attachments are invalid, already linked, or not owned by you",
+				},
+			})
+			return true
+		}
+		payload.Attachments = attachments
+	}
 
 	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/create",
 		instanceDomain, guildID, channelID)
@@ -453,4 +473,53 @@ func (ss *SyncService) ProxyCreateChannelMessage(
 	w.WriteHeader(statusCode)
 	w.Write(respBody)
 	return true
+}
+
+func (ss *SyncService) federatedAttachmentsForUploadIDs(ctx context.Context, userID string, attachmentIDs []string) ([]federatedAttachment, error) {
+	rows, err := ss.fed.pool.Query(ctx,
+		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,
+		        width, height, duration_seconds, s3_bucket, s3_key, blurhash,
+		        alt_text, nsfw, description, instance_id, created_at
+		   FROM attachments
+		  WHERE id = ANY($1) AND uploader_id = $2 AND message_id IS NULL`,
+		attachmentIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	attachments := make([]models.Attachment, 0, len(attachmentIDs))
+	for rows.Next() {
+		var att models.Attachment
+		if err := rows.Scan(
+			&att.ID, &att.MessageID, &att.UploaderID, &att.Filename, &att.ContentType,
+			&att.SizeBytes, &att.Width, &att.Height, &att.DurationSeconds, &att.S3Bucket,
+			&att.S3Key, &att.Blurhash, &att.AltText, &att.NSFW, &att.Description,
+			&att.InstanceID, &att.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, att)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(attachments) != len(attachmentIDs) {
+		return nil, fmt.Errorf("attachment ownership validation failed")
+	}
+
+	byID := make(map[string]models.Attachment, len(attachments))
+	for _, att := range attachments {
+		byID[att.ID] = att
+	}
+	ordered := make([]models.Attachment, 0, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		att, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("attachment %s not found", id)
+		}
+		ordered = append(ordered, att)
+	}
+
+	return federationAttachmentsFromModels(ordered), nil
 }
