@@ -2,6 +2,7 @@
 	import { api } from '$lib/api/client';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
 	import { guildMembers, guildRolesMap } from '$lib/stores/members';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		quoteMessageId: string;
@@ -10,8 +11,7 @@
 
 	let { quoteMessageId, quoteChannelId }: Props = $props();
 
-	let loading = $state(true);
-	let error = $state(false);
+	let quoteOp = $state(createAsyncOp(true));
 	let quotedMessage = $state<{
 		id: string;
 		content: string | null;
@@ -27,20 +27,18 @@
 	});
 
 	async function loadQuote() {
-		loading = true;
-		error = false;
-		try {
+		await quoteOp.run(
+			async () => {
 			const [msg, ch] = await Promise.all([
 				api.getMessage(quoteChannelId, quoteMessageId),
 				api.getChannel(quoteChannelId)
 			]);
 			quotedMessage = msg;
 			quotedChannel = ch;
-		} catch {
-			error = true;
-		} finally {
-			loading = false;
-		}
+			},
+			undefined,
+			'Could not load quoted message'
+		);
 	}
 
 	const authorName = $derived(
@@ -68,12 +66,12 @@
 		<span>Quoted from <span class="font-medium text-purple-400">#{channelName}</span></span>
 	</div>
 
-	{#if loading}
+	{#if quoteOp.loading}
 		<div class="flex items-center gap-2 py-1">
 			<div class="h-3 w-3 animate-spin rounded-full border-2 border-text-muted border-t-transparent"></div>
 			<span class="text-xs text-text-muted">Loading quoted message...</span>
 		</div>
-	{:else if error}
+	{:else if quoteOp.error}
 		<div class="flex items-center gap-1.5 py-1 text-xs text-red-400">
 			<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 				<circle cx="12" cy="12" r="10" />

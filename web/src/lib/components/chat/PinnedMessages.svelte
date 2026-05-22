@@ -4,7 +4,7 @@
 	import { api } from '$lib/api/client';
 	import Avatar from '$components/common/Avatar.svelte';
 	import { avatarUrl } from '$lib/utils/avatar';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		onclose: () => void;
@@ -14,18 +14,18 @@
 	let { onclose, onscrollto }: Props = $props();
 
 	let pins = $state<Message[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let pinsOp = $state(createAsyncOp(true));
 
 	$effect(() => {
 		const channelId = $currentChannelId;
 		if (channelId) {
-			loading = true;
-			error = '';
-			api.getPins(channelId)
-				.then((p) => (pins = p))
-				.catch((err: unknown) => (error = getErrorMessage(err, 'Failed to load pins')))
-				.finally(() => (loading = false));
+			pinsOp.run(
+				async () => {
+					pins = await api.getPins(channelId);
+				},
+				undefined,
+				'Failed to load pins'
+			);
 		}
 	});
 
@@ -54,12 +54,12 @@
 	</div>
 
 	<div class="flex-1 overflow-y-auto">
-		{#if loading}
+		{#if pinsOp.loading}
 			<div class="flex items-center justify-center p-8">
 				<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>
-		{:else if error}
-			<div class="p-4 text-sm text-red-400">{error}</div>
+		{:else if pinsOp.error}
+			<div class="p-4 text-sm text-red-400">{pinsOp.error}</div>
 		{:else if pins.length === 0}
 			<div class="flex flex-col items-center justify-center p-8 text-center">
 				<svg class="mb-2 h-12 w-12 text-text-muted" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">

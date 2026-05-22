@@ -3,35 +3,32 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import GalleryItem from './GalleryItem.svelte';
 	import MediaPreviewModal from './MediaPreviewModal.svelte';
 
 	let items = $state<Attachment[]>([]);
-	let loading = $state(true);
-	let loadingMore = $state(false);
+	let loadOp = $state(createAsyncOp(true));
+	let loadMoreOp = $state(createAsyncOp());
 	let hasMore = $state(true);
 	let selectedItem = $state<Attachment | null>(null);
 	let showPreview = $state(false);
 
 	$effect(() => {
-		api.getAdminMedia()
-			.then((data) => { items = data; hasMore = data.length >= 50; })
-			.catch(() => {})
-			.finally(() => { loading = false; });
+		loadOp.run(async () => {
+			const data = await api.getAdminMedia();
+			items = data;
+			hasMore = data.length >= 50;
+		});
 	});
 
 	async function loadMore() {
-		if (loadingMore || items.length === 0) return;
-		loadingMore = true;
-		try {
+		if (loadMoreOp.loading || items.length === 0) return;
+		await loadMoreOp.run(async () => {
 			const data = await api.getAdminMedia(items[items.length - 1].id);
 			items = [...items, ...data];
 			hasMore = data.length >= 50;
-		} catch {
-			// ignore
-		} finally {
-			loadingMore = false;
-		}
+		});
 	}
 
 	function openPreview(item: Attachment) {
@@ -62,7 +59,7 @@
 		<span class="text-xs text-text-muted">({items.length} files)</span>
 	</div>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center py-8">
 			<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
@@ -77,8 +74,8 @@
 
 		{#if hasMore}
 			<div class="flex justify-center">
-				<button class="btn-secondary text-sm" onclick={loadMore} disabled={loadingMore}>
-					{loadingMore ? 'Loading...' : 'Load More'}
+				<button class="btn-secondary text-sm" onclick={loadMore} disabled={loadMoreOp.loading}>
+					{loadMoreOp.loading ? 'Loading...' : 'Load More'}
 				</button>
 			</div>
 		{/if}

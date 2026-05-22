@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { StickerPack, Sticker } from '$lib/types';
 	import { fileUrl } from '$lib/utils/avatar';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { api } from '$lib/api/client';
 	import { currentGuildId } from '$lib/stores/guilds';
 
@@ -17,8 +17,7 @@
 	let userPacks = $state<StickerPack[]>([]);
 	let stickersByPack = $state<Map<string, Sticker[]>>(new Map());
 	let activePackId = $state<string | null>(null);
-	let loading = $state(true);
-	let error = $state('');
+	let packsOp = $state(createAsyncOp(true));
 
 	// Load packs on mount.
 	$effect(() => {
@@ -33,9 +32,8 @@
 	});
 
 	async function loadPacks() {
-		loading = true;
-		error = '';
-		try {
+		await packsOp.run(
+			async () => {
 			const guildId = $currentGuildId;
 			const [userP, guildP] = await Promise.all([
 				api.getUserStickerPacks(),
@@ -49,11 +47,10 @@
 			if (allPacks.length > 0) {
 				activePackId = allPacks[0].id;
 			}
-		} catch (err: unknown) {
-			error = getErrorMessage(err, 'Failed to load sticker packs');
-		} finally {
-			loading = false;
-		}
+			},
+			undefined,
+			'Failed to load sticker packs'
+		);
 	}
 
 	async function loadStickersForPack(packId: string) {
@@ -136,12 +133,12 @@
 
 	<!-- Sticker grid -->
 	<div class="max-h-64 overflow-y-auto p-2">
-		{#if loading}
+		{#if packsOp.loading}
 			<div class="flex items-center justify-center py-8">
 				<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>
-		{:else if error}
-			<p class="py-4 text-center text-xs text-text-muted">{error}</p>
+		{:else if packsOp.error}
+			<p class="py-4 text-center text-xs text-text-muted">{packsOp.error}</p>
 		{:else if allPacks.length === 0}
 			<p class="py-4 text-center text-xs text-text-muted">No sticker packs available</p>
 		{:else if activeStickers.length === 0}
@@ -170,7 +167,7 @@
 	</div>
 
 	<!-- Pack name footer -->
-	{#if activePackId && !loading}
+	{#if activePackId && !packsOp.loading}
 		<div class="border-t border-bg-modifier px-2 py-1 text-center">
 			<span class="text-2xs text-text-muted">{activePackName}</span>
 		</div>

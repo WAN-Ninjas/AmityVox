@@ -5,7 +5,7 @@
 		loadLocationShares,
 		locationSharesByChannel
 	} from '$lib/stores/locationShares';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		channelId: string;
@@ -15,9 +15,8 @@
 
 	let { channelId, location, compact = false }: Props = $props();
 
-	let loading = $state(false);
-	let sharing = $state(false);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp());
+	let shareOp = $state(createAsyncOp());
 	let liveLocationId = $state<string | null>(null);
 	let liveInterval = $state<ReturnType<typeof setInterval> | null>(null);
 	const locations = $derived($locationSharesByChannel.get(channelId) ?? []);
@@ -53,53 +52,61 @@
 	}
 
 	async function loadLocations() {
-		loading = true;
-		error = '';
-		try {
-			await loadLocationShares(channelId);
-		} catch (err: unknown) {
-			error = getErrorMessage(err, 'Failed to load locations');
-		} finally {
-			loading = false;
-		}
+		await loadOp.run(
+			async () => {
+				await loadLocationShares(channelId);
+			},
+			undefined,
+			'Failed to load locations'
+		);
+	}
+
+	function getCurrentPosition(options: PositionOptions): Promise<GeolocationPosition> {
+		return new Promise<GeolocationPosition>((resolve, reject) => {
+			navigator.geolocation.getCurrentPosition(resolve, (err) => {
+				if (err.code === GeolocationPositionError.PERMISSION_DENIED) {
+					reject(new Error('Location permission denied. Please allow location access.'));
+					return;
+				}
+				reject(err);
+			}, options);
+		});
 	}
 
 	async function shareMyLocation(live: boolean = false) {
-		sharing = true;
-		error = '';
-		try {
-			const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-				navigator.geolocation.getCurrentPosition(resolve, reject, {
+		await shareOp.run(
+			async () => {
+				const pos = await getCurrentPosition({
 					enableHighAccuracy: true,
 					timeout: 10000
 				});
-			});
 
-			const result = await api.shareLocation(channelId, {
-				latitude: pos.coords.latitude,
-				longitude: pos.coords.longitude,
-				accuracy: pos.coords.accuracy,
-				altitude: pos.coords.altitude,
-				live,
-				duration: live ? 3600 : 0
-			});
+				const result = await api.shareLocation(channelId, {
+					latitude: pos.coords.latitude,
+					longitude: pos.coords.longitude,
+					accuracy: pos.coords.accuracy,
+					altitude: pos.coords.altitude,
+					live,
+					duration: live ? 3600 : 0
+				});
 
-			if (live && result) {
-				liveLocationId = result.id;
-				startLiveUpdates();
-			}
+				if (live && result) {
+					liveLocationId = result.id;
+					startLiveUpdates();
+				}
 
-			await loadLocations();
-		} catch (err: unknown) {
-			if (err instanceof GeolocationPositionError && err.code === GeolocationPositionError.PERMISSION_DENIED) {
-				error = 'Location permission denied. Please allow location access.';
-			} else {
-				error = getErrorMessage(err, 'Failed to share location');
-			}
-		} finally {
-			sharing = false;
-		}
+				await loadLocations();
+			},
+			undefined,
+			'Failed to share location'
+		);
 	}
+
+	function getLocationError(): string | null {
+		return shareOp.error ?? loadOp.error;
+	}
+
+	let error = $derived(getLocationError());
 
 	function startLiveUpdates() {
 		if (liveInterval) clearInterval(liveInterval);
@@ -109,11 +116,9 @@
 				return;
 			}
 			try {
-				const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-					navigator.geolocation.getCurrentPosition(resolve, reject, {
-						enableHighAccuracy: true,
-						timeout: 5000
-					});
+				const pos = await getCurrentPosition({
+					enableHighAccuracy: true,
+					timeout: 5000
 				});
 				await api.updateLiveLocation(channelId, liveLocationId, {
 					latitude: pos.coords.latitude,
@@ -206,19 +211,19 @@
 		<div class="flex gap-2 mb-4">
 			<button
 				class="btn-primary text-sm px-3 py-1.5 rounded flex items-center gap-1.5"
-				disabled={sharing}
+				disabled={shareOp.loading}
 				onclick={() => shareMyLocation(false)}
 			>
 				<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
 				</svg>
-				{sharing ? 'Sharing...' : 'Share Location'}
+				{shareOp.loading ? 'Sharing...' : 'Share Location'}
 			</button>
 
 			{#if !liveLocationId}
 				<button
 					class="btn-secondary text-sm px-3 py-1.5 rounded flex items-center gap-1.5"
-					disabled={sharing}
+					disabled={shareOp.loading}
 					onclick={() => shareMyLocation(true)}
 				>
 					<span class="w-2 h-2 bg-green-400 rounded-full"></span>
@@ -234,7 +239,7 @@
 			{/if}
 		</div>
 
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="text-text-muted text-sm">Loading locations...</div>
 		{:else if locations.length === 0}
 			<div class="text-text-muted text-sm">No shared locations in this channel.</div>

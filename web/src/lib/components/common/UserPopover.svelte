@@ -16,6 +16,7 @@
 	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		userId: string;
@@ -28,11 +29,10 @@
 	let { userId, x, y, onclose, onviewprofile }: Props = $props();
 
 	let user = $state<User | null>(null);
-	let loading = $state(true);
-	let error = $state('');
+	let loadOp = $state(createAsyncOp(true));
 	let note = $state('');
 	let noteLoaded = $state(false);
-	let noteSaving = $state(false);
+	let noteOp = $state(createAsyncOp());
 	let nickname = $state('');
 	const currentNickname = $derived($clientNicknames.get(userId) ?? '');
 
@@ -50,51 +50,48 @@
 		return getMemberRoleColor(member.roles, $guildRolesMap);
 	});
 
-	let addingFriend = $state(false);
+	let friendOp = $state(createAsyncOp());
 	let showFullProfile = $state(false);
-	let blockingUser = $state(false);
+	let blockOp = $state(createAsyncOp());
 	const currentBlockLevel = $derived($blockedUsers.get(userId) ?? null);
 
 	async function handleBlock(level: BlockLevel) {
-		if (blockingUser) return;
-		blockingUser = true;
-		try {
+		if (blockOp.loading) return;
+		await blockOp.run(
+			async () => {
 			await api.blockUser(userId, level);
 			addBlockedUser(userId, level);
 			addToast(level === 'ignore' ? 'User ignored' : 'User blocked', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to block user'), 'error');
-		} finally {
-			blockingUser = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to block user'
+		);
 	}
 
 	async function handleUnblock() {
-		if (blockingUser) return;
-		blockingUser = true;
-		try {
+		if (blockOp.loading) return;
+		await blockOp.run(
+			async () => {
 			await api.unblockUser(userId);
 			removeBlockedUser(userId);
 			addToast('User unblocked', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to unblock user'), 'error');
-		} finally {
-			blockingUser = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to unblock user'
+		);
 	}
 
 	async function handleAddFriend() {
-		if (addingFriend) return;
-		addingFriend = true;
-		try {
+		if (friendOp.loading) return;
+		await friendOp.run(
+			async () => {
 			const rel = await api.addFriend(userId);
 			addOrUpdateRelationship(rel);
 			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to send friend request'), 'error');
-		} finally {
-			addingFriend = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to send friend request'
+		);
 	}
 
 	function saveNickname() {
@@ -106,10 +103,13 @@
 	});
 
 	$effect(() => {
-		api.getUser(userId)
-			.then((u) => (user = u))
-			.catch((e: unknown) => (error = getErrorMessage(e, 'Failed to load user')))
-			.finally(() => (loading = false));
+		loadOp.run(
+			async () => {
+				user = await api.getUser(userId);
+			},
+			undefined,
+			'Failed to load user'
+		);
 
 		if (!isSelf) {
 			api.getUserNote(userId)
@@ -158,15 +158,14 @@
 	}
 
 	async function saveNote() {
-		if (noteSaving) return;
-		noteSaving = true;
-		try {
+		if (noteOp.loading) return;
+		await noteOp.run(
+			async () => {
 			await api.setUserNote(userId, note);
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to save note'), 'error');
-		} finally {
-			noteSaving = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to save note'
+		);
 	}
 
 	// Guard: ignore the click event that opened us (same event still bubbling).
@@ -214,12 +213,12 @@
 	class="user-popover fixed z-50 w-80 overflow-hidden rounded-lg bg-bg-floating shadow-xl"
 	style={popoverStyle}
 >
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center justify-center p-8">
 			<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
-	{:else if error}
-		<div class="p-4 text-sm text-red-400">{error}</div>
+	{:else if loadOp.error}
+		<div class="p-4 text-sm text-red-400">{loadOp.error}</div>
 	{:else if user}
 		<!-- Banner area — use accent color if set, banner image if available -->
 		{#if user.banner_id}
@@ -416,9 +415,9 @@
 						<button
 							class="flex-1 rounded px-3 py-1.5 text-sm font-medium transition-colors {relationship?.type === 'pending_incoming' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-brand-500 text-white hover:bg-brand-600'}"
 							onclick={handleAddFriend}
-							disabled={addingFriend}
+							disabled={friendOp.loading}
 						>
-							{addingFriend ? '...' : relationship?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
+							{friendOp.loading ? '...' : relationship?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
 						</button>
 					{:else if relationship.type === 'pending_outgoing'}
 						<button
@@ -436,22 +435,22 @@
 						<button
 							class="flex-1 rounded border border-bg-modifier px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier"
 							onclick={handleUnblock}
-							disabled={blockingUser}
+							disabled={blockOp.loading}
 						>
-							{blockingUser ? '...' : 'Unblock'}
+							{blockOp.loading ? '...' : 'Unblock'}
 						</button>
 					{:else}
 						<button
 							class="flex-1 rounded px-3 py-1.5 text-xs font-medium text-yellow-500 transition-colors hover:bg-yellow-500/10"
 							onclick={() => handleBlock('ignore')}
-							disabled={blockingUser}
+							disabled={blockOp.loading}
 						>
 							Ignore
 						</button>
 						<button
 							class="flex-1 rounded px-3 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
 							onclick={() => handleBlock('block')}
-							disabled={blockingUser}
+							disabled={blockOp.loading}
 						>
 							Block
 						</button>

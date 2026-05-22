@@ -1,4 +1,4 @@
-// Package integration provides integration tests for AmityVox using dockertest.
+// Package integration provides integration tests for AmityVox using Docker.
 // These tests spin up real PostgreSQL, NATS, and DragonflyDB containers, run
 // migrations, and test the full stack including database queries, event bus
 // pub/sub, and cache operations. Tests are skipped if Docker is unavailable.
@@ -14,12 +14,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/database"
@@ -34,47 +34,35 @@ var (
 	testBus    *events.Bus
 	testCache  *presence.Cache
 	testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	dockerPool *dockertest.Pool
 )
 
 // TestMain sets up Docker containers for integration testing.
 func TestMain(m *testing.M) {
-	// Check if Docker is available.
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		fmt.Printf("Skipping integration tests: Docker not available: %v\n", err)
+	if _, err := exec.LookPath("docker"); err != nil {
+		fmt.Printf("Skipping integration tests: docker CLI not available: %v\n", err)
 		os.Exit(0)
 	}
-	if err := pool.Client.Ping(); err != nil {
+	if err := exec.Command("docker", "info").Run(); err != nil {
 		fmt.Printf("Skipping integration tests: Docker not reachable: %v\n", err)
 		os.Exit(0)
 	}
-	dockerPool = pool
-	pool.MaxWait = 120 * time.Second
 
-	// Start PostgreSQL.
-	pgResource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "postgres",
-		Tag:        "16-alpine",
-		Env: []string{
+	pgContainer, pgPort, err := startDockerContainer("postgres:16-alpine", "5432/tcp",
+		[]string{
 			"POSTGRES_USER=amityvox_test",
 			"POSTGRES_PASSWORD=testpass",
 			"POSTGRES_DB=amityvox_test",
 		},
-	}, func(config *docker.HostConfig) {
-		config.AutoRemove = true
-		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
-	})
+		nil)
 	if err != nil {
 		fmt.Printf("Could not start PostgreSQL: %v\n", err)
 		os.Exit(1)
 	}
+	defer removeDockerContainer(pgContainer)
 
-	pgURL := fmt.Sprintf("postgres://amityvox_test:testpass@localhost:%s/amityvox_test?sslmode=disable",
-		pgResource.GetPort("5432/tcp"))
+	pgURL := fmt.Sprintf("postgres://amityvox_test:testpass@localhost:%s/amityvox_test?sslmode=disable", pgPort)
 
-	// Wait for PostgreSQL to be ready.
-	if err := pool.Retry(func() error {
+	if err := retry(120*time.Second, func() error {
 		ctx := context.Background()
 		db, err := database.New(ctx, pgURL, 5, testLogger)
 		if err != nil {
@@ -85,36 +73,25 @@ func TestMain(m *testing.M) {
 		return db.HealthCheck(ctx)
 	}); err != nil {
 		fmt.Printf("Could not connect to PostgreSQL: %v\n", err)
-		pgResource.Close()
 		os.Exit(1)
 	}
 
 	// Run migrations.
 	if err := database.MigrateUp(pgURL, testLogger); err != nil {
 		fmt.Printf("Migration failed: %v\n", err)
-		pgResource.Close()
 		os.Exit(1)
 	}
 
-	// Start NATS.
-	natsResource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "nats",
-		Tag:        "2-alpine",
-		Cmd:        []string{"-js"},
-	}, func(config *docker.HostConfig) {
-		config.AutoRemove = true
-		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
-	})
+	natsContainer, natsPort, err := startDockerContainer("nats:2-alpine", "4222/tcp", nil, []string{"-js"})
 	if err != nil {
 		fmt.Printf("Could not start NATS: %v\n", err)
-		pgResource.Close()
 		os.Exit(1)
 	}
+	defer removeDockerContainer(natsContainer)
 
-	natsURL := fmt.Sprintf("nats://localhost:%s", natsResource.GetPort("4222/tcp"))
+	natsURL := fmt.Sprintf("nats://localhost:%s", natsPort)
 
-	// Wait for NATS to be ready.
-	if err := pool.Retry(func() error {
+	if err := retry(120*time.Second, func() error {
 		bus, err := events.New(natsURL, testLogger)
 		if err != nil {
 			return err
@@ -123,30 +100,19 @@ func TestMain(m *testing.M) {
 		return bus.HealthCheck()
 	}); err != nil {
 		fmt.Printf("Could not connect to NATS: %v\n", err)
-		pgResource.Close()
-		natsResource.Close()
 		os.Exit(1)
 	}
 
-	// Start DragonflyDB (Redis-compatible).
-	redisResource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "redis",
-		Tag:        "7-alpine",
-	}, func(config *docker.HostConfig) {
-		config.AutoRemove = true
-		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
-	})
+	redisContainer, redisPort, err := startDockerContainer("redis:7-alpine", "6379/tcp", nil, nil)
 	if err != nil {
 		fmt.Printf("Could not start Redis: %v\n", err)
-		pgResource.Close()
-		natsResource.Close()
 		os.Exit(1)
 	}
+	defer removeDockerContainer(redisContainer)
 
-	redisURL := fmt.Sprintf("redis://localhost:%s", redisResource.GetPort("6379/tcp"))
+	redisURL := fmt.Sprintf("redis://localhost:%s", redisPort)
 
-	// Wait for Redis to be ready.
-	if err := pool.Retry(func() error {
+	if err := retry(120*time.Second, func() error {
 		cache, err := presence.New(redisURL, testLogger)
 		if err != nil {
 			return err
@@ -155,9 +121,6 @@ func TestMain(m *testing.M) {
 		return cache.HealthCheck(context.Background())
 	}); err != nil {
 		fmt.Printf("Could not connect to Redis: %v\n", err)
-		pgResource.Close()
-		natsResource.Close()
-		redisResource.Close()
 		os.Exit(1)
 	}
 
@@ -168,11 +131,66 @@ func TestMain(m *testing.M) {
 	testDB.Close()
 	testBus.Close()
 	testCache.Close()
-	pgResource.Close()
-	natsResource.Close()
-	redisResource.Close()
 
 	os.Exit(code)
+}
+
+func startDockerContainer(image, port string, env []string, cmdArgs []string) (string, string, error) {
+	args := []string{"run", "-d", "--rm", "-P"}
+	for _, item := range env {
+		args = append(args, "-e", item)
+	}
+	args = append(args, image)
+	args = append(args, cmdArgs...)
+
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("docker run %s: %w: %s", image, err, strings.TrimSpace(string(out)))
+	}
+	containerID := strings.TrimSpace(string(out))
+
+	mappedPort, err := dockerMappedPort(containerID, port)
+	if err != nil {
+		removeDockerContainer(containerID)
+		return "", "", err
+	}
+	return containerID, mappedPort, nil
+}
+
+func dockerMappedPort(containerID, port string) (string, error) {
+	out, err := exec.Command("docker", "port", containerID, port).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w: %s", containerID, port, err, strings.TrimSpace(string(out)))
+	}
+	mapping := strings.TrimSpace(string(out))
+	if idx := strings.LastIndex(mapping, ":"); idx >= 0 && idx+1 < len(mapping) {
+		return mapping[idx+1:], nil
+	}
+	return "", fmt.Errorf("unexpected docker port output for %s/%s: %q", containerID, port, mapping)
+}
+
+func removeDockerContainer(containerID string) {
+	if containerID == "" {
+		return
+	}
+	_ = exec.Command("docker", "rm", "-f", containerID).Run()
+}
+
+func retry(timeout time.Duration, fn func() error) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := fn(); err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("timed out after %s", timeout)
 }
 
 // --- Database Integration Tests ---
@@ -629,4 +647,3 @@ func TestAutomodRuleCRUD(t *testing.T) {
 	testPool.Exec(ctx, `DELETE FROM guilds WHERE id = $1`, guildID)
 	testPool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 }
-

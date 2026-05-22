@@ -2,7 +2,7 @@
 	import type { MediaTag } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		guildId: string;
@@ -11,30 +11,28 @@
 	let { guildId }: Props = $props();
 
 	let tags = $state<MediaTag[]>([]);
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let newTagName = $state('');
-	let adding = $state(false);
+	let addOp = $state(createAsyncOp());
 
 	$effect(() => {
-		api.getMediaTags(guildId)
-			.then((t) => { tags = t; })
-			.catch(() => {})
-			.finally(() => { loading = false; });
+		loadOp.run(async () => {
+			tags = await api.getMediaTags(guildId);
+		});
 	});
 
 	async function addTag() {
-		if (!newTagName.trim() || adding) return;
-		adding = true;
-		try {
+		if (!newTagName.trim() || addOp.loading) return;
+		await addOp.run(
+			async () => {
 			const tag = await api.createMediaTag(guildId, newTagName.trim());
 			tags = [...tags, tag];
 			newTagName = '';
 			addToast('Tag created', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to create tag'), 'error');
-		} finally {
-			adding = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to create tag'
+		);
 	}
 
 	async function removeTag(tagId: string) {
@@ -52,7 +50,7 @@
 	<h3 class="text-sm font-semibold text-text-primary">Media Tags</h3>
 	<p class="text-xs text-text-muted">Tags help organize media in your server's gallery.</p>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center gap-2 py-2 text-sm text-text-muted">
 			<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			Loading...
@@ -93,9 +91,9 @@
 			<button
 				class="btn-primary text-sm"
 				onclick={addTag}
-				disabled={adding || !newTagName.trim()}
+				disabled={addOp.loading || !newTagName.trim()}
 			>
-				{adding ? '...' : 'Add'}
+				{addOp.loading ? '...' : 'Add'}
 			</button>
 		</div>
 	{/if}

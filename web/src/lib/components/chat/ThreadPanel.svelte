@@ -7,6 +7,7 @@
 	import Avatar from '$components/common/Avatar.svelte';
 	import { avatarUrl } from '$lib/utils/avatar';
 	import { tick } from 'svelte';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		threadChannel: { id: string; name: string | null; guild_id: string | null; parent_channel_id?: string | null; locked?: boolean; pinned?: boolean; encrypted?: boolean };
@@ -18,11 +19,11 @@
 
 	let content = $state('');
 	let messagesContainer = $state<HTMLDivElement>();
-	let loading = $state(true);
+	let messagesOp = $state(createAsyncOp(true));
 	let forumTags = $state<ForumTag[]>([]);
 	let channelPassphrase = $state('');
 	let hasKey = $state(false);
-	let checkingKey = $state(true);
+	let keyCheckOp = $state(createAsyncOp(true));
 
 	// Encrypted threads use the parent channel's key (same passphrase + parent ID as salt)
 	const encryptionChannelId = $derived(threadChannel.parent_channel_id ?? threadChannel.id);
@@ -30,14 +31,13 @@
 	// Check if we already have the decryption key for this encrypted thread
 	$effect(() => {
 		if (threadChannel.encrypted) {
-			checkingKey = true;
-			e2ee.hasChannelKey(encryptionChannelId).then((has) => {
-				hasKey = has;
-				checkingKey = false;
+			keyCheckOp.run(async () => {
+				hasKey = await e2ee.hasChannelKey(encryptionChannelId);
 			});
 		} else {
 			hasKey = true;
-			checkingKey = false;
+			keyCheckOp.loading = false;
+			keyCheckOp.error = null;
 		}
 	});
 
@@ -109,9 +109,8 @@
 	const threadMessages = $derived(rawThreadMessages);
 
 	$effect(() => {
-		loading = true;
-		loadMessages(threadChannel.id).finally(() => {
-			loading = false;
+		messagesOp.run(async () => {
+			await loadMessages(threadChannel.id);
 			tick().then(() => {
 				if (messagesContainer) {
 					messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -224,7 +223,7 @@
 	{/if}
 
 	<!-- Passphrase prompt for encrypted threads -->
-	{#if threadChannel.encrypted && !hasKey && !checkingKey}
+	{#if threadChannel.encrypted && !hasKey && !keyCheckOp.loading}
 		<div class="flex flex-1 flex-col items-center justify-center gap-3 p-4">
 			<svg class="h-8 w-8 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 				<path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
@@ -243,7 +242,7 @@
 	{:else}
 	<!-- Thread messages -->
 	<div bind:this={messagesContainer} class="flex-1 overflow-y-auto p-2">
-		{#if loading}
+		{#if messagesOp.loading}
 			<div class="flex items-center justify-center py-8">
 				<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>

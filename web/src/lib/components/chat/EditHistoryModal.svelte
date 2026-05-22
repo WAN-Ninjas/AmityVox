@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import Modal from '$components/common/Modal.svelte';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		open?: boolean;
@@ -13,17 +13,17 @@
 	let { open = false, channelId, messageId, onclose }: Props = $props();
 
 	let edits = $state<{ content: string; edited_at: string }[]>([]);
-	let loading = $state(true);
-	let error = $state('');
+	let editsOp = $state(createAsyncOp(true));
 
 	$effect(() => {
 		if (open && channelId && messageId) {
-			loading = true;
-			error = '';
-			api.getMessageEdits(channelId, messageId)
-				.then((data) => (edits = data))
-				.catch((err: unknown) => (error = getErrorMessage(err, 'Failed to load edit history')))
-				.finally(() => (loading = false));
+			editsOp.run(
+				async () => {
+					edits = await api.getMessageEdits(channelId, messageId);
+				},
+				undefined,
+				'Failed to load edit history'
+			);
 		}
 	});
 
@@ -33,12 +33,12 @@
 </script>
 
 <Modal {open} title="Edit History" {onclose}>
-	{#if loading}
+	{#if editsOp.loading}
 		<div class="flex items-center justify-center py-8">
 			<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 		</div>
-	{:else if error}
-		<p class="py-4 text-center text-sm text-red-400">{error}</p>
+	{:else if editsOp.error}
+		<p class="py-4 text-center text-sm text-red-400">{editsOp.error}</p>
 	{:else if edits.length === 0}
 		<p class="py-4 text-center text-sm text-text-muted">No edit history available.</p>
 	{:else}

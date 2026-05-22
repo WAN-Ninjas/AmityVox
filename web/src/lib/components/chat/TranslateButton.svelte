@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		channelId: string;
@@ -10,7 +10,7 @@
 
 	let { channelId, messageIds }: Props = $props();
 
-	let loading = $state(false);
+	let translateOp = $state(createAsyncOp());
 	let translations = $state<Array<{ translated_text: string; source_lang: string; target_lang: string }>>([]);
 	let showTranslation = $state(false);
 	let showLangPicker = $state(false);
@@ -47,9 +47,9 @@
 	async function translate(lang?: string, force = false) {
 		if (messageIds.length === 0) return;
 		const target = lang ?? preferredLang;
-		loading = true;
 		showLangPicker = false;
-		try {
+		await translateOp.run(
+			async () => {
 			const results = await Promise.all(
 				messageIds.map((id) => api.translateMessage(channelId, id, target, force))
 			);
@@ -59,11 +59,10 @@
 			// Save preferred language.
 			localStorage.setItem('av-translate-lang', target);
 			preferredLang = target;
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Translation failed'), 'error');
-		} finally {
-			loading = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Translation failed'
+		);
 	}
 
 	function hideTranslation() {
@@ -81,10 +80,10 @@
 		<button
 			class="flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-text-muted hover:bg-bg-modifier hover:text-text-secondary transition-colors"
 			onclick={() => translate()}
-			disabled={loading}
+			disabled={translateOp.loading}
 			title="Translate {messageIds.length > 1 ? `${messageIds.length} messages` : 'message'}"
 		>
-			{#if loading}
+			{#if translateOp.loading}
 				<div class="h-3 w-3 animate-spin rounded-full border border-text-muted border-t-transparent"></div>
 			{:else}
 				<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -146,9 +145,9 @@
 			<button
 				class="text-2xs text-text-muted hover:text-text-secondary"
 				onclick={() => translate(undefined, true)}
-				disabled={loading}
+				disabled={translateOp.loading}
 			>
-				{loading ? 'Retrying...' : 'Retry'}
+				{translateOp.loading ? 'Retrying...' : 'Retry'}
 			</button>
 			<button
 				class="text-2xs text-text-muted hover:text-text-secondary"

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import {
 		type FavoriteGif,
 		loadFavorites,
@@ -25,8 +25,7 @@
 	let search = $state('');
 	let gifs = $state<any[]>([]);
 	let categories = $state<any[]>([]);
-	let loading = $state(false);
-	let error = $state('');
+	let browseOp = $state(createAsyncOp());
 	let browseLabel = $state('');
 	let browsingFavorites = $state(false);
 	let searchingFavorites = $derived(browsingFavorites && search.trim().length > 0);
@@ -72,20 +71,21 @@
 	}
 
 	async function loadTrending() {
-		loading = true;
-		error = '';
 		browsingFavorites = false;
-		try {
-			const data = await api.getTrendingGiphy(25);
+		await browseOp.run(async () => {
+			const data = await withGiphyAvailabilityMessage(api.getTrendingGiphy(25));
 			gifs = data?.data ?? [];
+		}, undefined, 'Failed to load GIFs');
+	}
+
+	async function withGiphyAvailabilityMessage<T>(request: Promise<T>): Promise<T> {
+		try {
+			return await request;
 		} catch (err: unknown) {
 			if ((err as { status?: number } | null)?.status === 503) {
-				error = 'GIF search is not enabled on this instance';
-			} else {
-				error = getErrorMessage(err, 'Failed to load GIFs');
+				throw new Error('GIF search is not enabled on this instance');
 			}
-		} finally {
-			loading = false;
+			throw err;
 		}
 	}
 
@@ -107,30 +107,26 @@
 	}
 
 	async function searchGifs(query: string) {
-		loading = true;
-		error = '';
-		try {
+		await browseOp.run(
+			async () => {
 			const data = await api.searchGiphy(query.trim());
 			gifs = data?.data ?? [];
-		} catch (err: unknown) {
-			error = getErrorMessage(err, 'Search failed');
-		} finally {
-			loading = false;
-		}
+			},
+			undefined,
+			'Search failed'
+		);
 	}
 
 	async function loadCategoryGifs(categoryName: string) {
-		loading = true;
-		error = '';
 		browsingFavorites = false;
-		try {
+		await browseOp.run(
+			async () => {
 			const data = await api.searchGiphy(categoryName, 25);
 			gifs = data?.data ?? [];
-		} catch (err: unknown) {
-			error = getErrorMessage(err, 'Failed to load category');
-		} finally {
-			loading = false;
-		}
+			},
+			undefined,
+			'Failed to load category'
+		);
 	}
 
 	// --- Navigation ---
@@ -140,7 +136,7 @@
 		gifs = [];
 		browseLabel = '';
 		browsingFavorites = false;
-		error = '';
+		browseOp.error = null;
 	}
 
 	function openTrending() {
@@ -153,8 +149,8 @@
 		view = 'browse';
 		browseLabel = 'Favorites';
 		browsingFavorites = true;
-		loading = false;
-		error = '';
+		browseOp.loading = false;
+		browseOp.error = null;
 		// Convert favorites to gif-like objects for rendering
 		gifs = favorites.map(favoriteToGif);
 	}
@@ -296,12 +292,12 @@
 
 		{:else}
 			<!-- Browse: GIF grid -->
-			{#if loading}
+			{#if browseOp.loading}
 				<div class="flex items-center justify-center py-8">
 					<div class="h-5 w-5 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 				</div>
-			{:else if error}
-				<p class="py-4 text-center text-xs text-text-muted">{error}</p>
+			{:else if browseOp.error}
+				<p class="py-4 text-center text-xs text-text-muted">{browseOp.error}</p>
 			{:else if gifs.length === 0}
 				<p class="py-4 text-center text-xs text-text-muted">
 					{searchingFavorites ? 'No matching favorites' : browsingFavorites ? 'No favorites yet — star some GIFs!' : 'No GIFs found'}

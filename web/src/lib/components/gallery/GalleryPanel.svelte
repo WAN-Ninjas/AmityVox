@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Attachment } from '$lib/types';
 	import { api } from '$lib/api/client';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import GalleryItem from './GalleryItem.svelte';
 	import GalleryFilters from './GalleryFilters.svelte';
 	import MediaPreviewModal from './MediaPreviewModal.svelte';
@@ -15,8 +16,8 @@
 	let { channelId, guildId, canManage = false, onclose }: Props = $props();
 
 	let items = $state<Attachment[]>([]);
-	let loading = $state(true);
-	let loadingMore = $state(false);
+	let loadOp = $state(createAsyncOp(true));
+	let loadMoreOp = $state(createAsyncOp());
 	let hasMore = $state(true);
 	let typeFilter = $state('all');
 	let scope = $state<'channel' | 'server'>('server');
@@ -24,14 +25,10 @@
 	let showPreview = $state(false);
 
 	async function loadGallery(append = false) {
-		if (append) {
-			loadingMore = true;
-		} else {
-			loading = true;
-			items = [];
-		}
-
-		try {
+		const op = append ? loadMoreOp : loadOp;
+		if (!append) items = [];
+		await op.run(
+			async () => {
 			const before = append && items.length > 0 ? items[items.length - 1].id : undefined;
 			const opts = { before, type: typeFilter !== 'all' ? typeFilter : undefined };
 
@@ -52,12 +49,10 @@
 				items = data;
 			}
 			hasMore = data.length >= 50;
-		} catch {
-			// Silently fail
-		} finally {
-			loading = false;
-			loadingMore = false;
-		}
+			},
+			undefined,
+			append ? 'Failed to load more media' : 'Failed to load media'
+		);
 	}
 
 	$effect(() => {
@@ -127,7 +122,7 @@
 
 	<!-- Gallery grid -->
 	<div class="flex-1 overflow-y-auto p-4">
-		{#if loading}
+		{#if loadOp.loading}
 			<div class="flex items-center justify-center py-12">
 				<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>
@@ -150,9 +145,9 @@
 					<button
 						class="btn-secondary text-sm"
 						onclick={() => loadGallery(true)}
-						disabled={loadingMore}
+						disabled={loadMoreOp.loading}
 					>
-						{loadingMore ? 'Loading...' : 'Load More'}
+						{loadMoreOp.loading ? 'Loading...' : 'Load More'}
 					</button>
 				</div>
 			{/if}

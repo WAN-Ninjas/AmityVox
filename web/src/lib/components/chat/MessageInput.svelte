@@ -21,6 +21,7 @@
 	import PendingFilesPreview from '$components/chat/PendingFilesPreview.svelte';
 	import ScheduleMessagePicker from '$components/chat/ScheduleMessagePicker.svelte';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { Sticker } from '$lib/types';
 
 	let content = $state('');
@@ -48,7 +49,7 @@
 	// --- E2EE passphrase prompt ---
 	let needsPassphrase = $state(false);
 	let channelPassphrase = $state('');
-	let settingPassphrase = $state(false);
+	let passphraseOp = $state(createAsyncOp());
 
 	$effect(() => {
 		const ch = $currentChannel;
@@ -67,23 +68,21 @@
 	async function handleSetPassphrase() {
 		const channelId = $currentChannelId;
 		if (!channelId || !channelPassphrase.trim()) return;
-		settingPassphrase = true;
-		try {
+		await passphraseOp.run(
+			async () => {
 			await e2ee.setPassphrase(channelId, channelPassphrase);
 			needsPassphrase = false;
 			channelPassphrase = '';
 			addToast('Channel unlocked', 'success');
-		} catch {
-			addToast('Failed to set passphrase', 'error');
-		} finally {
-			settingPassphrase = false;
-		}
+			},
+			() => addToast('Failed to set passphrase', 'error')
+		);
 	}
 
 	// --- File attachment state ---
 	let pendingFiles = $state<File[]>([]);
 	let pendingAltTexts = $state<Record<number, string>>({});
-	let uploading = $state(false);
+	let uploadOp = $state(createAsyncOp());
 
 	const FALLBACK_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 	let maxFileSizeBytes = $state(FALLBACK_MAX_FILE_SIZE_BYTES);
@@ -342,7 +341,7 @@
 
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
-			if (uploading) return;
+			if (uploadOp.loading) return;
 			if (isEditing) {
 				handleSubmit();
 			} else if (pendingFiles.length > 0) {
@@ -484,59 +483,58 @@
 			return;
 		}
 
-		uploading = true;
-		try {
-			const isEncrypted = !!$currentChannel?.encrypted;
-			const ids: string[] = [];
-			for (let i = 0; i < pendingFiles.length; i++) {
-				let file = pendingFiles[i];
-				const altText = isEncrypted ? undefined : (pendingAltTexts[i]?.trim() || undefined);
+		await uploadOp.run(
+			async () => {
+				const isEncrypted = !!$currentChannel?.encrypted;
+				const ids: string[] = [];
+				for (let i = 0; i < pendingFiles.length; i++) {
+					let file = pendingFiles[i];
+					const altText = isEncrypted ? undefined : (pendingAltTexts[i]?.trim() || undefined);
+					if (isEncrypted) {
+						try {
+							const buf = await file.arrayBuffer();
+							const encBuf = await e2ee.encryptFile(channelId, buf);
+							file = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
+						} catch {
+							addToast('Failed to encrypt file. Do you have the channel key?', 'error');
+							return;
+						}
+					}
+					const uploaded = await api.uploadFile(file, altText);
+					ids.push(uploaded.id);
+				}
+				const msg = content.trim();
+				let sendContent = msg;
+				const opts: Record<string, any> = { attachment_ids: ids };
+				if (isReplying && $replyingTo) {
+					opts.reply_to_ids = [$replyingTo.id];
+				}
+				if (silentMode) {
+					opts.silent = true;
+				}
 				if (isEncrypted) {
-					try {
-						const buf = await file.arrayBuffer();
-						const encBuf = await e2ee.encryptFile(channelId, buf);
-						file = new File([encBuf], file.name + '.enc', { type: 'application/octet-stream' });
-					} catch {
-						addToast('Failed to encrypt file. Do you have the channel key?', 'error');
-						return;
+					opts.encrypted = true;
+					if (msg) {
+						try {
+							sendContent = await e2ee.encryptMessage(channelId, msg);
+						} catch {
+							addToast('Failed to encrypt message. Do you have the channel key?', 'error');
+							return;
+						}
 					}
 				}
-				const uploaded = await api.uploadFile(file, altText);
-				ids.push(uploaded.id);
-			}
-			const msg = content.trim();
-			let sendContent = msg;
-			const opts: Record<string, any> = { attachment_ids: ids };
-			if (isReplying && $replyingTo) {
-				opts.reply_to_ids = [$replyingTo.id];
-			}
-			if (silentMode) {
-				opts.silent = true;
-			}
-			if (isEncrypted) {
-				opts.encrypted = true;
-				if (msg) {
-					try {
-						sendContent = await e2ee.encryptMessage(channelId, msg);
-					} catch {
-						addToast('Failed to encrypt message. Do you have the channel key?', 'error');
-						return;
-					}
-				}
-			}
-			const sent = await api.sendMessage(channelId, sendContent, opts);
-			appendMessage(sent);
-			recordSuccessfulSend(channelId);
-			cancelReply();
-			content = '';
-			if (inputEl) inputEl.style.height = 'auto';
-			pendingFiles = [];
-			pendingAltTexts = {};
-		} catch (err) {
-			handleSendError(err, 'Upload failed');
-		} finally {
-			uploading = false;
-		}
+				const sent = await api.sendMessage(channelId, sendContent, opts);
+				appendMessage(sent);
+				recordSuccessfulSend(channelId);
+				cancelReply();
+				content = '';
+				if (inputEl) inputEl.style.height = 'auto';
+				pendingFiles = [];
+				pendingAltTexts = {};
+			},
+			(message) => addToast(message, 'error'),
+			'Upload failed'
+		);
 	}
 
 	async function handleFileUpload(e: Event) {
@@ -708,7 +706,7 @@
 	<div class="border-t border-bg-floating px-4 pb-4 pt-2">
 		<!-- Passphrase prompt for encrypted channels without a key -->
 		{#if needsPassphrase}
-			<ChannelPassphrasePrompt bind:passphrase={channelPassphrase} loading={settingPassphrase} onunlock={handleSetPassphrase} />
+			<ChannelPassphrasePrompt bind:passphrase={channelPassphrase} loading={passphraseOp.loading} onunlock={handleSetPassphrase} />
 		{/if}
 
 		<MessageInputStatusBars
@@ -726,8 +724,8 @@
 				files={pendingFiles}
 				bind:altTexts={pendingAltTexts}
 				{maxFileSizeBytes}
-				{uploading}
-				sendDisabled={uploading || hasOversizedFiles || slowmodeBlocked || !fileUploadsEnabled}
+				uploading={uploadOp.loading}
+				sendDisabled={uploadOp.loading || hasOversizedFiles || slowmodeBlocked || !fileUploadsEnabled}
 				sendLabel={slowmodeBlocked ? `${slowmodeRemainingSeconds}s` : 'Send'}
 				onclear={clearPendingFiles}
 				onremove={removePendingFile}

@@ -13,7 +13,7 @@
 	import { goto } from '$app/navigation';
 	import { blockedUsers, addBlockedUser, removeBlockedUser, type BlockLevel } from '$lib/stores/blocked';
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		userId: string;
@@ -27,12 +27,12 @@
 	let links = $state<UserLink[]>([]);
 	let mutualFriends = $state<User[]>([]);
 	let mutualGuilds = $state<MutualGuild[]>([]);
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let note = $state('');
 	let noteLoaded = $state(false);
-	let noteSaving = $state(false);
-	let addingFriend = $state(false);
-	let blockingUser = $state(false);
+	let noteOp = $state(createAsyncOp());
+	let friendOp = $state(createAsyncOp());
+	let blockOp = $state(createAsyncOp());
 
 	const isSelf = $derived($currentUser?.id === userId);
 	const currentBlockLevel = $derived($blockedUsers.get(userId) ?? null);
@@ -63,19 +63,20 @@
 
 	$effect(() => {
 		if (!open) return;
-		loading = true;
-		const promises: Promise<void>[] = [
-			api.getUser(userId).then((u) => { user = u; }),
-			api.getUserLinks(userId).then((l) => { links = l; }).catch(() => { links = []; })
-		];
-		if (!isSelf) {
-			promises.push(
-				api.getMutualFriends(userId).then((f) => { mutualFriends = f; }).catch(() => { mutualFriends = []; }),
-				api.getMutualGuilds(userId).then((g) => { mutualGuilds = g; }).catch(() => { mutualGuilds = []; }),
-				api.getUserNote(userId).then((d) => { note = d.note ?? ''; noteLoaded = true; }).catch(() => { noteLoaded = true; })
-			);
-		}
-		Promise.all(promises).finally(() => { loading = false; });
+		loadOp.run(async () => {
+			const promises: Promise<void>[] = [
+				api.getUser(userId).then((u) => { user = u; }),
+				api.getUserLinks(userId).then((l) => { links = l; }).catch(() => { links = []; })
+			];
+			if (!isSelf) {
+				promises.push(
+					api.getMutualFriends(userId).then((f) => { mutualFriends = f; }).catch(() => { mutualFriends = []; }),
+					api.getMutualGuilds(userId).then((g) => { mutualGuilds = g; }).catch(() => { mutualGuilds = []; }),
+					api.getUserNote(userId).then((d) => { note = d.note ?? ''; noteLoaded = true; }).catch(() => { noteLoaded = true; })
+				);
+			}
+			await Promise.all(promises);
+		});
 	});
 
 	async function handleMessage() {
@@ -91,57 +92,52 @@
 	}
 
 	async function handleAddFriend() {
-		if (addingFriend) return;
-		addingFriend = true;
-		try {
+		if (friendOp.loading) return;
+		await friendOp.run(
+			async () => {
 			const rel = await api.addFriend(userId);
 			addOrUpdateRelationship(rel);
 			addToast(rel.type === 'friend' ? 'Friend request accepted!' : 'Friend request sent!', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to send friend request'), 'error');
-		} finally {
-			addingFriend = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to send friend request'
+		);
 	}
 
 	async function saveNote() {
-		if (noteSaving) return;
-		noteSaving = true;
-		try {
+		if (noteOp.loading) return;
+		await noteOp.run(
+			async () => {
 			await api.setUserNote(userId, note);
-		} catch {
-			addToast('Failed to save note', 'error');
-		} finally {
-			noteSaving = false;
-		}
+			},
+			() => addToast('Failed to save note', 'error')
+		);
 	}
 
 	async function handleBlock(level: BlockLevel) {
-		if (blockingUser) return;
-		blockingUser = true;
-		try {
+		if (blockOp.loading) return;
+		await blockOp.run(
+			async () => {
 			await api.blockUser(userId, level);
 			addBlockedUser(userId, level);
 			addToast(level === 'ignore' ? 'User ignored' : 'User blocked', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to block user'), 'error');
-		} finally {
-			blockingUser = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to block user'
+		);
 	}
 
 	async function handleUnblock() {
-		if (blockingUser) return;
-		blockingUser = true;
-		try {
+		if (blockOp.loading) return;
+		await blockOp.run(
+			async () => {
 			await api.unblockUser(userId);
 			removeBlockedUser(userId);
 			addToast('User unblocked', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to unblock user'), 'error');
-		} finally {
-			blockingUser = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to unblock user'
+		);
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -186,7 +182,7 @@
 			role="document"
 			tabindex="-1"
 		>
-			{#if loading}
+			{#if loadOp.loading}
 				<div class="flex items-center justify-center p-16">
 					<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 				</div>
@@ -373,9 +369,9 @@
 								<button
 									class="flex-1 rounded px-3 py-1.5 text-sm font-medium transition-colors {relationship?.type === 'pending_incoming' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-brand-500 text-white hover:bg-brand-600'}"
 									onclick={handleAddFriend}
-									disabled={addingFriend}
+									disabled={friendOp.loading}
 								>
-									{addingFriend ? '...' : relationship?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
+									{friendOp.loading ? '...' : relationship?.type === 'pending_incoming' ? 'Accept Request' : 'Add Friend'}
 								</button>
 							{:else if relationship.type === 'pending_outgoing'}
 								<button
@@ -393,22 +389,22 @@
 								<button
 									class="flex-1 rounded border border-bg-modifier px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier"
 									onclick={handleUnblock}
-									disabled={blockingUser}
+									disabled={blockOp.loading}
 								>
-									{blockingUser ? '...' : 'Unblock'}
+									{blockOp.loading ? '...' : 'Unblock'}
 								</button>
 							{:else}
 								<button
 									class="flex-1 rounded px-3 py-1.5 text-xs font-medium text-yellow-500 transition-colors hover:bg-yellow-500/10"
 									onclick={() => handleBlock('ignore')}
-									disabled={blockingUser}
+									disabled={blockOp.loading}
 								>
 									Ignore
 								</button>
 								<button
 									class="flex-1 rounded px-3 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
 									onclick={() => handleBlock('block')}
-									disabled={blockingUser}
+									disabled={blockOp.loading}
 								>
 									Block
 								</button>

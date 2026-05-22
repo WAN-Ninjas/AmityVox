@@ -2,14 +2,14 @@
 	import type { UserLink } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	let links = $state<UserLink[]>([]);
-	let loading = $state(true);
+	let loadOp = $state(createAsyncOp(true));
 	let newPlatform = $state('website');
 	let newLabel = $state('');
 	let newUrl = $state('');
-	let adding = $state(false);
+	let addOp = $state(createAsyncOp());
 
 	const platformOptions = [
 		{ value: 'website', label: 'Website' },
@@ -25,27 +25,29 @@
 	];
 
 	$effect(() => {
-		api.getMyLinks()
-			.then((l) => { links = l; })
-			.catch(() => {})
-			.finally(() => { loading = false; });
+		loadOp.run(
+			async () => {
+				links = await api.getMyLinks();
+			},
+			undefined,
+			'Failed to load profile links'
+		);
 	});
 
 	async function addLink() {
 		if (!newLabel.trim() || !newUrl.trim()) return;
-		adding = true;
-		try {
+		await addOp.run(
+			async () => {
 			const link = await api.createLink(newPlatform, newLabel.trim(), newUrl.trim());
 			links = [...links, link];
 			newLabel = '';
 			newUrl = '';
 			newPlatform = 'website';
 			addToast('Link added', 'success');
-		} catch (err: unknown) {
-			addToast(getErrorMessage(err, 'Failed to add link'), 'error');
-		} finally {
-			adding = false;
-		}
+			},
+			(message) => addToast(message, 'error'),
+			'Failed to add link'
+		);
 	}
 
 	async function removeLink(linkId: string) {
@@ -63,7 +65,7 @@
 	<h3 class="mb-3 text-sm font-semibold text-text-primary">Profile Links</h3>
 	<p class="mb-3 text-xs text-text-muted">Add links to your profile that others can see.</p>
 
-	{#if loading}
+	{#if loadOp.loading}
 		<div class="flex items-center gap-2 py-4 text-sm text-text-muted">
 			<div class="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			Loading...
@@ -119,9 +121,9 @@
 				<button
 					class="btn-primary text-sm"
 					onclick={addLink}
-					disabled={adding || !newLabel.trim() || !newUrl.trim()}
+					disabled={addOp.loading || !newLabel.trim() || !newUrl.trim()}
 				>
-					{adding ? '...' : 'Add'}
+					{addOp.loading ? '...' : 'Add'}
 				</button>
 			</div>
 		</div>

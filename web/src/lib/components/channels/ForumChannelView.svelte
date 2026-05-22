@@ -3,7 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { channels } from '$lib/stores/channels';
-	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import ForumPostCard from './ForumPostCard.svelte';
 	import ForumPostCreate from './ForumPostCreate.svelte';
 
@@ -16,9 +16,8 @@
 
 	let posts = $state<ForumPost[]>([]);
 	let forumTags = $state<ForumTag[]>([]);
-	let loading = $state(true);
-	let loadingMore = $state(false);
-	let error = $state('');
+	let listOp = $state(createAsyncOp(true));
+	let moreOp = $state(createAsyncOp());
 	let hasMore = $state(false);
 	let showNewPostForm = $state(false);
 
@@ -54,15 +53,10 @@
 	}
 
 	async function loadPosts(reset: boolean) {
-		if (reset) {
-			loading = true;
-			error = '';
-			posts = [];
-		} else {
-			loadingMore = true;
-		}
-
-		try {
+		const op = reset ? listOp : moreOp;
+		if (reset) posts = [];
+		await op.run(
+			async () => {
 			const cursor = !reset && posts.length > 0 ? posts[posts.length - 1].id : undefined;
 			const result = await api.getForumPosts(channelId, {
 				sort: sortBy,
@@ -76,16 +70,10 @@
 				posts = [...posts, ...result];
 			}
 			hasMore = result.length === 25;
-		} catch (err: unknown) {
-			if (reset) {
-				error = getErrorMessage(err, 'Failed to load forum posts');
-			} else {
-				addToast(getErrorMessage(err, 'Failed to load more posts'), 'error');
-			}
-		} finally {
-			loading = false;
-			loadingMore = false;
-		}
+			},
+			reset ? undefined : (message) => addToast(message, 'error'),
+			reset ? 'Failed to load forum posts' : 'Failed to load more posts'
+		);
 	}
 
 	function openPost(post: ForumPost) {
@@ -212,16 +200,16 @@
 
 	<!-- Post list -->
 	<div class="flex-1 overflow-y-auto">
-		{#if loading}
+		{#if listOp.loading}
 			<div class="flex items-center justify-center py-16">
 				<div class="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			</div>
-		{:else if error}
+		{:else if listOp.error}
 			<div class="flex flex-col items-center justify-center py-16">
 				<svg class="mb-2 h-10 w-10 text-red-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
 					<path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
 				</svg>
-				<p class="text-sm text-red-400">{error}</p>
+				<p class="text-sm text-red-400">{listOp.error}</p>
 				<button
 					class="mt-2 text-xs text-brand-400 hover:underline"
 					onclick={() => loadPosts(true)}
@@ -269,9 +257,9 @@
 						<button
 							class="rounded-md bg-bg-secondary px-4 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-tertiary disabled:opacity-50"
 							onclick={() => loadPosts(false)}
-							disabled={loadingMore}
+							disabled={moreOp.loading}
 						>
-							{#if loadingMore}
+							{#if moreOp.loading}
 								<span class="flex items-center gap-1.5">
 									<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-text-muted border-t-transparent"></span>
 									Loading...

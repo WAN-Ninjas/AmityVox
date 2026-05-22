@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
 		channelId: string;
@@ -19,7 +20,7 @@
 	let chunks = $state<Blob[]>([]);
 	let previewUrl = $state<string | null>(null);
 	let error = $state('');
-	let uploading = $state(false);
+	let uploadOp = $state(createAsyncOp());
 	let mode = $state<'camera' | 'screen'>('screen');
 	let timerInterval = $state<ReturnType<typeof setInterval> | null>(null);
 	let videoPreview = $state<HTMLVideoElement | null>(null);
@@ -164,10 +165,10 @@
 
 	async function saveRecording() {
 		if (chunks.length === 0) return;
-		uploading = true;
+		uploadOp.error = null;
 		error = '';
-
-		try {
+		await uploadOp.run(
+			async () => {
 			const blob = new Blob(chunks, { type: getSupportedMimeType() });
 			const file = new File([blob], `recording_${Date.now()}.webm`, { type: blob.type });
 
@@ -188,11 +189,12 @@
 			addToast('Recording saved successfully!', 'success');
 			discardRecording();
 			if (onclose) onclose();
-		} catch (err: unknown) {
-			error = getErrorMessage(err, 'Failed to save recording');
-		} finally {
-			uploading = false;
-		}
+			},
+			(message) => {
+				error = message;
+			},
+			'Failed to save recording'
+		);
 	}
 
 	function formatSize(bytes: number): string {
@@ -347,7 +349,7 @@
 					type="button"
 					class="flex-1 btn-secondary py-2 rounded text-sm"
 					onclick={discardRecording}
-					disabled={uploading}
+					disabled={uploadOp.loading}
 				>
 					Discard
 				</button>
@@ -355,9 +357,9 @@
 					type="button"
 					class="flex-1 btn-primary py-2 rounded text-sm flex items-center justify-center gap-2"
 					onclick={saveRecording}
-					disabled={uploading}
+					disabled={uploadOp.loading}
 				>
-					{#if uploading}
+					{#if uploadOp.loading}
 						<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
 							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
 							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />

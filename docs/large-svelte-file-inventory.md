@@ -1,6 +1,6 @@
 # Large Svelte File Inventory
 
-Last updated: 2026-05-18
+Last updated: 2026-05-22
 
 The repo's 200-line target is a quality guardrail. The active bug backlog no
 longer treats every legacy file above 200 lines as a blocking defect; this file
@@ -21,6 +21,7 @@ Highest-priority split candidates:
 
 Recent reduction:
 
+- Older chat/gallery/common/gallery async submit/load flags were consolidated onto `createAsyncOp`; this did not materially change the highest-priority line-count inventory, so the next split order remains focused on structural extraction.
 - `ChannelSidebar.svelte` dropped from 1697 to 739 lines by extracting the report issue modal, user panel, create/edit channel modals, channel/DM/guild/thread context menus, direct messages, upcoming events, voice channels, guild header, text channels, and forum/gallery channel rows.
 - New extracted sidebar files are below the 200-line target: `ChannelContextMenu.svelte` 180, `EditChannelModal.svelte` 157, `TextChannelsSection.svelte` 109, `DirectMessagesSection.svelte` 104, `GuildContextMenu.svelte` 97, `CreateChannelModal.svelte` 87, `ThreadContextMenu.svelte` 77, `GuildSidebarHeader.svelte` 73, `UpcomingEventsSection.svelte` 67, `VoiceChannelsSection.svelte` 65, `TypedChannelsSection.svelte` 61, `UserPanel.svelte` 61, `ReportIssueModal.svelte` 59, `DMContextMenu.svelte` 52.
 - `ChannelGroups.svelte` dropped from 905 to 850 lines by extracting `ChannelGroupCreateModal.svelte` 72.
@@ -29,7 +30,7 @@ Recent reduction:
 
 Recommended next split order:
 
-1. `MessageInput.svelte`: continue with picker actions, mobile action tray, and send orchestration helpers.
+1. `MessageInput.svelte`: continue with picker actions, mobile action tray, and deeper send orchestration helpers.
 2. `MessageItem.svelte`: continue with hover action bar, forward/quote/report modals, and moderation helpers.
 3. `ChannelGroups.svelte`: continue with grouped channel rows and group header/editor controls.
 4. `SettingsAppearanceTab.svelte`: extract theme editor, preview, import/export, and connected accounts.

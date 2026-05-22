@@ -64,8 +64,8 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
   - Shared formatter now covers main routes, setup/registration/invites, friends, discovery, bookmarks, user settings, admin surfaces, guild/settings surfaces, layout sidebars/groups, chat actions, channel/gallery tools, voice controls, member-list action, and common guild management flows.
   - Remaining grep hits are registration/admin settings copy fields, not exception handling.
 - [x] Introduce a small reusable async-state pattern for search/theme/plugin/admin pages.
-  - Helper exists; plugin, search modal, theme gallery, discover, bookmarks, admin dashboard, admin federation, bridge admin, admin utility tabs, admin guild/registration/captcha/rate-limit/content-safety/domain/retention panels, profile/security/privacy/notification/voice/bot settings, auth/setup/invite routes, moderation route panes, and guild boost/insights/invite/widget/webhook/role/moderation/raid/audit/category/invite/ban/ban-list/template/retention/plugin/emoji/sticker/automod/onboarding/member panels use it.
-  - Remaining broad manual async flags are now outside this backlog scope, mostly older chat/gallery/common components and large-file refactor candidates tracked separately.
+	- Helper exists; plugin, search modal, theme gallery, discover, bookmarks, admin dashboard, admin federation, bridge admin, admin utility tabs, admin guild/registration/captcha/rate-limit/content-safety/domain/retention panels, profile/security/privacy/notification/voice/bot settings, auth/setup/invite routes, moderation route panes, and guild boost/insights/invite/widget/webhook/role/moderation/raid/audit/category/invite/ban/ban-list/template/retention/plugin/emoji/sticker/automod/onboarding/member panels use it.
+	- Older chat/gallery/common/gallery loaders and submit states now use the shared helper; remaining large-file work is structural extraction rather than scattered local async flags.
 - [x] Convert remaining visible gateway no-ops into store/component updates.
   - Core message/guild/member/widget/event paths improved.
   - Soundboard, broadcast, screen share, location, and activity/game gateway events now have store/component ownership.
@@ -95,8 +95,8 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
    - Done: login, setup, registration, invite acceptance, friends, discovery, bookmarks, user settings, admin dashboard/tabs, plugin install, member-list action, guild overview, invite, ban, emoji, role-delete, guild settings, layout sidebars/groups, message actions, video recorder, instance switcher, common profile/group/status/GIF/sticker, gallery/channel tools, embeds, bump, and voice-control flows use the shared API error formatter.
    - Remaining grep hits are registration/admin settings copy fields, not exception handling.
 6. [x] Finish async-state consolidation for search, theme, discover, and admin surfaces.
-   - Done: search modal, theme gallery, discover including federation peers, bookmarks, admin dashboard, admin federation, bridge admin, admin utility tabs, admin guild/registration/captcha/rate-limit/content-safety/domain/retention panels, profile/security/privacy/notification/voice/bot settings, auth/setup/invite routes, moderation route panes, and the remaining lower-traffic guild settings panes use the shared async helper.
-   - Follow-up refactor stream: older chat/gallery/common components still have local async flags and should be handled with large-component reduction rather than this admin/settings backlog item.
+	- Done: search modal, theme gallery, discover including federation peers, bookmarks, admin dashboard, admin federation, bridge admin, admin utility tabs, admin guild/registration/captcha/rate-limit/content-safety/domain/retention panels, profile/security/privacy/notification/voice/bot settings, auth/setup/invite routes, moderation route panes, and the remaining lower-traffic guild settings panes use the shared async helper.
+	- Done: older forum/gallery/channel panels, pins, edit history, cross-channel quotes, translation, stickers, GIFs, profile popovers/modals/links, media gallery/admin/tag tools, location sharing, video recording, and composer upload/passphrase states now use the shared helper where the state represents an async operation.
 7. [x] Assign or implement remaining gateway event no-op owners.
    - Done: active member roster, soundboard playback, voice broadcasts, screen-share badges, location shares, and activity/game invalidation now have explicit gateway ownership.
    - Done: bot component interaction events are documented as backend/bot-worker events; client-visible changes flow through message updates.
@@ -112,8 +112,9 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
    - Done: signed inbound guild message coverage verifies remote attachment persistence, response metadata, media `instance_id`, and nonce idempotency.
    - Done: remote guild message proxy now forwards attachment metadata after validating local upload ownership.
 10. [x] Update stale federation/codebase docs after each completed tranche.
-   - Done: current backlog and large Svelte inventory reflect this tranche's federation tests and component reductions.
-   - Done: guild message attachment federation and dependency audit cleanup are reflected here.
+	- Done: current backlog and large Svelte inventory reflect this tranche's federation tests and component reductions.
+	- Done: guild message attachment federation and dependency audit cleanup are reflected here.
+	- Done: async-state follow-up wording now reflects the older chat/gallery/common cleanup.
 
 ## Archived Docs
 
