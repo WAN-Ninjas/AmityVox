@@ -137,6 +137,21 @@ trap 'on_error $LINENO' ERR
 # ============================================================
 # OS Detection
 # ============================================================
+classify_distro_family() {
+    DISTRO_FAMILY="unknown"
+    if [ "$DISTRO_ID" = "debian" ] || [ "$DISTRO_ID" = "raspbian" ] ||
+        echo "${ID_LIKE:-}" | grep -Eqi '(^|[[:space:]])debian([[:space:]]|$)'; then
+        DISTRO_FAMILY="debian"
+    fi
+    if [ "$DISTRO_ID" = "ubuntu" ] || echo "${ID_LIKE:-}" | grep -Eqi '(^|[[:space:]])ubuntu([[:space:]]|$)'; then
+        DISTRO_FAMILY="ubuntu"
+    fi
+    if [ "$DISTRO_ID" = "arch" ] || echo "${ID_LIKE:-}" | grep -Eqi '(^|[[:space:]])arch([[:space:]]|$)' ||
+        echo "$DISTRO_ID ${ID_LIKE:-}" | grep -Eqi '(^|[[:space:]])(cachyos|manjaro|endeavouros|garuda)([[:space:]]|$)'; then
+        DISTRO_FAMILY="arch"
+    fi
+}
+
 detect_os() {
     ARCH="$(uname -m)"
     case "$ARCH" in
@@ -150,6 +165,7 @@ detect_os() {
     DISTRO_VERSION=""
     DISTRO_CODENAME=""
     DISTRO_LABEL="unknown"
+    DISTRO_FAMILY="unknown"
     IS_RASPBERRY_PI=false
 
     if [ -f /etc/os-release ]; then
@@ -157,9 +173,11 @@ detect_os() {
         . /etc/os-release
         DISTRO_ID="${ID:-unknown}"
         DISTRO_VERSION="${VERSION_ID:-}"
-        DISTRO_CODENAME="${VERSION_CODENAME:-}"
+        DISTRO_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-${DEBIAN_CODENAME:-}}}"
         DISTRO_LABEL="${PRETTY_NAME:-$DISTRO_ID $DISTRO_VERSION}"
     fi
+
+    classify_distro_family
 
     # Detect Raspberry Pi (RPi OS reports as "debian" with Raspberry Pi model).
     if [ -f /proc/device-tree/model ] && grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
@@ -180,6 +198,7 @@ detect_os() {
     if [ "$IS_ARMBIAN" = "true" ]; then
         info "  Hardware: Armbian SBC"
     fi
+    info "  Distro family: $DISTRO_FAMILY"
 }
 
 # ============================================================
@@ -194,6 +213,12 @@ run_sudo() {
         # Already root — just run it.
         "$@"
         return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        err "Elevated privileges are needed for: $reason"
+        err "sudo is not installed. Re-run as root, or install sudo and re-run this script."
+        return 1
     fi
 
     if [ "$NONINTERACTIVE" != "1" ] && [ -e /dev/tty ]; then
@@ -259,18 +284,53 @@ gen_alnum() {
     printf '%s' "${out:0:$len}"
 }
 
-install_apt_package() {
+install_package() {
     local package="$1"
     local purpose="$2"
+    local apt_package="${3:-$package}"
+    local pacman_package="${4:-$package}"
 
-    if ! command -v apt-get >/dev/null 2>&1; then
-        err "$package is required for $purpose, but apt-get is not available on this system."
-        err "Install $package with your system package manager, then re-run this script."
+    case "$DISTRO_FAMILY" in
+        debian|ubuntu)
+            if ! command -v apt-get >/dev/null 2>&1; then
+                err "$package is required for $purpose, but apt-get is not available on this system."
+                err "Install $apt_package with your system package manager, then re-run this script."
+                return 1
+            fi
+            run_sudo "install $apt_package" apt-get update -qq
+            run_sudo "install $apt_package" apt-get install -y -qq "$apt_package" >/dev/null
+            ;;
+        arch)
+            if ! command -v pacman >/dev/null 2>&1; then
+                err "$package is required for $purpose, but pacman is not available on this Arch-family system."
+                err "Install $pacman_package with your system package manager, then re-run this script."
+                return 1
+            fi
+            run_sudo "install $pacman_package" pacman -Sy --needed --noconfirm "$pacman_package"
+            ;;
+        *)
+            err "$package is required for $purpose."
+            err "Automatic package installation is supported on Debian, Ubuntu, Armbian, Raspberry Pi OS, and Arch derivatives."
+            err "Install $package with your system package manager, then re-run this script."
+            return 1
+            ;;
+    esac
+}
+
+start_and_enable_service() {
+    local service_name="$1"
+    if command -v systemctl >/dev/null 2>&1; then
+        run_sudo "start $service_name service" systemctl start "$service_name"
+        run_sudo "enable $service_name to start on boot" systemctl enable "$service_name" >/dev/null 2>&1
+    elif command -v service >/dev/null 2>&1; then
+        run_sudo "start $service_name service" service "$service_name" start
+    elif command -v rc-service >/dev/null 2>&1; then
+        run_sudo "start $service_name service" rc-service "$service_name" start
+    else
+        warn "Could not find systemctl, service, or rc-service."
+        warn "Start Docker manually before continuing."
         return 1
     fi
-
-    run_sudo "install $package" apt-get update -qq
-    run_sudo "install $package" apt-get install -y -qq "$package" >/dev/null
 }
 
 env_quote() {
@@ -417,8 +477,40 @@ banner() {
 # Step 2: Install Docker if missing
 # ============================================================
 install_docker() {
+    case "$DISTRO_FAMILY" in
+        arch)
+            echo
+            log "Docker is not installed. This script can install it with pacman."
+            info "This will install: docker and docker-compose"
+            echo
+
+            if ! ask_yn "Install Docker now?" "y"; then
+                err "Docker is required. Install it manually and re-run this script:"
+                err "  sudo pacman -Sy --needed docker docker-compose"
+                return 1
+            fi
+
+            install_package "Docker" "running AmityVox containers" "docker" "docker"
+            install_package "Docker Compose" "orchestrating AmityVox services" "docker-compose-plugin" "docker-compose"
+            start_and_enable_service docker || return 1
+            log "Docker installed successfully: $(docker --version 2>/dev/null || echo 'unknown version')"
+            return 0
+            ;;
+        debian|ubuntu) ;;
+        *)
+            err "Automatic Docker installation is supported on Debian, Ubuntu,"
+            err "Armbian, Raspberry Pi OS, and Arch-family distributions."
+            err ""
+            err "Your distro: $DISTRO_LABEL ($DISTRO_ID, family: $DISTRO_FAMILY)"
+            err ""
+            err "Install Docker manually: https://docs.docker.com/engine/install/"
+            err "Then re-run this script."
+            return 1
+            ;;
+    esac
+
     # Determine the upstream repo distro (armbian/rpios use debian/ubuntu repos).
-    local repo_distro="$DISTRO_ID"
+    local repo_distro="$DISTRO_FAMILY"
     local repo_codename="$DISTRO_CODENAME"
 
     # Armbian and Raspberry Pi OS are Debian or Ubuntu derivatives.
@@ -433,21 +525,6 @@ install_docker() {
             ;;
         raspbian)
             repo_distro="debian"
-            ;;
-    esac
-
-    # Validate we're on a supported distro.
-    case "$repo_distro" in
-        debian|ubuntu) ;;
-        *)
-            err "Automatic Docker installation is only supported on Debian, Ubuntu,"
-            err "Raspberry Pi OS, and Armbian."
-            err ""
-            err "Your distro: $DISTRO_LABEL ($DISTRO_ID)"
-            err ""
-            err "Install Docker manually: https://docs.docker.com/engine/install/"
-            err "Then re-run this script."
-            return 1
             ;;
     esac
 
@@ -512,11 +589,7 @@ install_docker() {
             docker-buildx-plugin docker-compose-plugin >/dev/null
 
     # Step 5: Start and enable Docker.
-    run_sudo "start Docker service" \
-        systemctl start docker
-
-    run_sudo "enable Docker to start on boot" \
-        systemctl enable docker >/dev/null 2>&1
+    start_and_enable_service docker || return 1
 
     log "Docker installed successfully: $(docker --version 2>/dev/null || echo 'unknown version')"
 }
@@ -595,11 +668,14 @@ check_prerequisites() {
     if ! command -v git >/dev/null 2>&1; then
         warn "git is not installed."
         if ask_yn "Install git now?" "y"; then
-            install_apt_package git "cloning the AmityVox repository"
+            install_package git "cloning the AmityVox repository"
             log "git installed."
         else
             err "git is required to clone the AmityVox repository."
-            err "Install it: sudo apt-get install git"
+            case "$DISTRO_FAMILY" in
+                arch) err "Install it: sudo pacman -Sy --needed git" ;;
+                *)    err "Install it: sudo apt-get install git" ;;
+            esac
             exit 1
         fi
     fi
@@ -608,11 +684,14 @@ check_prerequisites() {
     if ! command -v openssl >/dev/null 2>&1; then
         warn "openssl is not installed (needed for generating secrets)."
         if ask_yn "Install openssl now?" "y"; then
-            install_apt_package openssl "generating secure passwords and keys"
+            install_package openssl "generating secure passwords and keys"
             log "openssl installed."
         else
             err "openssl is required for generating secure passwords and keys."
-            err "Install it: sudo apt-get install openssl"
+            case "$DISTRO_FAMILY" in
+                arch) err "Install it: sudo pacman -Sy --needed openssl" ;;
+                *)    err "Install it: sudo apt-get install openssl" ;;
+            esac
             exit 1
         fi
     fi
@@ -635,7 +714,10 @@ check_prerequisites() {
         err ""
         err "Docker Compose should have been installed as a plugin with Docker."
         err "Try reinstalling Docker, or install the plugin manually:"
-        err "  sudo apt-get install docker-compose-plugin"
+        case "$DISTRO_FAMILY" in
+            arch) err "  sudo pacman -Sy --needed docker-compose" ;;
+            *)    err "  sudo apt-get install docker-compose-plugin" ;;
+        esac
         exit 1
     fi
 
@@ -643,7 +725,7 @@ check_prerequisites() {
     if ! docker info >/dev/null 2>&1; then
         warn "Docker is installed but the daemon is not running."
         if ask_yn "Start the Docker service now?" "y"; then
-            run_sudo "start Docker daemon" systemctl start docker
+            start_and_enable_service docker || exit 1
             # Wait for it to come up.
             local attempts=0
             while [ $attempts -lt 10 ]; do
@@ -654,12 +736,20 @@ check_prerequisites() {
                 sleep 1
             done
             if ! docker info >/dev/null 2>&1; then
-                err "Docker daemon did not start. Check: sudo systemctl status docker"
+                if command -v systemctl >/dev/null 2>&1; then
+                    err "Docker daemon did not start. Check: sudo systemctl status docker"
+                else
+                    err "Docker daemon did not start. Check your service manager logs."
+                fi
                 exit 1
             fi
             log "Docker daemon started."
         else
-            err "Docker must be running. Start it with: sudo systemctl start docker"
+            if command -v systemctl >/dev/null 2>&1; then
+                err "Docker must be running. Start it with: sudo systemctl start docker"
+            else
+                err "Docker must be running. Start it with your system service manager."
+            fi
             exit 1
         fi
     fi
