@@ -203,6 +203,19 @@ docker exec amityvox amityvox admin set-admin <username>
 
 Open your domain (or `http://localhost`) in a browser, log in with your admin account, and start using AmityVox.
 
+## Useful Commands
+
+The interactive installer prints these commands when setup completes. Replace `/home/user/amityvox` with your install directory if you chose a different path. These commands do not remove Docker volumes unless you add `-v` yourself.
+
+| Task | Command |
+|---|---|
+| View logs | `cd /home/user/amityvox && docker compose --env-file .env -f deploy/docker/docker-compose.yml logs -f` |
+| Stop | `cd /home/user/amityvox && docker compose --env-file .env -f deploy/docker/docker-compose.yml down` |
+| Start | `cd /home/user/amityvox && docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d` |
+| Update | `cd /home/user/amityvox && ./update.sh` |
+| Backup | `cd /home/user/amityvox && ./scripts/backup.sh` |
+| Create user | `docker exec amityvox amityvox admin create-user <user> <email> <pass>` |
+
 ## Configuration
 
 All runtime settings are controlled via environment variables in `.env`. The key variables:
