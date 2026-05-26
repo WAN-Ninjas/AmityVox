@@ -296,14 +296,25 @@ cat backup.sql | docker exec -i amityvox-postgresql psql -U amityvox
 ## Updating
 
 ```bash
-cd AmityVox
-git pull
-docker compose -f deploy/docker/docker-compose.yml build --no-cache amityvox web-init
-docker compose -f deploy/docker/docker-compose.yml up -d amityvox web-init
-docker compose -f deploy/docker/docker-compose.yml restart caddy
+cd ~/amityvox
+./update.sh
 ```
 
-Database migrations run automatically on startup. Always rebuild with `--no-cache` to avoid stale layers.
+The update script preserves `.env` and Docker volumes, creates a pre-update backup under `./backups/`, pulls with fast-forward only, rebuilds `amityvox` and `web-init`, runs `docker compose up -d`, and restarts Caddy. Database migrations run automatically on startup.
+
+For remote/scripted updates:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/update.sh | bash
+```
+
+Useful update flags:
+
+```bash
+AMITYVOX_SKIP_BACKUP=1 ./update.sh       # skip pre-update backup
+AMITYVOX_NO_CACHE=1 ./update.sh          # rebuild without Docker cache
+AMITYVOX_BRANCH=main ./update.sh         # update from a specific branch
+```
 
 For prebuilt image deployments:
 

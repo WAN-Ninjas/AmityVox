@@ -1613,7 +1613,7 @@ print_summary() {
     echo -e "    View logs:     cd $INSTALL_DIR && $(compose_display) logs -f"
     echo -e "    Stop:          cd $INSTALL_DIR && $(compose_display) down"
     echo -e "    Start:         cd $INSTALL_DIR && $(compose_display) up -d"
-    echo -e "    Update:        cd $INSTALL_DIR && git pull && $(compose_display) build --no-cache amityvox web-init && $(compose_display) up -d amityvox web-init && $(compose_display) restart caddy"
+    echo -e "    Update:        cd $INSTALL_DIR && ./update.sh"
     echo -e "    Backup:        cd $INSTALL_DIR && ./scripts/backup.sh"
     echo -e "    Create user:   docker exec amityvox amityvox admin create-user <user> <email> <pass>"
     echo

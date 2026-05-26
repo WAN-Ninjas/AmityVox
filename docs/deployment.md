@@ -198,10 +198,11 @@ AMITYVOX_PUSH_VAPID_CONTACT_EMAIL=admin@example.com
 ## Updating
 
 ```bash
-git pull
-make docker-restart   # Rebuilds only AmityVox, keeps data
-make web-build        # Rebuild frontend if changed
+cd ~/amityvox
+./update.sh
 ```
+
+`update.sh` keeps `.env` and Docker volumes intact, creates a pre-update backup, fast-forwards the Git checkout, rebuilds the application services, and runs `docker compose up -d`.
 
 ## Backup
 
