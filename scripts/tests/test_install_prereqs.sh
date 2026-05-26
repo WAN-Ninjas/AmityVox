@@ -153,6 +153,20 @@ Secret key: ab4532ff1e7906c5a60754c5d6680da94a4c4ea38dde1992dec31b5cc2e6a7fd'
     assert_eq "$(echo "$redacted_output" | garage_key_secret_from_info)" "" "garage redacted secret"
 }
 
+test_env_file_value_strips_quotes() {
+    load_installer_functions
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    (
+        cd "$tmpdir"
+        printf '%s\n' 'POSTGRES_PASSWORD="quoted-secret"' 'MEILI_MASTER_KEY=plain-secret' > .env
+        assert_eq "$(env_file_value POSTGRES_PASSWORD)" "quoted-secret" "quoted env value"
+        assert_eq "$(env_file_value MEILI_MASTER_KEY)" "plain-secret" "plain env value"
+        assert_eq "$(env_file_value MISSING_KEY)" "" "missing env value"
+    )
+    rm -rf "$tmpdir"
+}
+
 test_detect_os_does_not_abort_under_errexit
 test_install_package_uses_pacman_on_arch
 test_install_package_uses_apt_on_debian
@@ -160,5 +174,6 @@ test_detect_arch_family_from_derivative
 test_detect_debian_and_ubuntu_arm_families
 test_compose_uses_explicit_env_file
 test_garage_parsers_handle_v1_output
+test_env_file_value_strips_quotes
 
 echo "installer prerequisite tests passed"

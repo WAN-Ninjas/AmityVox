@@ -367,6 +367,13 @@ strip_env_quotes() {
     printf '%s' "$value"
 }
 
+env_file_value() {
+    local key="$1"
+    local value
+    value=$(sed -n "s/^${key}=//p" .env 2>/dev/null | head -1)
+    strip_env_quotes "$value"
+}
+
 # Prompt with a default value. In non-interactive mode, use the default or env var.
 ask() {
     local prompt="$1"
@@ -968,12 +975,28 @@ collect_config() {
 generate_config() {
     log "Generating secure configuration..."
 
-    # Generate all secrets.
-    POSTGRES_PASSWORD="$(gen_alnum 32)"
-    MEILI_MASTER_KEY="$(gen_hex 16)"
-    LIVEKIT_API_KEY="$(gen_alnum 12)"
-    LIVEKIT_API_SECRET="$(gen_alnum 32)"
-    GARAGE_RPC_SECRET="$(gen_hex 32)"
+    local existing_postgres_password existing_meili_master_key existing_livekit_api_key existing_livekit_api_secret
+    local existing_garage_rpc_secret existing_storage_access_key existing_storage_secret_key
+    if [ -f ".env" ]; then
+        existing_postgres_password="$(env_file_value POSTGRES_PASSWORD)"
+        existing_meili_master_key="$(env_file_value MEILI_MASTER_KEY)"
+        existing_livekit_api_key="$(env_file_value LIVEKIT_API_KEY)"
+        existing_livekit_api_secret="$(env_file_value LIVEKIT_API_SECRET)"
+        existing_garage_rpc_secret="$(env_file_value GARAGE_RPC_SECRET)"
+        existing_storage_access_key="$(env_file_value AMITYVOX_STORAGE_ACCESS_KEY)"
+        existing_storage_secret_key="$(env_file_value AMITYVOX_STORAGE_SECRET_KEY)"
+        info "Preserving existing service credentials from .env where present."
+    fi
+
+    # Generate secrets, preserving existing service credentials so reconfigure
+    # does not desynchronize persistent Docker volumes from .env.
+    POSTGRES_PASSWORD="${existing_postgres_password:-$(gen_alnum 32)}"
+    MEILI_MASTER_KEY="${existing_meili_master_key:-$(gen_hex 16)}"
+    LIVEKIT_API_KEY="${existing_livekit_api_key:-$(gen_alnum 12)}"
+    LIVEKIT_API_SECRET="${existing_livekit_api_secret:-$(gen_alnum 32)}"
+    GARAGE_RPC_SECRET="${existing_garage_rpc_secret:-$(gen_hex 32)}"
+    STORAGE_ACCESS_KEY="${existing_storage_access_key:-}"
+    STORAGE_SECRET_KEY="${existing_storage_secret_key:-}"
 
     # Determine LiveKit public URL.
     if [ "$DOMAIN" = "localhost" ]; then
@@ -1015,8 +1038,8 @@ POSTGRES_DB=amityvox
 # ============================================================
 # S3 Storage (Garage) — populated automatically after first boot
 # ============================================================
-AMITYVOX_STORAGE_ACCESS_KEY=
-AMITYVOX_STORAGE_SECRET_KEY=
+AMITYVOX_STORAGE_ACCESS_KEY=$STORAGE_ACCESS_KEY
+AMITYVOX_STORAGE_SECRET_KEY=$STORAGE_SECRET_KEY
 AMITYVOX_STORAGE_BUCKET=amityvox
 GARAGE_RPC_SECRET=$GARAGE_RPC_SECRET
 
