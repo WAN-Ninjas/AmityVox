@@ -333,6 +333,24 @@ start_and_enable_service() {
     fi
 }
 
+compose() {
+    if [ -f ".env" ]; then
+        # Compose v2 generally auto-loads .env from the working directory, but
+        # some wrappers/package builds do not. Pass it explicitly for consistency.
+        $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" "$@"
+    else
+        $COMPOSE_CMD -f "$COMPOSE_FILE" "$@"
+    fi
+}
+
+compose_display() {
+    if [ -f ".env" ]; then
+        printf '%s --env-file .env -f %s' "$COMPOSE_CMD" "$COMPOSE_FILE"
+    else
+        printf '%s -f %s' "$COMPOSE_CMD" "$COMPOSE_FILE"
+    fi
+}
+
 env_quote() {
     local value="$1"
     value="${value//\\/\\\\}"
@@ -1317,7 +1335,7 @@ build_and_start() {
 
     # Keep full build output visible. The previous filtered pipeline hid most
     # errors and made failures look like silent exits.
-    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache 2>&1 | tee "$build_log"; then
+    if ! compose build --no-cache 2>&1 | tee "$build_log"; then
         err "Docker build failed. See the output above for details."
         err "Full build log: $build_log"
         err ""
@@ -1336,13 +1354,13 @@ build_and_start() {
     log "Starting services..."
     local start_log
     start_log="$log_dir/docker-up-$(date -u +%Y%m%dT%H%M%SZ).log"
-    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee "$start_log"; then
+    if ! compose up -d 2>&1 | tee "$start_log"; then
         err "Failed to start services."
         err "Full startup log: $start_log"
         err ""
         err "Check what went wrong:"
-        err "  $COMPOSE_CMD -f $COMPOSE_FILE logs --tail=50"
-        err "  $COMPOSE_CMD -f $COMPOSE_FILE ps"
+        err "  $(compose_display) logs --tail=50"
+        err "  $(compose_display) ps"
         return 1
     fi
 
@@ -1367,8 +1385,8 @@ build_and_start() {
         warn ""
         warn "This is common on first run — the database may still be migrating."
         warn "Check what's happening:"
-        warn "  $COMPOSE_CMD -f $COMPOSE_FILE logs -f amityvox"
-        warn "  $COMPOSE_CMD -f $COMPOSE_FILE ps"
+        warn "  $(compose_display) logs -f amityvox"
+        warn "  $(compose_display) ps"
         warn ""
         warn "Continuing with setup — some steps may fail if services aren't ready."
     else
@@ -1459,7 +1477,7 @@ setup_garage() {
         sed -i "s|^AMITYVOX_STORAGE_SECRET_KEY=.*|AMITYVOX_STORAGE_SECRET_KEY=$secret_key|" .env
 
         # Restart amityvox to pick up the new S3 credentials.
-        $COMPOSE_CMD -f "$COMPOSE_FILE" restart amityvox >/dev/null 2>&1
+        compose restart amityvox >/dev/null 2>&1
 
         log "S3 storage configured (key: ${access_key:0:8}...)"
     else
@@ -1491,7 +1509,7 @@ create_admin() {
 
     if [ $attempts -ge 30 ]; then
         warn "Backend did not become healthy after restart."
-        warn "Check logs: $COMPOSE_CMD -f $COMPOSE_FILE logs -f amityvox"
+        warn "Check logs: $(compose_display) logs -f amityvox"
         warn ""
         warn "Create admin manually once the server is running:"
         warn "  docker exec amityvox amityvox admin create-user $ADMIN_USER $ADMIN_EMAIL <password>"
@@ -1534,10 +1552,10 @@ print_summary() {
     echo
 
     echo -e "  ${BOLD}Useful commands:${NC}"
-    echo -e "    View logs:     cd $INSTALL_DIR && $COMPOSE_CMD -f $COMPOSE_FILE logs -f"
-    echo -e "    Stop:          cd $INSTALL_DIR && $COMPOSE_CMD -f $COMPOSE_FILE down"
-    echo -e "    Start:         cd $INSTALL_DIR && $COMPOSE_CMD -f $COMPOSE_FILE up -d"
-    echo -e "    Update:        cd $INSTALL_DIR && git pull && $COMPOSE_CMD -f $COMPOSE_FILE build --no-cache amityvox web-init && $COMPOSE_CMD -f $COMPOSE_FILE up -d amityvox web-init && $COMPOSE_CMD -f $COMPOSE_FILE restart caddy"
+    echo -e "    View logs:     cd $INSTALL_DIR && $(compose_display) logs -f"
+    echo -e "    Stop:          cd $INSTALL_DIR && $(compose_display) down"
+    echo -e "    Start:         cd $INSTALL_DIR && $(compose_display) up -d"
+    echo -e "    Update:        cd $INSTALL_DIR && git pull && $(compose_display) build --no-cache amityvox web-init && $(compose_display) up -d amityvox web-init && $(compose_display) restart caddy"
     echo -e "    Backup:        cd $INSTALL_DIR && ./scripts/backup.sh"
     echo -e "    Create user:   docker exec amityvox amityvox admin create-user <user> <email> <pass>"
     echo

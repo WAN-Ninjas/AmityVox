@@ -106,10 +106,31 @@ test_detect_debian_and_ubuntu_arm_families() {
     assert_eq "$DISTRO_FAMILY" "ubuntu" "Armbian Ubuntu family"
 }
 
+test_compose_uses_explicit_env_file() {
+    load_installer_functions
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    (
+        cd "$tmpdir"
+        : > .env
+        COMPOSE_CMD="docker compose"
+        COMPOSE_FILE="deploy/docker/docker-compose.yml"
+        commands=()
+        docker() {
+            commands+=("docker $*")
+        }
+        compose build --no-cache
+        assert_eq "${commands[0]}" "docker compose --env-file .env -f deploy/docker/docker-compose.yml build --no-cache" "compose env-file command"
+        assert_eq "$(compose_display)" "docker compose --env-file .env -f deploy/docker/docker-compose.yml" "compose display"
+    )
+    rm -rf "$tmpdir"
+}
+
 test_detect_os_does_not_abort_under_errexit
 test_install_package_uses_pacman_on_arch
 test_install_package_uses_apt_on_debian
 test_detect_arch_family_from_derivative
 test_detect_debian_and_ubuntu_arm_families
+test_compose_uses_explicit_env_file
 
 echo "installer prerequisite tests passed"
