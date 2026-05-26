@@ -126,11 +126,39 @@ test_compose_uses_explicit_env_file() {
     rm -rf "$tmpdir"
 }
 
+test_garage_parsers_handle_v1_output() {
+    load_installer_functions
+
+    local status_output
+    status_output='2026-05-26T16:51:54.210240Z INFO garage_net::netapp: Connection established to f052b1327942dcc8
+==== HEALTHY NODES ====
+ID                Hostname      Address          Tags  Zone  Capacity          DataAvail
+f052b1327942dcc8  d6cae5335b57  172.19.0.7:3901              NO ROLE ASSIGNED'
+    assert_eq "$(echo "$status_output" | garage_node_id_from_status)" "f052b1327942dcc8" "garage v1 short node id"
+
+    local layout_output
+    layout_output='==== CURRENT CLUSTER LAYOUT ====
+Current cluster layout version: 3'
+    assert_eq "$(echo "$layout_output" | garage_layout_version_from_show)" "3" "garage layout version"
+
+    local key_output
+    key_output='Key name: amityvox-key
+Key ID: GKbb3fe42f858269cd3d4ea9fd
+Secret key: ab4532ff1e7906c5a60754c5d6680da94a4c4ea38dde1992dec31b5cc2e6a7fd'
+    assert_eq "$(echo "$key_output" | garage_key_access_from_info)" "GKbb3fe42f858269cd3d4ea9fd" "garage access key"
+    assert_eq "$(echo "$key_output" | garage_key_secret_from_info)" "ab4532ff1e7906c5a60754c5d6680da94a4c4ea38dde1992dec31b5cc2e6a7fd" "garage secret key"
+
+    local redacted_output
+    redacted_output='Secret key: (redacted)'
+    assert_eq "$(echo "$redacted_output" | garage_key_secret_from_info)" "" "garage redacted secret"
+}
+
 test_detect_os_does_not_abort_under_errexit
 test_install_package_uses_pacman_on_arch
 test_install_package_uses_apt_on_debian
 test_detect_arch_family_from_derivative
 test_detect_debian_and_ubuntu_arm_families
 test_compose_uses_explicit_env_file
+test_garage_parsers_handle_v1_output
 
 echo "installer prerequisite tests passed"

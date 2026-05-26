@@ -1315,6 +1315,28 @@ LIVEKITEOF
     log "LiveKit config written to deploy/livekit/livekit.yaml (node_ip: $node_ip)"
 }
 
+# Extract the first healthy Garage node ID from `garage status`.
+# Garage 1.x displays short 16-character node prefixes in the healthy-node
+# table, while older output may expose the full 64-character ID.
+garage_node_id_from_status() {
+    sed -n '/==== HEALTHY NODES ====/,$ s/^\([a-f0-9][a-f0-9]*\)[[:space:]].*/\1/p' |
+        awk 'length($1) >= 16 && length($1) <= 64 { print $1; exit }'
+}
+
+garage_layout_version_from_show() {
+    sed -n 's/.*layout version:[[:space:]]*\([0-9][0-9]*\).*/\1/p; s/.*version \([0-9][0-9]*\).*/\1/p' |
+        head -1
+}
+
+garage_key_access_from_info() {
+    sed -n 's/.*Key ID:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1
+}
+
+garage_key_secret_from_info() {
+    sed -n 's/.*Secret key:[[:space:]]*\([^[:space:]]*\).*/\1/p' |
+        awk '$1 != "(redacted)" { print $1; exit }'
+}
+
 # ============================================================
 # Step 8: Build & Start Services
 # ============================================================
@@ -1425,7 +1447,7 @@ setup_garage() {
     local garage_status
     garage_status=$(docker exec amityvox-garage /garage status 2>&1)
     local node_id
-    node_id=$(echo "$garage_status" | grep -oE '[a-f0-9]{64}' | head -1 || true)
+    node_id=$(echo "$garage_status" | garage_node_id_from_status || true)
     if [ -z "$node_id" ]; then
         warn "Could not determine Garage node ID."
         warn "Garage status output:"
@@ -1446,7 +1468,7 @@ setup_garage() {
     local layout_output
     layout_output=$(docker exec amityvox-garage /garage layout show 2>&1)
     local layout_version
-    layout_version=$(echo "$layout_output" | sed -n 's/.*version \([0-9]\{1,\}\).*/\1/p' | head -1)
+    layout_version=$(echo "$layout_output" | garage_layout_version_from_show)
     layout_version="${layout_version:-0}"
     local next_version=$((layout_version + 1))
 
@@ -1457,21 +1479,36 @@ setup_garage() {
     # Create bucket.
     docker exec amityvox-garage /garage bucket create amityvox >/dev/null 2>&1 || true
 
-    # Create key.
-    docker exec amityvox-garage /garage key create amityvox-key >/dev/null 2>&1 || true
-
-    # Allow key to access bucket.
-    docker exec amityvox-garage /garage bucket allow amityvox --read --write --key amityvox-key >/dev/null 2>&1 || true
-
-    # Extract key credentials.
+    # Create key. Garage only displays the secret when the key is created.
     local key_info
-    key_info=$(docker exec amityvox-garage /garage key info amityvox-key 2>&1)
+    key_info=$(docker exec amityvox-garage /garage key create amityvox-key 2>&1) || true
+    if ! echo "$key_info" | grep -q 'Secret key:'; then
+        key_info=$(docker exec amityvox-garage /garage key info amityvox-key 2>&1) || true
+    fi
+
     local access_key
-    access_key=$(echo "$key_info" | sed -n 's/.*Key ID: \(\S\{1,\}\).*/\1/p' | head -1)
+    access_key=$(echo "$key_info" | garage_key_access_from_info)
     local secret_key
-    secret_key=$(echo "$key_info" | sed -n 's/.*Secret key: \(\S\{1,\}\).*/\1/p' | head -1)
+    secret_key=$(echo "$key_info" | garage_key_secret_from_info)
+    local existing_secret_key
+    existing_secret_key=$(sed -n 's/^AMITYVOX_STORAGE_SECRET_KEY=//p' .env 2>/dev/null | head -1)
+
+    if [ -n "$access_key" ] && [ -z "$secret_key" ] && [ -n "$existing_secret_key" ]; then
+        secret_key="$existing_secret_key"
+    fi
+
+    if [ -n "$access_key" ] && [ -z "$secret_key" ]; then
+        warn "Existing Garage key has a redacted secret; recreating installer-managed key."
+        docker exec amityvox-garage /garage key delete --yes amityvox-key >/dev/null 2>&1 || true
+        key_info=$(docker exec amityvox-garage /garage key create amityvox-key 2>&1) || true
+        access_key=$(echo "$key_info" | garage_key_access_from_info)
+        secret_key=$(echo "$key_info" | garage_key_secret_from_info)
+    fi
 
     if [ -n "$access_key" ] && [ -n "$secret_key" ]; then
+        # Allow key to access bucket after we have a usable key.
+        docker exec amityvox-garage /garage bucket allow amityvox --read --write --key amityvox-key >/dev/null 2>&1 || true
+
         # Update .env with the real credentials.
         sed -i "s|^AMITYVOX_STORAGE_ACCESS_KEY=.*|AMITYVOX_STORAGE_ACCESS_KEY=$access_key|" .env
         sed -i "s|^AMITYVOX_STORAGE_SECRET_KEY=.*|AMITYVOX_STORAGE_SECRET_KEY=$secret_key|" .env
