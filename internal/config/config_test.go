@@ -166,6 +166,29 @@ func TestEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestFederationModeAliases(t *testing.T) {
+	tests := []struct {
+		env  string
+		want string
+	}{
+		{env: "disabled", want: "closed"},
+		{env: "public", want: "open"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv("AMITYVOX_INSTANCE_FEDERATION_MODE", tc.env)
+			cfg, err := Load("/nonexistent/config.toml")
+			if err != nil {
+				t.Fatalf("Load error: %v", err)
+			}
+			if cfg.Instance.FederationMode != tc.want {
+				t.Errorf("federation_mode = %q, want %q", cfg.Instance.FederationMode, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionDurationParsed(t *testing.T) {
 	cfg := AuthConfig{SessionDuration: "720h"}
 	d, err := cfg.SessionDurationParsed()

@@ -892,15 +892,13 @@ collect_config() {
     echo
 
     ask_choice "Federation mode:" \
-        "Disabled (standalone, no federation)" \
-        "Closed (require key exchange to federate)" \
-        "Open (anyone who knows your domain can federate)" \
-        "Public (listed on the federation directory)"
+        "Closed (standalone, no federation)" \
+        "Allowlist (only approved instances can federate)" \
+        "Open (any compatible instance can federate)"
     case "$REPLY" in
-        "Disabled"*)  FEDERATION_MODE="disabled" ;;
-        "Closed"*)    FEDERATION_MODE="closed"   ;;
-        "Open"*)      FEDERATION_MODE="open"     ;;
-        "Public"*)    FEDERATION_MODE="public"   ;;
+        "Closed"*)    FEDERATION_MODE="closed"    ;;
+        "Allowlist"*) FEDERATION_MODE="allowlist" ;;
+        "Open"*)      FEDERATION_MODE="open"      ;;
     esac
 
     echo

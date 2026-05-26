@@ -527,6 +527,8 @@ func applyEnvOverrides(cfg *Config) {
 // deriveDefaults fills in config values that can be inferred from other settings.
 // Called after env overrides so that explicitly set values are not overwritten.
 func deriveDefaults(cfg *Config) {
+	cfg.Instance.FederationMode = normalizeFederationMode(cfg.Instance.FederationMode)
+
 	if cfg.Auth.WebAuthn.RPID == "" || cfg.Auth.WebAuthn.RPID == "localhost" {
 		if cfg.Instance.Domain != "" && cfg.Instance.Domain != "localhost" {
 			cfg.Auth.WebAuthn.RPID = cfg.Instance.Domain
@@ -542,6 +544,17 @@ func deriveDefaults(cfg *Config) {
 		if cfg.Instance.Domain != "" && cfg.Instance.Domain != "localhost" {
 			cfg.Auth.WebAuthn.RPOrigins = []string{"https://" + cfg.Instance.Domain}
 		}
+	}
+}
+
+func normalizeFederationMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "disabled":
+		return "closed"
+	case "public":
+		return "open"
+	default:
+		return mode
 	}
 }
 
