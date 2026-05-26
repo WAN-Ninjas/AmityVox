@@ -773,9 +773,15 @@ func runAdmin() error {
 	switch os.Args[2] {
 	case "create-user":
 		if len(os.Args) < 5 {
-			return fmt.Errorf("usage: amityvox admin create-user <username> <password>")
+			return fmt.Errorf("usage: amityvox admin create-user <username> [email] <password>")
 		}
-		username, password := os.Args[3], os.Args[4]
+		username := os.Args[3]
+		email := ""
+		password := os.Args[4]
+		if len(os.Args) >= 6 {
+			email = os.Args[4]
+			password = os.Args[5]
+		}
 
 		// Get local instance ID.
 		var instanceID string
@@ -791,8 +797,9 @@ func runAdmin() error {
 
 		userID := models.NewULID().String()
 		_, err = db.Pool.Exec(ctx,
-			`INSERT INTO users (id, instance_id, username, password_hash, created_at) VALUES ($1, $2, $3, $4, now())`,
-			userID, instanceID, username, hash)
+			`INSERT INTO users (id, instance_id, username, password_hash, email, created_at)
+			 VALUES ($1, $2, $3, $4, NULLIF($5, ''), now())`,
+			userID, instanceID, username, hash, email)
 		if err != nil {
 			return fmt.Errorf("creating user: %w", err)
 		}
