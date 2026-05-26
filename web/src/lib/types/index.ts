@@ -939,6 +939,23 @@ export interface ReportedIssue {
 	reporter_name?: string;
 }
 
+export interface IssueExport {
+	format: 'amityvox.reported_issues.v1';
+	exported_at: string;
+	issues: ReportedIssue[];
+}
+
+export interface IssueAccessToken {
+	id: string;
+	note: string | null;
+	expires_at: string;
+	revoked_at: string | null;
+	last_used_at: string | null;
+	created_at: string;
+	created_by: string;
+	token?: string;
+}
+
 export interface ModerationStats {
 	open_message_reports: number;
 	open_user_reports: number;

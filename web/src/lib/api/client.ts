@@ -54,6 +54,8 @@ import type {
 	Sticker,
 	UserReport,
 	ReportedIssue,
+	IssueAccessToken,
+	IssueExport,
 	ModerationStats,
 	ModerationMessageReport,
 	VoicePreferences,
@@ -2843,8 +2845,24 @@ class ApiClient {
 		return this.get(url);
 	}
 
+	exportModerationIssues(status = 'all'): Promise<IssueExport> {
+		return this.get(`/moderation/issues/export?status=${encodeURIComponent(status)}`);
+	}
+
 	resolveModerationIssue(issueId: string, status: string, notes?: string): Promise<void> {
 		return this.patch(`/moderation/issues/${issueId}`, { status, notes });
+	}
+
+	getIssueAccessTokens(): Promise<IssueAccessToken[]> {
+		return this.get('/moderation/issues/tokens');
+	}
+
+	createIssueAccessToken(expiresInHours: number, note?: string): Promise<IssueAccessToken> {
+		return this.post('/moderation/issues/tokens', { expires_in_hours: expiresInHours, note });
+	}
+
+	revokeIssueAccessToken(tokenId: string): Promise<void> {
+		return this.del(`/moderation/issues/tokens/${tokenId}`);
 	}
 
 	setGlobalMod(userId: string, globalMod: boolean): Promise<void> {

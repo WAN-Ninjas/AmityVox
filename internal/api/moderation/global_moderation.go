@@ -1,7 +1,11 @@
 package moderation
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +27,63 @@ func (h *Handler) isGlobalModOrAdmin(r *http.Request) (bool, error) {
 		return false, err
 	}
 	return flags&(models.UserFlagAdmin|models.UserFlagGlobalMod) != 0, nil
+}
+
+func (h *Handler) isAdmin(r *http.Request) (bool, error) {
+	userID := auth.UserIDFromContext(r.Context())
+	var flags int
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
+	if err != nil {
+		return false, err
+	}
+	return flags&models.UserFlagAdmin != 0, nil
+}
+
+func generateIssueAccessToken() (string, string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", err
+	}
+	raw := "avissue_" + hex.EncodeToString(b)
+	sum := sha256.Sum256([]byte(raw))
+	return raw, hex.EncodeToString(sum[:]), nil
+}
+
+func hashIssueAccessToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func bearerToken(r *http.Request) string {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(header) < len("Bearer ") || !strings.EqualFold(header[:len("Bearer ")], "Bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(header[len("Bearer "):])
+}
+
+func (h *Handler) validateIssueAccessToken(w http.ResponseWriter, r *http.Request) bool {
+	token := bearerToken(r)
+	if token == "" {
+		apiutil.WriteError(w, http.StatusUnauthorized, "missing_token", "Authorization header with Bearer token is required")
+		return false
+	}
+
+	tokenHash := hashIssueAccessToken(token)
+	var tokenID string
+	err := h.Pool.QueryRow(r.Context(),
+		`SELECT id FROM issue_access_tokens
+		 WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()`,
+		tokenHash).Scan(&tokenID)
+	if err != nil {
+		apiutil.WriteError(w, http.StatusUnauthorized, "invalid_token", "Invalid or expired issue access token")
+		return false
+	}
+
+	_, _ = h.Pool.Exec(r.Context(),
+		`UPDATE issue_access_tokens SET last_used_at = now() WHERE id = $1`, tokenID)
+	return true
 }
 
 // HandleReportUser handles POST /api/v1/users/{userID}/report.
@@ -333,6 +394,279 @@ func (h *Handler) HandleResolveIssue(w http.ResponseWriter, r *http.Request) {
 	tag, err := h.Pool.Exec(r.Context(),
 		`UPDATE reported_issues SET status = $1, resolved_by = $2, resolved_at = $3, notes = $4 WHERE id = $5`,
 		req.Status, resolvedBy, resolvedAt, req.Notes, issueID)
+	if err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update issue")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Issue not found")
+		return
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{"status": req.Status})
+}
+
+// HandleExportIssues handles GET /api/v1/moderation/issues/export?status=.
+func (h *Handler) HandleExportIssues(w http.ResponseWriter, r *http.Request) {
+	ok, err := h.isGlobalModOrAdmin(r)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
+		return
+	}
+	if !ok {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Global moderator or admin access required")
+		return
+	}
+	h.writeIssuesExport(w, r)
+}
+
+// HandleRemoteExportIssues handles GET /api/v1/support/issues?status=all.
+func (h *Handler) HandleRemoteExportIssues(w http.ResponseWriter, r *http.Request) {
+	if !h.validateIssueAccessToken(w, r) {
+		return
+	}
+	h.writeIssuesExport(w, r)
+}
+
+func (h *Handler) writeIssuesExport(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "all"
+	}
+
+	query := `SELECT ri.id, ri.reporter_id, ri.title, ri.description, ri.category,
+		ri.status, ri.resolved_by, ri.resolved_at, ri.notes, ri.created_at,
+		u.username AS reporter_name
+		FROM reported_issues ri
+		JOIN users u ON u.id = ri.reporter_id`
+
+	var rows pgx.Rows
+	var err error
+	switch status {
+	case "all":
+		query += ` ORDER BY ri.created_at DESC`
+		rows, err = h.Pool.Query(r.Context(), query)
+	case "":
+		query += ` WHERE ri.status IN ('open', 'in_progress') ORDER BY ri.created_at DESC`
+		rows, err = h.Pool.Query(r.Context(), query)
+	default:
+		query += ` WHERE ri.status = $1 ORDER BY ri.created_at DESC`
+		rows, err = h.Pool.Query(r.Context(), query, status)
+	}
+	if err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to export issues")
+		return
+	}
+	defer rows.Close()
+
+	issues := make([]models.ReportedIssue, 0)
+	for rows.Next() {
+		var issue models.ReportedIssue
+		if err := rows.Scan(&issue.ID, &issue.ReporterID, &issue.Title, &issue.Description,
+			&issue.Category, &issue.Status, &issue.ResolvedBy, &issue.ResolvedAt,
+			&issue.Notes, &issue.CreatedAt, &issue.ReporterName); err != nil {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+			return
+		}
+		issues = append(issues, issue)
+	}
+	if err := rows.Err(); err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issues")
+		return
+	}
+
+	w.Header().Set("Content-Disposition", `attachment; filename="amityvox-issues.json"`)
+	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"format":      "amityvox.reported_issues.v1",
+		"exported_at": time.Now().UTC(),
+		"issues":      issues,
+	})
+}
+
+// HandleCreateIssueAccessToken handles POST /api/v1/moderation/issues/tokens.
+func (h *Handler) HandleCreateIssueAccessToken(w http.ResponseWriter, r *http.Request) {
+	ok, err := h.isAdmin(r)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
+		return
+	}
+	if !ok {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	var req struct {
+		ExpiresInHours int     `json:"expires_in_hours"`
+		Note           *string `json:"note"`
+	}
+	if !apiutil.DecodeJSON(w, r, &req) {
+		return
+	}
+	if req.ExpiresInHours < 1 || req.ExpiresInHours > 168 {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_expiry", "Expiry must be between 1 and 168 hours")
+		return
+	}
+	if req.Note != nil {
+		note := strings.TrimSpace(*req.Note)
+		if len(note) > 200 {
+			apiutil.WriteError(w, http.StatusBadRequest, "note_too_long", "Note must be 200 characters or less")
+			return
+		}
+		if note == "" {
+			req.Note = nil
+		} else {
+			req.Note = &note
+		}
+	}
+
+	raw, tokenHash, err := generateIssueAccessToken()
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to generate token", err)
+		return
+	}
+
+	tokenID := models.NewULID().String()
+	adminID := auth.UserIDFromContext(r.Context())
+	expiresAt := time.Now().Add(time.Duration(req.ExpiresInHours) * time.Hour)
+	_, err = h.Pool.Exec(r.Context(),
+		`INSERT INTO issue_access_tokens (id, token_hash, created_by, note, expires_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		tokenID, tokenHash, adminID, req.Note, expiresAt)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to create issue access token", err)
+		return
+	}
+
+	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":           tokenID,
+		"token":        raw,
+		"note":         req.Note,
+		"expires_at":   expiresAt,
+		"revoked_at":   nil,
+		"last_used_at": nil,
+		"created_at":   time.Now(),
+		"created_by":   adminID,
+	})
+}
+
+// HandleListIssueAccessTokens handles GET /api/v1/moderation/issues/tokens.
+func (h *Handler) HandleListIssueAccessTokens(w http.ResponseWriter, r *http.Request) {
+	ok, err := h.isAdmin(r)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
+		return
+	}
+	if !ok {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT iat.id, iat.note, iat.expires_at, iat.revoked_at, iat.last_used_at,
+		        iat.created_at, u.username
+		 FROM issue_access_tokens iat
+		 JOIN users u ON u.id = iat.created_by
+		 ORDER BY iat.created_at DESC
+		 LIMIT 100`)
+	if err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to list issue access tokens")
+		return
+	}
+	defer rows.Close()
+
+	type tokenEntry struct {
+		ID         string     `json:"id"`
+		Note       *string    `json:"note"`
+		ExpiresAt  time.Time  `json:"expires_at"`
+		RevokedAt  *time.Time `json:"revoked_at"`
+		LastUsedAt *time.Time `json:"last_used_at"`
+		CreatedAt  time.Time  `json:"created_at"`
+		CreatedBy  string     `json:"created_by"`
+	}
+	tokens := make([]tokenEntry, 0)
+	for rows.Next() {
+		var token tokenEntry
+		if err := rows.Scan(&token.ID, &token.Note, &token.ExpiresAt, &token.RevokedAt,
+			&token.LastUsedAt, &token.CreatedAt, &token.CreatedBy); err != nil {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issue access tokens")
+			return
+		}
+		tokens = append(tokens, token)
+	}
+	if err := rows.Err(); err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read issue access tokens")
+		return
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, tokens)
+}
+
+// HandleRevokeIssueAccessToken handles DELETE /api/v1/moderation/issues/tokens/{tokenID}.
+func (h *Handler) HandleRevokeIssueAccessToken(w http.ResponseWriter, r *http.Request) {
+	ok, err := h.isAdmin(r)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to verify permissions", err)
+		return
+	}
+	if !ok {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
+		return
+	}
+
+	tokenID := chi.URLParam(r, "tokenID")
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE issue_access_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`,
+		tokenID)
+	if err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to revoke issue access token")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Issue access token not found")
+		return
+	}
+	apiutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// HandleRemoteResolveIssue handles PATCH /api/v1/support/issues/{issueID}.
+func (h *Handler) HandleRemoteResolveIssue(w http.ResponseWriter, r *http.Request) {
+	if !h.validateIssueAccessToken(w, r) {
+		return
+	}
+
+	issueID := chi.URLParam(r, "issueID")
+	var req struct {
+		Status string  `json:"status"`
+		Notes  *string `json:"notes"`
+	}
+	if !apiutil.DecodeJSON(w, r, &req) {
+		return
+	}
+
+	validStatuses := map[string]bool{"in_progress": true, "resolved": true, "dismissed": true}
+	if !validStatuses[req.Status] {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_status", "Status must be 'in_progress', 'resolved', or 'dismissed'")
+		return
+	}
+
+	if req.Notes != nil {
+		notes := strings.TrimSpace(*req.Notes)
+		if len(notes) > 4000 {
+			apiutil.WriteError(w, http.StatusBadRequest, "notes_too_long", "Notes must be 4000 characters or less")
+			return
+		}
+		req.Notes = &notes
+	}
+
+	now := time.Now()
+	var resolvedAt *time.Time
+	if req.Status == "resolved" || req.Status == "dismissed" {
+		resolvedAt = &now
+	}
+
+	tag, err := h.Pool.Exec(r.Context(),
+		`UPDATE reported_issues SET status = $1, resolved_by = NULL, resolved_at = $2, notes = $3 WHERE id = $4`,
+		req.Status, resolvedAt, req.Notes, issueID)
 	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update issue")
 		return

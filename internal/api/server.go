@@ -441,6 +441,11 @@ func (s *Server) registerRoutes() {
 			})
 		})
 
+		// Time-limited issue support tokens. These routes are intentionally
+		// separate from user sessions and can only access the issue queue.
+		r.With(s.RateLimitGlobal(), s.requireInstanceFeature("moderation_reports")).Get("/support/issues", modH.HandleRemoteExportIssues)
+		r.With(s.RateLimitGlobal(), s.requireInstanceFeature("moderation_reports")).Patch("/support/issues/{issueID}", modH.HandleRemoteResolveIssue)
+
 		// Authenticated routes — require Bearer token.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireAuth(s.AuthService))
@@ -869,6 +874,10 @@ func (s *Server) registerRoutes() {
 				r.Patch("/user-reports/{reportID}", modH.HandleResolveUserReport)
 				r.Get("/message-reports", modH.HandleGetAllMessageReports)
 				r.Patch("/message-reports/{reportID}", modH.HandleResolveMessageReport)
+				r.Get("/issues/export", modH.HandleExportIssues)
+				r.Get("/issues/tokens", modH.HandleListIssueAccessTokens)
+				r.Post("/issues/tokens", modH.HandleCreateIssueAccessToken)
+				r.Delete("/issues/tokens/{tokenID}", modH.HandleRevokeIssueAccessToken)
 				r.Get("/issues", modH.HandleGetIssues)
 				r.Patch("/issues/{issueID}", modH.HandleResolveIssue)
 			})

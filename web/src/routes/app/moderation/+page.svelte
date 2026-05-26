@@ -10,7 +10,8 @@
 		ModerationStats,
 		ModerationMessageReport,
 		UserReport,
-		ReportedIssue
+		ReportedIssue,
+		IssueAccessToken
 	} from '$lib/types';
 
 	type Tab = 'dashboard' | 'message_reports' | 'user_reports' | 'issues';
@@ -38,6 +39,14 @@
 	let issuesOp = $state(createAsyncOp());
 	let issuesLoaded = $state(false);
 	let issueFilter = $state<IssueFilter>('');  // '' = active (open+in_progress), 'all', 'open', 'in_progress', 'resolved', 'dismissed'
+	let issueTokens = $state<IssueAccessToken[]>([]);
+	let issueTokensLoaded = $state(false);
+	let issueTokensRequested = $state(false);
+	let issueTokenHours = $state(24);
+	let issueTokenNote = $state('');
+	let createdIssueToken = $state<string | null>(null);
+	let issueExportOp = $state(createAsyncOp());
+	let issueTokenOp = $state(createAsyncOp());
 
 	// --- Resolve modal ---
 	let resolveModalOpen = $state(false);
@@ -80,6 +89,66 @@
 			issues = result;
 			issuesLoaded = true;
 		}
+	}
+
+	async function loadIssueTokens() {
+		if (!isAdmin || issueTokensRequested) return;
+		issueTokensRequested = true;
+		const result = await issueTokenOp.run(() => api.getIssueAccessTokens(), msg => addToast(msg, 'error'), 'Failed to load issue access tokens');
+		if (result) {
+			issueTokens = result;
+			issueTokensLoaded = true;
+		}
+	}
+
+	async function exportIssues() {
+		const result = await issueExportOp.run(() => api.exportModerationIssues('all'), msg => addToast(msg, 'error'), 'Failed to export issues');
+		if (!result) return;
+
+		const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = `amityvox-issues-${new Date().toISOString().slice(0, 10)}.json`;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		URL.revokeObjectURL(url);
+	}
+
+	async function createIssueToken() {
+		const token = await issueTokenOp.run(
+			() => api.createIssueAccessToken(issueTokenHours, issueTokenNote.trim() || undefined),
+			msg => addToast(msg, 'error'),
+			'Failed to create issue access token'
+		);
+		if (!token) return;
+		createdIssueToken = token.token ?? null;
+		issueTokenNote = '';
+		issueTokens = [token, ...issueTokens];
+		issueTokensRequested = true;
+		issueTokensLoaded = true;
+		addToast('Issue access token created', 'success');
+	}
+
+	async function revokeIssueToken(tokenId: string) {
+		await issueTokenOp.run(
+			() => api.revokeIssueAccessToken(tokenId),
+			msg => addToast(msg, 'error'),
+			'Failed to revoke issue access token'
+		);
+		if (!issueTokenOp.error) {
+			issueTokens = issueTokens.map((token) => token.id === tokenId ? { ...token, revoked_at: new Date().toISOString() } : token);
+			addToast('Issue access token revoked', 'success');
+		}
+	}
+
+	function copyIssueToken() {
+		if (!createdIssueToken) return;
+		navigator.clipboard.writeText(createdIssueToken).then(
+			() => addToast('Token copied', 'success'),
+			() => addToast('Failed to copy token', 'error')
+		);
 	}
 
 	function setIssueFilter(filter: IssueFilter) {
@@ -166,6 +235,7 @@
 		if (currentTab === 'message_reports' && !messageReportsLoaded) loadMessageReports();
 		if (currentTab === 'user_reports' && !userReportsLoaded) loadUserReports();
 		if (currentTab === 'issues' && !issuesLoaded) loadIssues();
+		if (currentTab === 'issues' && isAdmin && !issueTokensLoaded) loadIssueTokens();
 	});
 </script>
 
@@ -351,9 +421,14 @@
 			{:else if currentTab === 'issues'}
 				<div class="mb-4 flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-text-primary">Reported Issues</h1>
-					<button class="btn-secondary text-sm" onclick={loadIssues} disabled={issuesOp.loading}>
-						{issuesOp.loading ? 'Loading...' : 'Refresh'}
-					</button>
+					<div class="flex gap-2">
+						<button class="btn-secondary text-sm" onclick={exportIssues} disabled={issueExportOp.loading}>
+							{issueExportOp.loading ? 'Exporting...' : 'Export All'}
+						</button>
+						<button class="btn-secondary text-sm" onclick={loadIssues} disabled={issuesOp.loading}>
+							{issuesOp.loading ? 'Loading...' : 'Refresh'}
+						</button>
+					</div>
 				</div>
 				<div class="mb-4 flex flex-wrap gap-1.5">
 					{#each issueFilters as filter (filter.value)}
@@ -365,6 +440,60 @@
 						</button>
 					{/each}
 				</div>
+
+				{#if isAdmin}
+					<div class="mb-4 rounded-lg bg-bg-secondary p-4">
+						<div class="flex flex-col gap-3 lg:flex-row lg:items-end">
+							<div class="flex-1">
+								<h2 class="text-sm font-semibold text-text-primary">Temporary Issue API Access</h2>
+								<p class="mt-1 text-xs text-text-muted">
+									Remote endpoint: <code class="rounded bg-bg-primary px-1 py-0.5">/api/v1/support/issues</code>
+								</p>
+							</div>
+							<div>
+								<label for="issue-token-hours" class="mb-1 block text-xs font-bold uppercase text-text-muted">Hours</label>
+								<input id="issue-token-hours" type="number" class="input w-24" bind:value={issueTokenHours} min="1" max="168" />
+							</div>
+							<div class="min-w-0 flex-1">
+								<label for="issue-token-note" class="mb-1 block text-xs font-bold uppercase text-text-muted">Note</label>
+								<input id="issue-token-note" type="text" class="input w-full" bind:value={issueTokenNote} maxlength="200" placeholder="e.g., maintainer support" />
+							</div>
+							<button class="btn-secondary text-sm" onclick={createIssueToken} disabled={issueTokenOp.loading || issueTokenHours < 1 || issueTokenHours > 168}>
+								{issueTokenOp.loading ? 'Creating...' : 'Create Token'}
+							</button>
+						</div>
+
+						{#if createdIssueToken}
+							<div class="mt-3 rounded bg-bg-primary p-3">
+								<div class="mb-2 flex items-center justify-between gap-2">
+									<p class="text-xs font-semibold text-yellow-400">Token shown once</p>
+									<button class="text-xs text-brand-400 hover:text-brand-300" onclick={copyIssueToken}>Copy</button>
+								</div>
+								<code class="block break-all text-xs text-text-secondary">{createdIssueToken}</code>
+							</div>
+						{/if}
+
+						{#if issueTokens.length > 0}
+							<div class="mt-3 space-y-2">
+								{#each issueTokens.slice(0, 5) as token (token.id)}
+									<div class="flex items-center justify-between gap-3 rounded bg-bg-primary px-3 py-2 text-xs">
+										<div class="min-w-0">
+											<p class="truncate text-text-secondary">{token.note || 'Issue access token'}</p>
+											<p class="text-text-muted">
+												Expires {formatDate(token.expires_at)}
+												{#if token.last_used_at} &middot; Used {formatDate(token.last_used_at)}{/if}
+												{#if token.revoked_at} &middot; Revoked{/if}
+											</p>
+										</div>
+										{#if !token.revoked_at && new Date(token.expires_at) > new Date()}
+											<button class="shrink-0 text-xs text-red-400 hover:text-red-300" onclick={() => revokeIssueToken(token.id)}>Revoke</button>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
 
 				{#if issuesOp.loading && issues.length === 0}
 					<p class="text-text-muted">Loading issues...</p>
