@@ -31,13 +31,21 @@ else
     exit 1
 fi
 
+compose() {
+    if [ -f ".env" ]; then
+        $COMPOSE_CMD --env-file .env -f "$COMPOSE_DIR/docker-compose.yml" "$@"
+    else
+        $COMPOSE_CMD -f "$COMPOSE_DIR/docker-compose.yml" "$@"
+    fi
+}
+
 mkdir -p "$BACKUP_PATH"
 
 log "Starting backup to $BACKUP_PATH..."
 
 # 1. Backup PostgreSQL.
 log "Dumping PostgreSQL..."
-$COMPOSE_CMD -f "$COMPOSE_DIR/docker-compose.yml" exec -T postgresql pg_dumpall -U amityvox > "$BACKUP_PATH/postgres.sql"
+compose exec -T postgresql pg_dumpall -U amityvox > "$BACKUP_PATH/postgres.sql"
 log "PostgreSQL dump: $BACKUP_PATH/postgres.sql ($(du -h "$BACKUP_PATH/postgres.sql" | cut -f1))"
 
 # 2. Backup configuration.
