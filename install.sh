@@ -174,8 +174,12 @@ detect_os() {
     fi
 
     info "Detected: $DISTRO_LABEL ($ARCH)"
-    $IS_RASPBERRY_PI && info "  Hardware: Raspberry Pi"
-    $IS_ARMBIAN && info "  Hardware: Armbian SBC"
+    if [ "$IS_RASPBERRY_PI" = "true" ]; then
+        info "  Hardware: Raspberry Pi"
+    fi
+    if [ "$IS_ARMBIAN" = "true" ]; then
+        info "  Hardware: Armbian SBC"
+    fi
 }
 
 # ============================================================
