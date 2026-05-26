@@ -1,3 +1,6 @@
+/* Dyslexia-friendly font — OpenDyslexic loaded from CDN */
+@import url('https://fonts.cdnfonts.com/css/opendyslexic');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -312,9 +315,6 @@ html {
 	transition-duration: 0.01ms !important;
 	scroll-behavior: auto !important;
 }
-
-/* Dyslexia-friendly font — OpenDyslexic loaded from CDN */
-@import url('https://fonts.cdnfonts.com/css/opendyslexic');
 
 [data-dyslexic-font='true'] {
 	font-family: 'OpenDyslexic', sans-serif !important;
