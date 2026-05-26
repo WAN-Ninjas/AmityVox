@@ -1015,6 +1015,8 @@ generate_caddyfile() {
 	}
 }
 
+import /etc/caddy/custom/*.caddy
+
 $site_block {
 	# Security headers applied to all responses.
 	header {
