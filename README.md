@@ -21,65 +21,16 @@
 
 ## About
 
-AmityVox takes the best parts of Discord, Matrix, and other platforms and combines them into one cohesive, self-hostable, AGPL-3.0-licensed project. It's built by a small team of IT veterans who share the same vision: give communities a powerful turnkey alternative to Discord that will never be monetized.
+AmityVox is a self-hosted communication platform for communities that want a turnkey alternative to Discord. It combines guilds, channels, DMs, voice/video, moderation tools, federation, and optional end-to-end encryption in one AGPL-3.0 project.
 
-The architecture and spec behind it is a 31-page document written by the team, no AI involvement beyond making the spec more presentable. The implementation uses Claude Code and Codex. If AI-written code offends you, move along. If a project with rough edges offends you, come back later.
-
-We will continue to maintain the code indefinitely. The code, when initial development is completed, will be well-documented, and full spec documents will be made available.
 ## Features
 
-AmityVox ships with everything you need for a full-featured communication platform:
-
-**Communication**
-- Real-time messaging with threads, replies, reactions, pins, and rich markdown (code blocks, LaTeX, spoilers)
-- Direct messages and group DMs with typing indicators and read receipts
-- Voice and video channels with screen sharing via LiveKit (WebRTC)
-- Message scheduling, expiration, and silent sends
-- Full-text search across all messages via Meilisearch
-- GIF search (Giphy), custom emoji, and sticker packs
-- Polls with multiple voting modes
-- Message bookmarks
-
-**Guilds & Channels**
-- Guilds with channel categories, channel groups, and drag-and-drop reordering
-- Granular role-based permissions (bitfield system, 30+ individual permissions)
-- Announcement channels with cross-channel following
-- Channel locking, slowmode, and NSFW flags
-- Guild discovery for public servers
-- Customizable onboarding flows for new members
-- Audit logs for all administrative actions
-
-**Security & Privacy**
-- Optional end-to-end encryption (MLS / RFC 9420) for DMs and channels
-- TOTP and WebAuthn/FIDO2 two-factor authentication
-- Argon2id password hashing
-- EXIF metadata stripping on uploaded images
-- Per-guild and per-channel notification preferences
-
-**Federation**
-- Instance-to-instance communication with Ed25519-signed messages
-- Four modes: Public (listed), Open (unlisted but reachable), Closed (key exchange required), Disabled
-- Cross-instance guilds, DMs, and voice/video
-
-**Administration**
-- Web-based admin dashboard with user management and instance settings
-- AutoMod with word, regex, spam, and link filters
-- User suspension, bans, and moderation reports
-- In-app issue reporting and tracking system
-- CLI tools for user creation, admin promotion, and migrations
-
-**Extensibility**
-- Bot SDK (Go) with token auth, command registration, and event subscriptions
-- Webhooks for external integrations
-- Bridge adapters for Matrix, Discord, Telegram, Slack, and IRC
-- Self-hosted translation via LibreTranslate (16 languages)
-- Custom themes with a visual theme editor
-- Embeddable guild widgets
-
-**Mobile & PWA**
-- Responsive mobile interface with bottom sheets, overlay panels, and touch-optimized controls
-- Installable Progressive Web App with offline support and push notifications
-- Native apps (Windows, macOS, Linux, Android, iOS) via Tauri — coming soon
+- Guilds, channels, DMs, threads, replies, reactions, pins, rich markdown, polls, bookmarks, custom emoji, stickers, and GIF search.
+- Voice/video channels with screen sharing through LiveKit, plus full-text search through Meilisearch.
+- Admin dashboard, audit logs, AutoMod, reports, user management, and CLI tools.
+- Optional MLS end-to-end encryption, TOTP/WebAuthn 2FA, Argon2id password hashing, and EXIF metadata stripping.
+- Federation modes for public, open, closed, or standalone instances.
+- Responsive PWA with push notifications; native apps are planned through Tauri.
 
 ## Architecture
 
@@ -103,65 +54,51 @@ Total footprint: ~700 MB to 1.2 GB RAM. Runs comfortably on a Raspberry Pi 5 (8 
 
 The current application version is `0.5.0`. The root `VERSION` file is the canonical release version and must stay aligned with `web/package.json` and `web/package-lock.json`. Build metadata is attached as `version+commit.sanitizedBuildDate` and is exposed by the CLI, health/client-config responses, and gateway HELLO metadata. See `docs/versioning.md`.
 
-## Quick Start
+## Install
 
-### Prerequisites
+### Requirements
 
 - [Docker Engine](https://docs.docker.com/engine/install/) 24+ with Docker Compose v2
 - A domain name pointed at your server (for TLS) — or `localhost` for local testing
 - 2 GB+ RAM (4 GB recommended)
 - Ports 80 and 443 open (Caddy handles TLS automatically)
 
-### Option A: Interactive Setup (Recommended)
+### Interactive Setup
 
-The setup script clones the repo, asks you a few questions, generates all configuration, sets up S3 storage, creates your admin account, and starts everything:
+Recommended for most installs. The script clones the repo, writes configuration, initializes S3 storage, creates the first admin user, and starts the stack:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/install.sh | bash
 ```
 
-The installer will guide you through:
-1. Domain name and instance name
-2. Registration settings (open, invite-only, or closed)
-3. Federation mode
-4. Optional features (Giphy, push notifications)
-5. Admin account creation
+### Manual Deploy
 
-### Option B: Deploy with Prebuilt Images (No Build Required)
+Use this when you want to inspect or edit configuration before first boot:
 
-For users who want to deploy without cloning the full repo:
+```bash
+git clone https://github.com/WAN-Ninjas/AmityVox.git amityvox
+cd amityvox
+cp .env.example .env
+# Edit .env before starting.
+docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d --build
+```
+
+For prebuilt-image deployments without a full clone:
 
 ```bash
 mkdir amityvox && cd amityvox
 curl -O https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/docker_deploy/docker-compose.yml
 curl -O https://raw.githubusercontent.com/WAN-Ninjas/AmityVox/main/docker_deploy/.env.example
 cp .env.example .env
-```
-
-Edit `.env` with your settings (at minimum, set `AMITYVOX_INSTANCE_DOMAIN` and change all passwords), then:
-
-```bash
+# Edit .env before starting.
 docker compose up -d
 ```
 
-After first boot, set up S3 storage and create an admin account — see [Post-Install Setup](#post-install-setup) below.
-
-### Option C: Clone and Build from Source
-
-```bash
-git clone https://github.com/WAN-Ninjas/AmityVox.git
-cd AmityVox
-cp .env.example .env
-# Edit .env with your settings
-docker compose -f deploy/docker/docker-compose.yml build --no-cache
-docker compose -f deploy/docker/docker-compose.yml up -d
-```
-
-After first boot, set up S3 storage and create an admin account — see [Post-Install Setup](#post-install-setup) below.
+Manual installs must complete the post-install steps below.
 
 ## Post-Install Setup
 
-If you used Option A (interactive setup), these steps were done for you automatically. For Options B and C, complete the following:
+If you used the interactive setup, these steps were done for you automatically. For manual installs, complete the following:
 
 ### 1. Set Up S3 Storage (Garage)
 
@@ -203,18 +140,24 @@ docker exec amityvox amityvox admin set-admin <username>
 
 Open your domain (or `http://localhost`) in a browser, log in with your admin account, and start using AmityVox.
 
-## Useful Commands
+## Operations
 
-The interactive installer prints these commands when setup completes. Replace `/home/user/amityvox` with your install directory if you chose a different path. These commands do not remove Docker volumes unless you add `-v` yourself.
+Set `APP_DIR` to your install directory. The interactive installer usually uses `/home/user/amityvox`:
+
+```bash
+export APP_DIR=/home/user/amityvox
+```
 
 | Task | Command |
 |---|---|
-| View logs | `cd /home/user/amityvox && docker compose --env-file .env -f deploy/docker/docker-compose.yml logs -f` |
-| Stop | `cd /home/user/amityvox && docker compose --env-file .env -f deploy/docker/docker-compose.yml down` |
-| Start | `cd /home/user/amityvox && docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d` |
-| Update | `cd /home/user/amityvox && ./update.sh` |
-| Backup | `cd /home/user/amityvox && ./scripts/backup.sh` |
+| View logs | `cd "$APP_DIR" && docker compose --env-file .env -f deploy/docker/docker-compose.yml logs -f` |
+| Stop | `cd "$APP_DIR" && docker compose --env-file .env -f deploy/docker/docker-compose.yml down` |
+| Start | `cd "$APP_DIR" && docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d` |
+| Update | `cd "$APP_DIR" && ./update.sh` |
+| Backup | `cd "$APP_DIR" && ./scripts/backup.sh` |
 | Create user | `docker exec amityvox amityvox admin create-user <user> <email> <pass>` |
+
+`down` stops containers but keeps Docker volumes unless you add `-v`.
 
 ## Configuration
 
