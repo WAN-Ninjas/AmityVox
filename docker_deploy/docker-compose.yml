@@ -67,7 +67,9 @@ services:
       dragonflydb:
         condition: service_healthy
       libretranslate:
-        condition: service_healthy
+        # Translation is optional and can take several minutes to warm up on
+        # first boot, especially on SBCs. Do not block core app startup on it.
+        condition: service_started
     networks:
       - amityvox
 
