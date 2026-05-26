@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { confirmAction } from '$lib/stores/confirm';
@@ -37,15 +38,22 @@
 	let loadOp = $state(createAsyncOp());
 	let detailOp = $state(createAsyncOp());
 
-	$effect(() => {
-		if (adminGuilds.length === 0 && !loadOp.loading) {
-			loadGuilds();
-		}
+	onMount(() => {
+		loadGuilds();
+
+		return () => {
+			if (guildSearchTimeout) clearTimeout(guildSearchTimeout);
+		};
 	});
 
 	async function loadGuilds() {
+		if (loadOp.loading) return;
 		const result = await loadOp.run(() => api.getAdminGuilds({ query: guildSearch, sort: guildSort, limit: 100 }), msg => addToast(msg, 'error'), 'Failed to load servers');
-		if (result) adminGuilds = result;
+		if (result) {
+			adminGuilds = result;
+		} else {
+			adminGuilds = [];
+		}
 	}
 
 	function handleGuildSearch() {
