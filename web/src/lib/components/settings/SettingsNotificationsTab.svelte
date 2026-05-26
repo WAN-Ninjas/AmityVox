@@ -19,6 +19,7 @@
 	} from '$lib/stores/settings';
 	import { SOUND_PRESETS, playNotificationSound } from '$lib/utils/sounds';
 	import { ALL_NOTIFICATION_TYPES, NOTIFICATION_TYPE_LABELS, NOTIFICATION_CATEGORIES } from '$lib/utils/notificationHelpers';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { NotificationTypePreference, ServerNotificationType } from '$lib/types';
@@ -44,6 +45,7 @@
 	let typePrefsOp = $state(createAsyncOp());
 	let typePrefsSaveOp = $state(createAsyncOp());
 	let loaded = false;
+	const hasPushNotifications = $derived(isFeatureEnabled($clientConfig, 'pwa_push'));
 
 	$effect(() => {
 		if (!loaded) {
@@ -60,10 +62,11 @@
 	});
 
 	function getTypePref(type: string): NotificationTypePreference {
-		return typePrefs.get(type) ?? { type: type as ServerNotificationType, in_app: true, push: true, sound: true };
+		return typePrefs.get(type) ?? { type: type as ServerNotificationType, in_app: true, push: hasPushNotifications, sound: true };
 	}
 
 	function setTypePref(type: string, field: 'in_app' | 'push' | 'sound', value: boolean) {
+		if (field === 'push' && !hasPushNotifications) return;
 		const current = getTypePref(type);
 		typePrefs.set(type, { ...current, [field]: value });
 		typePrefs = new Map(typePrefs);
@@ -93,7 +96,10 @@
 		typePrefsSuccess = '';
 		notifError = '';
 		await typePrefsSaveOp.run(async () => {
-			const prefs = ALL_NOTIFICATION_TYPES.map((type) => getTypePref(type));
+			const prefs = ALL_NOTIFICATION_TYPES.map((type) => {
+				const pref = getTypePref(type);
+				return hasPushNotifications ? pref : { ...pref, push: false };
+			});
 			await api.updateNotificationTypePreferences(prefs);
 			typePrefsSuccess = 'Notification type preferences saved!';
 			setTimeout(() => (typePrefsSuccess = ''), 3000);
@@ -286,15 +292,17 @@
 								<h3 class="mb-3 text-sm font-semibold text-text-primary">{category.label}</h3>
 								<div class="space-y-2">
 									<!-- Header row -->
-									<div class="grid grid-cols-[1fr_60px_60px_60px] items-center gap-2 pb-1 text-2xs font-medium uppercase tracking-wide text-text-muted">
+									<div class="{hasPushNotifications ? 'grid-cols-[1fr_60px_60px_60px]' : 'grid-cols-[1fr_60px_60px]'} grid items-center gap-2 pb-1 text-2xs font-medium uppercase tracking-wide text-text-muted">
 										<span>Type</span>
 										<span class="text-center">In-App</span>
-										<span class="text-center">Push</span>
+										{#if hasPushNotifications}
+											<span class="text-center">Push</span>
+										{/if}
 										<span class="text-center">Sound</span>
 									</div>
 									{#each category.types as type}
 										{@const pref = getTypePref(type)}
-										<div class="grid grid-cols-[1fr_60px_60px_60px] items-center gap-2 rounded py-1.5 hover:bg-bg-modifier/50">
+										<div class="{hasPushNotifications ? 'grid-cols-[1fr_60px_60px_60px]' : 'grid-cols-[1fr_60px_60px]'} grid items-center gap-2 rounded py-1.5 hover:bg-bg-modifier/50">
 											<span class="text-sm text-text-secondary">{NOTIFICATION_TYPE_LABELS[type]}</span>
 											<label class="flex justify-center">
 												<input
@@ -304,14 +312,16 @@
 													class="accent-brand-500"
 												/>
 											</label>
-											<label class="flex justify-center">
-												<input
-													type="checkbox"
-													checked={pref.push}
-													onchange={() => setTypePref(type, 'push', !pref.push)}
-													class="accent-brand-500"
-												/>
-											</label>
+											{#if hasPushNotifications}
+												<label class="flex justify-center">
+													<input
+														type="checkbox"
+														checked={pref.push}
+														onchange={() => setTypePref(type, 'push', !pref.push)}
+														class="accent-brand-500"
+													/>
+												</label>
+											{/if}
 											<label class="flex justify-center">
 												<input
 													type="checkbox"

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Attachment } from '$lib/types';
+	import type { Attachment, MediaTag } from '$lib/types';
 	import { fileUrl as buildFileUrl } from '$lib/utils/avatar';
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
@@ -11,22 +11,34 @@
 		open: boolean;
 		onclose: () => void;
 		ondelete?: () => void;
+		onupdate?: (attachment: Attachment) => void;
 		canManage?: boolean;
+		guildId?: string;
 	}
 
-	let { attachment, open = $bindable(), onclose, ondelete, canManage = false }: Props = $props();
+	let { attachment, open = $bindable(), onclose, ondelete, onupdate, canManage = false, guildId }: Props = $props();
 
 	let editingMeta = $state(false);
 	let editNsfw = $state(false);
 	let editAltText = $state('');
 	let editDescription = $state('');
 	let saving = $state(false);
+	let mediaTags = $state<MediaTag[]>([]);
+	let appliedTagIds = $state<Set<string>>(new Set());
+	let tagBusyId = $state<string | null>(null);
 
 	$effect(() => {
 		if (attachment) {
 			editNsfw = attachment.nsfw;
 			editAltText = attachment.alt_text ?? '';
 			editDescription = attachment.description ?? '';
+			appliedTagIds = new Set(attachment.tags?.map((tag) => tag.id) ?? []);
+		}
+	});
+
+	$effect(() => {
+		if (open && guildId && canManage) {
+			api.getMediaTags(guildId).then((tags) => (mediaTags = tags)).catch(() => (mediaTags = []));
 		}
 	});
 
@@ -61,6 +73,29 @@
 			onclose();
 		} catch (err: unknown) {
 			addToast(getErrorMessage(err, 'Failed to delete'), 'error');
+		}
+	}
+
+	async function toggleTag(tag: MediaTag) {
+		if (!attachment || tagBusyId) return;
+		tagBusyId = tag.id;
+		const wasApplied = appliedTagIds.has(tag.id);
+		try {
+			if (wasApplied) {
+				await api.untagAttachment(attachment.id, tag.id);
+				appliedTagIds = new Set([...appliedTagIds].filter((id) => id !== tag.id));
+			} else {
+				await api.tagAttachment(attachment.id, tag.id);
+				appliedTagIds = new Set([...appliedTagIds, tag.id]);
+			}
+			const nextTags = wasApplied
+				? (attachment.tags ?? []).filter((item) => item.id !== tag.id)
+				: [...(attachment.tags ?? []), tag];
+			onupdate?.({ ...attachment, tags: nextTags });
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update tags'), 'error');
+		} finally {
+			tagBusyId = null;
 		}
 	}
 
@@ -143,6 +178,14 @@
 				<span class="inline-block rounded bg-red-500/20 px-2 py-0.5 text-xs font-medium text-red-400">NSFW</span>
 			{/if}
 
+			{#if attachment.tags && attachment.tags.length > 0}
+				<div class="flex flex-wrap gap-1">
+					{#each attachment.tags as tag (tag.id)}
+						<span class="rounded-full bg-bg-modifier px-2 py-0.5 text-xs text-text-secondary">{tag.name}</span>
+					{/each}
+				</div>
+			{/if}
+
 			<!-- Edit metadata -->
 			{#if canManage}
 				{#if editingMeta}
@@ -178,6 +221,26 @@
 						<button class="rounded px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/10" onclick={handleDelete}>
 							Delete
 						</button>
+					</div>
+				{/if}
+				{#if guildId}
+					<div class="rounded-md border border-bg-modifier p-3">
+						<h4 class="mb-2 text-xs font-medium text-text-muted">Tags</h4>
+						{#if mediaTags.length === 0}
+							<p class="text-xs text-text-muted">No media tags configured.</p>
+						{:else}
+							<div class="flex flex-wrap gap-1.5">
+								{#each mediaTags as tag (tag.id)}
+									<button
+										class="rounded-full border px-2 py-0.5 text-xs transition-colors {appliedTagIds.has(tag.id) ? 'border-brand-500 bg-brand-500/15 text-brand-300' : 'border-bg-modifier text-text-muted hover:text-text-primary'}"
+										onclick={() => toggleTag(tag)}
+										disabled={tagBusyId === tag.id}
+									>
+										{tagBusyId === tag.id ? '...' : tag.name}
+									</button>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				{/if}
 			{/if}

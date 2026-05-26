@@ -7,16 +7,12 @@
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import {
 		instanceProfiles,
-		instanceConnections,
-		activeInstanceUrl,
 		crossInstanceUnreadCount,
 		crossInstanceMentionCount,
 		setInstanceProfiles,
 		upsertInstanceProfile,
 		removeInstanceProfile,
 		setActiveInstance,
-		connectInstance,
-		disconnectInstance,
 		loadInstanceProfilesFromCache,
 		restoreActiveInstance,
 		type InstanceProfile
@@ -28,11 +24,10 @@
 	let newInstanceName = $state('');
 	let addOp = $state(createAsyncOp());
 	let loadOp = $state(createAsyncOp());
+	let currentOrigin = $state('');
 
 	// Derived state
 	let profiles = $derived($instanceProfiles);
-	let connections = $derived($instanceConnections);
-	let currentUrl = $derived($activeInstanceUrl);
 	let unreadBadge = $derived($crossInstanceUnreadCount);
 	let mentionBadge = $derived($crossInstanceMentionCount);
 
@@ -51,8 +46,7 @@
 		const result = await addOp.run(
 			() => api.createInstanceProfile({
 				instance_url: newInstanceUrl.trim(),
-				token: '',
-				display_name: newInstanceName.trim() || undefined,
+				instance_name: newInstanceName.trim() || undefined,
 			}),
 			msg => addToast('Failed to add instance: ' + msg, 'error')
 		);
@@ -87,15 +81,10 @@
 	function switchToInstance(instanceUrl: string) {
 		setActiveInstance(instanceUrl);
 		expanded = false;
-
-		// The actual instance switching logic would redirect or reconfigure
-		// the API client and gateway to use the new instance's URL and token.
-		// For cross-instance connections, each instance gets its own gateway connection.
-		const conn = connections.find(c => c.profile.instance_url === instanceUrl);
-		if (conn && conn.token) {
-			// In a full implementation, this would swap the active API client
-			// and reconnect the gateway to the new instance.
-			window.location.href = instanceUrl + '/app';
+		try {
+			window.location.href = new URL('/app', instanceUrl).toString();
+		} catch {
+			addToast('Invalid instance URL', 'error');
 		}
 	}
 
@@ -112,6 +101,7 @@
 	}
 
 	onMount(() => {
+		currentOrigin = window.location.origin;
 		restoreActiveInstance();
 		loadProfiles();
 	});
@@ -120,11 +110,11 @@
 <div class="relative">
 	<!-- Toggle Button -->
 	<button
-		class="w-12 h-12 rounded-full bg-bg-tertiary hover:bg-bg-modifier flex items-center justify-center transition-colors relative group"
+		class="relative flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-primary"
 		onclick={() => expanded = !expanded}
 		title="Switch Instance"
 	>
-		<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-text-muted group-hover:text-text-primary" viewBox="0 0 20 20" fill="currentColor">
+		<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
 			<path d="M10 3.5a1.5 1.5 0 013 0V4a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-.5a1.5 1.5 0 000 3h.5a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-.5a1.5 1.5 0 00-3 0v.5a1 1 0 01-1 1H6a1 1 0 01-1-1v-3a1 1 0 00-1-1h-.5a1.5 1.5 0 010-3H4a1 1 0 001-1V6a1 1 0 011-1h3a1 1 0 001-1v-.5z" />
 		</svg>
 
@@ -147,7 +137,7 @@
 			aria-label="Close instance switcher"
 		></button>
 
-		<div class="absolute bottom-full left-0 mb-2 w-72 bg-bg-floating rounded-lg shadow-xl border border-border-primary z-50">
+		<div class="absolute bottom-0 left-full z-50 ml-2 w-72 rounded-lg border border-border-primary bg-bg-floating shadow-xl">
 			<div class="p-3 border-b border-border-primary">
 				<h3 class="text-sm font-semibold text-text-primary">Instances</h3>
 				<p class="text-xs text-text-muted mt-0.5">Switch between connected AmityVox instances.</p>
@@ -171,7 +161,7 @@
 							</div>
 							<div class="flex-1 min-w-0">
 								<div class="text-sm font-medium text-text-primary truncate">This Instance</div>
-								<div class="text-xs text-text-muted truncate">{window.location.origin}</div>
+								<div class="text-xs text-text-muted truncate">{currentOrigin}</div>
 							</div>
 							<span class="text-xs text-brand-400">Current</span>
 						</div>

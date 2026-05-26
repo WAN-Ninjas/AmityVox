@@ -59,6 +59,7 @@
 	let loadOp = $state(createAsyncOp());
 	let createBoardOp = $state(createAsyncOp());
 	let createCardOp = $state(createAsyncOp());
+	let discoveredChannelId = $state<string | null>(null);
 
 	// Create mode.
 	let showCreateForm = $state(false);
@@ -102,6 +103,22 @@
 			msg => (error = msg)
 		);
 		if (data) board = data;
+	}
+
+	async function loadLatestBoard() {
+		discoveredChannelId = channelId;
+		error = '';
+		const boards = await loadOp.run(
+			() => api.getKanbanBoards(channelId),
+			msg => (error = msg)
+		);
+		if (boards?.[0]) {
+			boardId = boards[0].id;
+			showCreateForm = false;
+			await loadBoard();
+		} else {
+			showCreateForm = true;
+		}
 	}
 
 	async function addCard(columnId: string) {
@@ -205,10 +222,29 @@
 	}
 
 	$effect(() => {
+		if (!boardId && discoveredChannelId !== channelId && !loadOp.loading) {
+			loadLatestBoard();
+			return;
+		}
 		if (!boardId) showCreateForm = true;
 		if (boardId && !showCreateForm) {
 			loadBoard();
 		}
+	});
+
+	$effect(() => {
+		function handleKanbanUpdate(event: Event) {
+			const detail = (event as CustomEvent<{
+				channel_id?: string;
+				board_id?: string;
+			}>).detail;
+			if (detail?.channel_id && detail.channel_id !== channelId) return;
+			if (detail?.board_id && detail.board_id !== boardId) return;
+			loadBoard();
+		}
+
+		window.addEventListener('amityvox:kanban-update', handleKanbanUpdate);
+		return () => window.removeEventListener('amityvox:kanban-update', handleKanbanUpdate);
 	});
 </script>
 

@@ -5,10 +5,11 @@
 	import { currentGuild } from '$lib/stores/guilds';
 	import { currentTypingUsers } from '$lib/stores/typing';
 	import { ackChannel } from '$lib/stores/unreads';
-	import { api } from '$lib/api/client';
+	import { api, type MessageSummary } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import TopBar from '$components/layout/TopBar.svelte';
 	import MemberList from '$components/layout/MemberList.svelte';
 	import ResizeHandle from '$components/common/ResizeHandle.svelte';
@@ -17,16 +18,31 @@
 	import MessageInput from '$components/chat/MessageInput.svelte';
 	import TypingIndicator from '$components/chat/TypingIndicator.svelte';
 	import PinnedMessages from '$components/chat/PinnedMessages.svelte';
+	import ReadOnlyBanner from '$components/chat/ReadOnlyBanner.svelte';
+	import ScheduledMessagesPanel from '$components/chat/ScheduledMessagesPanel.svelte';
 	import ThreadPanel from '$components/chat/ThreadPanel.svelte';
 	import VoiceChannelView from '$components/voice/VoiceChannelView.svelte';
 	import ForumChannelView from '$components/channels/ForumChannelView.svelte';
 	import GalleryChannelView from '$components/channels/GalleryChannelView.svelte';
+	import Whiteboard from '$components/channels/Whiteboard.svelte';
+	import KanbanBoard from '$components/channels/KanbanBoard.svelte';
+	import ActivityFrame from '$components/channels/ActivityFrame.svelte';
+	import WidgetPanel from '$components/channels/WidgetPanel.svelte';
+	import LocationShare from '$components/chat/LocationShare.svelte';
 	import GalleryPanel from '$lib/components/gallery/GalleryPanel.svelte';
 
 	let showMembers = $state(true);
 	let showPins = $state(false);
 	let showFollowers = $state(false);
 	let showGallery = $state(false);
+	let showSummaries = $state(false);
+	let showWhiteboard = $state(false);
+	let showKanban = $state(false);
+	let showActivity = $state(false);
+	let showWidgets = $state(false);
+	let showLocations = $state(false);
+	let showScheduled = $state(false);
+	let summaries = $state<MessageSummary[]>([]);
 	let activeThread = $state<{ channel: Channel; parentMessage: Message | null } | null>(null);
 	let galleryViewRef = $state<GalleryChannelView>();
 	let messageInputRef = $state<{ addPendingFiles: (files: File[]) => void }>();
@@ -35,12 +51,42 @@
 	let nsfwAccepted = $state(false);
 	const routeGuildId = $derived($page.params.guildId ?? '');
 	const isArchived = $derived($currentChannel?.archived ?? false);
+	const hasWhiteboards = $derived(isFeatureEnabled($clientConfig, 'whiteboards'));
+	const hasKanbanBoards = $derived(isFeatureEnabled($clientConfig, 'kanban_boards'));
+	const hasActivities = $derived(isFeatureEnabled($clientConfig, 'activities'));
+	const hasWidgets = $derived(isFeatureEnabled($clientConfig, 'widgets'));
+	const hasLocationShares = $derived(isFeatureEnabled($clientConfig, 'location_sharing'));
+	const hasScheduledMessages = $derived(isFeatureEnabled($clientConfig, 'scheduled_messages'));
+	const hasMessageSummaries = $derived(isFeatureEnabled($clientConfig, 'message_summaries'));
+	const hasThreadsAndReplies = $derived(isFeatureEnabled($clientConfig, 'threads_and_replies'));
+	const hasAnnouncementChannels = $derived(isFeatureEnabled($clientConfig, 'announcement_channels'));
+	const hasGalleryMedia = $derived(isFeatureEnabled($clientConfig, 'gallery_media'));
+	const hasPins = $derived(isFeatureEnabled($clientConfig, 'pins'));
+
+	$effect(() => {
+		if (!hasWhiteboards) showWhiteboard = false;
+		if (!hasKanbanBoards) showKanban = false;
+		if (!hasActivities) showActivity = false;
+		if (!hasWidgets) showWidgets = false;
+		if (!hasLocationShares) showLocations = false;
+		if (!hasScheduledMessages) showScheduled = false;
+		if (!hasMessageSummaries) showSummaries = false;
+		if (!hasThreadsAndReplies) {
+			activeThread = null;
+			activeThreadId.set(null);
+		}
+		if (!hasPins) showPins = false;
+		if (!hasAnnouncementChannels) showFollowers = false;
+		if (!hasGalleryMedia) showGallery = false;
+	});
 	// --- Channel Followers (announcement channels) ---
 	let followers = $state<ChannelFollower[]>([]);
 	let followTargetChannelId = $state('');
 	let guildChannelsForFollow = $state<Channel[]>([]);
 	let followersOp = $state(createAsyncOp());
 	let followOp = $state(createAsyncOp());
+	let summariesOp = $state(createAsyncOp());
+	let createSummaryOp = $state(createAsyncOp());
 
 	function isNsfwAcceptedForChannel(channelId: string): boolean {
 		try {
@@ -132,6 +178,7 @@
 	}
 
 	function openThread(threadChannel: Channel, parentMessage: Message | null = null) {
+		if (!hasThreadsAndReplies) return;
 		activeThread = { channel: threadChannel, parentMessage };
 		activeThreadId.set(threadChannel.id);
 		showPins = false;
@@ -143,6 +190,12 @@
 		const threadId = $pendingThreadOpen;
 		const allChannels = $channelsStore;
 		if (threadId) {
+			if (!hasThreadsAndReplies) {
+				activeThread = null;
+				activeThreadId.set(null);
+				pendingThreadOpen.set(null);
+				return;
+			}
 			if (threadId === '__close__') {
 				activeThread = null;
 				activeThreadId.set(null);
@@ -162,6 +215,7 @@
 	// --- Channel Followers ---
 
 	function toggleFollowers() {
+		if (!hasAnnouncementChannels) return;
 		showFollowers = !showFollowers;
 		if (showFollowers) {
 			activeThread = null;
@@ -173,7 +227,7 @@
 
 	async function loadFollowers() {
 		const channelId = $currentChannelId;
-		if (!channelId) return;
+		if (!channelId || !hasAnnouncementChannels) return;
 		await followersOp.run(async () => {
 			const [f, channels] = await Promise.all([
 				api.getChannelFollowers(channelId),
@@ -186,7 +240,7 @@
 
 	async function handleFollowChannel() {
 		const channelId = $currentChannelId;
-		if (!channelId || !followTargetChannelId) return;
+		if (!channelId || !followTargetChannelId || !hasAnnouncementChannels) return;
 		await followOp.run(async () => {
 			const follower = await api.followChannel(channelId, { target_channel_id: followTargetChannelId });
 			followers = [...followers, follower];
@@ -197,13 +251,43 @@
 
 	async function handleUnfollowChannel(followerId: string) {
 		const channelId = $currentChannelId;
-		if (!channelId) return;
+		if (!channelId || !hasAnnouncementChannels) return;
 		try {
 			await api.unfollowChannel(channelId, followerId);
 			followers = followers.filter(f => f.id !== followerId);
 			addToast('Unfollowed channel', 'success');
 		} catch (err: unknown) {
 			addToast(getErrorMessage(err, 'Failed to unfollow'), 'error');
+		}
+	}
+
+	async function loadSummaries() {
+		const channelId = $currentChannelId;
+		if (!channelId || !hasMessageSummaries) return;
+		const result = await summariesOp.run(
+			() => api.getMessageSummaries(channelId),
+			msg => addToast(msg, 'error'),
+			'Failed to load summaries'
+		);
+		if (result) summaries = result;
+	}
+
+	async function createSummary() {
+		const channelId = $currentChannelId;
+		if (!channelId || !hasMessageSummaries) return;
+		if ($currentChannel?.encrypted) {
+			addToast('Encrypted channels cannot be summarized server-side', 'error');
+			return;
+		}
+		const result = await createSummaryOp.run(
+			() => api.summarizeMessages(channelId, { message_count: 100 }),
+			msg => addToast(msg, 'error'),
+			'Failed to summarize messages'
+		);
+		if (result) {
+			summaries = [result, ...summaries.filter(summary => summary.id !== result.id)];
+			showSummaries = true;
+			addToast('Summary created', 'success');
 		}
 	}
 </script>
@@ -261,12 +345,15 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<TopBar
 			onToggleMembers={() => (showMembers = !showMembers)}
-			onTogglePins={() => { showPins = !showPins; if (showPins) { activeThread = null; activeThreadId.set(null); showFollowers = false; showGallery = false; } }}
+			onTogglePins={() => { if (!hasPins) return; showPins = !showPins; if (showPins) { activeThread = null; activeThreadId.set(null); showFollowers = false; showGallery = false; } }}
 			onToggleFollowers={toggleFollowers}
-			onToggleGallery={() => { showGallery = !showGallery; if (showGallery) { showPins = false; showFollowers = false; activeThread = null; activeThreadId.set(null); } }}
+			onToggleGallery={() => { if (!hasGalleryMedia) return; showGallery = !showGallery; if (showGallery) { showPins = false; showFollowers = false; activeThread = null; activeThreadId.set(null); } }}
 			{showPins}
 			{showFollowers}
 			{showGallery}
+			canUseAnnouncementChannels={hasAnnouncementChannels}
+			canUseGalleryMedia={hasGalleryMedia}
+			canUsePins={hasPins}
 		/>
 		{#if $currentChannel?.channel_type === 'voice' || $currentChannel?.channel_type === 'stage'}
 			<VoiceChannelView
@@ -278,12 +365,16 @@
 				channelId={$currentChannelId ?? ''}
 				onopenthread={openThread}
 			/>
-		{:else if $currentChannel?.channel_type === 'gallery'}
+		{:else if $currentChannel?.channel_type === 'gallery' && hasGalleryMedia}
 			<GalleryChannelView
 				bind:this={galleryViewRef}
 				channelId={$currentChannelId ?? ''}
 				onopenthread={openThread}
 			/>
+		{:else if $currentChannel?.channel_type === 'gallery'}
+			<div class="flex flex-1 items-center justify-center p-6 text-sm text-text-muted">
+				Gallery channels are disabled on this server.
+			</div>
 		{:else}
 			{#if isArchived}
 				<div class="flex items-center gap-2 border-b border-bg-floating bg-yellow-500/10 px-4 py-2">
@@ -293,24 +384,101 @@
 					<span class="text-sm font-medium text-yellow-500">This channel is archived. It is read-only.</span>
 				</div>
 			{/if}
-			<MessageList onopenthread={openThread} />
-			<TypingIndicator typingUsers={$currentTypingUsers} />
-			{#if isArchived}
-				<div class="border-t border-bg-floating px-4 pb-4 pt-2">
-					<div class="flex items-center justify-center gap-2 rounded-lg bg-bg-modifier px-4 py-3">
-						<svg class="h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-						</svg>
-						<span class="text-sm text-text-muted">This channel is archived</span>
-					</div>
+			<ReadOnlyBanner readOnly={Boolean($currentChannel?.read_only && !isArchived)} />
+			{#if !$currentChannel?.encrypted && (hasWhiteboards || hasKanbanBoards || hasActivities || hasWidgets || hasLocationShares || hasScheduledMessages || hasMessageSummaries)}
+				<div class="flex items-center justify-end gap-2 border-b border-bg-floating bg-bg-primary px-4 py-2">
+					{#if hasWhiteboards}
+						<button
+							class="btn-secondary text-xs"
+							onclick={() => { showWhiteboard = !showWhiteboard; showKanban = false; showActivity = false; showWidgets = false; showLocations = false; showScheduled = false; showSummaries = false; }}
+						>
+							{showWhiteboard ? 'Hide Whiteboard' : 'Whiteboard'}
+						</button>
+					{/if}
+					{#if hasKanbanBoards}
+						<button
+							class="btn-secondary text-xs"
+							onclick={() => { showKanban = !showKanban; showWhiteboard = false; showActivity = false; showWidgets = false; showLocations = false; showScheduled = false; showSummaries = false; }}
+						>
+							{showKanban ? 'Hide Board' : 'Board'}
+						</button>
+					{/if}
+					{#if hasActivities}
+						<button
+							class="btn-secondary text-xs"
+							onclick={() => { showActivity = !showActivity; showWhiteboard = false; showKanban = false; showWidgets = false; showLocations = false; showScheduled = false; showSummaries = false; }}
+						>
+							{showActivity ? 'Hide Activity' : 'Activity'}
+						</button>
+					{/if}
+					{#if hasWidgets}
+						<button
+							class="btn-secondary text-xs"
+							onclick={() => { showWidgets = !showWidgets; showWhiteboard = false; showKanban = false; showActivity = false; showLocations = false; showScheduled = false; showSummaries = false; }}
+						>
+							{showWidgets ? 'Hide Widgets' : 'Widgets'}
+						</button>
+					{/if}
+					{#if hasLocationShares}
+						<button
+							class="btn-secondary text-xs"
+							onclick={() => { showLocations = !showLocations; showWhiteboard = false; showKanban = false; showActivity = false; showWidgets = false; showScheduled = false; showSummaries = false; }}
+						>
+							{showLocations ? 'Hide Locations' : 'Locations'}
+						</button>
+					{/if}
+					{#if hasScheduledMessages}
+						<button
+							class="btn-secondary text-xs"
+							onclick={() => { showScheduled = !showScheduled; showWhiteboard = false; showKanban = false; showActivity = false; showWidgets = false; showLocations = false; showSummaries = false; }}
+						>
+							{showScheduled ? 'Hide Scheduled' : 'Scheduled'}
+						</button>
+					{/if}
+					{#if hasMessageSummaries}
+						<button class="btn-secondary text-xs" onclick={() => { showSummaries = !showSummaries; showWhiteboard = false; showKanban = false; showActivity = false; showWidgets = false; showLocations = false; showScheduled = false; if (showSummaries) loadSummaries(); }}>
+							{showSummaries ? 'Hide Summaries' : 'Summaries'}
+						</button>
+						<button class="btn-primary text-xs" onclick={createSummary} disabled={createSummaryOp.loading}>
+							{createSummaryOp.loading ? 'Summarizing...' : 'Summarize Recent'}
+						</button>
+					{/if}
 				</div>
+			{/if}
+			{#if hasWhiteboards && showWhiteboard && $currentChannelId}
+				<Whiteboard channelId={$currentChannelId} onclose={() => (showWhiteboard = false)} />
+			{:else if hasKanbanBoards && showKanban && $currentChannelId}
+				<KanbanBoard channelId={$currentChannelId} />
+			{:else if hasActivities && showActivity && $currentChannelId}
+				<ActivityFrame channelId={$currentChannelId} onclose={() => (showActivity = false)} />
+			{:else if hasWidgets && showWidgets && $currentChannelId && routeGuildId}
+				<WidgetPanel channelId={$currentChannelId} guildId={routeGuildId} />
+			{:else if hasLocationShares && showLocations && $currentChannelId}
+				<div class="border-b border-bg-floating bg-bg-secondary p-4">
+					<LocationShare channelId={$currentChannelId} />
+				</div>
+			{:else if hasScheduledMessages && showScheduled && $currentChannelId}
+				<ScheduledMessagesPanel channelId={$currentChannelId} onclose={() => (showScheduled = false)} />
 			{:else}
-				<MessageInput bind:this={messageInputRef} />
+				<MessageList onopenthread={openThread} />
+				<TypingIndicator typingUsers={$currentTypingUsers} />
+				{#if isArchived}
+					<div class="border-t border-bg-floating px-4 pb-4 pt-2">
+						<div class="flex items-center justify-center gap-2 rounded-lg bg-bg-modifier px-4 py-3">
+							<svg class="h-4 w-4 shrink-0 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+							</svg>
+							<span class="text-sm text-text-muted">This channel is archived</span>
+						</div>
+					</div>
+				{:else}
+					<MessageInput bind:this={messageInputRef} />
+				{/if}
 			{/if}
 		{/if}
 	</div>
 
-	{#if activeThread}
+	{#if hasThreadsAndReplies && activeThread}
 		<ThreadPanel
 			threadChannel={activeThread.channel}
 			parentMessage={activeThread.parentMessage}
@@ -318,11 +486,11 @@
 		/>
 	{/if}
 
-	{#if showPins && !activeThread}
+	{#if hasPins && showPins && !activeThread}
 		<PinnedMessages onclose={() => (showPins = false)} onscrollto={scrollToMessage} />
 	{/if}
 
-	{#if showFollowers && !activeThread && !showPins}
+	{#if hasAnnouncementChannels && showFollowers && !activeThread && !showPins}
 		<aside class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:w-64 md:shrink-0 md:border-l md:border-bg-floating">
 			<div class="flex items-center justify-between border-b border-bg-floating px-4 py-3">
 				<h2 class="text-sm font-bold text-text-primary">Channel Followers</h2>
@@ -411,13 +579,48 @@
 		</aside>
 	{/if}
 
-	{#if showGallery && !activeThread}
+	{#if hasGalleryMedia && showGallery && !activeThread}
 		<aside class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:w-80 md:shrink-0 md:border-l md:border-bg-floating">
 			<GalleryPanel channelId={$currentChannelId ?? undefined} guildId={$page.params.guildId} canManage={true} onclose={() => (showGallery = false)} />
 		</aside>
 	{/if}
 
-	{#if showMembers && !showPins && !activeThread && !showFollowers && !showGallery}
+	{#if hasMessageSummaries && showSummaries && !activeThread}
+		<aside class="fixed inset-0 z-50 flex flex-col bg-bg-secondary md:relative md:inset-auto md:z-auto md:w-96 md:shrink-0 md:border-l md:border-bg-floating">
+			<div class="flex items-center justify-between border-b border-bg-floating px-4 py-3">
+				<div>
+					<h2 class="text-sm font-bold text-text-primary">Local Summaries</h2>
+					<p class="text-xs text-text-muted">Extractive highlights from recent unencrypted messages.</p>
+				</div>
+				<button class="text-text-muted hover:text-text-primary" onclick={() => (showSummaries = false)} title="Close">
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M6 18L18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+			<div class="flex-1 overflow-y-auto p-4">
+				{#if summariesOp.loading}
+					<p class="text-sm text-text-muted">Loading summaries...</p>
+				{:else if summaries.length === 0}
+					<p class="text-sm text-text-muted">No summaries yet.</p>
+				{:else}
+					<div class="space-y-3">
+						{#each summaries as summary (summary.id)}
+							<div class="rounded-lg bg-bg-primary p-3">
+								<div class="mb-2 flex items-center justify-between gap-2">
+									<span class="text-xs font-medium text-text-muted">{summary.message_count} messages · {summary.model}</span>
+									<span class="text-2xs text-text-muted">{new Date(summary.created_at).toLocaleString()}</span>
+								</div>
+								<p class="whitespace-pre-wrap text-sm text-text-secondary">{summary.summary}</p>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		</aside>
+	{/if}
+
+	{#if showMembers && !showPins && !activeThread && !showFollowers && !showGallery && !showSummaries}
 		<!-- Desktop: inline sidebar with resize handle -->
 		<div class="hidden lg:contents">
 			<div class="flex">

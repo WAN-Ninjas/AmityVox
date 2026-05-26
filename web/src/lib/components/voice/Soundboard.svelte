@@ -37,6 +37,20 @@
 		}
 	});
 
+	$effect(() => {
+		function handleSoundboardChanged(event: Event) {
+			const detail = (event as CustomEvent<{ guild_id?: string }>).detail;
+			if (!detail?.guild_id || detail.guild_id === guildId) {
+				loadSounds();
+			}
+		}
+
+		window.addEventListener('amityvox:soundboard-changed', handleSoundboardChanged);
+		return () => {
+			window.removeEventListener('amityvox:soundboard-changed', handleSoundboardChanged);
+		};
+	});
+
 	async function loadSounds() {
 		try {
 			loading = true;

@@ -8,9 +8,10 @@
 
 	interface Props {
 		onreportissue: () => void;
+		canReportIssue?: boolean;
 	}
 
-	let { onreportissue }: Props = $props();
+	let { onreportissue, canReportIssue = true }: Props = $props();
 
 	let showStatusPicker = $state(false);
 </script>
@@ -35,17 +36,19 @@
 					</p>
 				</div>
 			</button>
-			<button
-				class="rounded-md p-1.5 text-orange-400 hover:bg-bg-modifier hover:text-orange-300"
-				onclick={onreportissue}
-				title="Report Issue"
-			>
-				<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-					<path d="M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-					<path d="M12 9v4" stroke-linecap="round" />
-					<circle cx="12" cy="16" r="0.5" fill="currentColor" />
-				</svg>
-			</button>
+			{#if canReportIssue}
+				<button
+					class="rounded-md p-1.5 text-orange-400 hover:bg-bg-modifier hover:text-orange-300"
+					onclick={onreportissue}
+					title="Report Issue"
+				>
+					<svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+						<path d="M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+						<path d="M12 9v4" stroke-linecap="round" />
+						<circle cx="12" cy="16" r="0.5" fill="currentColor" />
+					</svg>
+				</button>
+			{/if}
 			<button
 				class="rounded-md p-1.5 text-text-muted hover:bg-bg-modifier hover:text-text-primary"
 				onclick={() => goto('/app/settings')}

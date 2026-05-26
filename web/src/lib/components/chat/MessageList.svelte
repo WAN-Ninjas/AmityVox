@@ -7,6 +7,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import MessageItem from './MessageItem.svelte';
 
 	interface Props {
@@ -24,6 +25,8 @@
 	let bulkDeleting = $state(false);
 	let showBulkConfirm = $state(false);
 	let lastSelectedIndex = $state<number | null>(null);
+	let lastDeepLinkKey = $state('');
+	const hasPins = $derived(isFeatureEnabled($clientConfig, 'pins'));
 
 	function toggleSelectionMode() {
 		selectionMode = !selectionMode;
@@ -79,7 +82,7 @@
 
 	async function handleBulkPin() {
 		const channelId = $currentChannelId;
-		if (!channelId || selectedMessages.size === 0) return;
+		if (!channelId || selectedMessages.size === 0 || !hasPins) return;
 
 		let pinned = 0;
 		for (const msgId of selectedMessages) {
@@ -117,6 +120,7 @@
 		selectionMode = false;
 		selectedMessages = new Set();
 		lastSelectedIndex = null;
+		lastDeepLinkKey = '';
 	});
 
 	const messages = $derived.by(() => {
@@ -323,6 +327,26 @@
 			setTimeout(() => el.classList.remove('bg-brand-500/10'), 2000);
 		}
 	}
+
+	function getDeepLinkedMessageId(): string | null {
+		if (typeof window === 'undefined') return null;
+		const queryMessage = new URLSearchParams(window.location.search).get('message');
+		if (queryMessage) return queryMessage;
+		const hash = window.location.hash.replace(/^#/, '');
+		if (!hash) return null;
+		return hash.startsWith('msg-') ? hash.slice(4) : hash;
+	}
+
+	$effect(() => {
+		const channelId = $currentChannelId;
+		const targetId = getDeepLinkedMessageId();
+		const count = messages.length;
+		if (!channelId || !targetId || count === 0) return;
+		const key = `${channelId}:${targetId}:${count}`;
+		if (lastDeepLinkKey === key) return;
+		lastDeepLinkKey = key;
+		tick().then(() => scrollToMessage(targetId));
+	});
 </script>
 
 <div class="relative flex-1 overflow-hidden">
@@ -448,15 +472,17 @@
 				</svg>
 				Delete
 			</button>
-			<button
-				class="flex items-center gap-1.5 rounded-lg bg-yellow-500/10 px-3 py-1.5 text-sm font-medium text-yellow-400 transition-colors hover:bg-yellow-500/20"
-				onclick={handleBulkPin}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-				</svg>
-				Pin
-			</button>
+			{#if hasPins}
+				<button
+					class="flex items-center gap-1.5 rounded-lg bg-yellow-500/10 px-3 py-1.5 text-sm font-medium text-yellow-400 transition-colors hover:bg-yellow-500/20"
+					onclick={handleBulkPin}
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+					</svg>
+					Pin
+				</button>
+			{/if}
 			<button
 				class="rounded-lg px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:text-text-primary hover:bg-bg-modifier"
 				onclick={cancelSelection}

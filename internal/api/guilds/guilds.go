@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/api/apiutil"
+	webhookapi "github.com/amityvox/amityvox/internal/api/webhooks"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
@@ -52,6 +54,39 @@ type updateGuildRequest struct {
 	AFKChannelID      *string  `json:"afk_channel_id"`
 	AFKTimeout        *int     `json:"afk_timeout"`
 	Tags              []string `json:"tags"`
+}
+
+func validateWebhookConfig(webhookType string, outgoingURL *string, outgoingEvents []string) error {
+	switch webhookType {
+	case models.WebhookTypeIncoming:
+		return nil
+	case models.WebhookTypeOutgoing:
+		if outgoingURL == nil || strings.TrimSpace(*outgoingURL) == "" {
+			return fmt.Errorf("outgoing webhooks require outgoing_url")
+		}
+		parsed, err := url.ParseRequestURI(strings.TrimSpace(*outgoingURL))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("outgoing_url must be a valid absolute URL")
+		}
+		if parsed.Scheme != "https" && parsed.Scheme != "http" {
+			return fmt.Errorf("outgoing_url must use http or https")
+		}
+		if len(outgoingEvents) == 0 {
+			return fmt.Errorf("outgoing webhooks require at least one event")
+		}
+		validEvents := make(map[string]struct{}, len(webhookapi.ValidOutgoingEvents()))
+		for _, eventName := range webhookapi.ValidOutgoingEvents() {
+			validEvents[eventName] = struct{}{}
+		}
+		for _, eventName := range outgoingEvents {
+			if _, ok := validEvents[eventName]; !ok {
+				return fmt.Errorf("unsupported outgoing event %q", eventName)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("webhook_type must be incoming or outgoing")
+	}
 }
 
 type createChannelRequest struct {
@@ -1938,7 +1973,7 @@ func (h *Handler) HandleGetGuildWebhooks(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT id, guild_id, channel_id, creator_id, name, avatar_id, token,
-		        webhook_type, outgoing_url, created_at
+		        webhook_type, outgoing_url, outgoing_events, created_at
 		 FROM webhooks WHERE guild_id = $1
 		 ORDER BY created_at DESC`,
 		guildID,
@@ -1954,7 +1989,7 @@ func (h *Handler) HandleGetGuildWebhooks(w http.ResponseWriter, r *http.Request)
 		var wh models.Webhook
 		if err := rows.Scan(
 			&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
-			&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+			&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.OutgoingEvents, &wh.CreatedAt,
 		); err != nil {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhooks")
 			return
@@ -1977,9 +2012,12 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name      string  `json:"name"`
-		ChannelID string  `json:"channel_id"`
-		AvatarID  *string `json:"avatar_id"`
+		Name           string   `json:"name"`
+		ChannelID      string   `json:"channel_id"`
+		AvatarID       *string  `json:"avatar_id"`
+		WebhookType    string   `json:"webhook_type"`
+		OutgoingURL    *string  `json:"outgoing_url"`
+		OutgoingEvents []string `json:"outgoing_events"`
 	}
 	if !apiutil.DecodeJSON(w, r, &req) {
 		return
@@ -1987,6 +2025,13 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 
 	if req.Name == "" || len(req.Name) > 80 || req.ChannelID == "" {
 		apiutil.WriteError(w, http.StatusBadRequest, "missing_fields", "Name (1-80 chars) and channel_id are required")
+		return
+	}
+	if req.WebhookType == "" {
+		req.WebhookType = models.WebhookTypeIncoming
+	}
+	if err := validateWebhookConfig(req.WebhookType, req.OutgoingURL, req.OutgoingEvents); err != nil {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_webhook", err.Error())
 		return
 	}
 
@@ -2004,13 +2049,13 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 
 	var wh models.Webhook
 	err = h.Pool.QueryRow(r.Context(),
-		`INSERT INTO webhooks (id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'incoming', now())
-		 RETURNING id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, created_at`,
-		webhookID, guildID, req.ChannelID, userID, req.Name, req.AvatarID, token,
+		`INSERT INTO webhooks (id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, outgoing_events, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		 RETURNING id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, outgoing_events, created_at`,
+		webhookID, guildID, req.ChannelID, userID, req.Name, req.AvatarID, token, req.WebhookType, req.OutgoingURL, req.OutgoingEvents,
 	).Scan(
 		&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
-		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.OutgoingEvents, &wh.CreatedAt,
 	)
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to create webhook", err)
@@ -2018,6 +2063,9 @@ func (h *Handler) HandleCreateGuildWebhook(w http.ResponseWriter, r *http.Reques
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "WEBHOOK_CREATE", "webhook", webhookID, nil)
+	if h.EventBus != nil {
+		h.EventBus.PublishGuildEvent(r.Context(), "amityvox.guild.webhook_update", "WEBHOOK_CREATE", guildID, wh)
+	}
 	apiutil.WriteJSON(w, http.StatusCreated, wh)
 }
 
@@ -2034,26 +2082,72 @@ func (h *Handler) HandleUpdateGuildWebhook(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name      *string `json:"name"`
-		ChannelID *string `json:"channel_id"`
-		AvatarID  *string `json:"avatar_id"`
+		Name           *string  `json:"name"`
+		ChannelID      *string  `json:"channel_id"`
+		AvatarID       *string  `json:"avatar_id"`
+		WebhookType    *string  `json:"webhook_type"`
+		OutgoingURL    *string  `json:"outgoing_url"`
+		OutgoingEvents []string `json:"outgoing_events"`
 	}
 	if !apiutil.DecodeJSON(w, r, &req) {
 		return
 	}
 
-	var wh models.Webhook
+	if req.Name != nil && (*req.Name == "" || len(*req.Name) > 80) {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_name", "Name must be 1-80 characters")
+		return
+	}
+	var existingType string
+	var existingURL *string
+	var existingEvents []string
 	err := h.Pool.QueryRow(r.Context(),
+		`SELECT webhook_type, outgoing_url, outgoing_events FROM webhooks WHERE id = $1 AND guild_id = $2`,
+		webhookID, guildID,
+	).Scan(&existingType, &existingURL, &existingEvents)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusNotFound, "webhook_not_found", "Webhook not found")
+			return
+		}
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhook")
+		return
+	}
+	webhookType := existingType
+	if req.WebhookType != nil {
+		webhookType = *req.WebhookType
+	}
+	outgoingURL := existingURL
+	if req.OutgoingURL != nil {
+		outgoingURL = req.OutgoingURL
+	}
+	outgoingEvents := existingEvents
+	if req.OutgoingEvents != nil {
+		outgoingEvents = req.OutgoingEvents
+	}
+	if webhookType == models.WebhookTypeIncoming {
+		outgoingURL = nil
+		outgoingEvents = []string{}
+	}
+	if err := validateWebhookConfig(webhookType, outgoingURL, outgoingEvents); err != nil {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_webhook", err.Error())
+		return
+	}
+
+	var wh models.Webhook
+	err = h.Pool.QueryRow(r.Context(),
 		`UPDATE webhooks SET
 			name = COALESCE($1, name),
 			channel_id = COALESCE($2, channel_id),
-			avatar_id = COALESCE($3, avatar_id)
-		 WHERE id = $4 AND guild_id = $5
-		 RETURNING id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, created_at`,
-		req.Name, req.ChannelID, req.AvatarID, webhookID, guildID,
+			avatar_id = COALESCE($3, avatar_id),
+			webhook_type = $4,
+			outgoing_url = $5,
+			outgoing_events = $6
+		 WHERE id = $7 AND guild_id = $8
+		 RETURNING id, guild_id, channel_id, creator_id, name, avatar_id, token, webhook_type, outgoing_url, outgoing_events, created_at`,
+		req.Name, req.ChannelID, req.AvatarID, webhookType, outgoingURL, outgoingEvents, webhookID, guildID,
 	).Scan(
 		&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
-		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+		&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.OutgoingEvents, &wh.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -2065,6 +2159,9 @@ func (h *Handler) HandleUpdateGuildWebhook(w http.ResponseWriter, r *http.Reques
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "WEBHOOK_UPDATE", "webhook", webhookID, nil)
+	if h.EventBus != nil {
+		h.EventBus.PublishGuildEvent(r.Context(), "amityvox.guild.webhook_update", "WEBHOOK_UPDATE", guildID, wh)
+	}
 	apiutil.WriteJSON(w, http.StatusOK, wh)
 }
 
@@ -2093,6 +2190,13 @@ func (h *Handler) HandleDeleteGuildWebhook(w http.ResponseWriter, r *http.Reques
 	}
 
 	h.logAudit(r.Context(), guildID, userID, "WEBHOOK_DELETE", "webhook", webhookID, nil)
+	if h.EventBus != nil {
+		h.EventBus.PublishGuildEvent(r.Context(), "amityvox.guild.webhook_update", "WEBHOOK_DELETE", guildID, map[string]string{
+			"guild_id":   guildID,
+			"webhook_id": webhookID,
+			"id":         webhookID,
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -2460,18 +2564,19 @@ func (h *Handler) isMember(ctx context.Context, guildID, userID string) bool {
 
 func (h *Handler) hasGuildPermission(ctx context.Context, guildID, userID string, perm uint64) bool {
 	// Owner has all permissions.
-	var ownerID string
-	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+	var ownerID, guildInstanceID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		return false
 	}
 	if userID == ownerID {
 		return true
 	}
 
-	// Check admin flag on user.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-	if userFlags&models.UserFlagAdmin != 0 {
+	var userInstanceID string
+	h.Pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID)
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return true
 	}
 
@@ -3199,9 +3304,9 @@ func (h *Handler) HandleGetMyPermissions(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Check if owner.
-	var ownerID string
+	var ownerID, guildInstanceID string
 	if err := h.Pool.QueryRow(r.Context(),
-		`SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+		`SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		apiutil.WriteError(w, http.StatusNotFound, "guild_not_found", "Guild not found")
 		return
 	}
@@ -3212,10 +3317,11 @@ func (h *Handler) HandleGetMyPermissions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check admin flag on user.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	h.Pool.QueryRow(r.Context(), `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-	if userFlags&models.UserFlagAdmin != 0 {
+	var userInstanceID string
+	h.Pool.QueryRow(r.Context(), `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID)
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		apiutil.WriteJSON(w, http.StatusOK, map[string]string{
 			"permissions": strconv.FormatUint(permissions.AllPermissions, 10),
 		})
@@ -3318,8 +3424,47 @@ func (h *Handler) HandleGetGuildGallery(w http.ResponseWriter, r *http.Request) 
 		}
 		attachments = append(attachments, a)
 	}
+	if err := h.loadAttachmentTags(r.Context(), attachments); err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load gallery tags")
+		return
+	}
 
 	apiutil.WriteJSON(w, http.StatusOK, attachments)
+}
+
+func (h *Handler) loadAttachmentTags(ctx context.Context, attachments []models.Attachment) error {
+	if len(attachments) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(attachments))
+	indexByID := make(map[string]int, len(attachments))
+	for i := range attachments {
+		ids = append(ids, attachments[i].ID)
+		indexByID[attachments[i].ID] = i
+	}
+	rows, err := h.Pool.Query(ctx,
+		`SELECT at.attachment_id, mt.id, mt.name, mt.guild_id, mt.created_by, mt.created_at
+		 FROM attachment_tags at
+		 JOIN media_tags mt ON mt.id = at.tag_id
+		 WHERE at.attachment_id = ANY($1)
+		 ORDER BY mt.name`,
+		ids,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var attachmentID string
+		var tag models.MediaTag
+		if err := rows.Scan(&attachmentID, &tag.ID, &tag.Name, &tag.GuildID, &tag.CreatedBy, &tag.CreatedAt); err != nil {
+			return err
+		}
+		if idx, ok := indexByID[attachmentID]; ok {
+			attachments[idx].Tags = append(attachments[idx].Tags, tag)
+		}
+	}
+	return rows.Err()
 }
 
 // HandleGetMediaTags returns all media tags for a guild.
@@ -3426,5 +3571,3 @@ func (h *Handler) HandleDeleteMediaTag(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
-
-

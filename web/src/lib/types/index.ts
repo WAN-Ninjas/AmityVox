@@ -17,6 +17,8 @@ export interface User {
 	banner_id: string | null;
 	accent_color: string | null;
 	pronouns: string | null;
+	activity_type?: 'playing' | 'listening' | 'watching' | 'streaming' | null;
+	activity_name?: string | null;
 	flags: number;
 	handle?: string;
 	last_online: string | null;
@@ -84,6 +86,9 @@ export interface Channel {
 	locked_by: string | null;
 	locked_at: string | null;
 	archived: boolean;
+	read_only?: boolean;
+	read_only_role_ids?: string[];
+	default_auto_archive_duration?: number;
 	parent_channel_id: string | null;
 	last_activity_at: string | null;
 	// Forum-specific fields.
@@ -122,14 +127,34 @@ export interface Message {
 	masquerade_color: string | null;
 	encrypted: boolean;
 	encryption_session_id: string | null;
+	expires_at?: string | null;
 	voice_duration_ms?: number | null;
 	voice_waveform?: number[] | null;
 	attachments: Attachment[];
 	embeds: Embed[];
+	poll?: Poll | null;
+	code_snippet?: CodeSnippet | null;
+	components?: MessageComponent[] | null;
 	reactions: Reaction[];
 	pinned: boolean;
 	created_at: string;
 	author?: User;
+}
+
+export interface MessageComponent {
+	id: string;
+	message_id: string;
+	component_type: 'button' | 'select_menu' | 'action_row' | string;
+	style?: string | null;
+	label?: string | null;
+	custom_id?: string | null;
+	url?: string | null;
+	disabled: boolean;
+	options?: unknown;
+	min_values?: number | null;
+	max_values?: number | null;
+	placeholder?: string | null;
+	position: number;
 }
 
 export type MessageType =
@@ -143,6 +168,7 @@ export type MessageType =
 	| 'thread_created'
 	| 'voice'
 	| 'poll'
+	| 'code_snippet'
 	| 'system_lockdown';
 
 export interface ScheduledMessage {
@@ -178,6 +204,7 @@ export interface Attachment {
 	nsfw: boolean;
 	description: string | null;
 	instance_id?: string | null;
+	tags?: MediaTag[];
 	created_at: string;
 }
 
@@ -434,6 +461,18 @@ export interface PollOption {
 	text: string;
 	position: number;
 	vote_count: number;
+}
+
+export interface CodeSnippet {
+	id: string;
+	channel_id: string;
+	message_id: string | null;
+	author_id: string;
+	title: string | null;
+	language: string;
+	code: string;
+	created_at: string;
+	updated_at: string;
 }
 
 // --- Bookmarks ---
@@ -715,6 +754,7 @@ export interface Webhook {
 	token: string;
 	webhook_type: 'incoming' | 'outgoing';
 	outgoing_url: string | null;
+	outgoing_events?: string[];
 	created_at: string;
 }
 

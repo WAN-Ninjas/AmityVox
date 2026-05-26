@@ -14,7 +14,9 @@
 	import EmojiPicker from '$components/common/EmojiPicker.svelte';
 	import GiphyPicker from '$components/common/GiphyPicker.svelte';
 	import StickerPicker from '$components/common/StickerPicker.svelte';
+	import Modal from '$components/common/Modal.svelte';
 	import VoiceMessageRecorder from '$components/chat/VoiceMessageRecorder.svelte';
+	import CodeSnippet from '$components/chat/CodeSnippet.svelte';
 	import MentionAutocomplete from '$components/chat/MentionAutocomplete.svelte';
 	import ChannelPassphrasePrompt from '$components/chat/ChannelPassphrasePrompt.svelte';
 	import MessageInputStatusBars from '$components/chat/MessageInputStatusBars.svelte';
@@ -22,6 +24,7 @@
 	import ScheduleMessagePicker from '$components/chat/ScheduleMessagePicker.svelte';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import type { Sticker } from '$lib/types';
 
 	let content = $state('');
@@ -31,12 +34,44 @@
 	let showGiphyPicker = $state(false);
 	let showStickerPicker = $state(false);
 	let silentMode = $state(false);
+	let expirySeconds = $state<number | null>(null);
 	let showSchedulePicker = $state(false);
 	let customDatetime = $state('');
 	let showVoiceRecorder = $state(false);
+	let showPollModal = $state(false);
+	let showCodeSnippetModal = $state(false);
+	let pollQuestion = $state('');
+	let pollOptions = $state(['', '']);
+	let pollMultiVote = $state(false);
+	let createPollOp = $state(createAsyncOp());
 	let showInputMore = $state(false);
 	let slowmodeNow = $state(Date.now());
 	let localLastSentAtByChannel = $state<Record<string, number>>({});
+	const hasScheduledMessages = $derived(isFeatureEnabled($clientConfig, 'scheduled_messages'));
+	const hasExpiringMessages = $derived(isFeatureEnabled($clientConfig, 'expiring_messages'));
+	const hasPolls = $derived(isFeatureEnabled($clientConfig, 'polls'));
+	const hasCodeSnippets = $derived(isFeatureEnabled($clientConfig, 'code_snippets'));
+	const hasGifSearch = $derived(isFeatureEnabled($clientConfig, 'gif_search'));
+	const hasStickerPacks = $derived(isFeatureEnabled($clientConfig, 'sticker_packs'));
+	const hasThreadsAndReplies = $derived(isFeatureEnabled($clientConfig, 'threads_and_replies'));
+
+	$effect(() => {
+		if (!hasScheduledMessages) showSchedulePicker = false;
+		if (!hasExpiringMessages) expirySeconds = null;
+		if (!hasPolls) showPollModal = false;
+		if (!hasCodeSnippets) showCodeSnippetModal = false;
+		if (!hasGifSearch) showGiphyPicker = false;
+		if (!hasStickerPacks) showStickerPicker = false;
+		if (!hasThreadsAndReplies && $replyingTo) cancelReply();
+	});
+
+	const expiryOptions = [
+		{ label: 'Keep', value: null },
+		{ label: '1h', value: 60 * 60 },
+		{ label: '24h', value: 60 * 60 * 24 },
+		{ label: '7d', value: 60 * 60 * 24 * 7 },
+		{ label: '30d', value: 60 * 60 * 24 * 30 }
+	];
 
 	// --- Mention autocomplete ---
 	let showMentionAutocomplete = $state(false);
@@ -216,6 +251,70 @@
 		return true;
 	}
 
+	function resetPollForm() {
+		pollQuestion = '';
+		pollOptions = ['', ''];
+		pollMultiVote = false;
+	}
+
+	function openPollModal() {
+		if ($currentChannel?.encrypted) {
+			addToast('Polls are not supported in encrypted channels', 'error');
+			return;
+		}
+		showPollModal = true;
+		showEmojiPicker = false;
+		showGiphyPicker = false;
+		showStickerPicker = false;
+		showSchedulePicker = false;
+		showInputMore = false;
+	}
+
+	function openCodeSnippetModal() {
+		if ($currentChannel?.encrypted) {
+			addToast('Code snippets are not supported in encrypted channels', 'error');
+			return;
+		}
+		showCodeSnippetModal = true;
+		showEmojiPicker = false;
+		showGiphyPicker = false;
+		showStickerPicker = false;
+		showSchedulePicker = false;
+		showInputMore = false;
+	}
+
+	async function handleCodeSnippetCreated(snippet: { message_id?: string | null }) {
+		const channelId = $currentChannelId;
+		if (!channelId || !snippet.message_id) return;
+		const message = await api.getMessage(channelId, snippet.message_id);
+		appendMessage(message);
+		recordSuccessfulSend(channelId);
+		showCodeSnippetModal = false;
+	}
+
+	async function createPoll() {
+		const channelId = $currentChannelId;
+		const options = pollOptions.map(option => option.trim()).filter(Boolean);
+		if (!channelId || !pollQuestion.trim() || options.length < 2) {
+			addToast('Polls need a question and at least two options', 'error');
+			return;
+		}
+		if (guardSlowmode()) return;
+
+		const poll = await createPollOp.run(
+			() => api.createPoll(channelId, pollQuestion.trim(), options, { multi_vote: pollMultiVote }),
+			msg => addToast(msg, 'error'),
+			'Failed to create poll'
+		);
+		if (poll?.message_id) {
+			const message = await api.getMessage(channelId, poll.message_id);
+			appendMessage(message);
+			recordSuccessfulSend(channelId);
+			showPollModal = false;
+			resetPollForm();
+		}
+	}
+
 	function handleSendError(err: unknown, fallback: string) {
 		if (err instanceof ApiRequestError && err.code === 'slowmode') {
 			addToast(getErrorMessage(err, fallback), 'error');
@@ -258,12 +357,15 @@
 		if (guardSlowmode()) return;
 
 		// Normal send (possibly with reply).
-		const opts: { reply_to_ids?: string[]; silent?: boolean; encrypted?: boolean } = {};
-		if (isReplying && $replyingTo) {
+		const opts: { reply_to_ids?: string[]; silent?: boolean; encrypted?: boolean; expires_in_seconds?: number } = {};
+		if (hasThreadsAndReplies && isReplying && $replyingTo) {
 			opts.reply_to_ids = [$replyingTo.id];
 		}
 		if (silentMode) {
 			opts.silent = true;
+		}
+		if (expirySeconds) {
+			opts.expires_in_seconds = expirySeconds;
 		}
 
 		cancelReply();
@@ -331,6 +433,10 @@
 			return;
 		}
 		handleSchedule(date);
+	}
+
+	function setExpiryFromSelect(value: string) {
+		expirySeconds = value ? Number(value) : null;
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -506,11 +612,14 @@
 				const msg = content.trim();
 				let sendContent = msg;
 				const opts: Record<string, any> = { attachment_ids: ids };
-				if (isReplying && $replyingTo) {
+				if (hasThreadsAndReplies && isReplying && $replyingTo) {
 					opts.reply_to_ids = [$replyingTo.id];
 				}
 				if (silentMode) {
 					opts.silent = true;
+				}
+				if (expirySeconds) {
+					opts.expires_in_seconds = expirySeconds;
 				}
 				if (isEncrypted) {
 					opts.encrypted = true;
@@ -560,7 +669,7 @@
 		try {
 			let uploadFile: File = file;
 			const opts: Record<string, any> = {};
-			if (isReplying && $replyingTo) {
+			if (hasThreadsAndReplies && isReplying && $replyingTo) {
 				opts.reply_to_ids = [$replyingTo.id];
 			}
 			if (silentMode) {
@@ -634,6 +743,9 @@
 					return;
 				}
 			}
+			if (expirySeconds) {
+				opts.expires_in_seconds = expirySeconds;
+			}
 			const sent = await api.sendMessage(channelId, sendContent, opts);
 			appendMessage(sent);
 			recordSuccessfulSend(channelId);
@@ -654,6 +766,9 @@
 		try {
 			// Send the sticker as a message with the sticker image file as an attachment.
 			const opts: Record<string, any> = { attachment_ids: [sticker.file_id] };
+			if (expirySeconds) {
+				opts.expires_in_seconds = expirySeconds;
+			}
 			const sent = await api.sendMessage(channelId, '', opts);
 			appendMessage(sent);
 			recordSuccessfulSend(channelId);
@@ -710,7 +825,7 @@
 		{/if}
 
 		<MessageInputStatusBars
-			replyingTo={$replyingTo}
+			replyingTo={hasThreadsAndReplies ? $replyingTo : null}
 			editingMessage={$editingMessage}
 			bind:silentMode
 			{slowmodeRemainingSeconds}
@@ -804,54 +919,98 @@
 					</button>
 
 				<!-- Schedule message button — desktop only -->
-					<div class="relative hidden md:block">
+					{#if hasScheduledMessages}
+						<div class="relative hidden md:block">
+							<button
+								class="flex items-center justify-center text-text-muted hover:text-text-primary"
+								title="Schedule message"
+								onclick={() => {
+									showSchedulePicker = !showSchedulePicker;
+									showEmojiPicker = false;
+									showGiphyPicker = false;
+									showStickerPicker = false;
+								}}
+							>
+								<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+								</svg>
+							</button>
+							<ScheduleMessagePicker bind:open={showSchedulePicker} bind:customDatetime onpreset={handleSchedule} oncustom={handleCustomSchedule} />
+						</div>
+					{/if}
+
+					{#if hasExpiringMessages}
+						<select
+							class="hidden h-7 rounded border border-transparent bg-transparent px-1 text-xs text-text-muted outline-none hover:border-bg-modifier hover:text-text-primary md:block"
+							title="Message expiry"
+							value={expirySeconds ?? ''}
+							onchange={(e) => setExpiryFromSelect((e.currentTarget as HTMLSelectElement).value)}
+						>
+							{#each expiryOptions as option}
+								<option value={option.value ?? ''}>{option.label}</option>
+							{/each}
+						</select>
+					{/if}
+
+				<!-- Poll button — desktop only -->
+					{#if hasPolls}
 						<button
-							class="flex items-center justify-center text-text-muted hover:text-text-primary"
-							title="Schedule message"
-							onclick={() => {
-								showSchedulePicker = !showSchedulePicker;
-								showEmojiPicker = false;
-								showGiphyPicker = false;
-								showStickerPicker = false;
-							}}
+							class="hidden items-center justify-center text-text-muted hover:text-text-primary md:flex"
+							title="Create poll"
+							onclick={openPollModal}
 						>
 							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+								<path d="M4 19V5m6 14V9m6 10V3m4 18H4" />
 							</svg>
 						</button>
-						<ScheduleMessagePicker bind:open={showSchedulePicker} bind:customDatetime onpreset={handleSchedule} oncustom={handleCustomSchedule} />
-					</div>
+					{/if}
+
+					{#if hasCodeSnippets}
+						<button
+							class="hidden items-center justify-center text-text-muted hover:text-text-primary md:flex"
+							title="Share code"
+							onclick={openCodeSnippetModal}
+						>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />
+							</svg>
+						</button>
+					{/if}
 
 				<!-- GIF picker button — desktop only -->
-					<div class="giphy-picker relative hidden md:block">
-						<button
-							class="flex h-5 items-center rounded border border-text-muted px-1 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
-							title="GIF"
-							onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
-						>
-							GIF
-						</button>
-						{#if showGiphyPicker}
-							<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
-						{/if}
-					</div>
+					{#if hasGifSearch}
+						<div class="giphy-picker relative hidden md:block">
+							<button
+								class="flex h-5 items-center rounded border border-text-muted px-1 text-[10px] font-bold leading-none text-text-muted hover:border-text-primary hover:text-text-primary"
+								title="GIF"
+								onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showEmojiPicker = false; showStickerPicker = false; showSchedulePicker = false; }}
+							>
+								GIF
+							</button>
+							{#if showGiphyPicker}
+								<GiphyPicker onselect={insertGif} onclose={() => (showGiphyPicker = false)} />
+							{/if}
+						</div>
+					{/if}
 
 				<!-- Sticker picker button — desktop only -->
-					<div class="sticker-picker relative hidden md:block">
-						<button
-							class="flex items-center justify-center text-text-muted hover:text-text-primary"
-							title="Stickers"
-							onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showEmojiPicker = false; showGiphyPicker = false; showSchedulePicker = false; }}
-						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-								<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-								<path d="M15 2v5a2 2 0 002 2h5" />
-							</svg>
-						</button>
-						{#if showStickerPicker}
-							<StickerPicker onselect={sendSticker} onclose={() => (showStickerPicker = false)} />
-						{/if}
-					</div>
+					{#if hasStickerPacks}
+						<div class="sticker-picker relative hidden md:block">
+							<button
+								class="flex items-center justify-center text-text-muted hover:text-text-primary"
+								title="Stickers"
+								onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showEmojiPicker = false; showGiphyPicker = false; showSchedulePicker = false; }}
+							>
+								<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+									<path d="M15 2v5a2 2 0 002 2h5" />
+								</svg>
+							</button>
+							{#if showStickerPicker}
+								<StickerPicker onselect={sendSticker} onclose={() => (showStickerPicker = false)} />
+							{/if}
+						</div>
+					{/if}
 
 				<!-- Emoji picker button -->
 					<div class="emoji-picker relative">
@@ -918,36 +1077,76 @@
 										{/if}
 									</svg>
 								</button>
-								<button
-									class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
-									title="Schedule"
-									onclick={() => { showSchedulePicker = !showSchedulePicker; showInputMore = false; }}
-								>
-									<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-										<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-									</svg>
-								</button>
-								<div class="giphy-picker">
-									<button
-										class="flex h-7 items-center rounded border border-text-muted px-1.5 text-[10px] font-bold text-text-muted hover:border-text-primary hover:text-text-primary"
-										title="GIF"
-										onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showInputMore = false; }}
-									>
-										GIF
-									</button>
-								</div>
-								<div class="sticker-picker">
+								{#if hasScheduledMessages}
 									<button
 										class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
-										title="Stickers"
-										onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showInputMore = false; }}
+										title="Schedule"
+										onclick={() => { showSchedulePicker = !showSchedulePicker; showInputMore = false; }}
 									>
 										<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-											<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-											<path d="M15 2v5a2 2 0 002 2h5" />
+											<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
 										</svg>
 									</button>
-								</div>
+								{/if}
+								{#if hasExpiringMessages}
+									<select
+										class="h-8 rounded border border-bg-modifier bg-bg-secondary px-1 text-xs text-text-secondary outline-none"
+										title="Message expiry"
+										value={expirySeconds ?? ''}
+										onchange={(e) => setExpiryFromSelect((e.currentTarget as HTMLSelectElement).value)}
+									>
+										{#each expiryOptions as option}
+											<option value={option.value ?? ''}>{option.label}</option>
+										{/each}
+									</select>
+								{/if}
+								{#if hasPolls}
+									<button
+										class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
+										title="Poll"
+										onclick={openPollModal}
+									>
+										<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M4 19V5m6 14V9m6 10V3m4 18H4" />
+										</svg>
+									</button>
+								{/if}
+								{#if hasCodeSnippets}
+									<button
+										class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
+										title="Code"
+										onclick={openCodeSnippetModal}
+									>
+										<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+											<path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />
+										</svg>
+									</button>
+								{/if}
+								{#if hasGifSearch}
+									<div class="giphy-picker">
+										<button
+											class="flex h-7 items-center rounded border border-text-muted px-1.5 text-[10px] font-bold text-text-muted hover:border-text-primary hover:text-text-primary"
+											title="GIF"
+											onclick={(e) => { e.stopPropagation(); showGiphyPicker = !showGiphyPicker; showInputMore = false; }}
+										>
+											GIF
+										</button>
+									</div>
+								{/if}
+								{#if hasStickerPacks}
+									<div class="sticker-picker">
+										<button
+											class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
+											title="Stickers"
+											onclick={(e) => { e.stopPropagation(); showStickerPicker = !showStickerPicker; showInputMore = false; }}
+										>
+											<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+												<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+												<path d="M15 2v5a2 2 0 002 2h5" />
+											</svg>
+										</button>
+									</div>
+								{/if}
 								<button
 									class="flex items-center justify-center rounded p-1.5 text-text-muted hover:text-text-primary"
 									title="Voice"
@@ -972,3 +1171,44 @@
 		{/if}
 	</div>
 {/if}
+
+<Modal open={showPollModal} title="Create Poll" onclose={() => (showPollModal = false)}>
+	<div class="space-y-4">
+		<div>
+			<label for="poll-question" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Question</label>
+			<input id="poll-question" class="input w-full" bind:value={pollQuestion} maxlength="300" placeholder="What should people vote on?" />
+		</div>
+		<div class="space-y-2">
+			<div class="text-xs font-bold uppercase tracking-wide text-text-muted">Options</div>
+			{#each pollOptions as option, index}
+				<div class="flex gap-2">
+					<input class="input flex-1" bind:value={pollOptions[index]} maxlength="100" placeholder="Option {index + 1}" />
+					{#if pollOptions.length > 2}
+						<button class="btn-secondary text-sm" onclick={() => (pollOptions = pollOptions.filter((_, i) => i !== index))}>Remove</button>
+					{/if}
+				</div>
+			{/each}
+			{#if pollOptions.length < 10}
+				<button class="btn-secondary text-sm" onclick={() => (pollOptions = [...pollOptions, ''])}>Add Option</button>
+			{/if}
+		</div>
+		<label class="flex items-center gap-2 text-sm text-text-secondary">
+			<input type="checkbox" class="rounded accent-brand-500" bind:checked={pollMultiVote} />
+			Allow multiple choices
+		</label>
+		<div class="flex justify-end gap-2">
+			<button class="btn-secondary text-sm" onclick={() => (showPollModal = false)}>Cancel</button>
+			<button class="btn-primary text-sm" onclick={createPoll} disabled={createPollOp.loading}>
+				{createPollOp.loading ? 'Creating...' : 'Create Poll'}
+			</button>
+		</div>
+	</div>
+</Modal>
+
+<Modal open={showCodeSnippetModal} title="Share Code" onclose={() => (showCodeSnippetModal = false)}>
+	<CodeSnippet
+		channelId={$currentChannelId ?? ''}
+		onclose={() => (showCodeSnippetModal = false)}
+		oncreated={handleCodeSnippetCreated}
+	/>
+</Modal>

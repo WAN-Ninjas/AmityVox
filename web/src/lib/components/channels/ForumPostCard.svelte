@@ -4,10 +4,13 @@
 
 	interface Props {
 		post: ForumPost;
+		canManage?: boolean;
 		onclick?: () => void;
+		onpin?: (post: ForumPost) => void;
+		onclose?: (post: ForumPost) => void;
 	}
 
-	let { post, onclick }: Props = $props();
+	let { post, canManage = false, onclick, onpin, onclose }: Props = $props();
 
 	function formatDate(iso: string): string {
 		const date = new Date(iso);
@@ -29,9 +32,17 @@
 	}
 </script>
 
-<button
+<div
 	class="group flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-bg-secondary {post.pinned ? 'border-brand-500/30 bg-brand-500/5' : 'border-transparent hover:border-bg-modifier'}"
-	{onclick}
+	onclick={onclick}
+	onkeydown={(e) => {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			onclick?.();
+		}
+	}}
+	role="button"
+	tabindex="0"
 >
 	<!-- Author avatar -->
 	<div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-modifier">
@@ -105,13 +116,36 @@
 		</div>
 	</div>
 
-	<svg
-		class="mt-1 h-4 w-4 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100"
-		fill="none"
-		stroke="currentColor"
-		stroke-width="2"
-		viewBox="0 0 24 24"
-	>
-		<path d="M9 5l7 7-7 7" />
-	</svg>
-</button>
+	<div class="mt-1 flex shrink-0 items-center gap-1">
+		{#if canManage}
+			<button
+				class="rounded p-1 text-text-muted opacity-0 transition-opacity hover:bg-bg-modifier hover:text-text-primary group-hover:opacity-100"
+				title={post.pinned ? 'Unpin post' : 'Pin post'}
+				onclick={(e) => { e.stopPropagation(); onpin?.(post); }}
+			>
+				<svg class="h-4 w-4" fill={post.pinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
+				</svg>
+			</button>
+			<button
+				class="rounded p-1 text-text-muted opacity-0 transition-opacity hover:bg-bg-modifier hover:text-text-primary group-hover:opacity-100"
+				title={post.locked ? 'Reopen post' : 'Close post'}
+				onclick={(e) => { e.stopPropagation(); onclose?.(post); }}
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+					<path d="M7 11V7a5 5 0 0110 0v4" />
+				</svg>
+			</button>
+		{/if}
+		<svg
+			class="h-4 w-4 text-text-muted opacity-0 transition-opacity group-hover:opacity-100"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			viewBox="0 0 24 24"
+		>
+			<path d="M9 5l7 7-7 7" />
+		</svg>
+	</div>
+</div>

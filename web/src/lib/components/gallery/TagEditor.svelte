@@ -25,10 +25,10 @@
 		if (!newTagName.trim() || addOp.loading) return;
 		await addOp.run(
 			async () => {
-			const tag = await api.createMediaTag(guildId, newTagName.trim());
-			tags = [...tags, tag];
-			newTagName = '';
-			addToast('Tag created', 'success');
+				const tag = await api.createMediaTag(guildId, newTagName.trim());
+				tags = [...tags, tag];
+				newTagName = '';
+				addToast('Tag created', 'success');
 			},
 			(message) => addToast(message, 'error'),
 			'Failed to create tag'

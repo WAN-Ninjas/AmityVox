@@ -4,6 +4,7 @@
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { api } from '$lib/api/client';
 	import { currentGuildId } from '$lib/stores/guilds';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	interface Props {
 		onselect: (sticker: Sticker) => void;
@@ -18,20 +19,30 @@
 	let stickersByPack = $state<Map<string, Sticker[]>>(new Map());
 	let activePackId = $state<string | null>(null);
 	let packsOp = $state(createAsyncOp(true));
+	const hasStickerPacks = $derived(isFeatureEnabled($clientConfig, 'sticker_packs'));
 
 	// Load packs on mount.
 	$effect(() => {
-		loadPacks();
+		if (hasStickerPacks) {
+			loadPacks();
+		} else {
+			guildPacks = [];
+			userPacks = [];
+			stickersByPack = new Map();
+			activePackId = null;
+			packsOp.loading = false;
+		}
 	});
 
 	// Load stickers when active pack changes.
 	$effect(() => {
-		if (activePackId && !stickersByPack.has(activePackId)) {
+		if (hasStickerPacks && activePackId && !stickersByPack.has(activePackId)) {
 			loadStickersForPack(activePackId);
 		}
 	});
 
 	async function loadPacks() {
+		if (!hasStickerPacks) return;
 		await packsOp.run(
 			async () => {
 			const guildId = $currentGuildId;
@@ -54,6 +65,7 @@
 	}
 
 	async function loadStickersForPack(packId: string) {
+		if (!hasStickerPacks) return;
 		const guildId = $currentGuildId;
 		// Determine if this is a guild pack or user pack.
 		const gPack = guildPacks.find(p => p.id === packId);
@@ -62,13 +74,7 @@
 			if (gPack && guildId) {
 				stickers = await api.getPackStickers(guildId, packId);
 			} else {
-				// For user packs, the backend uses the same guild pack endpoint structure
-				// but user packs don't have a guild context. We need to handle this.
-				// The backend only has guild-scoped sticker fetching, so user packs
-				// would need a different endpoint. For now, we skip if no guild context.
-				// NOTE: The current backend only supports fetching stickers via guild routes.
-				// User packs would need to be fetched through a guild route where the user has access.
-				stickers = [];
+				stickers = await api.getUserPackStickers(packId);
 			}
 			stickersByPack = new Map([...stickersByPack, [packId, stickers]]);
 		} catch {

@@ -111,7 +111,7 @@
 			<p class="text-sm text-text-muted">Manage plugins installed in this server.</p>
 		</div>
 		<a
-			href="/app/plugins"
+			href={`/app/plugins?guild=${encodeURIComponent(guildId)}`}
 			class="rounded-md bg-brand-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-600"
 		>
 			Browse Plugins

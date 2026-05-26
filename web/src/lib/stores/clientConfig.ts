@@ -4,9 +4,9 @@ import { setLocalInstanceId } from '$lib/utils/avatar';
 
 export const clientConfig = writable<ClientConfig | null>(null);
 
-export async function loadClientConfig(): Promise<ClientConfig | null> {
+export async function loadClientConfig(guildId?: string): Promise<ClientConfig | null> {
 	try {
-		const config = await api.getClientConfig();
+		const config = await api.getClientConfig(guildId);
 		clientConfig.set(config);
 		setLocalInstanceId(config.local_instance_id);
 		return config;
@@ -15,6 +15,10 @@ export async function loadClientConfig(): Promise<ClientConfig | null> {
 	}
 }
 
+export function isFeatureEnabled(config: ClientConfig | null, feature: string): boolean {
+	return Boolean(config?.feature_flags?.[feature]?.enabled ?? config?.experimental_features?.[feature]);
+}
+
 export function isExperimentalEnabled(config: ClientConfig | null, feature: string): boolean {
-	return Boolean(config?.experimental_features?.[feature]);
+	return isFeatureEnabled(config, feature);
 }

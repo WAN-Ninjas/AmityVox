@@ -19,6 +19,10 @@
 	let backupCodes = $state<string[]>([]);
 	let enablingTotp = $state(false);
 	let verifyingTotp = $state(false);
+	let disableTotpPassword = $state('');
+	let disableTotpCode = $state('');
+	let backupCodePassword = $state('');
+	let managingTotp = $state(false);
 	let totpError = $state('');
 	let totpStep = $state<'idle' | 'setup' | 'verify' | 'done'>('idle');
 
@@ -98,7 +102,46 @@
 		totpQrUrl = '';
 		totpCode = '';
 		backupCodes = [];
+		backupCodePassword = '';
 		totpError = '';
+	}
+
+	async function handleDisableTotp() {
+		if (!disableTotpPassword || disableTotpCode.length !== 6) {
+			totpError = 'Enter your password and a 6-digit code.';
+			return;
+		}
+		managingTotp = true;
+		totpError = '';
+		try {
+			await api.disableTOTP({ password: disableTotpPassword, code: disableTotpCode });
+			disableTotpPassword = '';
+			disableTotpCode = '';
+			addToast('Two-factor authentication disabled', 'success');
+		} catch (err: unknown) {
+			totpError = getErrorMessage(err, 'Failed to disable 2FA');
+		} finally {
+			managingTotp = false;
+		}
+	}
+
+	async function handleGenerateBackupCodes() {
+		if (!backupCodePassword) {
+			totpError = 'Enter your password to generate backup codes.';
+			return;
+		}
+		managingTotp = true;
+		totpError = '';
+		try {
+			const result = await api.generateBackupCodes(backupCodePassword);
+			backupCodes = result.codes;
+			backupCodePassword = '';
+			totpStep = 'done';
+		} catch (err: unknown) {
+			totpError = getErrorMessage(err, 'Failed to generate backup codes');
+		} finally {
+			managingTotp = false;
+		}
 	}
 
 	async function loadSessions() {
@@ -190,6 +233,25 @@
 		<button class="btn-primary" onclick={handleEnableTotp} disabled={enablingTotp}>
 			{enablingTotp ? 'Setting up...' : 'Enable 2FA'}
 		</button>
+		<div class="mt-4 grid gap-3 md:grid-cols-2">
+			<div class="rounded border border-bg-modifier bg-bg-primary p-3">
+				<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Regenerate Backup Codes</h4>
+				<input class="input mb-2 w-full text-sm" type="password" placeholder="Current password" bind:value={backupCodePassword} />
+				<button class="btn-secondary text-sm" onclick={handleGenerateBackupCodes} disabled={managingTotp || !backupCodePassword}>
+					{managingTotp ? 'Working...' : 'Generate Codes'}
+				</button>
+			</div>
+			<div class="rounded border border-bg-modifier bg-bg-primary p-3">
+				<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Disable 2FA</h4>
+				<input class="input mb-2 w-full text-sm" type="password" placeholder="Current password" bind:value={disableTotpPassword} />
+				<input class="input mb-2 w-32 text-sm" type="text" inputmode="numeric" maxlength="6" placeholder="000000" bind:value={disableTotpCode} />
+				<div>
+					<button class="btn-secondary text-sm text-red-400" onclick={handleDisableTotp} disabled={managingTotp || !disableTotpPassword || disableTotpCode.length !== 6}>
+						{managingTotp ? 'Working...' : 'Disable 2FA'}
+					</button>
+				</div>
+			</div>
+		</div>
 	{:else if totpStep === 'setup'}
 		<div class="space-y-4">
 			<p class="text-sm text-text-secondary">

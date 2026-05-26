@@ -173,7 +173,7 @@
 			const file = new File([blob], `recording_${Date.now()}.webm`, { type: blob.type });
 
 			// Upload via the api client.
-			const fileData = await api.uploadFile(file) as any;
+			const fileData = await api.uploadFile(file);
 
 			// Register the recording.
 			await api.createVideoRecording(channelId, {

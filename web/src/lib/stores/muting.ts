@@ -29,6 +29,30 @@ export async function loadChannelMutePrefs() {
 	}
 }
 
+// Load guild mute preferences for the guilds currently visible to the user.
+export async function loadGuildMutePrefs(guildIds: string[]) {
+	const uniqueGuildIds = Array.from(new Set(guildIds.filter(Boolean)));
+	if (uniqueGuildIds.length === 0) {
+		guildMuteMap.clear();
+		return;
+	}
+
+	try {
+		const prefs = await Promise.all(
+			uniqueGuildIds.map((guildId) => api.getNotificationPreferences(guildId))
+		);
+		const map = new Map<string, NotificationPreference>();
+		for (const pref of prefs) {
+			if (pref.guild_id) {
+				map.set(pref.guild_id, pref);
+			}
+		}
+		guildMuteMap.setAll(map);
+	} catch {
+		// Silently fail — muting is non-critical.
+	}
+}
+
 // Check if a channel is currently muted.
 export function isChannelMuted(channelId: string): boolean {
 	const pref = get(channelMuteMap).get(channelId);

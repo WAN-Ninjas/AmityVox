@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { page } from '$app/stores';
 	import { api, type PluginListing } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { currentGuildId } from '$lib/stores/guilds';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
 
@@ -11,6 +13,9 @@
 	let selectedCategory = $state('');
 	let installing = $state<string | null>(null);
 	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+	let selectedPlugin = $state<(PluginListing & { manifest: unknown }) | null>(null);
+	let detailOp = $state(createAsyncOp());
+	const hasWidgets = $derived(isFeatureEnabled($clientConfig, 'widgets'));
 
 	const categories = [
 		{ value: '', label: 'All Categories' },
@@ -28,10 +33,16 @@
 	};
 
 	$effect(() => {
-		loadPlugins();
+		if (hasWidgets) {
+			loadPlugins();
+		} else {
+			plugins = [];
+			selectedPlugin = null;
+		}
 	});
 
 	async function loadPlugins() {
+		if (!hasWidgets) return;
 		const result = await loadOp.run(() =>
 			api.listPlugins({
 				q: search.trim() || undefined,
@@ -43,7 +54,11 @@
 	}
 
 	async function installPlugin(plugin: PluginListing) {
-		const guildId = $currentGuildId;
+		if (!hasWidgets) {
+			addToast('Plugins are disabled on this instance', 'error');
+			return;
+		}
+		const guildId = $page.url.searchParams.get('guild') || $currentGuildId;
 		if (!guildId) {
 			addToast('Select a server first to install plugins', 'error');
 			return;
@@ -63,6 +78,21 @@
 		}
 	}
 
+	async function showPluginDetails(plugin: PluginListing) {
+		if (!hasWidgets) return;
+		const detail = await detailOp.run(
+			() => api.getPlugin(plugin.id),
+			(message) => addToast(message, 'error'),
+			'Failed to load plugin details'
+		);
+		if (detail) selectedPlugin = detail;
+	}
+
+	function installSelectedPlugin() {
+		if (!selectedPlugin) return;
+		installPlugin(selectedPlugin);
+	}
+
 	function handleSearch() {
 		if (searchTimeout) clearTimeout(searchTimeout);
 		searchTimeout = setTimeout(loadPlugins, 250);
@@ -72,6 +102,14 @@
 		if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
 		if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
 		return count.toString();
+	}
+
+	function formatManifest(manifest: unknown): string {
+		try {
+			return JSON.stringify(manifest, null, 2);
+		} catch {
+			return String(manifest);
+		}
 	}
 </script>
 
@@ -88,34 +126,40 @@
 		</p>
 	</div>
 
-	<!-- Search and filters -->
-	<div class="mb-6 flex flex-col gap-3 sm:flex-row">
-		<div class="relative flex-1">
-			<svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-			</svg>
-			<input
-				type="text"
-				class="input w-full pl-10"
-				placeholder="Search plugins..."
-				bind:value={search}
-				oninput={handleSearch}
-				onkeydown={(e) => e.key === 'Enter' && handleSearch()}
-			/>
+	{#if hasWidgets}
+		<!-- Search and filters -->
+		<div class="mb-6 flex flex-col gap-3 sm:flex-row">
+			<div class="relative flex-1">
+				<svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+				</svg>
+				<input
+					type="text"
+					class="input w-full pl-10"
+					placeholder="Search plugins..."
+					bind:value={search}
+					oninput={handleSearch}
+					onkeydown={(e) => e.key === 'Enter' && handleSearch()}
+				/>
+			</div>
+			<select
+				class="input w-full sm:w-48"
+				bind:value={selectedCategory}
+				onchange={loadPlugins}
+			>
+				{#each categories as cat}
+					<option value={cat.value}>{cat.label}</option>
+				{/each}
+			</select>
 		</div>
-		<select
-			class="input w-full sm:w-48"
-			bind:value={selectedCategory}
-			onchange={loadPlugins}
-		>
-			{#each categories as cat}
-				<option value={cat.value}>{cat.label}</option>
-			{/each}
-		</select>
-	</div>
+	{/if}
 
 	<!-- Plugin grid -->
-	{#if loadOp.loading}
+	{#if !hasWidgets}
+		<div class="rounded-lg border border-bg-modifier bg-bg-secondary px-6 py-5 text-sm text-text-muted">
+			Plugins are disabled on this instance.
+		</div>
+	{:else if loadOp.loading}
 		<div class="flex items-center justify-center py-16">
 			<span class="inline-block h-8 w-8 animate-spin rounded-full border-3 border-brand-500 border-t-transparent"></span>
 		</div>
@@ -176,16 +220,87 @@
 								{formatInstalls(plugin.install_count)} installs
 							</span>
 						</div>
-						<button
-							class="rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
-							onclick={() => installPlugin(plugin)}
-							disabled={installing === plugin.id}
-						>
-							{installing === plugin.id ? 'Installing...' : 'Install'}
-						</button>
+						<div class="flex items-center gap-2">
+							<button
+								class="rounded-md border border-bg-modifier px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-modifier hover:text-text-primary"
+								onclick={() => showPluginDetails(plugin)}
+								disabled={detailOp.loading}
+							>
+								Details
+							</button>
+							<button
+								class="rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
+								onclick={() => installPlugin(plugin)}
+								disabled={installing === plugin.id}
+							>
+								{installing === plugin.id ? 'Installing...' : 'Install'}
+							</button>
+						</div>
 					</div>
 				</div>
 			{/each}
 		</div>
 	{/if}
 </div>
+
+{#if selectedPlugin}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+		onclick={() => (selectedPlugin = null)}
+		onkeydown={(e) => e.key === 'Escape' && (selectedPlugin = null)}
+		role="dialog"
+		aria-modal="true"
+		tabindex="-1"
+	>
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+		<div
+			class="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-bg-floating p-5 shadow-xl"
+			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="document"
+			tabindex="-1"
+		>
+			<div class="flex items-start justify-between gap-4">
+				<div class="min-w-0">
+					<h2 class="truncate text-lg font-semibold text-text-primary">{selectedPlugin.name}</h2>
+					<p class="text-xs text-text-muted">by {selectedPlugin.author} · v{selectedPlugin.version}</p>
+				</div>
+				<button class="rounded p-1 text-text-muted hover:bg-bg-modifier hover:text-text-primary" onclick={() => (selectedPlugin = null)} aria-label="Close">
+					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M6 18L18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+
+			{#if selectedPlugin.description}
+				<p class="mt-4 text-sm text-text-secondary">{selectedPlugin.description}</p>
+			{/if}
+
+			<div class="mt-4 flex flex-wrap items-center gap-2 text-xs">
+				<span class="rounded-full border px-2 py-0.5 {categoryColors[selectedPlugin.category] || 'border-bg-modifier bg-bg-modifier text-text-muted'}">
+					{selectedPlugin.category}
+				</span>
+				<span class="text-text-muted">{formatInstalls(selectedPlugin.install_count)} installs</span>
+				{#if selectedPlugin.verified}
+					<span class="rounded-full bg-brand-500/10 px-2 py-0.5 text-brand-400">Verified</span>
+				{/if}
+				{#if selectedPlugin.homepage_url}
+					<a class="text-brand-400 hover:underline" href={selectedPlugin.homepage_url} target="_blank" rel="noopener noreferrer">Homepage</a>
+				{/if}
+			</div>
+
+			<div class="mt-5">
+				<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Manifest</h3>
+				<pre class="max-h-80 overflow-auto rounded-md bg-bg-primary p-3 text-xs text-text-secondary">{formatManifest(selectedPlugin.manifest)}</pre>
+			</div>
+
+			<div class="mt-5 flex justify-end gap-2">
+				<button class="btn-secondary text-sm" onclick={() => (selectedPlugin = null)}>Close</button>
+				<button class="btn-primary text-sm" onclick={installSelectedPlugin} disabled={installing === selectedPlugin.id}>
+					{installing === selectedPlugin.id ? 'Installing...' : 'Install'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}

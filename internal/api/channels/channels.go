@@ -25,6 +25,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/features"
 	"github.com/amityvox/amityvox/internal/mentions"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/permissions"
@@ -122,6 +123,28 @@ func (dt *dmTracker) cleanup() {
 	}
 }
 
+func (h *Handler) channelFeatureEnabled(w http.ResponseWriter, r *http.Request, guildID *string, featureKey string) bool {
+	scope := ""
+	if guildID != nil {
+		scope = *guildID
+	}
+	states, err := features.Resolve(r.Context(), h.Pool, scope)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to load feature flags", err)
+		return false
+	}
+	state, ok := states[featureKey]
+	if !ok || !state.Enabled {
+		message := "Feature is disabled"
+		if ok && state.Name != "" {
+			message = state.Name + " is disabled"
+		}
+		apiutil.WriteError(w, http.StatusForbidden, "feature_disabled", message)
+		return false
+	}
+	return true
+}
+
 func init() {
 	// Periodically clean up the DM spam tracker in the background.
 	go func() {
@@ -164,6 +187,7 @@ type createMessageRequest struct {
 	Silent              bool     `json:"silent"`
 	Encrypted           bool     `json:"encrypted"`
 	EncryptionSessionID *string  `json:"encryption_session_id"`
+	ExpiresInSeconds    *int     `json:"expires_in_seconds"`
 }
 
 type scheduleMessageRequest struct {
@@ -270,7 +294,8 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	// Validate encryption toggle: only text, DM, and group channels support encryption.
 	if req.Encrypted != nil {
 		var channelType string
-		if err := h.Pool.QueryRow(r.Context(), `SELECT channel_type FROM channels WHERE id = $1`, channelID).Scan(&channelType); err != nil {
+		var guildID *string
+		if err := h.Pool.QueryRow(r.Context(), `SELECT channel_type, guild_id FROM channels WHERE id = $1`, channelID).Scan(&channelType, &guildID); err != nil {
 			if err == pgx.ErrNoRows {
 				apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
 				return
@@ -281,6 +306,9 @@ func (h *Handler) HandleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		if channelType != "text" && channelType != "dm" && channelType != "group" {
 			apiutil.WriteError(w, http.StatusBadRequest, "encryption_not_supported",
 				"Encryption is only supported for text, DM, and group channels")
+			return
+		}
+		if *req.Encrypted && !h.channelFeatureEnabled(w, r, guildID, "e2ee") {
 			return
 		}
 	}
@@ -493,7 +521,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		                reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		                encrypted, encryption_session_id, created_at
+		                encrypted, encryption_session_id, expires_at, created_at
 		         FROM messages WHERE channel_id = $1 AND id < $2
 		         ORDER BY id DESC LIMIT $3`
 		args = []interface{}{channelID, before, limit}
@@ -501,7 +529,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		                reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		                encrypted, encryption_session_id, created_at
+		                encrypted, encryption_session_id, expires_at, created_at
 		         FROM messages WHERE channel_id = $1 AND id > $2
 		         ORDER BY id ASC LIMIT $3`
 		args = []interface{}{channelID, after, limit}
@@ -510,14 +538,14 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		query = `(SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                 thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		                 encrypted, encryption_session_id, created_at
+		                 encrypted, encryption_session_id, expires_at, created_at
 		          FROM messages WHERE channel_id = $1 AND id <= $2
 		          ORDER BY id DESC LIMIT $3)
 		         UNION ALL
 		         (SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		                 reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                 thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		                 encrypted, encryption_session_id, created_at
+		                 encrypted, encryption_session_id, expires_at, created_at
 		          FROM messages WHERE channel_id = $1 AND id > $2
 		          ORDER BY id ASC LIMIT $4)
 		         ORDER BY id DESC`
@@ -526,7 +554,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 		query = `SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		                reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		                thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		                encrypted, encryption_session_id, created_at
+		                encrypted, encryption_session_id, expires_at, created_at
 		         FROM messages WHERE channel_id = $1
 		         ORDER BY id DESC LIMIT $2`
 		args = []interface{}{channelID, limit}
@@ -546,7 +574,7 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
 			&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
-			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.ExpiresAt, &m.CreatedAt,
 		); err != nil {
 			apiutil.InternalError(w, h.Logger, "Failed to read messages", err)
 			return
@@ -557,6 +585,9 @@ func (h *Handler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
 	h.enrichMessagesWithAuthors(r.Context(), messages)
 	h.enrichMessagesWithAttachments(r.Context(), messages)
 	h.enrichMessagesWithEmbeds(r.Context(), messages)
+	h.enrichMessagesWithPolls(r.Context(), userID, messages)
+	h.enrichMessagesWithCodeSnippets(r.Context(), messages)
+	h.enrichMessagesWithComponents(r.Context(), messages)
 
 	apiutil.WriteJSON(w, http.StatusOK, messages)
 }
@@ -628,6 +659,13 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Encrypted && !h.channelFeatureEnabled(w, r, cc.GuildID, "e2ee") {
+		return
+	}
+	if req.ExpiresInSeconds != nil && !h.channelFeatureEnabled(w, r, cc.GuildID, "expiring_messages") {
+		return
+	}
+
 	// Federation proxy: if channel belongs to a remote guild, forward to home instance.
 	canProxy := (hasContent || hasAttachments) && !req.Silent && !req.Encrypted
 	if h.FedProxy != nil && canProxy {
@@ -640,6 +678,9 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(req.AttachmentIDs) > 0 {
 			opts["attachment_ids"] = req.AttachmentIDs
+		}
+		if req.ExpiresInSeconds != nil {
+			opts["expires_in_seconds"] = *req.ExpiresInSeconds
 		}
 		content := ""
 		if req.Content != nil {
@@ -714,6 +755,17 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		flags |= models.MessageFlagSilent
 		trimmed := strings.TrimPrefix(*req.Content, "@silent ")
 		req.Content = &trimmed
+	}
+
+	var expiresAt *time.Time
+	if req.ExpiresInSeconds != nil {
+		if *req.ExpiresInSeconds < 60 || *req.ExpiresInSeconds > 60*60*24*30 {
+			apiutil.WriteError(w, http.StatusBadRequest, "invalid_expiry",
+				"expires_in_seconds must be between 60 seconds and 30 days")
+			return
+		}
+		t := time.Now().UTC().Add(time.Duration(*req.ExpiresInSeconds) * time.Second)
+		expiresAt = &t
 	}
 
 	// Extract and validate mentions from content.
@@ -839,20 +891,20 @@ func (h *Handler) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		if err := tx.QueryRow(r.Context(),
 			`INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags,
 			                       reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
-			                       encrypted, encryption_session_id, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+			                       encrypted, encryption_session_id, expires_at, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
 			 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 			           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 			           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-			           encrypted, encryption_session_id, created_at`,
+			           encrypted, encryption_session_id, expires_at, created_at`,
 			msgID, channelID, userID, req.Content, req.Nonce, msgType, flags,
 			req.ReplyToIDs, mentionUserIDs, mentionRoleIDs, mentionHere,
-			req.Encrypted, req.EncryptionSessionID,
+			req.Encrypted, req.EncryptionSessionID, expiresAt,
 		).Scan(
 			&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 			&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
 			&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
-			&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+			&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.ExpiresAt, &msg.CreatedAt,
 		); err != nil {
 			return err
 		}
@@ -934,6 +986,11 @@ func (h *Handler) HandleGetMessage(w http.ResponseWriter, r *http.Request) {
 
 	msg.Attachments = h.loadAttachments(r.Context(), messageID)
 	msg.Embeds = h.loadEmbeds(r.Context(), messageID)
+	enriched := []models.Message{*msg}
+	h.enrichMessagesWithPolls(r.Context(), userID, enriched)
+	h.enrichMessagesWithCodeSnippets(r.Context(), enriched)
+	h.enrichMessagesWithComponents(r.Context(), enriched)
+	*msg = enriched[0]
 
 	apiutil.WriteJSON(w, http.StatusOK, msg)
 }
@@ -1113,13 +1170,13 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		           encrypted, encryption_session_id, created_at`,
+		           encrypted, encryption_session_id, expires_at, created_at`,
 		messageID, channelID, req.Content, editMentionUserIDs, editMentionRoleIDs, editMentionHere,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
 		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
-		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.ExpiresAt, &msg.CreatedAt,
 	)
 	if err != nil {
 		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to update message")
@@ -1128,6 +1185,7 @@ func (h *Handler) HandleUpdateMessage(w http.ResponseWriter, r *http.Request) {
 
 	msg.Attachments = h.loadAttachments(r.Context(), messageID)
 	msg.Embeds = h.loadEmbeds(r.Context(), messageID)
+	msg.Components = h.loadComponents(r.Context(), messageID)
 	h.enrichMessageWithAuthor(r.Context(), &msg)
 
 	h.EventBus.Publish(r.Context(), events.SubjectMessageUpdate, events.Event{
@@ -1472,7 +1530,7 @@ func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
 		`SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type,
 		        m.edited_at, m.flags, m.reply_to_ids, m.mention_user_ids, m.mention_role_ids,
 		        m.mention_here, m.thread_id, m.masquerade_name, m.masquerade_avatar,
-		        m.masquerade_color, m.encrypted, m.encryption_session_id, m.created_at
+		        m.masquerade_color, m.encrypted, m.encryption_session_id, m.expires_at, m.created_at
 		 FROM messages m
 		 JOIN pins p ON m.id = p.message_id
 		 WHERE p.channel_id = $1
@@ -1492,13 +1550,18 @@ func (h *Handler) HandleGetPins(w http.ResponseWriter, r *http.Request) {
 			&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 			&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
 			&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
-			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+			&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.ExpiresAt, &m.CreatedAt,
 		); err != nil {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read pins")
 			return
 		}
 		messages = append(messages, m)
 	}
+
+	h.enrichMessagesWithAuthors(r.Context(), messages)
+	h.enrichMessagesWithAttachments(r.Context(), messages)
+	h.enrichMessagesWithEmbeds(r.Context(), messages)
+	h.enrichMessagesWithComponents(r.Context(), messages)
 
 	apiutil.WriteJSON(w, http.StatusOK, messages)
 }
@@ -2169,7 +2232,7 @@ func (h *Handler) HandleGetChannelWebhooks(w http.ResponseWriter, r *http.Reques
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT id, guild_id, channel_id, creator_id, name, avatar_id, token,
-		        webhook_type, outgoing_url, created_at
+		        webhook_type, outgoing_url, outgoing_events, created_at
 		 FROM webhooks WHERE channel_id = $1
 		 ORDER BY created_at DESC`,
 		channelID,
@@ -2185,7 +2248,7 @@ func (h *Handler) HandleGetChannelWebhooks(w http.ResponseWriter, r *http.Reques
 		var wh models.Webhook
 		if err := rows.Scan(
 			&wh.ID, &wh.GuildID, &wh.ChannelID, &wh.CreatorID, &wh.Name,
-			&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.CreatedAt,
+			&wh.AvatarID, &wh.Token, &wh.WebhookType, &wh.OutgoingURL, &wh.OutgoingEvents, &wh.CreatedAt,
 		); err != nil {
 			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read webhooks")
 			return
@@ -2223,14 +2286,14 @@ func (h *Handler) getMessage(ctx context.Context, channelID, messageID string) (
 		`SELECT id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		        reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		        thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		        encrypted, encryption_session_id, created_at
+		        encrypted, encryption_session_id, expires_at, created_at
 		 FROM messages WHERE id = $1 AND channel_id = $2`,
 		messageID, channelID,
 	).Scan(
 		&m.ID, &m.ChannelID, &m.AuthorID, &m.Content, &m.Nonce, &m.MessageType,
 		&m.EditedAt, &m.Flags, &m.ReplyToIDs, &m.MentionUserIDs, &m.MentionRoleIDs,
 		&m.MentionHere, &m.ThreadID, &m.MasqueradeName, &m.MasqueradeAvatar,
-		&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.CreatedAt,
+		&m.MasqueradeColor, &m.Encrypted, &m.EncryptionSessionID, &m.ExpiresAt, &m.CreatedAt,
 	)
 	return &m, err
 }
@@ -2289,6 +2352,34 @@ func (h *Handler) loadEmbeds(ctx context.Context, messageID string) []models.Emb
 		embeds = append(embeds, e)
 	}
 	return embeds
+}
+
+func (h *Handler) loadComponents(ctx context.Context, messageID string) []models.MessageComponent {
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, message_id, component_type, style, label, custom_id, url, disabled,
+		        options, min_values, max_values, placeholder, position
+		 FROM message_components WHERE message_id = $1
+		 ORDER BY position`,
+		messageID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var components []models.MessageComponent
+	for rows.Next() {
+		var c models.MessageComponent
+		if err := rows.Scan(
+			&c.ID, &c.MessageID, &c.ComponentType, &c.Style, &c.Label, &c.CustomID,
+			&c.URL, &c.Disabled, &c.Options, &c.MinValues, &c.MaxValues,
+			&c.Placeholder, &c.Position,
+		); err != nil {
+			return nil
+		}
+		components = append(components, c)
+	}
+	return components
 }
 
 // enrichMessagesWithAuthors fetches author user data for a batch of messages
@@ -2433,6 +2524,184 @@ func (h *Handler) enrichMessagesWithEmbeds(ctx context.Context, messages []model
 	}
 }
 
+func (h *Handler) enrichMessagesWithPolls(ctx context.Context, userID string, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, 0, len(messages))
+	for _, m := range messages {
+		if m.MessageType == models.MessageTypePoll {
+			msgIDs = append(msgIDs, m.ID)
+		}
+	}
+	if len(msgIDs) == 0 {
+		return
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, channel_id, message_id, author_id, question, multi_vote, anonymous,
+		        expires_at, closed, created_at
+		 FROM polls WHERE message_id = ANY($1)`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	pollsByMessage := make(map[string]*models.Poll)
+	pollIDs := make([]string, 0, len(msgIDs))
+	for rows.Next() {
+		var poll models.Poll
+		if err := rows.Scan(
+			&poll.ID, &poll.ChannelID, &poll.MessageID, &poll.AuthorID, &poll.Question,
+			&poll.MultiVote, &poll.Anonymous, &poll.ExpiresAt, &poll.Closed, &poll.CreatedAt,
+		); err != nil {
+			continue
+		}
+		poll.Options = []models.PollOption{}
+		poll.UserVotes = []string{}
+		if poll.MessageID != nil {
+			pollsByMessage[*poll.MessageID] = &poll
+			pollIDs = append(pollIDs, poll.ID)
+		}
+	}
+	if len(pollIDs) == 0 {
+		return
+	}
+
+	optionRows, err := h.Pool.Query(ctx,
+		`SELECT id, poll_id, text, position, vote_count
+		 FROM poll_options WHERE poll_id = ANY($1)
+		 ORDER BY position`, pollIDs)
+	if err == nil {
+		defer optionRows.Close()
+		pollsByID := make(map[string]*models.Poll, len(pollsByMessage))
+		for _, poll := range pollsByMessage {
+			pollsByID[poll.ID] = poll
+		}
+		for optionRows.Next() {
+			var opt models.PollOption
+			if err := optionRows.Scan(&opt.ID, &opt.PollID, &opt.Text, &opt.Position, &opt.VoteCount); err != nil {
+				continue
+			}
+			if poll := pollsByID[opt.PollID]; poll != nil {
+				poll.Options = append(poll.Options, opt)
+				poll.TotalVotes += opt.VoteCount
+			}
+		}
+	}
+
+	voteRows, err := h.Pool.Query(ctx,
+		`SELECT poll_id, option_id FROM poll_votes WHERE poll_id = ANY($1) AND user_id = $2`,
+		pollIDs, userID)
+	if err == nil {
+		defer voteRows.Close()
+		pollsByID := make(map[string]*models.Poll, len(pollsByMessage))
+		for _, poll := range pollsByMessage {
+			pollsByID[poll.ID] = poll
+		}
+		for voteRows.Next() {
+			var pollID, optionID string
+			if err := voteRows.Scan(&pollID, &optionID); err != nil {
+				continue
+			}
+			if poll := pollsByID[pollID]; poll != nil {
+				poll.UserVotes = append(poll.UserVotes, optionID)
+			}
+		}
+	}
+
+	for i := range messages {
+		if poll := pollsByMessage[messages[i].ID]; poll != nil {
+			messages[i].Poll = poll
+		}
+	}
+}
+
+func (h *Handler) enrichMessagesWithCodeSnippets(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, 0, len(messages))
+	for _, m := range messages {
+		if m.MessageType == models.MessageTypeCodeSnippet {
+			msgIDs = append(msgIDs, m.ID)
+		}
+	}
+	if len(msgIDs) == 0 {
+		return
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, channel_id, message_id, author_id, title, language, code, created_at, updated_at
+		 FROM code_snippets WHERE message_id = ANY($1)`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	snippetsByMessage := make(map[string]*models.CodeSnippet)
+	for rows.Next() {
+		var snippet models.CodeSnippet
+		if err := rows.Scan(
+			&snippet.ID, &snippet.ChannelID, &snippet.MessageID, &snippet.AuthorID,
+			&snippet.Title, &snippet.Language, &snippet.Code, &snippet.CreatedAt, &snippet.UpdatedAt,
+		); err != nil {
+			continue
+		}
+		if snippet.MessageID != nil {
+			snippetsByMessage[*snippet.MessageID] = &snippet
+		}
+	}
+
+	for i := range messages {
+		if snippet := snippetsByMessage[messages[i].ID]; snippet != nil {
+			messages[i].CodeSnippet = snippet
+		}
+	}
+}
+
+func (h *Handler) enrichMessagesWithComponents(ctx context.Context, messages []models.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, len(messages))
+	for i, m := range messages {
+		msgIDs[i] = m.ID
+	}
+
+	rows, err := h.Pool.Query(ctx,
+		`SELECT id, message_id, component_type, style, label, custom_id, url, disabled,
+		        options, min_values, max_values, placeholder, position
+		 FROM message_components WHERE message_id = ANY($1)
+		 ORDER BY message_id, position`, msgIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	componentsByMessage := make(map[string][]models.MessageComponent)
+	for rows.Next() {
+		var c models.MessageComponent
+		if err := rows.Scan(
+			&c.ID, &c.MessageID, &c.ComponentType, &c.Style, &c.Label, &c.CustomID,
+			&c.URL, &c.Disabled, &c.Options, &c.MinValues, &c.MaxValues,
+			&c.Placeholder, &c.Position,
+		); err != nil {
+			continue
+		}
+		componentsByMessage[c.MessageID] = append(componentsByMessage[c.MessageID], c)
+	}
+
+	for i := range messages {
+		if comps, ok := componentsByMessage[messages[i].ID]; ok {
+			messages[i].Components = comps
+		}
+	}
+}
+
 // enrichMessageWithAuthor fetches author user data for a single message.
 // Joins the instances table to populate InstanceDomain for federation badges.
 func (h *Handler) enrichMessageWithAuthor(ctx context.Context, msg *models.Message) {
@@ -2505,13 +2774,13 @@ func (h *Handler) HandleCrosspostMessage(w http.ResponseWriter, r *http.Request)
 		 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
 		           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
 		           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
-		           encrypted, encryption_session_id, created_at`,
+		           encrypted, encryption_session_id, expires_at, created_at`,
 		newMsgID, req.TargetChannelID, userID, content, models.MessageTypeDefault, models.MessageFlagCrosspost,
 	).Scan(
 		&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
 		&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
 		&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
-		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+		&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.ExpiresAt, &msg.CreatedAt,
 	)
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to crosspost message", err)
@@ -3054,21 +3323,22 @@ func (h *Handler) HandleApplyChannelTemplate(w http.ResponseWriter, r *http.Requ
 }
 
 // hasGuildPermission checks if a user has a specific permission in a guild.
-// Guild owners and instance admins always pass. Then checks default_permissions + role overrides.
+// Guild owners and same-instance admins pass. Then checks default_permissions + role overrides.
 func (h *Handler) hasGuildPermission(ctx context.Context, guildID, userID string, perm uint64) bool {
 	// Owner has all permissions.
-	var ownerID string
-	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+	var ownerID, guildInstanceID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		return false
 	}
 	if userID == ownerID {
 		return true
 	}
 
-	// Admin flag.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-	if userFlags&models.UserFlagAdmin != 0 {
+	var userInstanceID string
+	h.Pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID)
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return true
 	}
 
@@ -3125,18 +3395,19 @@ func (h *Handler) hasChannelPermission(ctx context.Context, channelID, userID st
 	}
 
 	// Owner has all permissions.
-	var ownerID string
-	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, *guildID).Scan(&ownerID); err != nil {
+	var ownerID, guildInstanceID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, *guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		return false
 	}
 	if userID == ownerID {
 		return true
 	}
 
-	// Admin flag.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-	if userFlags&models.UserFlagAdmin != 0 {
+	var userInstanceID string
+	h.Pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID)
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return true
 	}
 
@@ -3181,6 +3452,8 @@ type channelCtx struct {
 	Encrypted       bool
 	SlowmodeSeconds int
 	OwnerID         string // guild owner, empty for DMs
+	GuildInstanceID string
+	UserInstanceID  string
 	UserFlags       int
 	ComputedPerms   uint64
 	IsOwner         bool
@@ -3200,7 +3473,7 @@ func (h *Handler) loadChannelCtx(ctx context.Context, channelID, userID string) 
 		`SELECT c.guild_id, c.channel_type, c.locked, c.archived, c.read_only,
 		        c.read_only_role_ids, c.encrypted, COALESCE(c.slowmode_seconds, 0),
 		        COALESCE(g.owner_id, ''), COALESCE(g.default_permissions, 0),
-		        COALESCE(u.flags, 0), gm.timeout_until
+		        COALESCE(g.instance_id, ''), COALESCE(u.instance_id, ''), COALESCE(u.flags, 0), gm.timeout_until
 		 FROM channels c
 		 LEFT JOIN guilds g ON g.id = c.guild_id
 		 LEFT JOIN users u ON u.id = $2
@@ -3210,14 +3483,14 @@ func (h *Handler) loadChannelCtx(ctx context.Context, channelID, userID string) 
 	).Scan(
 		&c.GuildID, &c.ChannelType, &c.Locked, &c.Archived, &c.ReadOnly,
 		&c.ReadOnlyRoleIDs, &c.Encrypted, &c.SlowmodeSeconds,
-		&c.OwnerID, &c.ComputedPerms, &c.UserFlags, &c.TimeoutUntil,
+		&c.OwnerID, &c.ComputedPerms, &c.GuildInstanceID, &c.UserInstanceID, &c.UserFlags, &c.TimeoutUntil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading channel context: %w", err)
 	}
 
 	c.IsOwner = c.GuildID != nil && userID == c.OwnerID
-	c.IsAdmin = c.UserFlags&models.UserFlagAdmin != 0
+	c.IsAdmin = permissions.InstanceAdminApplies(c.UserFlags&models.UserFlagAdmin != 0, c.UserInstanceID, c.GuildInstanceID)
 
 	// Short-circuit: owners and admins have all permissions.
 	if c.IsOwner || c.IsAdmin {
@@ -3527,7 +3800,7 @@ func (h *Handler) HandleGetChannelGallery(w http.ResponseWriter, r *http.Request
 		// For DM/group DM channels, verify the user is a participant.
 		var isRecipient bool
 		h.Pool.QueryRow(r.Context(),
-			`SELECT EXISTS(SELECT 1 FROM dm_recipients WHERE channel_id = $1 AND user_id = $2)`,
+			`SELECT EXISTS(SELECT 1 FROM channel_recipients WHERE channel_id = $1 AND user_id = $2)`,
 			channelID, userID).Scan(&isRecipient)
 		if !isRecipient {
 			apiutil.WriteError(w, http.StatusForbidden, "not_recipient", "You are not a member of this conversation")
@@ -3586,6 +3859,45 @@ func (h *Handler) HandleGetChannelGallery(w http.ResponseWriter, r *http.Request
 		}
 		attachments = append(attachments, a)
 	}
+	if err := h.loadAttachmentTags(r.Context(), attachments); err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to load gallery tags")
+		return
+	}
 
 	apiutil.WriteJSON(w, http.StatusOK, attachments)
+}
+
+func (h *Handler) loadAttachmentTags(ctx context.Context, attachments []models.Attachment) error {
+	if len(attachments) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(attachments))
+	indexByID := make(map[string]int, len(attachments))
+	for i := range attachments {
+		ids = append(ids, attachments[i].ID)
+		indexByID[attachments[i].ID] = i
+	}
+	rows, err := h.Pool.Query(ctx,
+		`SELECT at.attachment_id, mt.id, mt.name, mt.guild_id, mt.created_by, mt.created_at
+		 FROM attachment_tags at
+		 JOIN media_tags mt ON mt.id = at.tag_id
+		 WHERE at.attachment_id = ANY($1)
+		 ORDER BY mt.name`,
+		ids,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var attachmentID string
+		var tag models.MediaTag
+		if err := rows.Scan(&attachmentID, &tag.ID, &tag.Name, &tag.GuildID, &tag.CreatedBy, &tag.CreatedAt); err != nil {
+			return err
+		}
+		if idx, ok := indexByID[attachmentID]; ok {
+			attachments[idx].Tags = append(attachments[idx].Tags, tag)
+		}
+	}
+	return rows.Err()
 }

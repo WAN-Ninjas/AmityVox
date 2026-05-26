@@ -61,8 +61,11 @@
 	let showBrowser = $state(false);
 	let selectedCategory = $state('all');
 	let joinOp = $state(createAsyncOp());
+	let stateOp = $state(createAsyncOp());
 	let iframeEl = $state<HTMLIFrameElement | null>(null);
 	let lastInvalidation = $state(0);
+	let builtinUrl = $state('');
+	let builtinNotes = $state('');
 
 	const categories = [
 		{ id: 'all', label: 'All' },
@@ -74,6 +77,8 @@
 
 	const isHost = $derived(session?.host_user_id === $currentUser?.id);
 	const isParticipant = $derived(participants.some((p) => p.user_id === $currentUser?.id));
+	const isBuiltin = $derived(!!session?.activity_url?.startsWith('builtin://'));
+	const builtinKind = $derived(session?.activity_url?.replace('builtin://', '') ?? '');
 
 	async function loadActiveSession() {
 		error = '';
@@ -159,6 +164,32 @@
 		url.searchParams.set('user_id', $currentUser?.id ?? '');
 		return url.toString();
 	}
+
+	async function saveBuiltinState() {
+		if (!session) return;
+		const activeSession = session;
+		const nextState = {
+			...(activeSession.state ?? {}),
+			url: builtinUrl.trim(),
+			notes: builtinNotes
+		};
+		await stateOp.run(
+			() => api.updateActivitySessionState(activeSession.id, nextState),
+			(message) => {
+				error = message;
+			},
+			'Failed to save activity state'
+		);
+		if (!stateOp.error) {
+			session = { ...session, state: nextState };
+		}
+	}
+
+	$effect(() => {
+		const state = session?.state ?? {};
+		builtinUrl = typeof state.url === 'string' ? state.url : '';
+		builtinNotes = typeof state.notes === 'string' ? state.notes : '';
+	});
 
 	function renderStars(rating: number): string {
 		const full = Math.floor(rating);
@@ -254,9 +285,9 @@
 			</div>
 		</div>
 
-		<!-- Activity iframe -->
+		<!-- Activity surface -->
 		<div class="flex-1 relative">
-			{#if session.activity_url && !session.activity_url.startsWith('builtin://')}
+			{#if session.activity_url && !isBuiltin}
 				<iframe
 					bind:this={iframeEl}
 					src={buildActivityUrl(session.activity_url)}
@@ -265,16 +296,61 @@
 					sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
 					allow="camera; microphone; fullscreen"
 				></iframe>
-			{:else}
-				<!-- Built-in activity placeholder -->
-				<div class="flex flex-col items-center justify-center h-full text-text-muted">
-					<svg class="w-16 h-16 mb-4 text-brand-400/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-						<path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-					</svg>
-					<p class="text-lg font-medium text-text-primary">{session.activity_name}</p>
-					<p class="text-sm mt-1">Built-in activity running</p>
-					<p class="text-xs mt-2">{participants.length} participants connected</p>
+			{:else if isBuiltin}
+				<div class="flex h-full flex-col bg-bg-primary">
+					<div class="border-b border-border-primary p-4">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<p class="text-sm font-medium text-text-primary">{session.activity_name}</p>
+								<p class="text-xs text-text-muted">{participants.length} participant{participants.length !== 1 ? 's' : ''} connected</p>
+							</div>
+							<button class="btn-primary text-xs" onclick={saveBuiltinState} disabled={stateOp.loading || !isParticipant}>
+								{stateOp.loading ? 'Saving...' : 'Save State'}
+							</button>
+						</div>
+					</div>
+
+					<div class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[1fr_20rem]">
+						<div class="min-h-0 bg-black">
+							{#if builtinKind === 'watch-together' || builtinKind === 'music-party'}
+								{#if builtinUrl}
+									<iframe
+										src={builtinUrl}
+										title={session.activity_name}
+										class="h-full w-full border-none"
+										sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+										allow="autoplay; fullscreen"
+									></iframe>
+								{:else}
+									<div class="flex h-full items-center justify-center p-6 text-center text-sm text-text-muted">
+										Add a shareable media URL in the side panel.
+									</div>
+								{/if}
+							{:else}
+								<div class="flex h-full items-center justify-center p-6 text-center text-sm text-text-muted">
+									Shared notes are active for this session.
+								</div>
+							{/if}
+						</div>
+
+						<div class="space-y-3 overflow-y-auto border-l border-border-primary bg-bg-secondary p-4">
+							{#if builtinKind === 'watch-together' || builtinKind === 'music-party'}
+								<label class="block text-xs font-bold uppercase tracking-wide text-text-muted" for="activity-url">
+									{builtinKind === 'music-party' ? 'Audio or Stream URL' : 'Video URL'}
+								</label>
+								<input id="activity-url" class="input w-full text-sm" bind:value={builtinUrl} placeholder="https://..." disabled={!isParticipant} />
+							{/if}
+
+							<label class="block text-xs font-bold uppercase tracking-wide text-text-muted" for="activity-notes">Shared Notes</label>
+							<textarea
+								id="activity-notes"
+								class="input min-h-48 w-full resize-y text-sm"
+								bind:value={builtinNotes}
+								placeholder="Notes for this session"
+								disabled={!isParticipant}
+							></textarea>
+						</div>
+					</div>
 				</div>
 			{/if}
 		</div>
@@ -320,7 +396,7 @@
 			{:else if activities.length === 0}
 				<div class="text-center text-text-muted py-8">
 					<p class="text-sm">No activities available yet.</p>
-					<p class="text-xs mt-1">Create a custom activity with the Activity SDK!</p>
+					<p class="text-xs mt-1">Ask an admin to register a shared activity.</p>
 				</div>
 			{:else}
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">

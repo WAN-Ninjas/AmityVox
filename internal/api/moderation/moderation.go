@@ -19,6 +19,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // Handler implements moderation-related REST API endpoints.
@@ -77,17 +78,21 @@ type channelLockResponse struct {
 
 // --- Permission helper ---
 
-// isGuildAdmin checks whether the user is the guild owner or an instance admin.
+// isGuildAdmin checks whether the user is the guild owner or an applicable instance admin.
 func (h *Handler) isGuildAdmin(ctx context.Context, guildID, userID string) bool {
 	// Check if guild owner.
-	var ownerID string
-	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err == nil && ownerID == userID {
+	var ownerID, guildInstanceID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
+		return false
+	} else if ownerID == userID {
 		return true
 	}
-	// Check if instance admin (flags & 4).
+
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var flags int
-	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
-	return flags&models.UserFlagAdmin != 0
+	var userInstanceID string
+	h.Pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&flags, &userInstanceID)
+	return permissions.InstanceAdminApplies(flags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID)
 }
 
 // getGuildIDForChannel looks up the guild_id for a given channel. Returns an
@@ -812,10 +817,10 @@ func (h *Handler) hasGuildPermission(ctx context.Context, guildID, userID, permN
 
 	// Map permission name to bitfield.
 	permMap := map[string]uint64{
-		"ban_members":    1 << 2,
-		"manage_guild":   1 << 5,
-		"manage_roles":   1 << 24,
-		"administrator":  1 << 3,
+		"ban_members":   1 << 2,
+		"manage_guild":  1 << 5,
+		"manage_roles":  1 << 24,
+		"administrator": 1 << 3,
 	}
 	if computed&(1<<3) != 0 { // Administrator
 		return true

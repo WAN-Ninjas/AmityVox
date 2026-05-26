@@ -161,6 +161,7 @@ func (s *Server) handleVoiceJoin(w http.ResponseWriter, r *http.Request) {
 		voiceEvent["avatar_id"] = *avatarID
 	}
 	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_STATE_UPDATE", gID, voiceEvent)
+	s.publishBroadcastListenerCount(r.Context(), channelID, gID)
 
 	// For DM/Group channels, ring the other participants so they see an incoming call.
 	// Only ring if this is the first person joining (no ring for joining an active call).
@@ -232,6 +233,7 @@ func (s *Server) handleVoiceLeave(w http.ResponseWriter, r *http.Request) {
 		"channel_id": channelID,
 		"action":     "leave",
 	})
+	s.publishBroadcastListenerCount(r.Context(), channelID, gID)
 
 	WriteNoContent(w)
 }
@@ -1192,6 +1194,7 @@ func (s *Server) handleStartBroadcast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Voice.SetBroadcasting(userID, true)
+	broadcast.ListenerCount = s.updateBroadcastListenerCount(r.Context(), broadcast)
 
 	// Publish broadcast start event.
 	s.EventBus.PublishGuildEvent(r.Context(), events.SubjectVoiceStateUpdate, "VOICE_BROADCAST_START", gID, map[string]interface{}{
@@ -1200,6 +1203,7 @@ func (s *Server) handleStartBroadcast(w http.ResponseWriter, r *http.Request) {
 		"channel_id":     channelID,
 		"broadcaster_id": userID,
 		"title":          req.Title,
+		"listener_count": broadcast.ListenerCount,
 	})
 
 	WriteJSON(w, http.StatusCreated, broadcast)
@@ -1267,8 +1271,48 @@ func (s *Server) handleGetBroadcast(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusOK, nil)
 		return
 	}
+	broadcast.ListenerCount = s.updateBroadcastListenerCount(r.Context(), broadcast)
 
 	WriteJSON(w, http.StatusOK, broadcast)
+}
+
+func (s *Server) updateBroadcastListenerCount(ctx context.Context, broadcast *voice.VoiceBroadcast) int {
+	if s.Voice == nil || broadcast == nil {
+		return 0
+	}
+	count := 0
+	for _, state := range s.Voice.GetChannelVoiceStates(broadcast.ChannelID) {
+		if state.UserID != broadcast.BroadcasterID && !state.SelfDeaf && !state.Deafened {
+			count++
+		}
+	}
+	if err := s.Voice.UpdateBroadcastListeners(ctx, broadcast.ID, count); err != nil {
+		s.Logger.Warn("failed to update broadcast listener count",
+			"broadcast_id", broadcast.ID,
+			"error", err.Error(),
+		)
+	}
+	return count
+}
+
+func (s *Server) publishBroadcastListenerCount(ctx context.Context, channelID, guildID string) {
+	if s.Voice == nil {
+		return
+	}
+	broadcast, err := s.Voice.GetActiveBroadcast(ctx, channelID)
+	if err != nil || broadcast == nil {
+		return
+	}
+	count := s.updateBroadcastListenerCount(ctx, broadcast)
+	s.EventBus.PublishGuildEvent(ctx, events.SubjectVoiceStateUpdate, "VOICE_BROADCAST_UPDATE", guildID, map[string]interface{}{
+		"broadcast_id":   broadcast.ID,
+		"guild_id":       guildID,
+		"channel_id":     channelID,
+		"broadcaster_id": broadcast.BroadcasterID,
+		"title":          broadcast.Title,
+		"started_at":     broadcast.StartedAt,
+		"listener_count": count,
+	})
 }
 
 // --- Screen Share Handlers ---
@@ -1326,9 +1370,9 @@ func (s *Server) handleStartScreenShare(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		ShareType    string `json:"share_type"`    // "screen" or "window"
-		Resolution   string `json:"resolution"`     // "720p", "1080p", "4k"
-		Framerate    int    `json:"framerate"`      // 15, 30, 60
+		ShareType    string `json:"share_type"` // "screen" or "window"
+		Resolution   string `json:"resolution"` // "720p", "1080p", "4k"
+		Framerate    int    `json:"framerate"`  // 15, 30, 60
 		AudioEnabled bool   `json:"audio_enabled"`
 		MaxViewers   int    `json:"max_viewers"`
 	}
@@ -1554,18 +1598,19 @@ func (s *Server) handleGetScreenShares(w http.ResponseWriter, r *http.Request) {
 // Used by voice handlers which are on *Server, not on a domain-specific Handler.
 func checkGuildPerm(ctx context.Context, pool *pgxpool.Pool, guildID, userID string, perm uint64) bool {
 	// Owner has all permissions.
-	var ownerID string
-	if err := pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+	var ownerID, guildInstanceID string
+	if err := pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		return false
 	}
 	if userID == ownerID {
 		return true
 	}
 
-	// Admin flag.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-	if userFlags&models.UserFlagAdmin != 0 {
+	var userInstanceID string
+	pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID)
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return true
 	}
 

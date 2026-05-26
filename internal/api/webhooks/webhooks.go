@@ -61,52 +61,52 @@ type templateTransformResult struct {
 // builtinTemplates contains all available webhook templates.
 var builtinTemplates = []WebhookTemplate{
 	{
-		ID:          "github-push",
-		Name:        "GitHub Push",
-		Description: "Formats GitHub push event payloads into channel messages showing commits.",
-		Service:     "github",
+		ID:            "github-push",
+		Name:          "GitHub Push",
+		Description:   "Formats GitHub push event payloads into channel messages showing commits.",
+		Service:       "github",
 		SamplePayload: `{"ref":"refs/heads/main","pusher":{"name":"octocat"},"repository":{"full_name":"octocat/Hello-World"},"commits":[{"id":"abc123def456","message":"Fix bug in login flow","author":{"name":"Octocat"}}],"compare":"https://github.com/octocat/Hello-World/compare/abc...def"}`,
 	},
 	{
-		ID:          "github-pr",
-		Name:        "GitHub Pull Request",
-		Description: "Formats GitHub pull request event payloads showing PR details.",
-		Service:     "github",
+		ID:            "github-pr",
+		Name:          "GitHub Pull Request",
+		Description:   "Formats GitHub pull request event payloads showing PR details.",
+		Service:       "github",
 		SamplePayload: `{"action":"opened","number":42,"pull_request":{"title":"Add new feature","html_url":"https://github.com/octocat/Hello-World/pull/42","user":{"login":"octocat"},"body":"This PR adds a new feature.","head":{"ref":"feature-branch"},"base":{"ref":"main"},"merged":false,"draft":false}},"repository":{"full_name":"octocat/Hello-World"}}`,
 	},
 	{
-		ID:          "github-issues",
-		Name:        "GitHub Issues",
-		Description: "Formats GitHub issue event payloads showing issue details.",
-		Service:     "github",
+		ID:            "github-issues",
+		Name:          "GitHub Issues",
+		Description:   "Formats GitHub issue event payloads showing issue details.",
+		Service:       "github",
 		SamplePayload: `{"action":"opened","issue":{"number":1,"title":"Found a bug","html_url":"https://github.com/octocat/Hello-World/issues/1","user":{"login":"octocat"},"body":"Something is broken.","labels":[{"name":"bug","color":"d73a4a"}]},"repository":{"full_name":"octocat/Hello-World"}}`,
 	},
 	{
-		ID:          "gitlab-push",
-		Name:        "GitLab Push",
-		Description: "Formats GitLab push event payloads into channel messages.",
-		Service:     "gitlab",
+		ID:            "gitlab-push",
+		Name:          "GitLab Push",
+		Description:   "Formats GitLab push event payloads into channel messages.",
+		Service:       "gitlab",
 		SamplePayload: `{"ref":"refs/heads/main","user_name":"root","project":{"path_with_namespace":"root/my-project","web_url":"https://gitlab.example.com/root/my-project"},"commits":[{"id":"abc123","message":"Update README","author":{"name":"Root"}}],"total_commits_count":1}`,
 	},
 	{
-		ID:          "gitlab-mr",
-		Name:        "GitLab Merge Request",
-		Description: "Formats GitLab merge request event payloads.",
-		Service:     "gitlab",
+		ID:            "gitlab-mr",
+		Name:          "GitLab Merge Request",
+		Description:   "Formats GitLab merge request event payloads.",
+		Service:       "gitlab",
 		SamplePayload: `{"object_kind":"merge_request","user":{"username":"root"},"project":{"path_with_namespace":"root/my-project","web_url":"https://gitlab.example.com/root/my-project"},"object_attributes":{"title":"Add new feature","url":"https://gitlab.example.com/root/my-project/-/merge_requests/1","action":"open","source_branch":"feature","target_branch":"main","description":"New feature description","iid":1,"state":"opened"}}`,
 	},
 	{
-		ID:          "jira-issue",
-		Name:        "Jira Issue",
-		Description: "Formats Jira issue event payloads showing issue updates.",
-		Service:     "jira",
+		ID:            "jira-issue",
+		Name:          "Jira Issue",
+		Description:   "Formats Jira issue event payloads showing issue updates.",
+		Service:       "jira",
 		SamplePayload: `{"webhookEvent":"jira:issue_created","user":{"displayName":"John Doe"},"issue":{"key":"PROJ-123","fields":{"summary":"Login page broken","issuetype":{"name":"Bug"},"priority":{"name":"High"},"status":{"name":"Open"},"description":"The login page returns 500 error.","assignee":{"displayName":"Jane Smith"}},"self":"https://jira.example.com/rest/api/2/issue/PROJ-123"}}`,
 	},
 	{
-		ID:          "sentry-error",
-		Name:        "Sentry Error",
-		Description: "Formats Sentry error/issue alert payloads.",
-		Service:     "sentry",
+		ID:            "sentry-error",
+		Name:          "Sentry Error",
+		Description:   "Formats Sentry error/issue alert payloads.",
+		Service:       "sentry",
 		SamplePayload: `{"action":"created","data":{"issue":{"title":"TypeError: Cannot read property 'map' of undefined","culprit":"app/components/UserList.tsx","shortId":"FRONTEND-1K","metadata":{"type":"TypeError","value":"Cannot read property 'map' of undefined"},"count":42,"userCount":12,"firstSeen":"2025-01-15T10:30:00Z","project":{"name":"frontend","slug":"frontend"}},"event":{"event_id":"abc123","platform":"javascript","tags":[{"key":"browser","value":"Chrome 120"}]}},"actor":{"name":"Sentry"}}`,
 	},
 }
@@ -588,22 +588,22 @@ func (h *Handler) logExecution(ctx context.Context, webhookID string, statusCode
 
 // outgoingEvents lists the valid event types that can trigger outgoing webhooks.
 var outgoingEvents = map[string]string{
-	"message_create":     events.SubjectMessageCreate,
-	"message_update":     events.SubjectMessageUpdate,
-	"message_delete":     events.SubjectMessageDelete,
-	"member_join":        events.SubjectGuildMemberAdd,
-	"member_leave":       events.SubjectGuildMemberRemove,
-	"member_ban":         events.SubjectGuildBanAdd,
-	"member_unban":       events.SubjectGuildBanRemove,
-	"channel_create":     events.SubjectChannelCreate,
-	"channel_update":     events.SubjectChannelUpdate,
-	"channel_delete":     events.SubjectChannelDelete,
-	"guild_update":       events.SubjectGuildUpdate,
-	"role_create":        events.SubjectGuildRoleCreate,
-	"role_update":        events.SubjectGuildRoleUpdate,
-	"role_delete":        events.SubjectGuildRoleDelete,
-	"reaction_add":       events.SubjectMessageReactionAdd,
-	"reaction_remove":    events.SubjectMessageReactionDel,
+	"message_create":  events.SubjectMessageCreate,
+	"message_update":  events.SubjectMessageUpdate,
+	"message_delete":  events.SubjectMessageDelete,
+	"member_join":     events.SubjectGuildMemberAdd,
+	"member_leave":    events.SubjectGuildMemberRemove,
+	"member_ban":      events.SubjectGuildBanAdd,
+	"member_unban":    events.SubjectGuildBanRemove,
+	"channel_create":  events.SubjectChannelCreate,
+	"channel_update":  events.SubjectChannelUpdate,
+	"channel_delete":  events.SubjectChannelDelete,
+	"guild_update":    events.SubjectGuildUpdate,
+	"role_create":     events.SubjectGuildRoleCreate,
+	"role_update":     events.SubjectGuildRoleUpdate,
+	"role_delete":     events.SubjectGuildRoleDelete,
+	"reaction_add":    events.SubjectMessageReactionAdd,
+	"reaction_remove": events.SubjectMessageReactionDel,
 }
 
 // ValidOutgoingEvents returns a sorted list of valid outgoing event names.
@@ -809,11 +809,16 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	if req.Username != nil && *req.Username != "" {
 		displayName = *req.Username
 	}
+	if wh.CreatorID == nil || *wh.CreatorID == "" {
+		h.logExecution(r.Context(), webhookID, http.StatusInternalServerError, string(bodyBytes), "", false, "Webhook has no creator to attribute messages to")
+		apiutil.WriteError(w, http.StatusInternalServerError, "invalid_webhook", "Webhook has no creator to attribute messages to")
+		return
+	}
 
 	_, err = h.Pool.Exec(r.Context(),
-		`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
-		 VALUES ($1, $2, NULL, $3, 'webhook', $4)`,
-		messageID, wh.ChannelID, finalContent, now)
+		`INSERT INTO messages (id, channel_id, author_id, content, message_type, masquerade_name, masquerade_avatar, created_at)
+		 VALUES ($1, $2, $3, $4, 'default', $5, $6, $7)`,
+		messageID, wh.ChannelID, *wh.CreatorID, finalContent, displayName, req.AvatarURL, now)
 	if err != nil {
 		h.logExecution(r.Context(), webhookID, http.StatusInternalServerError, string(bodyBytes), "", false, "Failed to create message")
 		apiutil.InternalError(w, h.Logger, "Failed to create message", err)
@@ -831,6 +836,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			"channel_id":   wh.ChannelID,
 			"guild_id":     wh.GuildID,
 			"content":      finalContent,
+			"author_id":    *wh.CreatorID,
 			"webhook_id":   webhookID,
 			"display_name": displayName,
 			"avatar_url":   req.AvatarURL,

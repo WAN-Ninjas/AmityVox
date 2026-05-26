@@ -2,7 +2,7 @@
 	import type { User, MutualGuild } from '$lib/types';
 	import { api } from '$lib/api/client';
 	import { addDMChannel } from '$lib/stores/dms';
-	import { presenceMap } from '$lib/stores/presence';
+	import { activityMap, presenceMap } from '$lib/stores/presence';
 	import { currentUser } from '$lib/stores/auth';
 	import { addToast } from '$lib/stores/toast';
 	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
@@ -43,6 +43,7 @@
 
 	const isSelf = $derived($currentUser?.id === userId);
 	const status = $derived($presenceMap.get(userId) ?? 'offline');
+	const activity = $derived($activityMap.get(userId));
 	const relationship = $derived($relationships.get(userId));
 	const userRoleColor = $derived.by(() => {
 		const member = $guildMembers.get(userId);
@@ -201,6 +202,13 @@
 		offline: 'bg-status-offline'
 	};
 
+	const activityLabels: Record<string, string> = {
+		playing: 'Playing',
+		listening: 'Listening to',
+		watching: 'Watching',
+		streaming: 'Streaming'
+	};
+
 	// User flag constants.
 	const UserFlagBot = 1 << 3;
 	const UserFlagVerified = 1 << 4;
@@ -277,6 +285,11 @@
 					{#if user.status_emoji}{user.status_emoji} {/if}{user.status_text ?? statusText[status] ?? 'Offline'}
 				</span>
 			</div>
+			{#if (activity?.activity_type && activity?.activity_name) || (user.activity_type && user.activity_name)}
+				<div class="mt-1 text-xs text-text-muted">
+					{activityLabels[activity?.activity_type ?? user.activity_type ?? ''] ?? 'Activity'} {activity?.activity_name ?? user.activity_name}
+				</div>
+			{/if}
 
 			<!-- Bio -->
 			{#if user.bio}

@@ -330,6 +330,10 @@ func (ss *SyncService) HandleFederatedDMMessage(w http.ResponseWriter, r *http.R
 	}
 
 	ctx := r.Context()
+	if len(req.Message.Attachments) > 0 && !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+		http.Error(w, "Federated attachments disabled", http.StatusForbidden)
+		return
+	}
 
 	// Look up the local channel via mirror mapping.
 	var localChannelID string
@@ -484,6 +488,10 @@ func (ss *SyncService) HandleFederatedDMMessageUpdate(w http.ResponseWriter, r *
 	}
 
 	ctx := r.Context()
+	if len(req.Message.Attachments) > 0 && !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+		http.Error(w, "Federated attachments disabled", http.StatusForbidden)
+		return
+	}
 	if !ss.validateSenderUser(ctx, w, senderID, req.Message.AuthorID) {
 		return
 	}

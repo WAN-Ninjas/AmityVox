@@ -494,20 +494,21 @@ func (ss *SyncService) handleVoiceRelay(
 // package to avoid circular imports.
 func computeFederatedGuildPerms(ctx context.Context, pool *pgxpool.Pool, guildID, userID string) (uint64, bool) {
 	// Owner has all permissions.
-	var ownerID string
-	if err := pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+	var ownerID, guildInstanceID string
+	if err := pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		return 0, false
 	}
 	if userID == ownerID {
 		return permissions.Administrator, true
 	}
 
-	// Admin flag.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	if err := pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags); err != nil {
+	var userInstanceID string
+	if err := pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID); err != nil {
 		return 0, false
 	}
-	if userFlags&models.UserFlagAdmin != 0 {
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return permissions.Administrator, true
 	}
 

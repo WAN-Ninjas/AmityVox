@@ -6,6 +6,7 @@
 	import OnlineFriendsPanel from './OnlineFriendsPanel.svelte';
 	import ActiveVoicePanel from './ActiveVoicePanel.svelte';
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	let showCreateModal = $state(false);
 	let createModalMode = $state<'create' | 'join'>('create');
@@ -16,6 +17,7 @@
 		if (hour < 18) return 'Good afternoon';
 		return 'Good evening';
 	});
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
 </script>
 
 <div class="flex h-full flex-col overflow-y-auto bg-bg-tertiary">
@@ -53,9 +55,11 @@
 		<div class="xl:col-span-1">
 			<ActiveVoicePanel />
 		</div>
-		<div class="xl:col-span-1">
-			<MyIssuesPanel />
-		</div>
+		{#if hasModerationReports}
+			<div class="xl:col-span-1">
+				<MyIssuesPanel />
+			</div>
+		{/if}
 	</div>
 </div>
 

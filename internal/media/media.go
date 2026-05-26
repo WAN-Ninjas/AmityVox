@@ -661,9 +661,10 @@ func (s *Service) HandleTagAttachment(w http.ResponseWriter, r *http.Request) {
 	var uploaderID string
 	var guildID *string
 	err := s.pool.QueryRow(r.Context(),
-		`SELECT a.uploader_id, m.guild_id
+		`SELECT a.uploader_id, c.guild_id
 		 FROM attachments a
 		 LEFT JOIN messages m ON m.id = a.message_id
+		 LEFT JOIN channels c ON c.id = m.channel_id
 		 WHERE a.id = $1`, fileID).Scan(&uploaderID, &guildID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")
@@ -706,9 +707,10 @@ func (s *Service) HandleUntagAttachment(w http.ResponseWriter, r *http.Request) 
 	var uploaderID string
 	var guildID *string
 	err := s.pool.QueryRow(r.Context(),
-		`SELECT a.uploader_id, m.guild_id
+		`SELECT a.uploader_id, c.guild_id
 		 FROM attachments a
 		 LEFT JOIN messages m ON m.id = a.message_id
+		 LEFT JOIN channels c ON c.id = m.channel_id
 		 WHERE a.id = $1`, fileID).Scan(&uploaderID, &guildID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "file_not_found", "Attachment not found")

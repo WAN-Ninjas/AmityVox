@@ -3,6 +3,7 @@
 	import { e2ee } from '$lib/encryption/e2eeManager';
 	import { addToast } from '$lib/stores/toast';
 	import { updateChannel as updateChannelStore } from '$lib/stores/channels';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 
 	interface Props {
@@ -29,6 +30,7 @@
 	let changePassphraseOp = $state(createAsyncOp());
 	let showDisableOptions = $state(false);
 	let decryptProgress = $state<{ current: number; total: number } | null>(null);
+	const hasE2EE = $derived(isFeatureEnabled($clientConfig, 'e2ee'));
 
 	let keyCheckToken = 0;
 	// Check if we have a key when channelId changes
@@ -47,6 +49,10 @@
 	});
 
 	async function handleEnable() {
+		if (!hasE2EE) {
+			addToast('End-to-end encryption is disabled on this instance', 'error');
+			return;
+		}
 		if (!passphrase.trim()) {
 			addToast('Enter a passphrase', 'error');
 			return;
@@ -385,7 +391,7 @@
 			{/if}
 		{/if}
 
-	{:else}
+	{:else if hasE2EE}
 		<!-- Enable encryption -->
 		<div class="border-t border-bg-modifier pt-4">
 			<h4 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Enable Encryption</h4>
@@ -420,6 +426,10 @@
 					Enable Encryption
 				{/if}
 			</button>
+		</div>
+	{:else}
+		<div class="border-t border-bg-modifier pt-4">
+			<p class="text-xs text-text-muted">End-to-end encryption is disabled on this instance.</p>
 		</div>
 	{/if}
 </div>

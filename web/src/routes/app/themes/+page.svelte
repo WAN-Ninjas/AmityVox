@@ -5,6 +5,7 @@
 	import { confirmAction } from '$lib/stores/confirm';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	let themes = $state<SharedTheme[]>([]);
 	let loadOp = $state(createAsyncOp(true));
@@ -18,8 +19,10 @@
 	let shareName = $state('');
 	let shareDescription = $state('');
 	let sharing = $state(false);
+	const hasThemeEditor = $derived(isFeatureEnabled($clientConfig, 'theme_editor'));
 
 	async function loadThemes() {
+		if (!hasThemeEditor) return;
 		const result = await loadOp.run(() =>
 			api.listThemes({ sort, limit: 60, q: search.trim() || undefined })
 		);
@@ -28,24 +31,41 @@
 		}
 	}
 
+	async function loadSharedThemeFromCode() {
+		if (!hasThemeEditor) return;
+		const code = new URL(window.location.href).searchParams.get('code');
+		if (!code) return;
+		try {
+			const theme = await api.getSharedTheme(code);
+			themes = [theme, ...themes.filter((entry) => entry.id !== theme.id)];
+			addToast(`Shared theme "${theme.name}" loaded`, 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to load shared theme'), 'error');
+		}
+	}
+
 	onMount(() => {
 		mounted = true;
-		loadThemes();
+		if (hasThemeEditor) {
+			loadThemes().then(loadSharedThemeFromCode);
+		}
 	});
 
 	$effect(() => {
 		sort;
-		if (mounted) {
+		if (mounted && hasThemeEditor) {
 			loadThemes();
 		}
 	});
 
 	function onSearchInput() {
+		if (!hasThemeEditor) return;
 		clearTimeout(searchTimeout);
 		searchTimeout = setTimeout(() => loadThemes(), 300);
 	}
 
 	async function toggleLike(theme: SharedTheme) {
+		if (!hasThemeEditor) return;
 		const wasLiked = theme.liked;
 		const nextLikeCount = Math.max(0, theme.like_count + (wasLiked ? -1 : 1));
 		themes = themes.map(t =>
@@ -66,6 +86,7 @@
 	}
 
 	function applyTheme(theme: SharedTheme) {
+		if (!hasThemeEditor) return;
 		if (theme.variables && typeof theme.variables === 'object') {
 			const root = document.documentElement;
 			for (const [key, value] of Object.entries(theme.variables)) {
@@ -90,6 +111,7 @@
 	}
 
 	function copyShareLink(shareCode: string) {
+		if (!hasThemeEditor) return;
 		const url = `${window.location.origin}/app/themes?code=${shareCode}`;
 		navigator.clipboard.writeText(url).then(
 			() => addToast('Share link copied to clipboard', 'success'),
@@ -98,6 +120,7 @@
 	}
 
 	async function shareCurrentTheme() {
+		if (!hasThemeEditor) return;
 		if (!shareName.trim()) return;
 		sharing = true;
 		try {
@@ -139,6 +162,7 @@
 	}
 
 	async function deleteTheme(themeId: string) {
+		if (!hasThemeEditor) return;
 		if (!(await confirmAction({ title: 'Delete Theme', message: 'Are you sure you want to delete this theme?', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteTheme(themeId);
@@ -179,15 +203,18 @@
 			</svg>
 			<h1 class="text-base font-semibold text-text-primary">Theme Gallery</h1>
 		</div>
-		<button
-			class="btn-primary text-sm"
-			onclick={() => (showShareModal = true)}
-		>
-			Share Your Theme
-		</button>
+		{#if hasThemeEditor}
+			<button
+				class="btn-primary text-sm"
+				onclick={() => (showShareModal = true)}
+			>
+				Share Your Theme
+			</button>
+		{/if}
 	</div>
 
 	<!-- Toolbar: Search + Sort -->
+	{#if hasThemeEditor}
 	<div class="flex items-center gap-3 border-b border-bg-modifier px-4 py-2">
 		<div class="relative flex-1">
 			<svg class="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -222,10 +249,15 @@
 			</button>
 		</div>
 	</div>
+	{/if}
 
 	<!-- Theme grid -->
 	<div class="flex-1 overflow-y-auto p-6">
-		{#if loadOp.loading}
+		{#if !hasThemeEditor}
+			<div class="flex items-center justify-center py-20">
+				<p class="text-sm text-text-muted">Theme gallery is disabled.</p>
+			</div>
+		{:else if loadOp.loading}
 			<div class="flex items-center justify-center py-20">
 				<p class="text-sm text-text-muted">Loading themes...</p>
 			</div>

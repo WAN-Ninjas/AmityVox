@@ -165,6 +165,23 @@ export function handleNotificationDelete(data: { id: string }) {
 	notificationMap.removeEntry(data.id);
 }
 
+export function handleNotificationsMarkAllRead() {
+	notificationMap.update((map) => {
+		let changed = false;
+		for (const [id, entry] of map) {
+			if (!entry.read) {
+				map.set(id, { ...entry, read: true });
+				changed = true;
+			}
+		}
+		return changed ? new Map(map) : map;
+	});
+}
+
+export function handleNotificationsClearAll() {
+	notificationMap.clear();
+}
+
 // Mark a single notification as read (optimistic + API).
 export async function markNotificationRead(id: string) {
 	notificationMap.updateEntry(id, (entry) => ({ ...entry, read: true }));

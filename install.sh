@@ -25,6 +25,7 @@
 #   curl -fsSL .../install.sh | bash
 
 set -euo pipefail
+set -E
 
 # ============================================================
 # Resolve Script Directory
@@ -47,6 +48,8 @@ INSTALL_DIR="${AMITYVOX_DIR:-$HOME/amityvox}"
 BRANCH="${AMITYVOX_BRANCH:-main}"
 COMPOSE_FILE="deploy/docker/docker-compose.yml"
 NONINTERACTIVE="${AMITYVOX_NONINTERACTIVE:-0}"
+INSTALL_LOG_DIR="${AMITYVOX_INSTALL_LOG_DIR:-}"
+CURRENT_STEP="startup"
 
 # ============================================================
 # Colors & Output Helpers
@@ -71,6 +74,31 @@ err()     { echo -e "${RED}[ERROR]${NC}   $*" >&2; }
 info()    { echo -e "${BLUE}[INFO]${NC}    $*"; }
 debug()   { echo -e "${DIM}[DEBUG]${NC}   $*"; }
 hr()      { echo -e "${CYAN}──────────────────────────────────────────────────${NC}"; }
+step()    { CURRENT_STEP="$*"; }
+
+# Prompt helpers read from /dev/tty because this script is commonly run as
+# `curl | bash`, where stdin is the script body rather than user input.
+require_tty() {
+    if [ "$NONINTERACTIVE" = "1" ]; then
+        return 0
+    fi
+    if [ ! -r /dev/tty ]; then
+        err "Interactive input requires a TTY, but /dev/tty is not available."
+        err "Run this script from an interactive terminal, or set AMITYVOX_NONINTERACTIVE=1"
+        err "and provide required values through environment variables."
+        return 1
+    fi
+}
+
+read_tty() {
+    require_tty
+    read -r "$@" < /dev/tty
+}
+
+read_tty_secret() {
+    require_tty
+    read -rs "$@" < /dev/tty
+}
 
 # Print a command before running it so the user sees exactly what happens.
 run_verbose() {
@@ -86,6 +114,7 @@ on_error() {
     local line_no=${1:-unknown}
     echo
     err "Installation failed at line $line_no (exit code $exit_code)."
+    err "Step: $CURRENT_STEP"
     err ""
     err "Diagnostic information:"
     err "  OS:           $(uname -srm)"
@@ -169,7 +198,7 @@ run_sudo() {
         echo -e "  ${DIM}Command: sudo $*${NC}" >/dev/tty
         echo >/dev/tty
         echo -en "${BOLD}Run this command with sudo?${NC} ${CYAN}[Y/n]${NC}: " >/dev/tty
-        read -r confirm < /dev/tty
+        read_tty confirm
         confirm="${confirm:-y}"
         if [[ ! "$confirm" =~ ^[Yy] ]]; then
             warn "Skipped. You may need to run this manually:"
@@ -190,14 +219,70 @@ run_sudo() {
 # Generate a cryptographically random hex string.
 gen_hex() {
     local len="${1:-32}"
-    openssl rand -hex "$len" 2>/dev/null || head -c "$((len * 2))" /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c "$((len * 2))"
+    local out=""
+    if command -v openssl >/dev/null 2>&1; then
+        out="$(openssl rand -hex "$len" 2>/dev/null || true)"
+    fi
+    if [ -z "$out" ]; then
+        out="$(od -An -N "$len" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+    fi
+    if [ ${#out} -lt $((len * 2)) ]; then
+        err "Could not generate secure random bytes."
+        return 1
+    fi
+    printf '%s' "${out:0:$((len * 2))}"
 }
 
 # Generate a random alphanumeric string.
 gen_alnum() {
     local len="${1:-32}"
-    openssl rand -base64 "$((len * 2))" 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c "$len" || \
-        head -c "$((len * 2))" /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "$len"
+    local out=""
+    local chunk=""
+
+    while [ ${#out} -lt "$len" ]; do
+        if command -v openssl >/dev/null 2>&1; then
+            chunk="$(openssl rand -base64 "$((len * 2))" 2>/dev/null | tr -dc 'A-Za-z0-9' || true)"
+        else
+            chunk="$(od -An -N "$((len * 2))" -tx1 /dev/urandom 2>/dev/null | tr -dc 'A-Fa-f0-9' || true)"
+        fi
+        out="${out}${chunk}"
+        if [ -z "$chunk" ]; then
+            err "Could not generate secure random bytes."
+            return 1
+        fi
+    done
+
+    printf '%s' "${out:0:$len}"
+}
+
+install_apt_package() {
+    local package="$1"
+    local purpose="$2"
+
+    if ! command -v apt-get >/dev/null 2>&1; then
+        err "$package is required for $purpose, but apt-get is not available on this system."
+        err "Install $package with your system package manager, then re-run this script."
+        return 1
+    fi
+
+    run_sudo "install $package" apt-get update -qq
+    run_sudo "install $package" apt-get install -y -qq "$package" >/dev/null
+}
+
+env_quote() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"' "$value"
+}
+
+strip_env_quotes() {
+    local value="$1"
+    if [[ "$value" == \"*\" ]] && [[ "$value" == *\" ]]; then
+        value="${value#\"}"
+        value="${value%\"}"
+    fi
+    printf '%s' "$value"
 }
 
 # Prompt with a default value. In non-interactive mode, use the default or env var.
@@ -221,7 +306,7 @@ ask() {
         echo -en " ${CYAN}[$default]${NC}"
     fi
     echo -n ": "
-    read -r REPLY < /dev/tty
+    read_tty REPLY
     REPLY="${REPLY:-$default}"
 }
 
@@ -238,7 +323,7 @@ ask_yn() {
     [ "$default" = "y" ] && hint="Y/n"
 
     echo -en "${BOLD}$prompt${NC} ${CYAN}[$hint]${NC}: "
-    read -r REPLY < /dev/tty
+    read_tty REPLY
     REPLY="${REPLY:-$default}"
     [[ "$REPLY" =~ ^[Yy] ]]
 }
@@ -247,6 +332,7 @@ ask_yn() {
 ask_pass() {
     local prompt="$1"
     local varname="${2:-}"
+    local REPLY2
 
     if [ -n "$varname" ] && [ -n "${!varname:-}" ]; then
         REPLY="${!varname}"
@@ -261,14 +347,14 @@ ask_pass() {
 
     while true; do
         echo -en "${BOLD}$prompt${NC}: "
-        read -rs REPLY < /dev/tty
+        read_tty_secret REPLY
         echo
         if [ ${#REPLY} -lt 8 ]; then
             warn "Password must be at least 8 characters. Try again."
             continue
         fi
         echo -en "${BOLD}Confirm password${NC}: "
-        read -rs REPLY2 < /dev/tty
+        read_tty_secret REPLY2
         echo
         if [ "$REPLY" != "$REPLY2" ]; then
             warn "Passwords don't match. Try again."
@@ -295,7 +381,7 @@ ask_choice() {
         echo -e "  ${CYAN}$((i+1)))${NC} ${options[$i]}"
     done
     echo -n "Choice [1]: "
-    read -r choice < /dev/tty
+    read_tty choice
     choice="${choice:-$default}"
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#options[@]} ]; then
         REPLY="${options[$((choice-1))]}"
@@ -477,7 +563,7 @@ fix_docker_permissions() {
     if [ "$SCRIPT_IS_PIPED" = "false" ] && [ "${AMITYVOX_SG_REEXEC:-}" != "1" ]; then
         info "Re-launching installer under the docker group..."
         export AMITYVOX_SG_REEXEC=1
-        exec sg docker -c "bash '$SCRIPT_DIR/install.sh' $*"
+        exec sg docker -c "bash '$SCRIPT_DIR/install.sh'"
     fi
 
     # If re-exec is not possible (piped) or failed, check again.
@@ -505,7 +591,7 @@ check_prerequisites() {
     if ! command -v git >/dev/null 2>&1; then
         warn "git is not installed."
         if ask_yn "Install git now?" "y"; then
-            run_sudo "install git" apt-get install -y -qq git >/dev/null
+            install_apt_package git "cloning the AmityVox repository"
             log "git installed."
         else
             err "git is required to clone the AmityVox repository."
@@ -518,7 +604,7 @@ check_prerequisites() {
     if ! command -v openssl >/dev/null 2>&1; then
         warn "openssl is not installed (needed for generating secrets)."
         if ask_yn "Install openssl now?" "y"; then
-            run_sudo "install openssl" apt-get install -y -qq openssl >/dev/null
+            install_apt_package openssl "generating secure passwords and keys"
             log "openssl installed."
         else
             err "openssl is required for generating secure passwords and keys."
@@ -629,10 +715,21 @@ setup_repo() {
         else
             cd "$INSTALL_DIR"
         fi
+    elif [ -e "$INSTALL_DIR" ]; then
+        err "Install path exists but is not an AmityVox git checkout: $INSTALL_DIR"
+        err "Choose a different path with AMITYVOX_DIR=/path/to/install, or move the existing path aside."
+        return 1
     else
         log "Cloning AmityVox to $INSTALL_DIR..."
         run_verbose git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
         cd "$INSTALL_DIR"
+    fi
+
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        err "Repository checkout is missing $COMPOSE_FILE."
+        err "Current directory: $(pwd)"
+        err "The clone may be incomplete or AMITYVOX_BRANCH may point to the wrong branch."
+        return 1
     fi
 }
 
@@ -775,6 +872,15 @@ generate_config() {
         LIVEKIT_PUBLIC_URL="wss://$DOMAIN"
     fi
 
+    local q_domain q_instance_name q_instance_description q_livekit_public_url q_vapid_email q_giphy_api_key q_max_upload_size
+    q_domain="$(env_quote "$DOMAIN")"
+    q_instance_name="$(env_quote "$INSTANCE_NAME")"
+    q_instance_description="$(env_quote "$INSTANCE_DESCRIPTION")"
+    q_livekit_public_url="$(env_quote "$LIVEKIT_PUBLIC_URL")"
+    q_vapid_email="$(env_quote "$VAPID_EMAIL")"
+    q_giphy_api_key="$(env_quote "$GIPHY_API_KEY")"
+    q_max_upload_size="$(env_quote "$MAX_UPLOAD_SIZE")"
+
     # Write .env file.
     cat > .env <<EOF
 # AmityVox Configuration
@@ -784,9 +890,9 @@ generate_config() {
 # ============================================================
 # Instance
 # ============================================================
-AMITYVOX_INSTANCE_DOMAIN=$DOMAIN
-AMITYVOX_INSTANCE_NAME="$INSTANCE_NAME"
-AMITYVOX_INSTANCE_DESCRIPTION="$INSTANCE_DESCRIPTION"
+AMITYVOX_INSTANCE_DOMAIN=$q_domain
+AMITYVOX_INSTANCE_NAME=$q_instance_name
+AMITYVOX_INSTANCE_DESCRIPTION=$q_instance_description
 AMITYVOX_INSTANCE_FEDERATION_MODE=$FEDERATION_MODE
 
 # ============================================================
@@ -809,7 +915,7 @@ GARAGE_RPC_SECRET=$GARAGE_RPC_SECRET
 # ============================================================
 LIVEKIT_API_KEY=$LIVEKIT_API_KEY
 LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET
-AMITYVOX_LIVEKIT_PUBLIC_URL=$LIVEKIT_PUBLIC_URL
+AMITYVOX_LIVEKIT_PUBLIC_URL=$q_livekit_public_url
 
 # ============================================================
 # Meilisearch (full-text search)
@@ -821,7 +927,7 @@ MEILI_MASTER_KEY=$MEILI_MASTER_KEY
 # ============================================================
 AMITYVOX_PUSH_VAPID_PUBLIC_KEY=$VAPID_PUBLIC
 AMITYVOX_PUSH_VAPID_PRIVATE_KEY=$VAPID_PRIVATE
-AMITYVOX_PUSH_VAPID_CONTACT_EMAIL=$VAPID_EMAIL
+AMITYVOX_PUSH_VAPID_CONTACT_EMAIL=$q_vapid_email
 
 # ============================================================
 # Auth
@@ -833,7 +939,7 @@ AMITYVOX_AUTH_INVITE_ONLY=$INVITE_ONLY
 # Giphy (GIF search)
 # ============================================================
 AMITYVOX_GIPHY_ENABLED=$GIPHY_ENABLED
-AMITYVOX_GIPHY_API_KEY=$GIPHY_API_KEY
+AMITYVOX_GIPHY_API_KEY=$q_giphy_api_key
 
 # ============================================================
 # Translation (LibreTranslate)
@@ -844,7 +950,7 @@ LIBRETRANSLATE_TAG=v1.8.4
 # ============================================================
 # Media
 # ============================================================
-AMITYVOX_MEDIA_MAX_UPLOAD_SIZE=$MAX_UPLOAD_SIZE
+AMITYVOX_MEDIA_MAX_UPLOAD_SIZE=$q_max_upload_size
 
 # ============================================================
 # Logging
@@ -878,6 +984,7 @@ generate_caddyfile() {
     # Resolve upload size: use current var, fall back to .env value, then default.
     local upload_size
     upload_size="${MAX_UPLOAD_SIZE:-$(sed -n 's/^AMITYVOX_MEDIA_MAX_UPLOAD_SIZE=//p' .env 2>/dev/null | head -1)}"
+    upload_size="$(strip_env_quotes "$upload_size")"
     upload_size="${upload_size:-50MB}"
 
     # Localhost uses HTTP only (no TLS). Public domains get automatic HTTPS via Caddy.
@@ -1102,21 +1209,21 @@ build_and_start() {
     info "Architecture: $ARCH — building for $DOCKER_ARCH"
     echo
 
-    # Run build with full output so failures are visible.
-    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache 2>&1 | while IFS= read -r line; do
-        case "$line" in
-            *"ERROR"*|*"error"*|*"FAILED"*|*"failed"*|*"CANCELED"*)
-                echo -e "  ${RED}$line${NC}"
-                ;;
-            *"DONE"*|*"exporting"*|*"FINISHED"*|*"Successfully"*|*"Built"*)
-                echo -e "  ${GREEN}$line${NC}"
-                ;;
-            *"#"*"RUN"*|*"#"*"COPY"*|*"#"*"FROM"*)
-                echo -e "  ${DIM}$line${NC}"
-                ;;
-        esac
-    done; then
+    local log_dir
+    log_dir="${INSTALL_LOG_DIR:-$INSTALL_DIR/install-logs}"
+    mkdir -p "$log_dir"
+
+    local build_log
+    build_log="$log_dir/docker-build-$(date -u +%Y%m%dT%H%M%SZ).log"
+
+    info "Docker build output will also be saved to: $build_log"
+    echo
+
+    # Keep full build output visible. The previous filtered pipeline hid most
+    # errors and made failures look like silent exits.
+    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache 2>&1 | tee "$build_log"; then
         err "Docker build failed. See the output above for details."
+        err "Full build log: $build_log"
         err ""
         err "Common causes:"
         err "  - Not enough disk space (need ~5 GB free)"
@@ -1124,15 +1231,18 @@ build_and_start() {
         err "  - Network issues downloading base images"
         err "  - On ARM devices, some images may take longer to build"
         err ""
-        err "Retry with verbose output:"
-        err "  $COMPOSE_CMD -f $COMPOSE_FILE build --no-cache 2>&1 | tee build.log"
+        err "Last 40 lines of the build log:"
+        tail -40 "$build_log" >&2 || true
         return 1
     fi
 
     echo
     log "Starting services..."
-    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1; then
+    local start_log
+    start_log="$log_dir/docker-up-$(date -u +%Y%m%dT%H%M%SZ).log"
+    if ! $COMPOSE_CMD -f "$COMPOSE_FILE" up -d 2>&1 | tee "$start_log"; then
         err "Failed to start services."
+        err "Full startup log: $start_log"
         err ""
         err "Check what went wrong:"
         err "  $COMPOSE_CMD -f $COMPOSE_FILE logs --tail=50"
@@ -1367,14 +1477,19 @@ print_summary() {
 # Main
 # ============================================================
 main() {
+    step "showing banner"
     banner
+    step "checking prerequisites"
     check_prerequisites
+    step "preparing repository"
     setup_repo
 
     # Skip interactive config if .env already exists and user doesn't want to overwrite.
     if [ -f ".env" ]; then
         if ask_yn "An existing .env was found. Reconfigure from scratch?"; then
+            step "collecting configuration"
             collect_config
+            step "generating configuration"
             generate_config
         else
             log "Keeping existing .env configuration."
@@ -1391,24 +1506,32 @@ main() {
             fi
             # Read domain from existing .env for summary.
             DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
+            DOMAIN="$(strip_env_quotes "$DOMAIN")"
             DOMAIN="${DOMAIN:-localhost}"
             # Ensure gitignored config files exist and are up to date.
             # Each function handles existing files by updating values in-place.
+            step "refreshing generated config files"
             generate_caddyfile
             generate_garage_toml
             generate_livekit_yaml
         fi
     else
+        step "collecting configuration"
         collect_config
+        step "generating configuration"
         generate_config
     fi
 
     echo
+    step "building and starting services"
     build_and_start
+    step "configuring Garage storage"
     setup_garage || true
     if [ -n "${ADMIN_USER:-}" ]; then
+        step "creating admin account"
         create_admin || true
     fi
+    step "printing summary"
     print_summary
 }
 

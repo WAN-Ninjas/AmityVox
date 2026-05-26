@@ -17,6 +17,7 @@ import (
 
 	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
+	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/permissions"
 )
 
@@ -32,14 +33,14 @@ const exportCooldownDuration = 24 * time.Hour
 
 // userDataExport represents the full GDPR data export for a user.
 type userDataExport struct {
-	ExportedAt   time.Time              `json:"exported_at"`
-	User         userExportProfile      `json:"user"`
-	Settings     json.RawMessage        `json:"settings"`
-	Guilds       []userExportGuild      `json:"guilds"`
-	Messages     []userExportMessage    `json:"messages"`
-	Bookmarks    []userExportBookmark   `json:"bookmarks"`
-	Reactions    []userExportReaction   `json:"reactions"`
-	ReadStates   []userExportReadState  `json:"read_states"`
+	ExportedAt    time.Time             `json:"exported_at"`
+	User          userExportProfile     `json:"user"`
+	Settings      json.RawMessage       `json:"settings"`
+	Guilds        []userExportGuild     `json:"guilds"`
+	Messages      []userExportMessage   `json:"messages"`
+	Bookmarks     []userExportBookmark  `json:"bookmarks"`
+	Reactions     []userExportReaction  `json:"reactions"`
+	ReadStates    []userExportReadState `json:"read_states"`
 	Relationships []userExportRelation  `json:"relationships"`
 }
 
@@ -59,10 +60,10 @@ type userExportProfile struct {
 }
 
 type userExportGuild struct {
-	GuildID   string  `json:"guild_id"`
-	GuildName string  `json:"guild_name"`
-	Nickname  *string `json:"nickname,omitempty"`
-	JoinedAt  string  `json:"joined_at"`
+	GuildID   string   `json:"guild_id"`
+	GuildName string   `json:"guild_name"`
+	Nickname  *string  `json:"nickname,omitempty"`
+	JoinedAt  string   `json:"joined_at"`
 	Roles     []string `json:"roles,omitempty"`
 }
 
@@ -206,10 +207,10 @@ func (h *Handler) HandleExportUserData(w http.ResponseWriter, r *http.Request) {
 
 // channelMessageExport represents a full archive of messages in a channel.
 type channelMessageExport struct {
-	ChannelID  string                   `json:"channel_id"`
-	ExportedAt time.Time                `json:"exported_at"`
-	ExportedBy string                   `json:"exported_by"`
-	Messages   []channelExportMessage   `json:"messages"`
+	ChannelID  string                 `json:"channel_id"`
+	ExportedAt time.Time              `json:"exported_at"`
+	ExportedBy string                 `json:"exported_by"`
+	Messages   []channelExportMessage `json:"messages"`
 }
 
 type channelExportMessage struct {
@@ -395,10 +396,10 @@ func (h *Handler) HandleExportChannelMessages(w http.ResponseWriter, r *http.Req
 
 // accountExport represents a portable account snapshot for migration between instances.
 type accountExport struct {
-	Version    int                    `json:"version"`
-	ExportedAt time.Time              `json:"exported_at"`
-	Profile    accountExportProfile   `json:"profile"`
-	Settings   json.RawMessage        `json:"settings"`
+	Version    int                  `json:"version"`
+	ExportedAt time.Time            `json:"exported_at"`
+	Profile    accountExportProfile `json:"profile"`
+	Settings   json.RawMessage      `json:"settings"`
 }
 
 type accountExportProfile struct {
@@ -794,18 +795,19 @@ func (h *Handler) collectRelationships(ctx context.Context, userID string) ([]us
 // For guild channels, it delegates to the permission computation logic.
 func (h *Handler) hasChannelPermission(ctx context.Context, guildID, channelID, userID string, perm uint64) bool {
 	// Owner has all permissions.
-	var ownerID string
-	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err != nil {
+	var ownerID, guildInstanceID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
 		return false
 	}
 	if userID == ownerID {
 		return true
 	}
 
-	// Check admin flag on user.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var userFlags int
-	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-	if userFlags&4 != 0 { // UserFlagAdmin = 1 << 2
+	var userInstanceID string
+	h.Pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&userFlags, &userInstanceID)
+	if permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return true
 	}
 

@@ -10,6 +10,7 @@
 	import { fileUrl } from '$lib/utils/avatar';
 	import Avatar from '$components/common/Avatar.svelte';
 	import CreateGuildModal from '$components/guild/CreateGuildModal.svelte';
+	import InstanceSwitcher from '$components/layout/InstanceSwitcher.svelte';
 	import NotificationPopover from '$components/common/NotificationPopover.svelte';
 	import { DragController } from '$lib/utils/dragDrop';
 	import { addToast } from '$lib/stores/toast';
@@ -25,12 +26,15 @@
 	import { channelGuildMap } from '$lib/stores/unreads';
 	import InviteModal from '$components/guild/InviteModal.svelte';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	let showNotificationPopover = $state(false);
 	let showInviteForGuild = $state<string | null>(null);
 
 	const isAdmin = $derived(($currentUser?.flags ?? 0) & 4);
 	const isGlobalMod = $derived(($currentUser?.flags ?? 0) & 32);
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
+	const hasMessageBookmarks = $derived(isFeatureEnabled($clientConfig, 'message_bookmarks'));
 
 	// Badge count for the Home button: pending friend requests + unread DMs + incoming calls.
 	const homeBadgeCount = $derived.by(() => {
@@ -262,17 +266,21 @@
 	<!-- Spacer to push bottom buttons down -->
 	<div class="flex-1"></div>
 
-	<!-- Saved messages button -->
-	<button
-		class="flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-primary"
-		class:!bg-bg-modifier={$page.url.pathname === '/app/bookmarks'}
-		onclick={() => goto('/app/bookmarks')}
-		title="Saved Messages"
-	>
-		<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-			<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-		</svg>
-	</button>
+	<InstanceSwitcher />
+
+	{#if hasMessageBookmarks}
+		<!-- Saved messages button -->
+		<button
+			class="flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-primary"
+			class:!bg-bg-modifier={$page.url.pathname === '/app/bookmarks'}
+			onclick={() => goto('/app/bookmarks')}
+			title="Saved Messages"
+		>
+			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+			</svg>
+		</button>
+	{/if}
 
 	<!-- Notifications bell button -->
 	<button
@@ -320,7 +328,7 @@
 	{/if}
 
 	<!-- Moderation button (visible to global mods and admins) -->
-	{#if isGlobalMod || isAdmin}
+	{#if (isGlobalMod || isAdmin) && hasModerationReports}
 		<button
 			class="flex h-9 w-9 items-center justify-center rounded-md border border-bg-modifier bg-bg-tertiary text-orange-500 transition-colors hover:bg-orange-500 hover:text-white"
 			class:!bg-orange-500={$page.url.pathname.startsWith('/app/moderation')}

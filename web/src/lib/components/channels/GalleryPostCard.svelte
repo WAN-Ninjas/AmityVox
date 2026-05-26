@@ -4,10 +4,13 @@
 
 	interface Props {
 		post: GalleryPost;
+		canManage?: boolean;
 		onclick?: () => void;
+		onpin?: (post: GalleryPost) => void;
+		onclose?: (post: GalleryPost) => void;
 	}
 
-	let { post, onclick }: Props = $props();
+	let { post, canManage = false, onclick, onpin, onclose }: Props = $props();
 
 	let isVideo = $derived(post.thumbnail?.content_type?.startsWith('video/') ?? false);
 	let thumbnailUrl = $derived(post.thumbnail ? buildFileUrl(post.thumbnail.id, post.thumbnail.instance_id || undefined) : null);
@@ -32,9 +35,17 @@
 	}
 </script>
 
-<button
+<div
 	class="group relative flex flex-col overflow-hidden rounded-lg border border-bg-modifier bg-bg-secondary transition-all hover:border-brand-500/40 hover:shadow-lg"
-	{onclick}
+	onclick={onclick}
+	onkeydown={(e) => {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			onclick?.();
+		}
+	}}
+	role="button"
+	tabindex="0"
 >
 	<!-- Thumbnail -->
 	<div class="relative aspect-square w-full overflow-hidden bg-bg-tertiary">
@@ -97,6 +108,30 @@
 			</div>
 		{/if}
 
+		{#if canManage}
+			<div class="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 {post.locked ? 'translate-y-7' : ''}">
+				<button
+					class="rounded-full bg-bg-floating/85 p-1 text-text-muted backdrop-blur-sm hover:text-text-primary"
+					title={post.pinned ? 'Unpin post' : 'Pin post'}
+					onclick={(e) => { e.stopPropagation(); onpin?.(post); }}
+				>
+					<svg class="h-3.5 w-3.5" fill={post.pinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
+					</svg>
+				</button>
+				<button
+					class="rounded-full bg-bg-floating/85 p-1 text-text-muted backdrop-blur-sm hover:text-text-primary"
+					title={post.locked ? 'Reopen post' : 'Close post'}
+					onclick={(e) => { e.stopPropagation(); onclose?.(post); }}
+				>
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+						<path d="M7 11V7a5 5 0 0110 0v4" />
+					</svg>
+				</button>
+			</div>
+		{/if}
+
 		<!-- Reply count badge -->
 		{#if post.reply_count > 0}
 			<div class="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-bg-floating/80 px-1.5 py-0.5 text-[10px] font-medium text-text-secondary backdrop-blur-sm">
@@ -148,4 +183,4 @@
 			<span class="shrink-0">{formatDate(post.created_at)}</span>
 		</div>
 	</div>
-</button>
+</div>

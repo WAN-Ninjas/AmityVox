@@ -23,6 +23,18 @@
 		}
 	});
 
+	$effect(() => {
+		function handleWebhooksChanged(event: Event) {
+			const detail = (event as CustomEvent<{ guild_id?: string }>).detail;
+			if (!detail?.guild_id || detail.guild_id === guildId) {
+				loadWebhooks();
+			}
+		}
+
+		window.addEventListener('amityvox:webhooks-changed', handleWebhooksChanged);
+		return () => window.removeEventListener('amityvox:webhooks-changed', handleWebhooksChanged);
+	});
+
 	async function loadWebhooks() {
 		const result = await loadOp.run(
 			() => Promise.all([

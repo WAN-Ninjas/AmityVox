@@ -11,12 +11,16 @@
 		channelId,
 		guildId,
 		connected = false,
-		currentUserId = ''
+		currentUserId = '',
+		joining = false,
+		onjoin
 	}: {
 		channelId: string;
 		guildId: string;
 		connected: boolean;
 		currentUserId: string;
+		joining?: boolean;
+		onjoin?: () => void;
 	} = $props();
 
 	let loadOp = $state(createAsyncOp());
@@ -32,7 +36,7 @@
 
 	// Load active broadcast on mount and when channel changes
 	$effect(() => {
-		if (channelId && connected) {
+		if (channelId) {
 			loadBroadcast();
 		}
 
@@ -83,7 +87,7 @@
 	}
 </script>
 
-{#if connected}
+{#if connected || activeBroadcast || loadOp.loading}
 	<div class="broadcast-section">
 		{#if loadOp.loading}
 			<div class="loading">Checking broadcast...</div>
@@ -111,9 +115,17 @@
 					>
 						{stopOp.loading ? 'Stopping...' : 'End'}
 					</button>
+				{:else if !connected && onjoin}
+					<button
+						class="btn-primary"
+						onclick={onjoin}
+						disabled={joining}
+					>
+						{joining ? 'Joining...' : 'Join to Listen'}
+					</button>
 				{/if}
 			</div>
-		{:else if showStartForm}
+		{:else if connected && showStartForm}
 			<!-- Start broadcast form -->
 			<div class="broadcast-form">
 				<input
@@ -140,7 +152,7 @@
 					</button>
 				</div>
 			</div>
-		{:else}
+		{:else if connected}
 			<!-- Start broadcast button -->
 			<button
 				class="btn-broadcast"

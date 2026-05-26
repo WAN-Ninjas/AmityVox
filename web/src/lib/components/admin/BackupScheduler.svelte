@@ -52,10 +52,16 @@
 	let newName = $state('');
 	let newFrequency = $state('daily');
 	let newRetentionCount = $state(7);
+	let newBackupType = $state<'data' | 'media' | 'combined'>('data');
 	let newIncludeMedia = $state(false);
 	let newIncludeDatabase = $state(true);
 	let newStoragePath = $state('/backups');
 	let newEnabled = $state(true);
+
+	$effect(() => {
+		newIncludeDatabase = newBackupType === 'data' || newBackupType === 'combined';
+		newIncludeMedia = newBackupType === 'media' || newBackupType === 'combined';
+	});
 
 	async function loadSchedules() {
 		const result = await loadOp.run(() => api.getBackupSchedules(), msg => addToast(msg, 'error'));
@@ -135,6 +141,7 @@
 		newName = '';
 		newFrequency = 'daily';
 		newRetentionCount = 7;
+		newBackupType = 'data';
 		newIncludeMedia = false;
 		newIncludeDatabase = true;
 		newStoragePath = '/backups';
@@ -209,20 +216,20 @@
 					<input id="bk-retention" type="number" class="input w-full" min="1" max="365" bind:value={newRetentionCount} />
 				</div>
 				<div>
+					<label for="bk-type" class="block text-sm font-medium text-text-secondary mb-1">Backup Type</label>
+					<select id="bk-type" class="input w-full" bind:value={newBackupType}>
+						<option value="data">Data</option>
+						<option value="media">Media</option>
+						<option value="combined">Combined</option>
+					</select>
+				</div>
+				<div>
 					<label for="bk-path" class="block text-sm font-medium text-text-secondary mb-1">Storage Path</label>
 					<input id="bk-path" type="text" class="input w-full" placeholder="/backups" bind:value={newStoragePath} />
 				</div>
 			</div>
 
 			<div class="flex gap-6 mt-4">
-				<label class="flex items-center gap-2 text-sm text-text-primary">
-					<input type="checkbox" bind:checked={newIncludeDatabase} />
-					Include database
-				</label>
-				<label class="flex items-center gap-2 text-sm text-text-primary">
-					<input type="checkbox" bind:checked={newIncludeMedia} />
-					Include media files
-				</label>
 				<label class="flex items-center gap-2 text-sm text-text-primary">
 					<input type="checkbox" bind:checked={newEnabled} />
 					Enable immediately

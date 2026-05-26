@@ -188,7 +188,9 @@
 		}
 	}
 
-	onMount(loadBridges);
+	onMount(() => {
+		loadBridges();
+	});
 </script>
 
 <div class="flex-1 overflow-y-auto p-6">
@@ -318,10 +320,10 @@
 											<div class="flex items-center gap-2 mt-1">
 												<span class="px-2 py-0.5 rounded text-xs {statusColor(selectedBridge.status)}">{selectedBridge.status}</span>
 												<span class="text-xs text-text-muted capitalize">{selectedBridge.bridge_type}</span>
+												</div>
 											</div>
 										</div>
-									</div>
-									<div class="flex gap-2">
+										<div class="flex gap-2">
 										<button
 											class="px-4 py-2 text-sm rounded transition-colors {selectedBridge.enabled
 												? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'
@@ -518,6 +520,6 @@
 					{/if}
 				</div>
 			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
-</div>

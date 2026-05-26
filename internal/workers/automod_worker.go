@@ -52,6 +52,7 @@ func (m *Manager) processAutomod(ctx context.Context, event events.Event) {
 		GuildID   string `json:"guild_id"`
 		AuthorID  string `json:"author_id"`
 		Content   string `json:"content"`
+		Encrypted bool   `json:"encrypted"`
 	}
 
 	if err := json.Unmarshal(event.Data, &msgData); err != nil {
@@ -59,7 +60,7 @@ func (m *Manager) processAutomod(ctx context.Context, event events.Event) {
 	}
 
 	// Skip DMs (no guild_id) and empty content.
-	if msgData.GuildID == "" || msgData.Content == "" {
+	if msgData.GuildID == "" || msgData.Content == "" || msgData.Encrypted {
 		return
 	}
 

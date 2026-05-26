@@ -1,13 +1,16 @@
 <!-- MessageEffects.svelte — Renders confetti, fireworks, hearts, snow, and super reactions with particle effects. -->
 <script lang="ts">
 	import { api, type EffectEvent, type SuperReaction } from '$lib/api/client';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	interface Props {
 		messageId: string;
 		channelId: string;
+		showTrigger?: boolean;
+		showReactions?: boolean;
 	}
 
-	let { messageId, channelId }: Props = $props();
+	let { messageId, channelId, showTrigger = true, showReactions = true }: Props = $props();
 
 	let activeEffect = $state<EffectEvent | null>(null);
 	let particles = $state<Array<{ id: number; x: number; y: number; emoji: string; scale: number; opacity: number; rotation: number; vx: number; vy: number }>>([]);
@@ -15,6 +18,8 @@
 	let showEffectMenu = $state(false);
 	let sending = $state(false);
 	let animFrame = $state<number>(0);
+	const hasMessageEffects = $derived(isFeatureEnabled($clientConfig, 'message_effects'));
+	const hasSuperReactions = $derived(isFeatureEnabled($clientConfig, 'super_reactions'));
 
 	const effectTypes = [
 		{ type: 'confetti', label: 'Confetti', icon: '🎊' },
@@ -30,12 +35,14 @@
 	const confettiColors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9ca24', '#6c5ce7', '#a29bfe', '#fd79a8', '#00cec9'];
 
 	async function sendEffect(effectType: string) {
+		if (!hasMessageEffects) return;
 		sending = true;
 		showEffectMenu = false;
 		try {
 			const result = await api.createMessageEffect(channelId, messageId, { effect_type: effectType, config: {} });
 			if (result) {
 				triggerEffect(result);
+				dispatchRealtimeEffect(result);
 			}
 		} catch {
 			// Silently handle (effect is cosmetic).
@@ -45,15 +52,21 @@
 	}
 
 	async function addSuperReaction(emoji: string, intensity: number = 1) {
+		if (!hasSuperReactions) return;
 		try {
 			await api.addSuperReaction(channelId, messageId, { emoji, intensity });
 			await loadSuperReactions();
+			dispatchRealtimeSuperReaction(emoji, intensity);
 		} catch {
 			// Silently handle.
 		}
 	}
 
 	async function loadSuperReactions() {
+		if (!hasSuperReactions) {
+			superReactions = [];
+			return;
+		}
 		try {
 			const data = await api.getSuperReactions(channelId, messageId);
 			superReactions = data ?? [];
@@ -182,15 +195,52 @@
 		setTimeout(() => { particles = []; }, 2000);
 	}
 
+	function dispatchRealtimeEffect(effect: EffectEvent) {
+		window.dispatchEvent(new CustomEvent('amityvox:message-effect', { detail: effect }));
+	}
+
+	function dispatchRealtimeSuperReaction(emoji: string, intensity: number) {
+		window.dispatchEvent(new CustomEvent('amityvox:super-reaction', {
+			detail: { channel_id: channelId, message_id: messageId, emoji, intensity }
+		}));
+	}
+
+	function handleRealtimeEffect(event: Event) {
+		const detail = (event as CustomEvent<EffectEvent>).detail;
+		if (detail?.message_id === messageId && detail?.channel_id === channelId) {
+			triggerEffect(detail);
+		}
+	}
+
+	function handleRealtimeSuperReaction(event: Event) {
+		const detail = (event as CustomEvent<{ channel_id?: string; message_id?: string; emoji?: string; intensity?: number }>).detail;
+		if (detail?.message_id === messageId && detail?.channel_id === channelId) {
+			loadSuperReactions();
+			if (detail.emoji) {
+				triggerSuperReactionBurst(detail.emoji, detail.intensity ?? 1);
+			}
+		}
+	}
+
 	$effect(() => {
-		if (messageId) {
+		if (messageId && hasSuperReactions) {
 			loadSuperReactions();
 		}
+	});
+
+	$effect(() => {
+		window.addEventListener('amityvox:message-effect', handleRealtimeEffect);
+		window.addEventListener('amityvox:super-reaction', handleRealtimeSuperReaction);
+		return () => {
+			window.removeEventListener('amityvox:message-effect', handleRealtimeEffect);
+			window.removeEventListener('amityvox:super-reaction', handleRealtimeSuperReaction);
+		};
 	});
 </script>
 
 <div class="relative">
 	<!-- Effect trigger button -->
+	{#if showTrigger && (hasMessageEffects || hasSuperReactions)}
 	<div class="relative inline-block">
 		<button
 			type="button"
@@ -207,20 +257,23 @@
 		{#if showEffectMenu}
 			<div class="absolute bottom-full left-0 mb-1 bg-bg-secondary border border-border-primary rounded-lg shadow-lg p-2 z-50 min-w-[180px]">
 				<div class="text-text-muted text-xs font-medium px-2 py-1 mb-1">Message Effects</div>
-				<div class="grid grid-cols-4 gap-1">
-					{#each effectTypes as effect}
-						<button
-							type="button"
-							class="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-bg-tertiary transition-colors"
-							title={effect.label}
-							onclick={() => sendEffect(effect.type)}
-						>
-							<span class="text-lg">{effect.icon}</span>
-							<span class="text-[10px] text-text-muted">{effect.label}</span>
-						</button>
-					{/each}
-				</div>
+				{#if hasMessageEffects}
+					<div class="grid grid-cols-4 gap-1">
+						{#each effectTypes as effect}
+							<button
+								type="button"
+								class="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-bg-tertiary transition-colors"
+								title={effect.label}
+								onclick={() => sendEffect(effect.type)}
+							>
+								<span class="text-lg">{effect.icon}</span>
+								<span class="text-[10px] text-text-muted">{effect.label}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
 
+				{#if hasSuperReactions}
 				<div class="border-t border-border-primary mt-2 pt-2">
 					<div class="text-text-muted text-xs font-medium px-2 py-1 mb-1">Super React</div>
 					<div class="flex gap-1 px-1">
@@ -236,12 +289,14 @@
 						{/each}
 					</div>
 				</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
+	{/if}
 
 	<!-- Super reactions display -->
-	{#if superReactions.length > 0}
+	{#if showReactions && hasSuperReactions && superReactions.length > 0}
 		<div class="flex flex-wrap gap-1 mt-1">
 			{#each groupSuperReactions(superReactions) as group}
 				<button

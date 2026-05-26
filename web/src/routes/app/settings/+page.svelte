@@ -11,19 +11,21 @@
 	import SettingsEncryptionTab from '$lib/components/settings/SettingsEncryptionTab.svelte';
 	import SettingsAccountTab from '$lib/components/settings/SettingsAccountTab.svelte';
 	import { isDndActive } from '$lib/stores/settings';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	import type { User } from '$lib/types';
 
 	type Tab = 'account' | 'security' | 'notifications' | 'privacy' | 'appearance' | 'voice' | 'encryption' | 'bots' | 'data';
 	let currentTab = $state<Tab>('account');
 	let importedProfile = $state<User | null>(null);
+	const hasE2EE = $derived(isFeatureEnabled($clientConfig, 'e2ee'));
 
 	async function handleLogout() {
 		await logout();
 		goto('/login');
 	}
 
-	const tabs: { id: Tab; label: string }[] = [
+	const allTabs: { id: Tab; label: string }[] = [
 		{ id: 'account', label: 'My Account' },
 		{ id: 'security', label: 'Security' },
 		{ id: 'notifications', label: 'Notifications' },
@@ -34,6 +36,13 @@
 		{ id: 'bots', label: 'Bots' },
 		{ id: 'data', label: 'Data & Privacy' }
 	];
+	const tabs = $derived(allTabs.filter((tab) => tab.id !== 'encryption' || hasE2EE));
+
+	$effect(() => {
+		if (!tabs.some((tab) => tab.id === currentTab)) {
+			currentTab = 'account';
+		}
+	});
 
 	function handleImportedProfile(user: User) {
 		importedProfile = user;

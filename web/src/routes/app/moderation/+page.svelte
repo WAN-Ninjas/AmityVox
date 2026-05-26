@@ -4,6 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { currentUser } from '$lib/stores/auth';
+	import { clientConfig, isFeatureEnabled, loadClientConfig } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type {
 		ModerationStats,
@@ -149,20 +150,22 @@
 		{ value: 'all', label: 'All' }
 	];
 
-	$effect(() => {
-		if (currentTab === 'dashboard') loadStats();
-		if (currentTab === 'message_reports' && !messageReportsLoaded) loadMessageReports();
-		if (currentTab === 'user_reports' && !userReportsLoaded) loadUserReports();
-		if (currentTab === 'issues' && !issuesLoaded) loadIssues();
-	});
-
 	// GlobalMod = 1<<5 = 32, Admin = 1<<2 = 4
 	const isGlobalMod = $derived(($currentUser?.flags ?? 0) & 32);
 	const isAdmin = $derived(($currentUser?.flags ?? 0) & 4);
 	const canAccessModeration = $derived(isGlobalMod || isAdmin);
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
 
 	onMount(() => {
-		loadStats();
+		loadClientConfig().catch(() => {});
+	});
+
+	$effect(() => {
+		if (!canAccessModeration || !hasModerationReports) return;
+		if (currentTab === 'dashboard') loadStats();
+		if (currentTab === 'message_reports' && !messageReportsLoaded) loadMessageReports();
+		if (currentTab === 'user_reports' && !userReportsLoaded) loadUserReports();
+		if (currentTab === 'issues' && !issuesLoaded) loadIssues();
 	});
 </script>
 
@@ -171,6 +174,14 @@
 	<div class="text-center">
 		<h1 class="mb-2 text-2xl font-bold text-text-primary">Access Denied</h1>
 		<p class="text-sm text-text-muted">You don't have permission to view the moderation panel.</p>
+		<a href="/app" class="mt-4 inline-block text-sm text-brand-400 hover:text-brand-300">Back to app</a>
+	</div>
+</div>
+{:else if !hasModerationReports}
+<div class="flex h-full items-center justify-center bg-bg-tertiary">
+	<div class="text-center">
+		<h1 class="mb-2 text-2xl font-bold text-text-primary">Moderation Reports Disabled</h1>
+		<p class="text-sm text-text-muted">Reporting and moderation queues are disabled on this instance.</p>
 		<a href="/app" class="mt-4 inline-block text-sm text-brand-400 hover:text-brand-300">Back to app</a>
 	</div>
 </div>

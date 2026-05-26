@@ -36,12 +36,12 @@ RUN go mod download
 COPY . .
 
 # Build static binary with version info.
-ARG VERSION=dev
+ARG VERSION=0.5.0
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
     -o /amityvox \
     ./cmd/amityvox
 

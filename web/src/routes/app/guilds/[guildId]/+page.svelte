@@ -9,6 +9,8 @@
 	import type { OnboardingConfig } from '$lib/types';
 	import { fileUrl } from '$lib/utils/avatar';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { addToast } from '$lib/stores/toast';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import OnboardingModal from '$lib/components/guild/OnboardingModal.svelte';
 
 	let eventsLoading = $state(true);
@@ -25,6 +27,7 @@
 	let guideCurrentStep = $state(0);
 	let guideDismissed = $state(false);
 	const routeGuildId = $derived($page.params.guildId ?? '');
+	const hasGuildOnboarding = $derived(isFeatureEnabled($clientConfig, 'guild_onboarding'));
 
 	// --- Bump System ---
 	let bumpStatus = $state<BumpStatus | null>(null);
@@ -32,6 +35,13 @@
 	let bumpMessage = $state<string | null>(null);
 	let bumpCooldownText = $state('');
 	let bumpCooldownInterval: ReturnType<typeof setInterval> | null = null;
+	let showCreateEvent = $state(false);
+	let eventName = $state('');
+	let eventDescription = $state('');
+	let eventLocation = $state('');
+	let eventStart = $state('');
+	let eventSubmitting = $state(false);
+	let eventRsvpUpdating = $state<string | null>(null);
 	const events = $derived(
 		routeGuildId ? ($guildEventsByGuild.get(routeGuildId) ?? []).slice(0, 5) : []
 	);
@@ -43,6 +53,7 @@
 
 		showOnboarding = false;
 		onboardingConfig = null;
+		if (!hasGuildOnboarding) return;
 
 		api.getOnboardingStatus(guildId)
 			.then((status) => {
@@ -90,8 +101,14 @@
 		if (!guildId) return;
 
 		guideLoading = true;
+		guideSteps = [];
 		guideCurrentStep = 0;
 		guideDismissed = false;
+
+		if (!hasGuildOnboarding) {
+			guideLoading = false;
+			return;
+		}
 
 		// Check localStorage to see if the user already dismissed this guild's guide.
 		const dismissKey = `guide_dismissed_${guildId}`;
@@ -286,6 +303,47 @@
 				hour: 'numeric',
 				minute: '2-digit'
 			});
+		}
+	}
+
+	async function createEvent() {
+		if (!routeGuildId || !eventName.trim() || !eventStart) return;
+		eventSubmitting = true;
+		try {
+			await api.createGuildEvent(routeGuildId, {
+				name: eventName.trim(),
+				description: eventDescription.trim() || undefined,
+				location: eventLocation.trim() || undefined,
+				scheduled_start: new Date(eventStart).toISOString()
+			});
+			eventName = '';
+			eventDescription = '';
+			eventLocation = '';
+			eventStart = '';
+			showCreateEvent = false;
+			await loadGuildEvents(routeGuildId);
+			addToast('Event created', 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to create event'), 'error');
+		} finally {
+			eventSubmitting = false;
+		}
+	}
+
+	async function updateEventRsvp(eventId: string, status: 'interested' | 'going' | null) {
+		if (!routeGuildId) return;
+		eventRsvpUpdating = eventId;
+		try {
+			if (status) {
+				await api.rsvpEvent(routeGuildId, eventId, status);
+			} else {
+				await api.deleteRsvp(routeGuildId, eventId);
+			}
+			await loadGuildEvents(routeGuildId);
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update RSVP'), 'error');
+		} finally {
+			eventRsvpUpdating = null;
 		}
 	}
 </script>
@@ -536,15 +594,33 @@
 
 				<!-- Scheduled Events -->
 				<div class="rounded-lg bg-bg-secondary p-5">
-					<h2 class="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
-						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-							<rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-							<line x1="16" y1="2" x2="16" y2="6" />
-							<line x1="8" y1="2" x2="8" y2="6" />
-							<line x1="3" y1="10" x2="21" y2="10" />
-						</svg>
-						Upcoming Events
-					</h2>
+					<div class="mb-3 flex items-center justify-between gap-3">
+						<h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+								<line x1="16" y1="2" x2="16" y2="6" />
+								<line x1="8" y1="2" x2="8" y2="6" />
+								<line x1="3" y1="10" x2="21" y2="10" />
+							</svg>
+							Upcoming Events
+						</h2>
+						<button class="btn-secondary text-xs" onclick={() => (showCreateEvent = !showCreateEvent)}>
+							{showCreateEvent ? 'Cancel' : 'Create'}
+						</button>
+					</div>
+					{#if showCreateEvent}
+						<div class="mb-3 space-y-2 rounded border border-bg-primary/50 bg-bg-primary/30 p-3">
+							<input class="input w-full text-sm" placeholder="Event name" maxlength="100" bind:value={eventName} />
+							<textarea class="input min-h-16 w-full resize-y text-sm" placeholder="Description (optional)" maxlength="1000" bind:value={eventDescription}></textarea>
+							<input class="input w-full text-sm" placeholder="Location (optional)" maxlength="200" bind:value={eventLocation} />
+							<input class="input w-full text-sm" type="datetime-local" bind:value={eventStart} />
+							<div class="flex justify-end">
+								<button class="btn-primary text-xs" onclick={createEvent} disabled={eventSubmitting || !eventName.trim() || !eventStart}>
+									{eventSubmitting ? 'Creating...' : 'Create Event'}
+								</button>
+							</div>
+						</div>
+					{/if}
 					{#if eventsLoading}
 						<div class="flex items-center justify-center py-6">
 							<svg class="h-5 w-5 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
@@ -581,6 +657,22 @@
 											{event.location}
 										</div>
 									{/if}
+									<div class="mt-2 flex flex-wrap gap-2">
+										<button
+											class="rounded px-2 py-1 text-xs {event.user_rsvp === 'interested' ? 'bg-brand-500/20 text-brand-300' : 'bg-bg-modifier text-text-muted hover:text-text-primary'}"
+											onclick={() => updateEventRsvp(event.id, event.user_rsvp === 'interested' ? null : 'interested')}
+											disabled={eventRsvpUpdating === event.id}
+										>
+											Interested
+										</button>
+										<button
+											class="rounded px-2 py-1 text-xs {event.user_rsvp === 'going' ? 'bg-green-500/20 text-green-300' : 'bg-bg-modifier text-text-muted hover:text-text-primary'}"
+											onclick={() => updateEventRsvp(event.id, event.user_rsvp === 'going' ? null : 'going')}
+											disabled={eventRsvpUpdating === event.id}
+										>
+											Going
+										</button>
+									</div>
 								</li>
 							{/each}
 						</ul>

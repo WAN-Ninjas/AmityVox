@@ -3,7 +3,9 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { channels } from '$lib/stores/channels';
+	import { canManageThreads } from '$lib/stores/permissions';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import ForumPostCard from './ForumPostCard.svelte';
 	import ForumPostCreate from './ForumPostCreate.svelte';
 
@@ -126,6 +128,24 @@
 		filterTagId = filterTagId === tagId ? null : tagId;
 	}
 
+	async function togglePinPost(post: ForumPost) {
+		try {
+			await api.pinForumPost(channelId, post.id);
+			posts = posts.map((p) => p.id === post.id ? { ...p, pinned: !p.pinned } : p);
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update post pin'), 'error');
+		}
+	}
+
+	async function toggleClosePost(post: ForumPost) {
+		try {
+			await api.closeForumPost(channelId, post.id);
+			posts = posts.map((p) => p.id === post.id ? { ...p, locked: !p.locked } : p);
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update post status'), 'error');
+		}
+	}
+
 	// Separate pinned from regular posts for display
 	let pinnedPosts = $derived(posts.filter((p) => p.pinned));
 	let regularPosts = $derived(posts.filter((p) => !p.pinned));
@@ -241,14 +261,14 @@
 							Pinned
 						</h3>
 						{#each pinnedPosts as post (post.id)}
-							<ForumPostCard {post} onclick={() => openPost(post)} />
+							<ForumPostCard {post} canManage={$canManageThreads} onclick={() => openPost(post)} onpin={togglePinPost} onclose={toggleClosePost} />
 						{/each}
 					</div>
 				{/if}
 
 				<!-- Regular posts -->
 				{#each regularPosts as post (post.id)}
-					<ForumPostCard {post} onclick={() => openPost(post)} />
+					<ForumPostCard {post} canManage={$canManageThreads} onclick={() => openPost(post)} onpin={togglePinPost} onclose={toggleClosePost} />
 				{/each}
 
 				<!-- Load more -->

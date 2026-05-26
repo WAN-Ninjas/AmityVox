@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/features"
 	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/gateway"
 	"github.com/amityvox/amityvox/internal/media"
@@ -43,10 +45,30 @@ import (
 
 // Build-time variables set via ldflags.
 var (
-	version   = "dev"
+	version   = "0.5.0"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
+
+func buildVersion() string {
+	return version + "+" + sanitizeBuildMetadata(commit) + "." + sanitizeBuildMetadata(buildDate)
+}
+
+func sanitizeBuildMetadata(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('-')
+	}
+	return b.String()
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -321,14 +343,37 @@ func runServe() error {
 	srv.FedSvc = fedSvc
 	srv.FedProxy = syncSvc
 	srv.Version = version
+	srv.BuildVersion = buildVersion()
 
 	// Register API routes after all optional services are set.
 	srv.RegisterRoutes()
 
+	requireInstanceFeature := func(featureKey string) func(http.Handler) http.Handler {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				states, err := features.Resolve(r.Context(), db.Pool, "")
+				if err != nil {
+					logger.Error("failed to resolve feature flags",
+						slog.String("feature", featureKey),
+						slog.String("error", err.Error()))
+					http.Error(w, "Feature flags unavailable", http.StatusInternalServerError)
+					return
+				}
+				state, ok := states[featureKey]
+				if !ok || !state.Enabled {
+					http.Error(w, "Feature disabled", http.StatusForbidden)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}
+	}
+	requireFederatedMessaging := requireInstanceFeature("federated_messaging")
+
 	// Public federation discovery and handshake (rate limited — no signature verification).
 	fedRL := srv.RateLimitGlobal()
 	srv.Router.With(fedRL).Get("/.well-known/amityvox", fedSvc.HandleDiscovery)
-	srv.Router.With(fedRL).Post("/federation/v1/handshake", fedSvc.HandleHandshake)
+	srv.Router.With(fedRL, requireFederatedMessaging).Post("/federation/v1/handshake", fedSvc.HandleHandshake)
 
 	// Wire voice service into federation sync for federated voice token generation.
 	if voiceSvc != nil {
@@ -353,10 +398,10 @@ func runServe() error {
 	// Signed federation endpoints — no rate limit. These verify Ed25519 signatures
 	// from authenticated peers, so IP-based rate limiting is unnecessary and causes
 	// 429 errors that break real-time event delivery between instances.
-	srv.Router.Post("/federation/v1/inbox", syncSvc.HandleInbox)
-	srv.Router.Post("/federation/v1/sync", syncSvc.HandleSync)
-	srv.Router.Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
-	srv.Router.Post("/federation/v1/users/{userID}/profile", syncSvc.HandleUserProfile)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/inbox", syncSvc.HandleInbox)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/sync", syncSvc.HandleSync)
+	srv.Router.With(requireFederatedMessaging).Get("/federation/v1/users/lookup", fedSvc.HandleUserLookup)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/users/{userID}/profile", syncSvc.HandleUserProfile)
 
 	// Wire federation DM notifier into the users handler.
 	if cfg.Instance.FederationMode != "closed" && srv.UserHandler != nil {
@@ -364,36 +409,37 @@ func runServe() error {
 	}
 
 	// Federation DM endpoints (signed, no rate limit).
-	srv.Router.Post("/federation/v1/dm/create", syncSvc.HandleFederatedDMCreate)
-	srv.Router.Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
-	srv.Router.Post("/federation/v1/dm/message/update", syncSvc.HandleFederatedDMMessageUpdate)
-	srv.Router.Post("/federation/v1/dm/message/delete", syncSvc.HandleFederatedDMMessageDelete)
-	srv.Router.Post("/federation/v1/dm/reaction/add", syncSvc.HandleFederatedDMReactionAdd)
-	srv.Router.Post("/federation/v1/dm/reaction/remove", syncSvc.HandleFederatedDMReactionRemove)
-	srv.Router.Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
-	srv.Router.Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/create", syncSvc.HandleFederatedDMCreate)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/message", syncSvc.HandleFederatedDMMessage)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/message/update", syncSvc.HandleFederatedDMMessageUpdate)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/message/delete", syncSvc.HandleFederatedDMMessageDelete)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/reaction/add", syncSvc.HandleFederatedDMReactionAdd)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/reaction/remove", syncSvc.HandleFederatedDMReactionRemove)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/recipient-add", syncSvc.HandleFederatedDMRecipientAdd)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/dm/recipient-remove", syncSvc.HandleFederatedDMRecipientRemove)
 
 	// Federation guild endpoints (signed, no rate limit).
-	srv.Router.Get("/federation/v1/guilds/{guildID}/preview", syncSvc.HandleFederatedGuildPreview)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/join", syncSvc.HandleFederatedGuildJoin)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/leave", syncSvc.HandleFederatedGuildLeave)
-	srv.Router.Post("/federation/v1/guilds/invite-accept", syncSvc.HandleFederatedGuildInviteAccept)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages", syncSvc.HandleFederatedGuildMessages)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/create", syncSvc.HandleFederatedGuildPostMessage)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/members", syncSvc.HandleFederatedGuildMembers)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/typing", syncSvc.HandleFederatedGuildTyping)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/manage", syncSvc.HandleManage)
+	srv.Router.With(requireFederatedMessaging).Get("/federation/v1/guilds/{guildID}/preview", syncSvc.HandleFederatedGuildPreview)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/join", syncSvc.HandleFederatedGuildJoin)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/leave", syncSvc.HandleFederatedGuildLeave)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/invite-accept", syncSvc.HandleFederatedGuildInviteAccept)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages", syncSvc.HandleFederatedGuildMessages)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/create", syncSvc.HandleFederatedGuildPostMessage)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/members", syncSvc.HandleFederatedGuildMembers)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/typing", syncSvc.HandleFederatedGuildTyping)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/manage", syncSvc.HandleManage)
 
 	// Federation invite endpoints (resolve is public GET, accept is signed POST).
-	srv.Router.Get("/federation/v1/invites/{code}", syncSvc.HandleInviteResolve)
-	srv.Router.Post("/federation/v1/invites/{code}/accept", syncSvc.HandleInviteAccept)
+	srv.Router.With(requireFederatedMessaging).Get("/federation/v1/invites/{code}", syncSvc.HandleInviteResolve)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/invites/{code}/accept", syncSvc.HandleInviteAccept)
 
 	// Federation guild proxy endpoints (authenticated, for local users accessing remote guilds).
 	srv.Router.Route("/api/v1/federation/guilds", func(r chi.Router) {
 		r.Use(auth.RequireAuth(authSvc))
 		r.Use(srv.RateLimitGlobal())
+		r.Use(requireFederatedMessaging)
 		r.Post("/join", syncSvc.HandleProxyJoinFederatedGuild)
 		r.Post("/{guildID}/leave", syncSvc.HandleProxyLeaveFederatedGuild)
 		r.Get("/{guildID}/channels/{channelID}/messages", syncSvc.HandleProxyGetFederatedGuildMessages)
@@ -408,6 +454,7 @@ func runServe() error {
 	srv.Router.Route("/api/v1/federation/users", func(r chi.Router) {
 		r.Use(auth.RequireAuth(authSvc))
 		r.Use(srv.RateLimitGlobal())
+		r.Use(requireFederatedMessaging)
 		r.Post("/ensure", syncSvc.HandleProxyEnsureFederatedUser)
 		r.Get("/{instanceID}/{userID}/profile", syncSvc.HandleProxyUserProfile)
 	})
@@ -416,35 +463,37 @@ func runServe() error {
 	srv.Router.Route("/api/v1/federation/peers", func(r chi.Router) {
 		r.Use(auth.RequireAuth(authSvc))
 		r.Use(srv.RateLimitGlobal())
+		r.Use(requireFederatedMessaging)
 		r.Get("/public", syncSvc.HandleGetPublicFederationPeers)
 		r.Get("/{peerID}/guilds", syncSvc.HandleProxyDiscoverRemoteGuilds)
 	})
 
 	// Aggregated federation guild discovery (authenticated, fans out to all peers).
-	srv.Router.With(auth.RequireAuth(authSvc), srv.RateLimitGlobal()).Get("/api/v1/federation/discover", syncSvc.HandleAggregatedDiscover)
+	srv.Router.With(auth.RequireAuth(authSvc), srv.RateLimitGlobal(), requireFederatedMessaging).Get("/api/v1/federation/discover", syncSvc.HandleAggregatedDiscover)
 
 	// Federation invite proxy (authenticated, rate limited — for local users resolving cross-instance invites).
-	srv.Router.With(auth.RequireAuth(authSvc), srv.RateLimitGlobal()).Post("/api/v1/federation/invites/resolve", syncSvc.HandleProxyResolveInvite)
+	srv.Router.With(auth.RequireAuth(authSvc), srv.RateLimitGlobal(), requireFederatedMessaging).Post("/api/v1/federation/invites/resolve", syncSvc.HandleProxyResolveInvite)
 
 	// Federation guild discovery (signed, no rate limit).
-	srv.Router.Post("/federation/v1/guilds/discover", syncSvc.HandleFederatedGuildDiscover)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/discover", syncSvc.HandleFederatedGuildDiscover)
 
 	// Federation voice endpoint (signed, no rate limit).
-	srv.Router.Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/voice/token", syncSvc.HandleFederatedVoiceToken)
 
 	// Federation MLS (E2EE) endpoints (signed, no rate limit).
 	// These allow remote instances to perform MLS operations on channels hosted by this instance.
-	srv.Router.Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/key-packages/{userID}", syncSvc.HandleMLSKeyPackages)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/key-packages/{userID}/claim", syncSvc.HandleMLSClaimKeyPackage)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/welcome", syncSvc.HandleMLSSendWelcome)
-	srv.Router.Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/commits", syncSvc.HandleMLSPublishCommit)
-	srv.Router.Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/group-state", syncSvc.HandleMLSGetGroupState)
-	srv.Router.Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/commits", syncSvc.HandleMLSGetCommits)
+	srv.Router.With(requireFederatedMessaging).Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/key-packages/{userID}", syncSvc.HandleMLSKeyPackages)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/key-packages/{userID}/claim", syncSvc.HandleMLSClaimKeyPackage)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/welcome", syncSvc.HandleMLSSendWelcome)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/commits", syncSvc.HandleMLSPublishCommit)
+	srv.Router.With(requireFederatedMessaging).Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/group-state", syncSvc.HandleMLSGetGroupState)
+	srv.Router.With(requireFederatedMessaging).Get("/federation/v1/guilds/{guildID}/channels/{channelID}/mls/commits", syncSvc.HandleMLSGetCommits)
 
 	// Federation voice proxy endpoints (authenticated, for local users joining remote voice channels).
 	srv.Router.Route("/api/v1/federation/voice", func(r chi.Router) {
 		r.Use(auth.RequireAuth(authSvc))
 		r.Use(srv.RateLimitGlobal())
+		r.Use(requireFederatedMessaging)
 		r.Post("/join", syncSvc.HandleProxyFederatedVoiceJoin)
 		r.Post("/guild-join", syncSvc.HandleProxyFederatedVoiceJoinByGuild)
 	})
@@ -476,7 +525,7 @@ func runServe() error {
 		HeartbeatInterval: heartbeatInterval,
 		HeartbeatTimeout:  heartbeatTimeout,
 		ListenAddr:        cfg.WebSocket.Listen,
-		BuildVersion:      version + "-" + commit + "-" + buildDate,
+		BuildVersion:      buildVersion(),
 		LocalInstanceID:   instanceID,
 		Logger:            logger,
 		CORSOrigins:       cfg.HTTP.CORSOrigins,
@@ -850,6 +899,7 @@ func runVersion() {
 	fmt.Printf("AmityVox %s\n", version)
 	fmt.Printf("  commit:     %s\n", commit)
 	fmt.Printf("  built:      %s\n", buildDate)
+	fmt.Printf("  build:      %s\n", buildVersion())
 }
 
 // configPath returns the config file path from AMITYVOX_CONFIG_PATH env var

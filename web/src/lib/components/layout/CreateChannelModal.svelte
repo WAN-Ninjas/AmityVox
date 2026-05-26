@@ -5,7 +5,7 @@
 	import { updateChannel } from '$lib/stores/channels';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 
-	type ChannelType = 'text' | 'voice' | 'forum' | 'gallery';
+	type ChannelType = 'text' | 'announcement' | 'voice' | 'stage' | 'forum' | 'gallery';
 
 	interface Props {
 		open: boolean;
@@ -26,7 +26,9 @@
 	}
 
 	function placeholderForType(): string {
+		if (type === 'announcement') return 'announcements';
 		if (type === 'voice') return 'General';
+		if (type === 'stage') return 'Town Hall';
 		if (type === 'forum') return 'bug-reports';
 		if (type === 'gallery') return 'screenshots';
 		return 'new-channel';
@@ -55,9 +57,11 @@
 
 	<div class="mb-4">
 		<div id="channel-type-label" class="mb-2 block text-xs font-bold uppercase tracking-wide text-text-muted">Channel Type</div>
-		<div class="flex gap-2" role="group" aria-labelledby="channel-type-label">
+		<div class="flex flex-wrap gap-2" role="group" aria-labelledby="channel-type-label">
 			<button class={channelTypeButtonClass('text')} onclick={() => (type = 'text')}># Text</button>
+			<button class={channelTypeButtonClass('announcement')} onclick={() => (type = 'announcement')}>Announcement</button>
 			<button class={channelTypeButtonClass('voice')} onclick={() => (type = 'voice')}>Voice</button>
+			<button class={channelTypeButtonClass('stage')} onclick={() => (type = 'stage')}>Stage</button>
 			<button class={channelTypeButtonClass('forum')} onclick={() => (type = 'forum')}>Forum</button>
 			<button class={channelTypeButtonClass('gallery')} onclick={() => (type = 'gallery')}>Gallery</button>
 		</div>

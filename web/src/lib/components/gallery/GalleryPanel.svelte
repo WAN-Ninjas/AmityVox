@@ -77,6 +77,11 @@
 			selectedItem = null;
 		}
 	}
+
+	function handleUpdate(updated: Attachment) {
+		items = items.map((item) => item.id === updated.id ? updated : item);
+		selectedItem = updated;
+	}
 </script>
 
 <div class="flex h-full flex-col">
@@ -160,5 +165,7 @@
 	bind:open={showPreview}
 	onclose={() => (showPreview = false)}
 	ondelete={handleDelete}
+	onupdate={handleUpdate}
 	{canManage}
+	{guildId}
 />

@@ -31,11 +31,11 @@ type Instance struct {
 // User represents a user account on an AmityVox instance. Users are identified
 // globally as @username@instance.domain. Corresponds to the users table.
 type User struct {
-	ID             string    `json:"id"`
-	InstanceID     string    `json:"instance_id"`
-	Username       string    `json:"username"`
-	DisplayName    *string   `json:"display_name,omitempty"`
-	AvatarID       *string   `json:"avatar_id,omitempty"`
+	ID              string     `json:"id"`
+	InstanceID      string     `json:"instance_id"`
+	Username        string     `json:"username"`
+	DisplayName     *string    `json:"display_name,omitempty"`
+	AvatarID        *string    `json:"avatar_id,omitempty"`
 	StatusText      *string    `json:"status_text,omitempty"`
 	StatusEmoji     *string    `json:"status_emoji,omitempty"`
 	StatusPresence  string     `json:"status_presence"`
@@ -44,15 +44,17 @@ type User struct {
 	BannerID        *string    `json:"banner_id,omitempty"`
 	AccentColor     *string    `json:"accent_color,omitempty"`
 	Pronouns        *string    `json:"pronouns,omitempty"`
-	BotOwnerID     *string   `json:"bot_owner_id,omitempty"`
-	PasswordHash   *string   `json:"-"`
-	TOTPSecret     *string   `json:"-"`
-	Email          *string   `json:"-"`
-	Flags          int       `json:"flags"`
-	Handle         string     `json:"handle,omitempty"`
-	LastOnline     *time.Time `json:"last_online,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	InstanceDomain *string    `json:"instance_domain,omitempty"` // Set for remote/federated users
+	ActivityType    *string    `json:"activity_type,omitempty"`
+	ActivityName    *string    `json:"activity_name,omitempty"`
+	BotOwnerID      *string    `json:"bot_owner_id,omitempty"`
+	PasswordHash    *string    `json:"-"`
+	TOTPSecret      *string    `json:"-"`
+	Email           *string    `json:"-"`
+	Flags           int        `json:"flags"`
+	Handle          string     `json:"handle,omitempty"`
+	LastOnline      *time.Time `json:"last_online,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	InstanceDomain  *string    `json:"instance_domain,omitempty"` // Set for remote/federated users
 }
 
 // SelfUser is a response-only wrapper that includes the email field.
@@ -69,12 +71,12 @@ func (u *User) ToSelf() SelfUser {
 
 // UserFlags defines bitfield flags for user account status.
 const (
-	UserFlagSuspended  = 1 << 0
-	UserFlagDeleted    = 1 << 1
-	UserFlagAdmin      = 1 << 2
-	UserFlagBot        = 1 << 3
-	UserFlagVerified   = 1 << 4
-	UserFlagGlobalMod  = 1 << 5
+	UserFlagSuspended = 1 << 0
+	UserFlagDeleted   = 1 << 1
+	UserFlagAdmin     = 1 << 2
+	UserFlagBot       = 1 << 3
+	UserFlagVerified  = 1 << 4
+	UserFlagGlobalMod = 1 << 5
 )
 
 // IsSuspended reports whether the user is suspended.
@@ -165,31 +167,31 @@ type WebAuthnCredential struct {
 // belong to a specific instance and contain channels, roles, and members.
 // Corresponds to the guilds table.
 type Guild struct {
-	ID                   string    `json:"id"`
-	InstanceID           string    `json:"instance_id"`
-	InstanceDomain       string    `json:"instance_domain,omitempty"`
-	OwnerID              string    `json:"owner_id"`
-	Name                 string    `json:"name"`
-	Description          *string   `json:"description,omitempty"`
-	IconID               *string   `json:"icon_id,omitempty"`
-	BannerID             *string   `json:"banner_id,omitempty"`
-	DefaultPermissions   int64     `json:"default_permissions"`
-	Flags                int       `json:"flags"`
-	NSFW                 bool      `json:"nsfw"`
-	Discoverable         bool      `json:"discoverable"`
-	SystemChannelJoin    *string   `json:"system_channel_join,omitempty"`
-	SystemChannelLeave   *string   `json:"system_channel_leave,omitempty"`
-	SystemChannelKick    *string   `json:"system_channel_kick,omitempty"`
-	SystemChannelBan     *string   `json:"system_channel_ban,omitempty"`
-	PreferredLocale      string    `json:"preferred_locale"`
-	MaxMembers           int       `json:"max_members"`
-	VanityURL            *string   `json:"vanity_url,omitempty"`
-	VerificationLevel    int       `json:"verification_level"`
-	AFKChannelID         *string   `json:"afk_channel_id,omitempty"`
-	AFKTimeout           int       `json:"afk_timeout"`
-	Tags                 []string  `json:"tags,omitempty"`
-	MemberCount          int       `json:"member_count,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	InstanceID         string    `json:"instance_id"`
+	InstanceDomain     string    `json:"instance_domain,omitempty"`
+	OwnerID            string    `json:"owner_id"`
+	Name               string    `json:"name"`
+	Description        *string   `json:"description,omitempty"`
+	IconID             *string   `json:"icon_id,omitempty"`
+	BannerID           *string   `json:"banner_id,omitempty"`
+	DefaultPermissions int64     `json:"default_permissions"`
+	Flags              int       `json:"flags"`
+	NSFW               bool      `json:"nsfw"`
+	Discoverable       bool      `json:"discoverable"`
+	SystemChannelJoin  *string   `json:"system_channel_join,omitempty"`
+	SystemChannelLeave *string   `json:"system_channel_leave,omitempty"`
+	SystemChannelKick  *string   `json:"system_channel_kick,omitempty"`
+	SystemChannelBan   *string   `json:"system_channel_ban,omitempty"`
+	PreferredLocale    string    `json:"preferred_locale"`
+	MaxMembers         int       `json:"max_members"`
+	VanityURL          *string   `json:"vanity_url,omitempty"`
+	VerificationLevel  int       `json:"verification_level"`
+	AFKChannelID       *string   `json:"afk_channel_id,omitempty"`
+	AFKTimeout         int       `json:"afk_timeout"`
+	Tags               []string  `json:"tags,omitempty"`
+	MemberCount        int       `json:"member_count,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // GuildCategory represents a channel category within a guild, used to organize
@@ -206,41 +208,41 @@ type GuildCategory struct {
 // channels belong to a guild; DM/group channels are standalone.
 // Corresponds to the channels table.
 type Channel struct {
-	ID                 string    `json:"id"`
-	GuildID            *string   `json:"guild_id,omitempty"`
-	InstanceID         *string   `json:"instance_id,omitempty"`
-	CategoryID         *string   `json:"category_id,omitempty"`
-	ChannelType        string    `json:"channel_type"`
-	Name               *string   `json:"name,omitempty"`
-	Topic              *string   `json:"topic,omitempty"`
-	Position           int       `json:"position"`
-	SlowmodeSeconds    int       `json:"slowmode_seconds"`
-	NSFW               bool      `json:"nsfw"`
-	Encrypted          bool      `json:"encrypted"`
-	LastMessageID      *string   `json:"last_message_id,omitempty"`
-	OwnerID            *string   `json:"owner_id,omitempty"`
-	DefaultPermissions *int64     `json:"default_permissions,omitempty"`
-	UserLimit          int        `json:"user_limit"`
-	Bitrate            int        `json:"bitrate"`
-	Locked                    bool       `json:"locked"`
-	LockedBy                  *string    `json:"locked_by,omitempty"`
-	LockedAt                  *time.Time `json:"locked_at,omitempty"`
-	Archived                  bool       `json:"archived"`
-	ReadOnly                  bool       `json:"read_only"`
-	ReadOnlyRoleIDs           []string   `json:"read_only_role_ids,omitempty"`
+	ID                         string     `json:"id"`
+	GuildID                    *string    `json:"guild_id,omitempty"`
+	InstanceID                 *string    `json:"instance_id,omitempty"`
+	CategoryID                 *string    `json:"category_id,omitempty"`
+	ChannelType                string     `json:"channel_type"`
+	Name                       *string    `json:"name,omitempty"`
+	Topic                      *string    `json:"topic,omitempty"`
+	Position                   int        `json:"position"`
+	SlowmodeSeconds            int        `json:"slowmode_seconds"`
+	NSFW                       bool       `json:"nsfw"`
+	Encrypted                  bool       `json:"encrypted"`
+	LastMessageID              *string    `json:"last_message_id,omitempty"`
+	OwnerID                    *string    `json:"owner_id,omitempty"`
+	DefaultPermissions         *int64     `json:"default_permissions,omitempty"`
+	UserLimit                  int        `json:"user_limit"`
+	Bitrate                    int        `json:"bitrate"`
+	Locked                     bool       `json:"locked"`
+	LockedBy                   *string    `json:"locked_by,omitempty"`
+	LockedAt                   *time.Time `json:"locked_at,omitempty"`
+	Archived                   bool       `json:"archived"`
+	ReadOnly                   bool       `json:"read_only"`
+	ReadOnlyRoleIDs            []string   `json:"read_only_role_ids,omitempty"`
 	DefaultAutoArchiveDuration int        `json:"default_auto_archive_duration"`
-	ParentChannelID           *string    `json:"parent_channel_id,omitempty"`
-	LastActivityAt            *time.Time `json:"last_activity_at,omitempty"`
-	ForumDefaultSort          string     `json:"forum_default_sort,omitempty"`
-	ForumPostGuidelines       *string    `json:"forum_post_guidelines,omitempty"`
-	ForumRequireTags          bool       `json:"forum_require_tags,omitempty"`
-	GalleryDefaultSort        string     `json:"gallery_default_sort,omitempty"`
-	GalleryPostGuidelines     *string    `json:"gallery_post_guidelines,omitempty"`
-	GalleryRequireTags        bool       `json:"gallery_require_tags,omitempty"`
-	Pinned                    bool       `json:"pinned,omitempty"`
-	ReplyCount                int        `json:"reply_count,omitempty"`
-	CreatedAt                 time.Time  `json:"created_at"`
-	Recipients                []User     `json:"recipients,omitempty"`
+	ParentChannelID            *string    `json:"parent_channel_id,omitempty"`
+	LastActivityAt             *time.Time `json:"last_activity_at,omitempty"`
+	ForumDefaultSort           string     `json:"forum_default_sort,omitempty"`
+	ForumPostGuidelines        *string    `json:"forum_post_guidelines,omitempty"`
+	ForumRequireTags           bool       `json:"forum_require_tags,omitempty"`
+	GalleryDefaultSort         string     `json:"gallery_default_sort,omitempty"`
+	GalleryPostGuidelines      *string    `json:"gallery_post_guidelines,omitempty"`
+	GalleryRequireTags         bool       `json:"gallery_require_tags,omitempty"`
+	Pinned                     bool       `json:"pinned,omitempty"`
+	ReplyCount                 int        `json:"reply_count,omitempty"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	Recipients                 []User     `json:"recipients,omitempty"`
 }
 
 // ChannelType constants for channels.channel_type.
@@ -327,48 +329,52 @@ const (
 // Message represents a chat message in a channel. Messages use ULIDs as IDs so
 // they sort by creation time. Corresponds to the messages table.
 type Message struct {
-	ID                  string     `json:"id"`
-	ChannelID           string     `json:"channel_id"`
-	AuthorID            string     `json:"author_id"`
-	InstanceID          *string    `json:"instance_id,omitempty"`
-	Content             *string    `json:"content,omitempty"`
-	Nonce               *string    `json:"nonce,omitempty"`
-	MessageType         string     `json:"message_type"`
-	EditedAt            *time.Time `json:"edited_at,omitempty"`
-	Flags               int        `json:"flags"`
-	ReplyToIDs          []string   `json:"reply_to_ids,omitempty"`
-	MentionUserIDs      []string   `json:"mention_user_ids,omitempty"`
-	MentionRoleIDs      []string   `json:"mention_role_ids,omitempty"`
-	MentionHere         bool       `json:"mention_here"`
-	ThreadID            *string    `json:"thread_id,omitempty"`
-	MasqueradeName      *string    `json:"masquerade_name,omitempty"`
-	MasqueradeAvatar    *string    `json:"masquerade_avatar,omitempty"`
-	MasqueradeColor     *string    `json:"masquerade_color,omitempty"`
-	Encrypted           bool            `json:"encrypted"`
-	EncryptionSessionID *string         `json:"encryption_session_id,omitempty"`
-	VoiceDurationMs     *int            `json:"voice_duration_ms,omitempty"`
-	VoiceWaveform       json.RawMessage `json:"voice_waveform,omitempty"`
-	Components          json.RawMessage `json:"components,omitempty"`
-	Attachments         []Attachment    `json:"attachments,omitempty"`
-	Embeds              []Embed         `json:"embeds,omitempty"`
-	CreatedAt           time.Time       `json:"created_at"`
-	Author              *User           `json:"author,omitempty"`
+	ID                  string             `json:"id"`
+	ChannelID           string             `json:"channel_id"`
+	AuthorID            string             `json:"author_id"`
+	InstanceID          *string            `json:"instance_id,omitempty"`
+	Content             *string            `json:"content,omitempty"`
+	Nonce               *string            `json:"nonce,omitempty"`
+	MessageType         string             `json:"message_type"`
+	EditedAt            *time.Time         `json:"edited_at,omitempty"`
+	Flags               int                `json:"flags"`
+	ReplyToIDs          []string           `json:"reply_to_ids,omitempty"`
+	MentionUserIDs      []string           `json:"mention_user_ids,omitempty"`
+	MentionRoleIDs      []string           `json:"mention_role_ids,omitempty"`
+	MentionHere         bool               `json:"mention_here"`
+	ThreadID            *string            `json:"thread_id,omitempty"`
+	MasqueradeName      *string            `json:"masquerade_name,omitempty"`
+	MasqueradeAvatar    *string            `json:"masquerade_avatar,omitempty"`
+	MasqueradeColor     *string            `json:"masquerade_color,omitempty"`
+	Encrypted           bool               `json:"encrypted"`
+	EncryptionSessionID *string            `json:"encryption_session_id,omitempty"`
+	ExpiresAt           *time.Time         `json:"expires_at,omitempty"`
+	VoiceDurationMs     *int               `json:"voice_duration_ms,omitempty"`
+	VoiceWaveform       json.RawMessage    `json:"voice_waveform,omitempty"`
+	Components          []MessageComponent `json:"components,omitempty"`
+	Attachments         []Attachment       `json:"attachments,omitempty"`
+	Embeds              []Embed            `json:"embeds,omitempty"`
+	Poll                *Poll              `json:"poll,omitempty"`
+	CodeSnippet         *CodeSnippet       `json:"code_snippet,omitempty"`
+	CreatedAt           time.Time          `json:"created_at"`
+	Author              *User              `json:"author,omitempty"`
 }
 
 // MessageType constants for messages.message_type.
 const (
-	MessageTypeDefault       = "default"
-	MessageTypeSystemJoin    = "system_join"
-	MessageTypeSystemLeave   = "system_leave"
-	MessageTypeSystemKick    = "system_kick"
-	MessageTypeSystemBan     = "system_ban"
-	MessageTypeSystemPin     = "system_pin"
-	MessageTypeReply         = "reply"
-	MessageTypeThreadCreated = "thread_created"
-	MessageTypeVoice         = "voice"
-	MessageTypePoll          = "poll"
-	MessageTypeForward       = "forward"
-	MessageTypeScheduled     = "scheduled"
+	MessageTypeDefault        = "default"
+	MessageTypeSystemJoin     = "system_join"
+	MessageTypeSystemLeave    = "system_leave"
+	MessageTypeSystemKick     = "system_kick"
+	MessageTypeSystemBan      = "system_ban"
+	MessageTypeSystemPin      = "system_pin"
+	MessageTypeReply          = "reply"
+	MessageTypeThreadCreated  = "thread_created"
+	MessageTypeVoice          = "voice"
+	MessageTypePoll           = "poll"
+	MessageTypeCodeSnippet    = "code_snippet"
+	MessageTypeForward        = "forward"
+	MessageTypeScheduled      = "scheduled"
 	MessageTypeSystemLockdown = "system_lockdown"
 )
 
@@ -398,23 +404,24 @@ type ScheduledMessage struct {
 // Attachment represents a file attached to a message, stored in S3-compatible
 // object storage. Corresponds to the attachments table.
 type Attachment struct {
-	ID              string    `json:"id"`
-	MessageID       *string   `json:"message_id,omitempty"`
-	UploaderID      *string   `json:"uploader_id,omitempty"`
-	Filename        string    `json:"filename"`
-	ContentType     string    `json:"content_type"`
-	SizeBytes       int64     `json:"size_bytes"`
-	Width           *int      `json:"width,omitempty"`
-	Height          *int      `json:"height,omitempty"`
-	DurationSeconds *float32  `json:"duration_seconds,omitempty"`
-	S3Bucket        string    `json:"s3_bucket"`
-	S3Key           string    `json:"s3_key"`
-	Blurhash        *string   `json:"blurhash,omitempty"`
-	AltText         *string   `json:"alt_text,omitempty"`
-	NSFW            bool      `json:"nsfw"`
-	Description     *string   `json:"description,omitempty"`
-	InstanceID      *string   `json:"instance_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              string     `json:"id"`
+	MessageID       *string    `json:"message_id,omitempty"`
+	UploaderID      *string    `json:"uploader_id,omitempty"`
+	Filename        string     `json:"filename"`
+	ContentType     string     `json:"content_type"`
+	SizeBytes       int64      `json:"size_bytes"`
+	Width           *int       `json:"width,omitempty"`
+	Height          *int       `json:"height,omitempty"`
+	DurationSeconds *float32   `json:"duration_seconds,omitempty"`
+	S3Bucket        string     `json:"s3_bucket"`
+	S3Key           string     `json:"s3_key"`
+	Blurhash        *string    `json:"blurhash,omitempty"`
+	AltText         *string    `json:"alt_text,omitempty"`
+	NSFW            bool       `json:"nsfw"`
+	Description     *string    `json:"description,omitempty"`
+	InstanceID      *string    `json:"instance_id,omitempty"`
+	Tags            []MediaTag `json:"tags,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 // MediaTag represents a guild-scoped tag for categorizing attachments.
@@ -469,8 +476,8 @@ type Reaction struct {
 	MessageID  string    `json:"message_id"`
 	UserID     string    `json:"user_id"`
 	InstanceID *string   `json:"instance_id,omitempty"`
-	Emoji     string    `json:"emoji"`
-	CreatedAt time.Time `json:"created_at"`
+	Emoji      string    `json:"emoji"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Pin represents a pinned message in a channel. Corresponds to the pins table.
@@ -479,7 +486,7 @@ type Pin struct {
 	MessageID  string    `json:"message_id"`
 	InstanceID *string   `json:"instance_id,omitempty"`
 	PinnedBy   string    `json:"pinned_by"`
-	PinnedAt  time.Time `json:"pinned_at"`
+	PinnedAt   time.Time `json:"pinned_at"`
 }
 
 // Invite represents a guild invite link with optional usage limits and expiry.
@@ -532,17 +539,18 @@ type CustomEmoji struct {
 // Webhook represents an incoming or outgoing webhook for a guild channel.
 // Corresponds to the webhooks table.
 type Webhook struct {
-	ID          string    `json:"id"`
-	GuildID     string    `json:"guild_id"`
-	ChannelID   string    `json:"channel_id"`
-	InstanceID  *string   `json:"instance_id,omitempty"`
-	CreatorID   *string   `json:"creator_id,omitempty"`
-	Name        string    `json:"name"`
-	AvatarID    *string   `json:"avatar_id,omitempty"`
-	Token       string    `json:"-"`
-	WebhookType string    `json:"webhook_type"`
-	OutgoingURL *string   `json:"outgoing_url,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	GuildID        string    `json:"guild_id"`
+	ChannelID      string    `json:"channel_id"`
+	InstanceID     *string   `json:"instance_id,omitempty"`
+	CreatorID      *string   `json:"creator_id,omitempty"`
+	Name           string    `json:"name"`
+	AvatarID       *string   `json:"avatar_id,omitempty"`
+	Token          string    `json:"token,omitempty"`
+	WebhookType    string    `json:"webhook_type"`
+	OutgoingURL    *string   `json:"outgoing_url,omitempty"`
+	OutgoingEvents []string  `json:"outgoing_events,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // WebhookType constants for webhooks.webhook_type.
@@ -555,28 +563,28 @@ const (
 // Corresponds to the audit_log table.
 // Audit log action constants for categorizing guild events.
 const (
-	AuditActionGuildUpdate         = "guild_update"
-	AuditActionChannelCreate       = "channel_create"
-	AuditActionChannelUpdate       = "channel_update"
-	AuditActionChannelDelete       = "channel_delete"
-	AuditActionRoleCreate          = "role_create"
-	AuditActionRoleUpdate          = "role_update"
-	AuditActionRoleDelete          = "role_delete"
-	AuditActionMemberKick          = "member_kick"
-	AuditActionMemberBan           = "member_ban"
-	AuditActionMemberUnban         = "member_unban"
-	AuditActionMemberUpdate        = "member_update"
-	AuditActionInviteCreate        = "invite_create"
-	AuditActionInviteDelete        = "invite_delete"
-	AuditActionWebhookCreate       = "webhook_create"
-	AuditActionWebhookUpdate       = "webhook_update"
-	AuditActionWebhookDelete       = "webhook_delete"
-	AuditActionEmojiCreate         = "emoji_create"
-	AuditActionEmojiUpdate         = "emoji_update"
-	AuditActionEmojiDelete         = "emoji_delete"
-	AuditActionMessageDelete       = "message_delete"
-	AuditActionMessageBulkDelete   = "message_bulk_delete"
-	AuditActionOwnershipTransfer   = "ownership_transfer"
+	AuditActionGuildUpdate       = "guild_update"
+	AuditActionChannelCreate     = "channel_create"
+	AuditActionChannelUpdate     = "channel_update"
+	AuditActionChannelDelete     = "channel_delete"
+	AuditActionRoleCreate        = "role_create"
+	AuditActionRoleUpdate        = "role_update"
+	AuditActionRoleDelete        = "role_delete"
+	AuditActionMemberKick        = "member_kick"
+	AuditActionMemberBan         = "member_ban"
+	AuditActionMemberUnban       = "member_unban"
+	AuditActionMemberUpdate      = "member_update"
+	AuditActionInviteCreate      = "invite_create"
+	AuditActionInviteDelete      = "invite_delete"
+	AuditActionWebhookCreate     = "webhook_create"
+	AuditActionWebhookUpdate     = "webhook_update"
+	AuditActionWebhookDelete     = "webhook_delete"
+	AuditActionEmojiCreate       = "emoji_create"
+	AuditActionEmojiUpdate       = "emoji_update"
+	AuditActionEmojiDelete       = "emoji_delete"
+	AuditActionMessageDelete     = "message_delete"
+	AuditActionMessageBulkDelete = "message_bulk_delete"
+	AuditActionOwnershipTransfer = "ownership_transfer"
 )
 
 type AuditLogEntry struct {
@@ -619,19 +627,19 @@ type ReadState struct {
 
 // Poll represents a poll attached to a message in a channel. Corresponds to the polls table.
 type Poll struct {
-	ID              string       `json:"id"`
-	ChannelID       string       `json:"channel_id"`
-	MessageID       *string      `json:"message_id,omitempty"`
-	AuthorID        string       `json:"author_id"`
-	Question        string       `json:"question"`
-	MultiVote       bool         `json:"multi_vote"`
-	Anonymous       bool         `json:"anonymous"`
-	ExpiresAt       *time.Time   `json:"expires_at,omitempty"`
-	Closed          bool         `json:"closed"`
-	CreatedAt       time.Time    `json:"created_at"`
-	Options         []PollOption `json:"options,omitempty"`
-	TotalVotes      int          `json:"total_votes"`
-	UserVotes       []string     `json:"user_votes,omitempty"` // option IDs the requesting user voted for
+	ID         string       `json:"id"`
+	ChannelID  string       `json:"channel_id"`
+	MessageID  *string      `json:"message_id,omitempty"`
+	AuthorID   string       `json:"author_id"`
+	Question   string       `json:"question"`
+	MultiVote  bool         `json:"multi_vote"`
+	Anonymous  bool         `json:"anonymous"`
+	ExpiresAt  *time.Time   `json:"expires_at,omitempty"`
+	Closed     bool         `json:"closed"`
+	CreatedAt  time.Time    `json:"created_at"`
+	Options    []PollOption `json:"options,omitempty"`
+	TotalVotes int          `json:"total_votes"`
+	UserVotes  []string     `json:"user_votes,omitempty"` // option IDs the requesting user voted for
 }
 
 // PollOption represents a single option within a poll.
@@ -641,6 +649,19 @@ type PollOption struct {
 	Text      string `json:"text"`
 	Position  int    `json:"position"`
 	VoteCount int    `json:"vote_count"`
+}
+
+// CodeSnippet represents a shared code block attached to a message.
+type CodeSnippet struct {
+	ID        string    `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	MessageID *string   `json:"message_id,omitempty"`
+	AuthorID  string    `json:"author_id"`
+	Title     *string   `json:"title,omitempty"`
+	Language  string    `json:"language"`
+	Code      string    `json:"code"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // MessageBookmark represents a user's bookmark on a message. Corresponds to the message_bookmarks table.
@@ -656,21 +677,21 @@ type MessageBookmark struct {
 
 // GuildEvent represents a scheduled event in a guild. Corresponds to the guild_events table.
 type GuildEvent struct {
-	ID               string     `json:"id"`
-	GuildID          string     `json:"guild_id"`
-	CreatorID        string     `json:"creator_id"`
-	Name             string     `json:"name"`
-	Description      *string    `json:"description,omitempty"`
-	Location         *string    `json:"location,omitempty"`
-	ChannelID        *string    `json:"channel_id,omitempty"`
-	ImageID          *string    `json:"image_id,omitempty"`
-	ScheduledStart   time.Time  `json:"scheduled_start"`
-	ScheduledEnd     *time.Time `json:"scheduled_end,omitempty"`
-	Status           string     `json:"status"`
-	InterestedCount  int        `json:"interested_count"`
-	CreatedAt        time.Time  `json:"created_at"`
-	Creator          *User      `json:"creator,omitempty"`
-	UserRSVP         *string    `json:"user_rsvp,omitempty"` // Requesting user's RSVP status
+	ID              string     `json:"id"`
+	GuildID         string     `json:"guild_id"`
+	CreatorID       string     `json:"creator_id"`
+	Name            string     `json:"name"`
+	Description     *string    `json:"description,omitempty"`
+	Location        *string    `json:"location,omitempty"`
+	ChannelID       *string    `json:"channel_id,omitempty"`
+	ImageID         *string    `json:"image_id,omitempty"`
+	ScheduledStart  time.Time  `json:"scheduled_start"`
+	ScheduledEnd    *time.Time `json:"scheduled_end,omitempty"`
+	Status          string     `json:"status"`
+	InterestedCount int        `json:"interested_count"`
+	CreatedAt       time.Time  `json:"created_at"`
+	Creator         *User      `json:"creator,omitempty"`
+	UserRSVP        *string    `json:"user_rsvp,omitempty"` // Requesting user's RSVP status
 }
 
 // GuildEventStatus constants.

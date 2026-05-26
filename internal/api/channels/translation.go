@@ -38,7 +38,7 @@ type libreTranslateRequest struct {
 
 // libreTranslateResponse is the response from the LibreTranslate API.
 type libreTranslateResponse struct {
-	TranslatedText string `json:"translatedText"`
+	TranslatedText   string `json:"translatedText"`
 	DetectedLanguage struct {
 		Confidence float64 `json:"confidence"`
 		Language   string  `json:"language"`
@@ -103,16 +103,21 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 
 	// Fetch the message content from the database.
 	var content *string
+	var encrypted bool
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT content FROM messages WHERE id = $1 AND channel_id = $2`,
+		`SELECT content, encrypted FROM messages WHERE id = $1 AND channel_id = $2`,
 		messageID, channelID,
-	).Scan(&content)
+	).Scan(&content, &encrypted)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			apiutil.WriteError(w, http.StatusNotFound, "message_not_found", "Message not found")
 			return
 		}
 		apiutil.InternalError(w, h.Logger, "Failed to fetch message", err)
+		return
+	}
+	if encrypted {
+		apiutil.WriteError(w, http.StatusBadRequest, "encrypted_message", "Encrypted messages cannot be translated server-side")
 		return
 	}
 	if content == nil || *content == "" {

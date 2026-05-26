@@ -108,6 +108,8 @@ func (m *Manager) Start(ctx context.Context) {
 
 	// Periodic data retention cleanup (every 15 minutes).
 	m.startPeriodic(ctx, "retention-cleanup", 15*time.Minute, m.runRetentionPolicies)
+	m.startPeriodic(ctx, "scheduled-messages", 30*time.Second, m.deliverDueScheduledMessages)
+	m.startPeriodic(ctx, "expiring-messages", 30*time.Second, m.deleteExpiredMessages)
 
 	// Federation events retention — prune events older than backfill window.
 	m.startPeriodic(ctx, "federation-events-cleanup", 1*time.Hour, m.cleanFederationEvents)
@@ -275,8 +277,9 @@ func (m *Manager) handleMessageCreate(ctx context.Context, event events.Event) {
 	guildID, _ := data["guild_id"].(string)
 	authorID, _ := data["author_id"].(string)
 	content, _ := data["content"].(string)
+	encrypted, _ := data["encrypted"].(bool)
 
-	if id == "" || content == "" {
+	if id == "" || content == "" || encrypted {
 		return
 	}
 
@@ -309,12 +312,13 @@ func (m *Manager) handleMessageUpdate(ctx context.Context, event events.Event) {
 	var guildID *string
 	var msgContent *string
 	var createdAt time.Time
+	var encrypted bool
 	err := m.pool.QueryRow(ctx,
-		`SELECT m.id, m.channel_id, c.guild_id, m.author_id, m.content, m.created_at
+		`SELECT m.id, m.channel_id, c.guild_id, m.author_id, m.content, m.created_at, m.encrypted
 		 FROM messages m
 		 LEFT JOIN channels c ON c.id = m.channel_id
 		 WHERE m.id = $1`, id).Scan(
-		&doc.ID, &doc.ChannelID, &guildID, &doc.AuthorID, &msgContent, &createdAt,
+		&doc.ID, &doc.ChannelID, &guildID, &doc.AuthorID, &msgContent, &createdAt, &encrypted,
 	)
 	if err != nil {
 		if content != "" {
@@ -328,6 +332,10 @@ func (m *Manager) handleMessageUpdate(ctx context.Context, event events.Event) {
 
 	if guildID != nil {
 		doc.GuildID = *guildID
+	}
+	if encrypted {
+		_ = m.search.DeleteMessage(ctx, id)
+		return
 	}
 	if msgContent != nil {
 		doc.Content = *msgContent

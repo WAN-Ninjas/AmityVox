@@ -70,6 +70,14 @@
 			starting = true;
 			error = null;
 
+			await api.startScreenShare(channelId, {
+				share_type: 'screen',
+				resolution,
+				framerate,
+				audio_enabled: audioEnabled,
+				max_viewers: 50
+			});
+
 			const res = getResolutionConstraints();
 				await room.localParticipant.setScreenShareEnabled(true, {
 					audio: audioEnabled,
@@ -92,6 +100,7 @@
 				error = getErrorMessage(err, 'Failed to start screen share');
 				console.error('Screen share error:', err);
 			}
+			await api.stopScreenShare(channelId).catch(() => {});
 		} finally {
 			starting = false;
 		}
@@ -102,7 +111,10 @@
 		if (!room) return;
 		error = null;
 		await stopOp.run(
-			() => room.localParticipant.setScreenShareEnabled(false),
+			async () => {
+				await room.localParticipant.setScreenShareEnabled(false);
+				await api.stopScreenShare(channelId);
+			},
 			msg => (error = msg)
 		);
 		if (!stopOp.error) isSharing = false;

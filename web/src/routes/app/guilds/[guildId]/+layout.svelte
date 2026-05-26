@@ -3,6 +3,7 @@
 	import type { Snippet } from 'svelte';
 	import { setGuild } from '$lib/stores/guilds';
 	import { loadChannels, loadHiddenThreads } from '$lib/stores/channels';
+	import { loadClientConfig } from '$lib/stores/clientConfig';
 
 	interface Props {
 		children: Snippet;
@@ -15,8 +16,8 @@
 		const guildId = $page.params.guildId;
 		if (guildId) {
 			setGuild(guildId);
+			loadClientConfig(guildId).then(() => loadHiddenThreads());
 			loadChannels(guildId);
-			loadHiddenThreads();
 		}
 	});
 </script>

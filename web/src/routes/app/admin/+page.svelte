@@ -15,14 +15,18 @@
 	import AdminRateLimitsTab from '$lib/components/admin/AdminRateLimitsTab.svelte';
 	import AdminContentSafetyTab from '$lib/components/admin/AdminContentSafetyTab.svelte';
 	import AdminRegistrationTab from '$lib/components/admin/AdminRegistrationTab.svelte';
+	import AdminFeatureFlagsTab from '$lib/components/admin/AdminFeatureFlagsTab.svelte';
+	import AdminTranscriptionTab from '$lib/components/admin/AdminTranscriptionTab.svelte';
 	import AdminBotsTab from '$lib/components/admin/AdminBotsTab.svelte';
 	import AdminUsersTab from '$lib/components/admin/AdminUsersTab.svelte';
 	import AdminGuildsTab from '$lib/components/admin/AdminGuildsTab.svelte';
 	import AdminInstanceBansTab from '$lib/components/admin/AdminInstanceBansTab.svelte';
+	import AdminMediaPanel from '$lib/components/gallery/AdminMediaPanel.svelte';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { AdminStats } from '$lib/types';
 
-	type Tab = 'dashboard' | 'users' | 'guilds' | 'bots' | 'bans' | 'registration' | 'announcements' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha' | 'health' | 'storage' | 'backups' | 'domains' | 'retention' | 'updates';
+	type Tab = 'dashboard' | 'users' | 'guilds' | 'bots' | 'bans' | 'registration' | 'features' | 'transcription' | 'announcements' | 'media' | 'instance' | 'federation' | 'rate_limits' | 'content_safety' | 'captcha' | 'health' | 'storage' | 'backups' | 'domains' | 'retention' | 'updates';
 	let currentTab = $state<Tab>('dashboard');
 
 	// --- Dashboard ---
@@ -51,7 +55,10 @@
 		{ id: 'bots', label: 'Bots' },
 		{ id: 'bans', label: 'Instance Bans' },
 		{ id: 'registration', label: 'Registration' },
+		{ id: 'features', label: 'Features' },
+		{ id: 'transcription', label: 'Transcription' },
 		{ id: 'announcements', label: 'Announcements' },
+		{ id: 'media', label: 'Media' },
 		{ id: 'rate_limits', label: 'Rate Limiting' },
 		{ id: 'content_safety', label: 'Content Safety' },
 		{ id: 'captcha', label: 'CAPTCHA' },
@@ -64,6 +71,23 @@
 		{ id: 'retention', label: 'Retention' },
 		{ id: 'updates', label: 'Updates' }
 	];
+	function isTabVisible(tab: Tab): boolean {
+		if (tab === 'federation') {
+			return isFeatureEnabled($clientConfig, 'federated_messaging');
+		}
+		if (tab === 'backups') {
+			return isFeatureEnabled($clientConfig, 'admin_backups');
+		}
+		return true;
+	}
+
+	const visibleTabs = $derived(tabs.filter((tab) => isTabVisible(tab.id)));
+
+	$effect(() => {
+		if (!visibleTabs.some((tab) => tab.id === currentTab)) {
+			currentTab = 'dashboard';
+		}
+	});
 </script>
 
 <svelte:head>
@@ -74,7 +98,7 @@
 	<nav class="flex w-48 shrink-0 flex-col overflow-y-auto bg-bg-secondary p-4">
 		<h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Administration</h3>
 		<ul class="space-y-0.5">
-			{#each tabs as tab (tab.id)}
+			{#each visibleTabs as tab (tab.id)}
 				<li>
 					<button
 						class="w-full rounded px-2 py-1.5 text-left text-sm transition-colors {currentTab === tab.id ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:bg-bg-modifier hover:text-text-secondary'}"
@@ -166,8 +190,14 @@
 			<AdminInstanceBansTab />
 		{:else if currentTab === 'registration'}
 			<AdminRegistrationTab />
+		{:else if currentTab === 'features'}
+			<AdminFeatureFlagsTab />
+		{:else if currentTab === 'transcription'}
+			<AdminTranscriptionTab />
 		{:else if currentTab === 'announcements'}
 			<AdminAnnouncementsTab />
+		{:else if currentTab === 'media'}
+			<AdminMediaPanel />
 		{:else if currentTab === 'rate_limits'}
 			<AdminRateLimitsTab />
 		{:else if currentTab === 'content_safety'}

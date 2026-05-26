@@ -8,6 +8,7 @@ vi.mock('$lib/api/client', () => ({
 }));
 
 import { api, type LocationShare } from '$lib/api/client';
+import { clientConfig } from '$lib/stores/clientConfig';
 import {
 	loadLocationShares,
 	locationSharesByChannel,
@@ -33,6 +34,7 @@ function createLocation(overrides?: Partial<LocationShare>): LocationShare {
 describe('locationShares store', () => {
 	beforeEach(() => {
 		locationSharesByChannel.set(new Map());
+		clientConfig.set({ feature_flags: { location_sharing: { enabled: true } } } as any);
 		vi.mocked(api.getLocations).mockReset();
 	});
 

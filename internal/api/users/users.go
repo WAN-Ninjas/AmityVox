@@ -40,11 +40,11 @@ type FederationDMNotifier func(ctx context.Context, remoteDomain, localChannelID
 
 // Handler implements user-related REST API endpoints.
 type Handler struct {
-	Pool           *pgxpool.Pool
-	EventBus       *events.Bus
-	InstanceID     string
-	InstanceDomain string
-	Logger         *slog.Logger
+	Pool              *pgxpool.Pool
+	EventBus          *events.Bus
+	InstanceID        string
+	InstanceDomain    string
+	Logger            *slog.Logger
 	NotifyFederatedDM FederationDMNotifier // optional — nil if federation disabled
 }
 
@@ -85,9 +85,20 @@ func (h *Handler) HandleGetSelf(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 
-	var req updateSelfRequest
-	if !apiutil.DecodeJSON(w, r, &req) {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
 		return
+	}
+	body, _ := json.Marshal(raw)
+	var req updateSelfRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		apiutil.WriteError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+	fieldPresent := func(field string) bool {
+		_, ok := raw[field]
+		return ok
 	}
 
 	// Validate field lengths.
@@ -121,7 +132,7 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 
 	// Parse status expiry if provided.
 	var statusExpiresAt *time.Time
-	if req.StatusExpiresAt != nil {
+	if fieldPresent("status_expires_at") && req.StatusExpiresAt != nil {
 		if *req.StatusExpiresAt == "" {
 			// Clear expiry.
 			statusExpiresAt = nil
@@ -135,7 +146,7 @@ func (h *Handler) HandleUpdateSelf(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	user, err := h.updateUser(r.Context(), userID, req, statusExpiresAt)
+	user, err := h.updateUser(r.Context(), userID, req, statusExpiresAt, fieldPresent)
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to update user", err)
 		return
@@ -1335,7 +1346,7 @@ func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, err
 	err := h.Pool.QueryRow(ctx,
 		`SELECT id, instance_id, username, display_name, avatar_id, status_text,
 		        status_emoji, status_presence, status_expires_at, bio,
-		        banner_id, accent_color, pronouns,
+		        banner_id, accent_color, pronouns, activity_type, activity_name,
 		        bot_owner_id, email, flags, last_online, created_at
 		 FROM users WHERE id = $1`,
 		userID,
@@ -1343,38 +1354,44 @@ func (h *Handler) getUser(ctx context.Context, userID string) (*models.User, err
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
 		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
 		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
-		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.LastOnline, &user.CreatedAt,
+		&user.Pronouns, &user.ActivityType, &user.ActivityName,
+		&user.BotOwnerID, &user.Email, &user.Flags, &user.LastOnline, &user.CreatedAt,
 	)
 	return &user, err
 }
 
-func (h *Handler) updateUser(ctx context.Context, userID string, req updateSelfRequest, statusExpiresAt *time.Time) (*models.User, error) {
+func (h *Handler) updateUser(ctx context.Context, userID string, req updateSelfRequest, statusExpiresAt *time.Time, fieldPresent func(string) bool) (*models.User, error) {
 	var user models.User
 	err := h.Pool.QueryRow(ctx,
 		`UPDATE users SET
-			display_name = COALESCE($2, display_name),
-			avatar_id = COALESCE($3, avatar_id),
-			status_text = COALESCE($4, status_text),
-			bio = COALESCE($5, bio),
-			status_emoji = COALESCE($6, status_emoji),
-			status_presence = COALESCE($7, status_presence),
-			status_expires_at = COALESCE($8, status_expires_at),
-			banner_id = COALESCE($9, banner_id),
-			accent_color = COALESCE($10, accent_color),
-			pronouns = COALESCE($11, pronouns)
+			display_name = CASE WHEN $12 THEN $2 ELSE display_name END,
+			avatar_id = CASE WHEN $13 THEN $3 ELSE avatar_id END,
+			status_text = CASE WHEN $14 THEN $4 ELSE status_text END,
+			bio = CASE WHEN $15 THEN $5 ELSE bio END,
+			status_emoji = CASE WHEN $16 THEN $6 ELSE status_emoji END,
+			status_presence = CASE WHEN $17 THEN $7 ELSE status_presence END,
+			status_expires_at = CASE WHEN $18 THEN $8 ELSE status_expires_at END,
+			banner_id = CASE WHEN $19 THEN $9 ELSE banner_id END,
+			accent_color = CASE WHEN $20 THEN $10 ELSE accent_color END,
+			pronouns = CASE WHEN $21 THEN $11 ELSE pronouns END
 		 WHERE id = $1
 		 RETURNING id, instance_id, username, display_name, avatar_id, status_text,
 		           status_emoji, status_presence, status_expires_at, bio,
-		           banner_id, accent_color, pronouns,
+		           banner_id, accent_color, pronouns, activity_type, activity_name,
 		           bot_owner_id, email, flags, last_online, created_at`,
 		userID, req.DisplayName, req.AvatarID, req.StatusText, req.Bio,
 		req.StatusEmoji, req.StatusPresence, statusExpiresAt,
 		req.BannerID, req.AccentColor, req.Pronouns,
+		fieldPresent("display_name"), fieldPresent("avatar_id"), fieldPresent("status_text"),
+		fieldPresent("bio"), fieldPresent("status_emoji"), fieldPresent("status_presence"),
+		fieldPresent("status_expires_at"), fieldPresent("banner_id"), fieldPresent("accent_color"),
+		fieldPresent("pronouns"),
 	).Scan(
 		&user.ID, &user.InstanceID, &user.Username, &user.DisplayName,
 		&user.AvatarID, &user.StatusText, &user.StatusEmoji, &user.StatusPresence,
 		&user.StatusExpiresAt, &user.Bio, &user.BannerID, &user.AccentColor,
-		&user.Pronouns, &user.BotOwnerID, &user.Email, &user.Flags, &user.LastOnline, &user.CreatedAt,
+		&user.Pronouns, &user.ActivityType, &user.ActivityName,
+		&user.BotOwnerID, &user.Email, &user.Flags, &user.LastOnline, &user.CreatedAt,
 	)
 	return &user, err
 }

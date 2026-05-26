@@ -3,7 +3,9 @@
 	import { api } from '$lib/api/client';
 	import { currentUser } from '$lib/stores/auth';
 	import { addToast } from '$lib/stores/toast';
-	import { removeDMChannel, addDMChannel } from '$lib/stores/dms';
+	import { removeDMChannel, updateDMChannel } from '$lib/stores/dms';
+	import { relationships } from '$lib/stores/relationships';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { goto } from '$app/navigation';
 	import { avatarUrl } from '$lib/utils/avatar';
 	import { getErrorMessage } from '$lib/utils/apiError';
@@ -20,14 +22,46 @@
 	let { channel, open = $bindable(), onclose }: Props = $props();
 
 	const isOwner = $derived($currentUser?.id === channel.owner_id);
+	const hasE2EE = $derived(isFeatureEnabled($clientConfig, 'e2ee'));
 	const recipients = $derived(channel.recipients ?? []);
+	const recipientIds = $derived(new Set(recipients.map((member) => member.id)));
+	let memberSearch = $state('');
+	let addingUserId = $state<string | null>(null);
+
+	const addableFriends = $derived.by(() => {
+		const query = memberSearch.trim().toLowerCase();
+		const list: User[] = [];
+		for (const [targetId, rel] of $relationships) {
+			if (rel.type !== 'friend' || recipientIds.has(targetId) || !rel.user) continue;
+			const name = rel.user.display_name ?? rel.user.username;
+			if (query && !name.toLowerCase().includes(query) && !rel.user.username.toLowerCase().includes(query)) continue;
+			list.push(rel.user);
+		}
+		return list.sort((a, b) => (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username));
+	});
 
 	async function removeMember(userId: string) {
 		try {
 			await api.removeGroupDMRecipient(channel.id, userId);
+			updateDMChannel({ ...channel, recipients: recipients.filter((member) => member.id !== userId) });
 			addToast('Member removed', 'success');
 		} catch (err: unknown) {
 			addToast(getErrorMessage(err, 'Failed to remove member'), 'error');
+		}
+	}
+
+	async function addMember(user: User) {
+		if (addingUserId || recipients.length >= 10) return;
+		addingUserId = user.id;
+		try {
+			const updated = await api.addGroupDMRecipient(channel.id, user.id);
+			updateDMChannel(updated);
+			memberSearch = '';
+			addToast('Member added', 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to add member'), 'error');
+		} finally {
+			addingUserId = null;
 		}
 	}
 
@@ -85,6 +119,43 @@
 				{/each}
 			</div>
 		</div>
+
+		{#if isOwner && (hasE2EE || channel.encrypted)}
+			<div>
+				<h4 class="mb-2 text-xs font-medium text-text-muted">Add Members</h4>
+				<input
+					class="input mb-2 w-full text-sm"
+					placeholder={recipients.length >= 10 ? 'Group is full' : 'Search friends...'}
+					bind:value={memberSearch}
+					disabled={recipients.length >= 10}
+				/>
+				{#if recipients.length < 10}
+					<div class="max-h-36 overflow-y-auto rounded-md bg-bg-primary">
+						{#if addableFriends.length === 0}
+							<p class="p-3 text-center text-sm text-text-muted">{memberSearch ? 'No friends match your search.' : 'No friends available to add.'}</p>
+						{:else}
+							{#each addableFriends as friend (friend.id)}
+								<button
+									class="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-bg-modifier disabled:opacity-50"
+									onclick={() => addMember(friend)}
+									disabled={addingUserId === friend.id}
+								>
+									<Avatar
+										name={friend.display_name ?? friend.username}
+										src={avatarUrl(friend.avatar_id, friend.instance_id || undefined)}
+										size="sm"
+									/>
+									<span class="flex-1 truncate text-sm text-text-secondary">
+										{friend.display_name ?? friend.username}
+									</span>
+									<span class="text-xs text-text-muted">{addingUserId === friend.id ? 'Adding...' : 'Add'}</span>
+								</button>
+							{/each}
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{/if}
 
 		<!-- Encryption (owner only) -->
 		{#if isOwner}

@@ -18,6 +18,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/features"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/presence"
 )
@@ -148,6 +149,18 @@ func NewSyncService(fed *Service, bus *events.Bus, logger *slog.Logger, cfg Sync
 // and cleared when the peer sends offline/invisible.
 func (ss *SyncService) SetPresenceCache(cache presenceStore) {
 	ss.cache = cache
+}
+
+func (ss *SyncService) federationFeatureEnabled(ctx context.Context, key string) bool {
+	states, err := features.Resolve(ctx, ss.fed.pool, "")
+	if err != nil {
+		ss.logger.Error("failed to resolve federation feature flag",
+			slog.String("feature", key),
+			slog.String("error", err.Error()))
+		return false
+	}
+	state, ok := states[key]
+	return ok && state.Enabled
 }
 
 // isNegativelyCached returns true if the sender is in the negative cache and
@@ -396,6 +409,15 @@ func (ss *SyncService) HandleInbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
+	if msg.Type == "PRESENCE_UPDATE" {
+		if !ss.federationFeatureEnabled(r.Context(), "federated_presence") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	} else if !ss.federationFeatureEnabled(r.Context(), "federated_messaging") {
+		http.Error(w, "Federated messaging disabled", http.StatusForbidden)
+		return
+	}
 
 	if msg.GuildID == "" && requiresFederationGuildID(msg.Type, msg.ChannelID) {
 		http.Error(w, "Missing guild_id", http.StatusBadRequest)
@@ -607,6 +629,9 @@ func (ss *SyncService) persistInboundMessage(ctx context.Context, remoteInstance
 		}
 		if msgData.MessageType == "" {
 			msgData.MessageType = models.MessageTypeDefault
+		}
+		if len(msgData.Attachments) > 0 && !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+			msgData.Attachments = nil
 		}
 		if msgData.Author != nil && msgData.Author.ID != "" {
 			ss.ensureRemoteUserStub(ctx, remoteInstanceID, federatedUserInfo{
@@ -1300,6 +1325,13 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	if err := json.Unmarshal(event.Data, &data); err != nil {
 		return
 	}
+	if event.Type == "PRESENCE_UPDATE" {
+		if !ss.federationFeatureEnabled(ctx, "federated_presence") {
+			return
+		}
+	} else if !ss.federationFeatureEnabled(ctx, "federated_messaging") {
+		return
+	}
 
 	// Ensure GuildID is populated for channel-scoped events. The local message
 	// handler publishes MESSAGE_CREATE with only ChannelID set; without the
@@ -1382,6 +1414,10 @@ func (ss *SyncService) routeEvent(ctx context.Context, event events.Event) {
 	// the media proxy instead of requesting files from local storage (404).
 	if event.Type == "MESSAGE_CREATE" || event.Type == "MESSAGE_UPDATE" {
 		if dataMap, ok := data.(map[string]interface{}); ok {
+			if !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+				delete(dataMap, "attachments")
+				data = dataMap
+			}
 			if atts, ok := dataMap["attachments"].([]interface{}); ok {
 				for _, att := range atts {
 					if attMap, ok := att.(map[string]interface{}); ok {
@@ -1521,6 +1557,9 @@ func (ss *SyncService) deliverDMEventToPeer(ctx context.Context, event events.Ev
 }
 
 func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
+	if len(msg.Attachments) > 0 && !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+		msg.Attachments = nil
+	}
 	req := federatedDMMessageRequest{
 		RemoteChannelID: remoteChannelID,
 		Message:         federatedMessageDataFromModel(msg),
@@ -1529,6 +1568,9 @@ func (ss *SyncService) deliverDMMessageToPeer(ctx context.Context, domain, peerI
 }
 
 func (ss *SyncService) deliverDMMessageUpdateToPeer(ctx context.Context, domain, peerID, remoteChannelID string, msg models.Message) {
+	if len(msg.Attachments) > 0 && !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+		msg.Attachments = nil
+	}
 	req := federatedDMMessageRequest{
 		RemoteChannelID: remoteChannelID,
 		Message:         federatedMessageDataFromModel(msg),

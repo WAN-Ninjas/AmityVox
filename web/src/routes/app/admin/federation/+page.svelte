@@ -10,6 +10,7 @@
 		type AdminFederationSearchConfig
 	} from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import type { KeyAuditEntry } from '$lib/types';
@@ -46,6 +47,9 @@
 	let securityOp = $state(createAsyncOp());
 	let saveSearchOp = $state(createAsyncOp());
 	let deliveryFilter = $state('');
+	const hasFederatedMessaging = $derived(isFeatureEnabled($clientConfig, 'federated_messaging'));
+	const hasFederationDiagnostics = $derived(isFeatureEnabled($clientConfig, 'federation_admin_diagnostics'));
+	const canUseFederationDashboard = $derived(hasFederationDiagnostics);
 
 	// Config form state
 	let configFedMode = $state('open');
@@ -57,6 +61,12 @@
 
 	function toastError(error: unknown, fallback: string) {
 		addToast(getErrorMessage(error, fallback), 'error');
+	}
+
+	function requireFederatedMessaging(): boolean {
+		if (hasFederatedMessaging) return true;
+		addToast('Federated messaging is disabled on this instance.', 'error');
+		return false;
 	}
 
 	// --- Data loading ---
@@ -155,6 +165,7 @@
 	}
 
 	async function approvePeer(peerId: string) {
+		if (!requireFederatedMessaging()) return;
 		try {
 			await api.approveFederationPeer(peerId);
 			addToast('Peer approved', 'success');
@@ -165,6 +176,7 @@
 	}
 
 	async function rejectPeer(peerId: string) {
+		if (!requireFederatedMessaging()) return;
 		try {
 			await api.rejectFederationPeer(peerId);
 			addToast('Peer rejected', 'success');
@@ -186,6 +198,7 @@
 
 	// --- Actions ---
 	async function updatePeerControl(peerId: string, action: string, reason?: string) {
+		if (!requireFederatedMessaging()) return;
 		try {
 			await api.updateAdminFederationPeerControl(peerId, { action, reason });
 			addToast(`Peer ${action === 'block' ? 'blocked' : action === 'allow' ? 'allowed' : 'muted'} successfully`, 'success');
@@ -197,6 +210,7 @@
 	}
 
 	async function retryDelivery(receiptId: string) {
+		if (!requireFederatedMessaging()) return;
 		try {
 			await api.retryAdminFederationDelivery(receiptId);
 			addToast('Retry queued', 'success');
@@ -251,12 +265,15 @@
 	}
 
 	onMount(() => {
-		loadDashboard();
-		loadConfig();
+		if (canUseFederationDashboard) {
+			loadDashboard();
+			loadConfig();
+		}
 	});
 
 	// Load tab-specific data.
 	$effect(() => {
+		if (!canUseFederationDashboard) return;
 		if (currentTab === 'controls') loadControls();
 		if (currentTab === 'delivery') loadDeliveryReceipts();
 		if (currentTab === 'search') loadSearchConfig();
@@ -276,6 +293,12 @@
 			<h1 class="text-2xl font-bold text-text-primary">Federation Dashboard</h1>
 			<p class="text-text-muted mt-1">Manage federation peers, delivery, search, and protocol settings.</p>
 		</div>
+
+		{#if !canUseFederationDashboard}
+			<div class="rounded-lg border border-bg-modifier bg-bg-secondary p-6 text-sm text-text-muted">
+				Federation diagnostics are disabled.
+			</div>
+		{:else}
 
 		<!-- Tab Navigation -->
 		<div class="flex gap-1 mb-6 border-b border-border-primary">
@@ -444,23 +467,25 @@
 								<span>Since: {formatDate(peer.established_at)}</span>
 							</div>
 							<!-- Quick Actions -->
-							<div class="flex gap-2 mt-3">
-								{#if peer.federation_status !== 'blocked'}
-									<button
-										class="px-3 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
-										onclick={() => updatePeerControl(peer.peer_id, 'block')}
-									>
-										Block
-									</button>
-								{:else}
-									<button
-										class="px-3 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
-										onclick={() => updatePeerControl(peer.peer_id, 'allow')}
-									>
-										Unblock
-									</button>
-								{/if}
-							</div>
+							{#if hasFederatedMessaging}
+								<div class="flex gap-2 mt-3">
+									{#if peer.federation_status !== 'blocked'}
+										<button
+											class="px-3 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+											onclick={() => updatePeerControl(peer.peer_id, 'block')}
+										>
+											Block
+										</button>
+									{:else}
+										<button
+											class="px-3 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+											onclick={() => updatePeerControl(peer.peer_id, 'allow')}
+										>
+											Unblock
+										</button>
+									{/if}
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -498,15 +523,17 @@
 									: 'bg-yellow-500/20 text-yellow-400'}">
 									{ctrl.action}
 								</span>
-								<button
-									class="text-xs text-text-muted hover:text-text-primary"
-									onclick={() => {
-										const newAction = ctrl.action === 'block' ? 'allow' : 'block';
-										updatePeerControl(ctrl.peer_id, newAction);
-									}}
-								>
-									{ctrl.action === 'block' ? 'Unblock' : 'Block'}
-								</button>
+								{#if hasFederatedMessaging}
+									<button
+										class="text-xs text-text-muted hover:text-text-primary"
+										onclick={() => {
+											const newAction = ctrl.action === 'block' ? 'allow' : 'block';
+											updatePeerControl(ctrl.peer_id, newAction);
+										}}
+									>
+										{ctrl.action === 'block' ? 'Unblock' : 'Block'}
+									</button>
+								{/if}
 							</div>
 						</div>
 					{/each}
@@ -561,7 +588,7 @@
 									<span class="text-xs text-text-muted">
 										Attempts: {receipt.attempts}
 									</span>
-									{#if receipt.status === 'failed' || receipt.status === 'pending'}
+									{#if hasFederatedMessaging && (receipt.status === 'failed' || receipt.status === 'pending')}
 										<button
 											class="px-2 py-0.5 text-xs bg-brand-500/20 text-brand-400 rounded hover:bg-brand-500/30 transition-colors"
 											onclick={() => retryDelivery(receipt.id)}
@@ -698,12 +725,14 @@
 											<span class="text-text-muted text-sm ml-2">-- {peer.reason}</span>
 										{/if}
 									</div>
-									<button
-										class="text-xs text-green-400 hover:text-green-300"
-										onclick={() => updatePeerControl(peer.peer_id, 'allow')}
-									>
-										Unblock
-									</button>
+									{#if hasFederatedMessaging}
+										<button
+											class="text-xs text-green-400 hover:text-green-300"
+											onclick={() => updatePeerControl(peer.peer_id, 'allow')}
+										>
+											Unblock
+										</button>
+									{/if}
 								</div>
 							{/each}
 						</div>
@@ -726,12 +755,14 @@
 											<span class="text-text-muted text-sm ml-1">({peer.peer_name})</span>
 										{/if}
 									</div>
-									<button
-										class="text-xs text-red-400 hover:text-red-300"
-										onclick={() => updatePeerControl(peer.peer_id, 'block')}
-									>
-										Block
-									</button>
+									{#if hasFederatedMessaging}
+										<button
+											class="text-xs text-red-400 hover:text-red-300"
+											onclick={() => updatePeerControl(peer.peer_id, 'block')}
+										>
+											Block
+										</button>
+									{/if}
 								</div>
 							{/each}
 						</div>
@@ -763,20 +794,22 @@
 											{peer.peer_software} &middot; Requested {formatDate(peer.established_at)}
 										</div>
 									</div>
-									<div class="flex items-center gap-2">
-										<button
-											class="px-3 py-1.5 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors font-medium"
-											onclick={() => approvePeer(peer.peer_id)}
-										>
-											Approve
-										</button>
-										<button
-											class="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors font-medium"
-											onclick={() => rejectPeer(peer.peer_id)}
-										>
-											Reject
-										</button>
-									</div>
+									{#if hasFederatedMessaging}
+										<div class="flex items-center gap-2">
+											<button
+												class="px-3 py-1.5 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors font-medium"
+												onclick={() => approvePeer(peer.peer_id)}
+											>
+												Approve
+											</button>
+											<button
+												class="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors font-medium"
+												onclick={() => rejectPeer(peer.peer_id)}
+											>
+												Reject
+											</button>
+										</div>
+									{/if}
 								</div>
 							{/each}
 						</div>
@@ -844,6 +877,7 @@
 					{/if}
 				</div>
 			</div>
+		{/if}
 		{/if}
 	</div>
 </div>

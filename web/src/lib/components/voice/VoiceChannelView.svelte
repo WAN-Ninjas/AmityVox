@@ -17,6 +17,7 @@
 		type VoiceParticipant
 	} from '$lib/stores/voice';
 	import { addToast } from '$lib/stores/toast';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { avatarUrl } from '$lib/utils/avatar';
 	import { getErrorMessage } from '$lib/utils/apiError';
@@ -26,6 +27,9 @@
 	import VoiceControls from './VoiceControls.svelte';
 	import Soundboard from './Soundboard.svelte';
 	import ScreenShareControls from './ScreenShareControls.svelte';
+	import VoiceBroadcast from './VoiceBroadcast.svelte';
+	import Transcription from './Transcription.svelte';
+	import VoiceRecordings from './VoiceRecordings.svelte';
 	import CameraSettings from './CameraSettings.svelte';
 	import VideoTile from './VideoTile.svelte';
 
@@ -41,11 +45,25 @@
 	let showSettings = $state(false);
 	let showSoundboard = $state(false);
 	let showScreenShare = $state(false);
+	let showTranscription = $state(false);
+	let showRecordings = $state(false);
 	let textCollapsed = $state(false);
 	let pinnedId = $state<string | null>(null);
 
 	const connected = $derived($voiceState === 'connected');
 	const connecting = $derived($voiceState === 'connecting');
+	const hasVoiceBroadcasts = $derived(isFeatureEnabled($clientConfig, 'voice_broadcasts'));
+	const hasVoiceTranscription = $derived(isFeatureEnabled($clientConfig, 'voice_transcription'));
+	const hasVideoRecordings = $derived(isFeatureEnabled($clientConfig, 'video_recordings'));
+
+	$effect(() => {
+		if (!hasVoiceBroadcasts) {
+			showSoundboard = false;
+			showScreenShare = false;
+		}
+		if (!hasVoiceTranscription) showTranscription = false;
+		if (!hasVideoRecordings) showRecordings = false;
+	});
 
 	const allTracks = $derived($videoTrackList);
 	const audioOnlyParticipants = $derived(
@@ -146,6 +164,19 @@
 						{/if}
 					</div>
 				</div>
+			{/if}
+
+			{#if hasVoiceBroadcasts}
+			<div class="w-full max-w-md">
+				<VoiceBroadcast
+					{channelId}
+					{guildId}
+					connected={false}
+					currentUserId={$currentUser?.id ?? ''}
+					joining={joinOp.loading}
+					onjoin={handleJoin}
+				/>
+			</div>
 			{/if}
 
 			<button
@@ -265,6 +296,17 @@
 		<!-- Bottom section: controls bar + optional text chat side-by-side -->
 		<div class="flex {textCollapsed ? '' : 'min-h-0 flex-1'} flex-col">
 			<!-- Controls bar spans full width -->
+			<div class="border-t border-bg-floating bg-bg-primary px-4 py-2">
+				{#if hasVoiceBroadcasts}
+					<VoiceBroadcast
+						{channelId}
+						{guildId}
+						{connected}
+						currentUserId={$currentUser?.id ?? ''}
+					/>
+				{/if}
+			</div>
+
 			<div class="flex items-center justify-center gap-2 border-t border-bg-floating bg-bg-secondary px-4 py-3">
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {$selfMute ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'bg-bg-modifier text-text-secondary hover:bg-bg-floating hover:text-text-primary'}"
@@ -321,25 +363,55 @@
 					{/if}
 				</button>
 
-				<button
-					class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
-					onclick={() => (showScreenShare = !showScreenShare)}
-					title="Screen Share"
-				>
-					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-					</svg>
-				</button>
+				{#if hasVoiceBroadcasts}
+					<button
+						class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
+						onclick={() => (showScreenShare = !showScreenShare)}
+						title="Screen Share"
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+						</svg>
+					</button>
+				{/if}
 
-				<button
-					class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
-					onclick={() => (showSoundboard = !showSoundboard)}
-					title="Soundboard"
-				>
-					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-					</svg>
-				</button>
+				{#if hasVoiceBroadcasts}
+					<button
+						class="flex h-10 w-10 items-center justify-center rounded-full bg-bg-modifier text-text-secondary transition-colors hover:bg-bg-floating hover:text-text-primary"
+						onclick={() => (showSoundboard = !showSoundboard)}
+						title="Soundboard"
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+						</svg>
+					</button>
+				{/if}
+
+				{#if hasVoiceTranscription}
+					<button
+						class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {showTranscription ? 'bg-brand-500/20 text-brand-400' : 'bg-bg-modifier text-text-secondary'} hover:bg-bg-floating hover:text-text-primary"
+						onclick={() => (showTranscription = !showTranscription)}
+						title="Transcription"
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3z" />
+							<path d="M19 11a7 7 0 01-14 0M12 18v3m-4 0h8" />
+						</svg>
+					</button>
+				{/if}
+
+				{#if hasVideoRecordings}
+					<button
+						class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {showRecordings ? 'bg-brand-500/20 text-brand-400' : 'bg-bg-modifier text-text-secondary'} hover:bg-bg-floating hover:text-text-primary"
+						onclick={() => (showRecordings = !showRecordings)}
+						title="Recordings"
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<rect x="3" y="6" width="13" height="12" rx="2" />
+							<path d="M16 10l5-3v10l-5-3" />
+						</svg>
+					</button>
+				{/if}
 
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full transition-colors {textCollapsed ? 'bg-bg-modifier text-text-secondary' : 'bg-brand-500/20 text-brand-400'} hover:bg-bg-floating hover:text-text-primary"
@@ -400,7 +472,7 @@
 				</div>
 			{/if}
 
-			{#if showSoundboard}
+			{#if hasVoiceBroadcasts && showSoundboard}
 				<div class="border-t border-bg-floating">
 					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
 						<h3 class="text-sm font-semibold text-text-primary">Soundboard</h3>
@@ -416,7 +488,7 @@
 				</div>
 			{/if}
 
-			{#if showScreenShare}
+			{#if hasVoiceBroadcasts && showScreenShare}
 				<div class="border-t border-bg-floating">
 					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
 						<h3 class="text-sm font-semibold text-text-primary">Screen Share</h3>
@@ -433,6 +505,38 @@
 							{connected}
 							currentUserId={$currentUser?.id ?? ''}
 						/>
+					</div>
+				</div>
+			{/if}
+
+			{#if hasVoiceTranscription && showTranscription}
+				<div class="border-t border-bg-floating">
+					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
+						<h3 class="text-sm font-semibold text-text-primary">Transcription</h3>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showTranscription = false)} aria-label="Close transcription">
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M6 18L18 6M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+					<div class="h-80 bg-bg-primary">
+						<Transcription {channelId} />
+					</div>
+				</div>
+			{/if}
+
+			{#if hasVideoRecordings && showRecordings}
+				<div class="border-t border-bg-floating">
+					<div class="flex items-center justify-between bg-bg-secondary px-4 py-2">
+						<h3 class="text-sm font-semibold text-text-primary">Recordings</h3>
+						<button class="text-text-muted hover:text-text-primary" onclick={() => (showRecordings = false)} aria-label="Close recordings">
+							<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path d="M6 18L18 6M6 6l12 12" />
+							</svg>
+						</button>
+					</div>
+					<div class="max-h-[32rem] overflow-y-auto bg-bg-primary p-4">
+						<VoiceRecordings {channelId} />
 					</div>
 				</div>
 			{/if}

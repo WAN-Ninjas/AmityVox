@@ -99,6 +99,10 @@ AmityVox runs as a set of Docker containers orchestrated by Docker Compose:
 
 Total footprint: ~700 MB to 1.2 GB RAM. Runs comfortably on a Raspberry Pi 5 (8 GB).
 
+## Versioning
+
+The current application version is `0.5.0`. The root `VERSION` file is the canonical release version and must stay aligned with `web/package.json` and `web/package-lock.json`. Build metadata is attached as `version+commit.sanitizedBuildDate` and is exposed by the CLI, health/client-config responses, and gateway HELLO metadata. See `docs/versioning.md`.
+
 ## Quick Start
 
 ### Prerequisites

@@ -4,14 +4,21 @@
 	import { addToast } from '$lib/stores/toast';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { clientConfig, isFeatureEnabled, loadClientConfig } from '$lib/stores/clientConfig';
 	import type { MessageBookmark } from '$lib/types';
 
 	let bookmarks = $state<MessageBookmark[]>([]);
 	let loadOp = $state(createAsyncOp(true));
 	let reminderOpenId = $state<string | null>(null);
 	let customReminderDate = $state('');
+	const hasMessageBookmarks = $derived(isFeatureEnabled($clientConfig, 'message_bookmarks'));
 
 	onMount(async () => {
+		if (!$clientConfig) await loadClientConfig();
+		if (!hasMessageBookmarks) {
+			loadOp.loading = false;
+			return;
+		}
 		const result = await loadOp.run(() => api.getBookmarks(), undefined, 'Failed to load bookmarks');
 		if (result) {
 			bookmarks = result;
@@ -19,6 +26,7 @@
 	});
 
 	async function removeBookmark(messageId: string) {
+		if (!hasMessageBookmarks) return;
 		try {
 			await api.deleteBookmark(messageId);
 			bookmarks = bookmarks.filter(b => b.message_id !== messageId);
@@ -42,6 +50,7 @@
 	}
 
 	async function setReminder(bookmark: MessageBookmark, reminderAt: string | null) {
+		if (!hasMessageBookmarks) return;
 		reminderOpenId = null;
 		customReminderDate = '';
 		try {
@@ -100,7 +109,15 @@
 
 	<div class="flex-1 overflow-y-auto p-6">
 		<div class="mx-auto max-w-2xl">
-			{#if loadOp.loading}
+			{#if !hasMessageBookmarks}
+				<div class="flex flex-col items-center justify-center py-20 text-center">
+					<svg class="mb-4 h-16 w-16 text-text-muted opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+						<path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+					</svg>
+					<h2 class="mb-2 text-lg font-semibold text-text-primary">Saved Messages Disabled</h2>
+					<p class="text-sm text-text-muted">Message bookmarks are disabled on this instance.</p>
+				</div>
+			{:else if loadOp.loading}
 				<p class="text-sm text-text-muted">Loading saved messages...</p>
 			{:else if loadOp.error}
 				<p class="text-sm text-red-400">{loadOp.error}</p>

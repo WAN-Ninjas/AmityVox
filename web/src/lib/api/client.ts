@@ -327,6 +327,18 @@ export interface Integration {
 	updated_at: string;
 }
 
+export interface ActivityPubFollow {
+	id: string;
+	integration_id: string;
+	actor_uri: string;
+	actor_inbox: string | null;
+	actor_name: string | null;
+	actor_handle: string | null;
+	actor_avatar_url: string | null;
+	last_fetched_at: string | null;
+	created_at: string;
+}
+
 export interface BridgeConnection {
 	id: string;
 	guild_id: string;
@@ -358,23 +370,26 @@ export interface IntegrationLogEntry {
 export interface CodeSnippet {
 	id: string;
 	channel_id: string;
+	message_id?: string | null;
 	author_id: string;
-	title?: string;
+	title?: string | null;
 	language: string;
 	code: string;
-	stdin?: string;
-	output?: string;
-	output_error?: string;
-	exit_code?: number;
-	runtime_ms?: number;
-	runnable: boolean;
+	created_at?: string;
+	updated_at?: string;
+	runnable?: boolean;
 }
 
-export interface CodeSnippetRunResult {
-	output: string;
-	output_error?: string;
-	exit_code: number;
-	runtime_ms: number;
+export interface MessageSummary {
+	id: string;
+	channel_id: string;
+	requested_by?: string;
+	summary: string;
+	message_count: number;
+	from_message_id?: string | null;
+	to_message_id?: string | null;
+	model: string;
+	created_at: string;
 }
 
 export interface LocationShare {
@@ -439,6 +454,24 @@ export interface WhiteboardData {
 	background_color: string;
 	locked: boolean;
 	collaborators: Array<{ user_id: string; username: string; cursor_x: number; cursor_y: number }>;
+}
+
+export type WhiteboardSummary = Omit<WhiteboardData, 'state' | 'collaborators'> & {
+	guild_id?: string | null;
+	max_collaborators?: number;
+	created_at?: string;
+	updated_at?: string;
+};
+
+export interface KanbanBoardSummary {
+	id: string;
+	channel_id: string;
+	guild_id: string;
+	name: string;
+	description?: string | null;
+	creator_id: string;
+	created_at: string;
+	updated_at: string;
 }
 
 export interface GuildInsightDay {
@@ -540,6 +573,12 @@ export interface TranscriptionEntry {
 	avatar_id?: string;
 }
 
+export interface AdminTranscriptionConfig {
+	engine_type: 'none' | 'whisper' | 'llm' | 'custom';
+	engine_endpoint: string;
+	save_enabled: boolean;
+}
+
 export interface VideoRecordingPayload {
 	title: string;
 	s3_key: string;
@@ -549,6 +588,23 @@ export interface VideoRecordingPayload {
 	width: number;
 	height: number;
 	thumbnail_s3_key?: string;
+}
+
+export interface VideoRecording {
+	id: string;
+	channel_id: string;
+	user_id: string;
+	title?: string | null;
+	duration_ms: number;
+	file_size_bytes: number;
+	width?: number | null;
+	height?: number | null;
+	status: string;
+	created_at: string;
+	attachment_id?: string | null;
+	username: string;
+	display_name?: string | null;
+	avatar_id?: string | null;
 }
 
 export interface AdminFederationPeerHealth {
@@ -661,7 +717,22 @@ export interface ClientConfig {
 	file_uploads_enabled: boolean;
 	max_upload_bytes: number;
 	local_instance_id: string;
+	version?: string;
+	build_version?: string;
+	feature_flags?: Record<string, FeatureFlagState>;
 	experimental_features?: Record<string, boolean>;
+}
+
+export interface FeatureFlagState {
+	key: string;
+	name: string;
+	description: string;
+	enabled: boolean;
+	instance_enabled: boolean;
+	instance_hard_disabled: boolean;
+	guild_enabled?: boolean;
+	disabled_by?: 'instance_hard_disable' | 'instance' | 'guild' | string;
+	standard: boolean;
 }
 
 export interface ChannelWidget {
@@ -808,8 +879,36 @@ class ApiClient {
 		return this.post('/admin/setup/complete', data);
 	}
 
-	getClientConfig(): Promise<ClientConfig> {
-		return this.get('/client-config');
+	getClientConfig(guildId?: string): Promise<ClientConfig> {
+		const query = guildId ? `?guild_id=${encodeURIComponent(guildId)}` : '';
+		return this.get(`/client-config${query}`);
+	}
+
+	getAdminFeatureFlags(): Promise<{ features: Record<string, FeatureFlagState> }> {
+		return this.get('/admin/features');
+	}
+
+	updateAdminFeatureFlag(
+		featureKey: string,
+		data: { enabled?: boolean; hard_disabled?: boolean }
+	): Promise<FeatureFlagState> {
+		return this.patch(`/admin/features/${featureKey}`, data);
+	}
+
+	getGuildFeatureFlags(guildId: string): Promise<{ features: Record<string, FeatureFlagState> }> {
+		return this.get(`/guilds/${guildId}/features`);
+	}
+
+	updateGuildFeatureFlag(guildId: string, featureKey: string, data: { enabled: boolean }): Promise<FeatureFlagState> {
+		return this.patch(`/guilds/${guildId}/features/${featureKey}`, data);
+	}
+
+	getAdminTranscriptionConfig(): Promise<AdminTranscriptionConfig> {
+		return this.get('/admin/transcription');
+	}
+
+	updateAdminTranscriptionConfig(data: Partial<AdminTranscriptionConfig>): Promise<AdminTranscriptionConfig> {
+		return this.patch('/admin/transcription', data);
 	}
 
 	// --- Users ---
@@ -820,6 +919,14 @@ class ApiClient {
 
 	updateMe(data: Partial<Pick<User, 'username' | 'display_name' | 'bio' | 'status_text' | 'status_emoji' | 'status_presence' | 'pronouns' | 'accent_color' | 'banner_id'>> & { status_expires_at?: string | null; avatar_id?: string | null }): Promise<User> {
 		return this.patch('/users/@me', data);
+	}
+
+	getMyActivity(): Promise<{ user_id: string; activity_type?: User['activity_type']; activity_name?: string | null }> {
+		return this.get('/users/@me/activity');
+	}
+
+	updateMyActivity(data: { activity_type: User['activity_type']; activity_name: string | null }): Promise<{ user_id: string; activity_type?: User['activity_type']; activity_name?: string | null }> {
+		return this.put('/users/@me/activity', data);
 	}
 
 	getUser(userId: string): Promise<User> {
@@ -969,7 +1076,7 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/messages/${messageId}`);
 	}
 
-	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[]; encrypted?: boolean; encryption_session_id?: string; mention_user_ids?: string[]; mention_role_ids?: string[]; mention_here?: boolean }): Promise<Message> {
+	sendMessage(channelId: string, content: string, opts?: { reply_to_ids?: string[]; nonce?: string; attachment_ids?: string[]; silent?: boolean; voice_duration_ms?: number; voice_waveform?: number[]; encrypted?: boolean; encryption_session_id?: string; mention_user_ids?: string[]; mention_role_ids?: string[]; mention_here?: boolean; expires_in_seconds?: number }): Promise<Message> {
 		return this.post(`/channels/${channelId}/messages`, { content, ...opts });
 	}
 
@@ -998,6 +1105,10 @@ class ApiClient {
 
 	deleteMessage(channelId: string, messageId: string): Promise<void> {
 		return this.del(`/channels/${channelId}/messages/${messageId}`);
+	}
+
+	interactMessageComponent(channelId: string, messageId: string, componentId: string, values: string[] = []): Promise<{ acknowledged: boolean }> {
+		return this.post(`/channels/${channelId}/messages/${messageId}/components/${componentId}/interact`, { values });
 	}
 
 	bulkDeleteMessages(channelId: string, messageIds: string[]): Promise<void> {
@@ -1175,12 +1286,12 @@ class ApiClient {
 		return this.post('/auth/totp/verify', { code });
 	}
 
-	disableTOTP(code: string): Promise<void> {
-		return this.del('/auth/totp');
+	disableTOTP(data: { password: string; code: string }): Promise<void> {
+		return this.del('/auth/totp', data);
 	}
 
-	generateBackupCodes(): Promise<{ codes: string[] }> {
-		return this.post('/auth/backup-codes');
+	generateBackupCodes(password: string): Promise<{ codes: string[] }> {
+		return this.post('/auth/backup-codes', { password });
 	}
 
 	// --- Sessions ---
@@ -1261,7 +1372,7 @@ class ApiClient {
 
 	// --- File Upload ---
 
-	async uploadFile(file: File, altText?: string): Promise<{ id: string; url: string }> {
+	async uploadFile(file: File, altText?: string): Promise<Attachment> {
 		const formData = new FormData();
 		formData.append('file', file);
 		if (altText) {
@@ -1298,7 +1409,7 @@ class ApiClient {
 			const err = json as ApiError;
 			throw new ApiRequestError(err.error?.message || 'Upload failed', 'upload_failed', res.status);
 		}
-		return (json as ApiResponse<{ id: string; url: string }>).data;
+		return (json as ApiResponse<Attachment>).data;
 	}
 
 	// --- Search ---
@@ -1836,11 +1947,25 @@ class ApiClient {
 		return this.get(`/channels/${channelId}/webhooks`);
 	}
 
-	createWebhook(guildId: string, data: { name: string; channel_id: string }): Promise<Webhook> {
+	createWebhook(guildId: string, data: {
+		name: string;
+		channel_id: string;
+		avatar_id?: string | null;
+		webhook_type?: 'incoming' | 'outgoing';
+		outgoing_url?: string | null;
+		outgoing_events?: string[];
+	}): Promise<Webhook> {
 		return this.post(`/guilds/${guildId}/webhooks`, data);
 	}
 
-	updateWebhook(guildId: string, webhookId: string, data: { name?: string; avatar_id?: string; channel_id?: string }): Promise<Webhook> {
+	updateWebhook(guildId: string, webhookId: string, data: {
+		name?: string;
+		avatar_id?: string | null;
+		channel_id?: string;
+		webhook_type?: 'incoming' | 'outgoing';
+		outgoing_url?: string | null;
+		outgoing_events?: string[];
+	}): Promise<Webhook> {
 		return this.patch(`/guilds/${guildId}/webhooks/${webhookId}`, data);
 	}
 
@@ -2162,6 +2287,22 @@ class ApiClient {
 		return this.del(`/guilds/${guildId}/integrations/${integrationId}`);
 	}
 
+	getActivityPubFollows(guildId: string, integrationId: string): Promise<ActivityPubFollow[]> {
+		return this.get(`/guilds/${guildId}/integrations/${integrationId}/activitypub/follows`);
+	}
+
+	addActivityPubFollow(guildId: string, integrationId: string, data: {
+		actor_uri: string;
+		actor_name?: string;
+		actor_handle?: string;
+	}): Promise<ActivityPubFollow> {
+		return this.post(`/guilds/${guildId}/integrations/${integrationId}/activitypub/follows`, data);
+	}
+
+	removeActivityPubFollow(guildId: string, integrationId: string, followId: string): Promise<void> {
+		return this.del(`/guilds/${guildId}/integrations/${integrationId}/activitypub/follows/${followId}`);
+	}
+
 	getBridgeConnections(guildId: string): Promise<BridgeConnection[]> {
 		return this.get(`/guilds/${guildId}/bridge-connections`);
 	}
@@ -2193,14 +2334,8 @@ class ApiClient {
 		title?: string;
 		language: string;
 		code: string;
-		stdin?: string;
-		runnable: boolean;
 	}): Promise<CodeSnippet> {
 		return this.post(`/channels/${channelId}/experimental/code-snippets`, data);
-	}
-
-	runCodeSnippet(channelId: string, snippetId: string): Promise<CodeSnippetRunResult> {
-		return this.post(`/channels/${channelId}/experimental/code-snippets/${snippetId}/run`);
 	}
 
 	getLocations(channelId: string): Promise<LocationShare[]> {
@@ -2232,6 +2367,14 @@ class ApiClient {
 		return this.del(`/channels/${channelId}/experimental/location/${locationId}`);
 	}
 
+	summarizeMessages(channelId: string, data: { message_count?: number; from_id?: string } = {}): Promise<MessageSummary> {
+		return this.post(`/channels/${channelId}/experimental/summarize`, data);
+	}
+
+	getMessageSummaries(channelId: string): Promise<MessageSummary[]> {
+		return this.get(`/channels/${channelId}/experimental/summaries`);
+	}
+
 	updateWhiteboard(channelId: string, whiteboardId: string, data: WhiteboardUpdate): Promise<void> {
 		return this.patch(`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`, data);
 	}
@@ -2247,6 +2390,10 @@ class ApiClient {
 
 	getWhiteboard(channelId: string, whiteboardId: string): Promise<WhiteboardData> {
 		return this.get(`/channels/${channelId}/experimental/whiteboards/${whiteboardId}`);
+	}
+
+	getWhiteboards(channelId: string): Promise<WhiteboardSummary[]> {
+		return this.get(`/channels/${channelId}/experimental/whiteboards`);
 	}
 
 	getGuildInsights(guildId: string, days: number): Promise<GuildInsights> {
@@ -2277,18 +2424,18 @@ class ApiClient {
 		effect_type: string;
 		config: Record<string, unknown>;
 	}): Promise<EffectEvent> {
-		return this.post(`/channels/${channelId}/messages/${messageId}/effects`, data);
+		return this.post(`/channels/${channelId}/experimental/messages/${messageId}/effects`, data);
 	}
 
 	addSuperReaction(channelId: string, messageId: string, data: {
 		emoji: string;
 		intensity: number;
 	}): Promise<SuperReaction> {
-		return this.post(`/channels/${channelId}/messages/${messageId}/super-reactions`, data);
+		return this.post(`/channels/${channelId}/experimental/messages/${messageId}/super-reactions`, data);
 	}
 
 	getSuperReactions(channelId: string, messageId: string): Promise<SuperReaction[]> {
-		return this.get(`/channels/${channelId}/messages/${messageId}/super-reactions`);
+		return this.get(`/channels/${channelId}/experimental/messages/${messageId}/super-reactions`);
 	}
 
 	getTranscriptionSettings(channelId: string): Promise<TranscriptionSettings> {
@@ -2308,6 +2455,24 @@ class ApiClient {
 
 	createVideoRecording(channelId: string, data: VideoRecordingPayload): Promise<unknown> {
 		return this.post(`/channels/${channelId}/experimental/recordings`, data);
+	}
+
+	getVideoRecordings(channelId: string): Promise<VideoRecording[]> {
+		return this.get(`/channels/${channelId}/experimental/recordings`);
+	}
+
+	startScreenShare(channelId: string, data: {
+		share_type?: 'screen' | 'window';
+		resolution: '720p' | '1080p' | '4k';
+		framerate: 15 | 30 | 60;
+		audio_enabled: boolean;
+		max_viewers?: number;
+	}): Promise<unknown> {
+		return this.post(`/voice/${channelId}/screen-share`, data);
+	}
+
+	stopScreenShare(channelId: string): Promise<void> {
+		return this.del(`/voice/${channelId}/screen-share`);
 	}
 
 	// --- Moderation: Channel Lock ---
@@ -2568,19 +2733,23 @@ class ApiClient {
 		return this.post('/stickers/my-packs', { name, description });
 	}
 
+	getUserPackStickers(packId: string): Promise<Sticker[]> {
+		return this.get(`/stickers/my-packs/${packId}/stickers`);
+	}
+
 	// --- Activities ---
 
-	getActiveSession<T>(activityId: string): Promise<T> {
-		return this.get(`/activities/${activityId}/sessions/active`);
+	getActiveSession<T>(channelId: string): Promise<T> {
+		return this.get(`/activities/${channelId}/sessions/active`);
 	}
 
 	listActivities<T>(category?: string): Promise<T> {
-		const url = category ? `/activities?category=${category}` : '/activities';
+		const url = category ? `/activities?category=${encodeURIComponent(category)}` : '/activities';
 		return this.get(url);
 	}
 
-	createActivitySession<T>(activityId: string, body: unknown): Promise<T> {
-		return this.post(`/activities/${activityId}/sessions`, body);
+	createActivitySession<T>(channelId: string, body: unknown): Promise<T> {
+		return this.post(`/activities/${channelId}/sessions`, body);
 	}
 
 	joinActivitySession(sessionId: string): Promise<void> {
@@ -2595,6 +2764,10 @@ class ApiClient {
 		return this.post(`/activities/sessions/${sessionId}/end`);
 	}
 
+	updateActivitySessionState(sessionId: string, state: Record<string, unknown>): Promise<void> {
+		return this.patch(`/activities/sessions/${sessionId}/state`, { state });
+	}
+
 	// --- Kanban ---
 
 	createKanbanBoard<T>(channelId: string, body: unknown): Promise<T> {
@@ -2603,6 +2776,10 @@ class ApiClient {
 
 	getKanbanBoard<T>(channelId: string, boardId: string): Promise<T> {
 		return this.get(`/channels/${channelId}/experimental/kanban/${boardId}`);
+	}
+
+	getKanbanBoards(channelId: string): Promise<KanbanBoardSummary[]> {
+		return this.get(`/channels/${channelId}/experimental/kanban`);
 	}
 
 	createKanbanColumn(channelId: string, boardId: string, body: unknown): Promise<void> {
@@ -2839,7 +3016,7 @@ class ApiClient {
 	}
 
 	setVoicePrioritySpeaker(channelId: string, userId: string, enabled: boolean): Promise<void> {
-		return this.post(`/voice/${channelId}/members/${userId}/priority`, { enabled });
+		return this.post(`/voice/${channelId}/members/${userId}/priority`, { priority: enabled });
 	}
 
 	// --- Voice Broadcast ---
@@ -2849,11 +3026,11 @@ class ApiClient {
 	}
 
 	startVoiceBroadcast(channelId: string, data?: { title?: string }): Promise<VoiceBroadcast> {
-		return this.post(`/voice/${channelId}/broadcast/start`, data);
+		return this.post(`/voice/${channelId}/broadcast`, data);
 	}
 
 	stopVoiceBroadcast(channelId: string): Promise<void> {
-		return this.post(`/voice/${channelId}/broadcast/stop`);
+		return this.del(`/voice/${channelId}/broadcast`);
 	}
 
 	// --- Soundboard ---
@@ -2988,7 +3165,7 @@ class ApiClient {
 		return this.get('/users/@me/instance-profiles');
 	}
 
-	createInstanceProfile(data: { instance_url: string; token: string; display_name?: string }): Promise<any> {
+	createInstanceProfile(data: { instance_url: string; session_token?: string; instance_name?: string }): Promise<any> {
 		return this.post('/users/@me/instance-profiles', data);
 	}
 
@@ -3063,7 +3240,7 @@ class ApiClient {
 	}
 
 	runBackup(scheduleId: string): Promise<void> {
-		return this.post(`/admin/backups/${scheduleId}/run`);
+		return this.post(`/admin/backups/${scheduleId}/trigger`);
 	}
 
 	getBackupHistory(scheduleId: string): Promise<any[]> {

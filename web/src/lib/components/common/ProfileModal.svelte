@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { User, UserLink, MutualGuild } from '$lib/types';
+	import type { User, UserBadge, UserLink, MutualGuild } from '$lib/types';
 	import { api } from '$lib/api/client';
-	import { presenceMap } from '$lib/stores/presence';
+	import { activityMap, presenceMap } from '$lib/stores/presence';
 	import { currentUser } from '$lib/stores/auth';
 	import { addToast } from '$lib/stores/toast';
 	import { relationships, addOrUpdateRelationship } from '$lib/stores/relationships';
@@ -24,6 +24,7 @@
 	let { userId, open = $bindable(false), onclose }: Props = $props();
 
 	let user = $state<User | null>(null);
+	let badges = $state<UserBadge[]>([]);
 	let links = $state<UserLink[]>([]);
 	let mutualFriends = $state<User[]>([]);
 	let mutualGuilds = $state<MutualGuild[]>([]);
@@ -37,15 +38,13 @@
 	const isSelf = $derived($currentUser?.id === userId);
 	const currentBlockLevel = $derived($blockedUsers.get(userId) ?? null);
 	const status = $derived($presenceMap.get(userId) ?? 'offline');
+	const activity = $derived($activityMap.get(userId));
 	const relationship = $derived($relationships.get(userId));
 	const roleColor = $derived.by(() => {
 		const member = $guildMembers.get(userId);
 		if (!member?.roles) return null;
 		return getMemberRoleColor(member.roles, $guildRolesMap);
 	});
-
-	const UserFlagBot = 1 << 3;
-	const UserFlagVerified = 1 << 4;
 
 	const statusText: Record<string, string> = {
 		online: 'Online',
@@ -61,11 +60,19 @@
 		offline: 'bg-status-offline'
 	};
 
+	const activityLabels: Record<string, string> = {
+		playing: 'Playing',
+		listening: 'Listening to',
+		watching: 'Watching',
+		streaming: 'Streaming'
+	};
+
 	$effect(() => {
 		if (!open) return;
 		loadOp.run(async () => {
 			const promises: Promise<void>[] = [
 				api.getUser(userId).then((u) => { user = u; }),
+				api.getUserBadges(userId).then((b) => { badges = b; }).catch(() => { badges = []; }),
 				api.getUserLinks(userId).then((l) => { links = l; }).catch(() => { links = []; })
 			];
 			if (!isSelf) {
@@ -162,6 +169,10 @@
 		website: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z',
 		youtube: 'M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z'
 	};
+
+	function badgeLabel(badge: UserBadge): string {
+		return badge.id === 'bot' ? 'BOT' : badge.name;
+	}
 </script>
 
 {#if open}
@@ -216,14 +227,11 @@
 						>
 							{user.display_name ?? user.username}
 						</h2>
-						{#if user.flags & UserFlagVerified}
-							<svg class="h-5 w-5 text-brand-500" viewBox="0 0 24 24" fill="currentColor">
-								<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-							</svg>
-						{/if}
-						{#if user.flags & UserFlagBot}
-							<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-xs font-bold text-brand-400">BOT</span>
-						{/if}
+						{#each badges as badge (badge.id)}
+							<span class="rounded bg-brand-500/20 px-1.5 py-0.5 text-xs font-bold text-brand-400" title={badge.name}>
+								{badgeLabel(badge)}
+							</span>
+						{/each}
 						{#if user.instance_domain || (user.instance_id && $currentUser && user.instance_id !== $currentUser.instance_id)}
 							<FederationBadge domain={user.instance_domain ?? user.instance_id} />
 						{/if}
@@ -240,6 +248,11 @@
 							{#if user.status_emoji}{user.status_emoji} {/if}{user.status_text ?? statusText[status] ?? 'Offline'}
 						</span>
 					</div>
+					{#if (activity?.activity_type && activity?.activity_name) || (user.activity_type && user.activity_name)}
+						<div class="mt-1 text-xs text-text-muted">
+							{activityLabels[activity?.activity_type ?? user.activity_type ?? ''] ?? 'Activity'} {activity?.activity_name ?? user.activity_name}
+						</div>
+					{/if}
 
 					<!-- Bio -->
 					{#if user.bio}

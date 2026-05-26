@@ -4,11 +4,15 @@
 package admin
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -1440,7 +1444,7 @@ func (h *Handler) HandleGetBackupHistory(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleTriggerBackup manually triggers a backup for a schedule.
-// POST /api/v1/admin/backups/{scheduleID}/run
+// POST /api/v1/admin/backups/{scheduleID}/trigger
 func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
 		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Admin access required")
@@ -1450,9 +1454,12 @@ func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 	scheduleID := chi.URLParam(r, "scheduleID")
 
 	// Verify schedule exists.
-	var name, frequency string
+	var name, frequency, storagePath string
+	var includeMedia, includeDatabase bool
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT name, frequency FROM backup_schedules WHERE id = $1`, scheduleID).Scan(&name, &frequency)
+		`SELECT name, frequency, include_media, include_database, storage_path
+		 FROM backup_schedules WHERE id = $1`,
+		scheduleID).Scan(&name, &frequency, &includeMedia, &includeDatabase, &storagePath)
 	if err == pgx.ErrNoRows {
 		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Backup schedule not found")
 		return
@@ -1478,19 +1485,116 @@ func (h *Handler) HandleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 		 next_run_at = $1, updated_at = now() WHERE id = $2`,
 		calculateNextRun(frequency), scheduleID)
 
-	// Simulate completion (in production, this would be async via a worker).
+	filePath, sizeBytes, backupErr := h.writeBackupManifest(r.Context(), scheduleID, historyID, name, storagePath, includeDatabase, includeMedia)
+	if backupErr != nil {
+		errMsg := backupErr.Error()
+		h.Pool.Exec(r.Context(),
+			`UPDATE backup_history SET status = 'failed', completed_at = now(), error_message = $2
+			 WHERE id = $1`, historyID, errMsg)
+		h.Pool.Exec(r.Context(),
+			`UPDATE backup_schedules SET last_run_status = 'failed' WHERE id = $1`, scheduleID)
+		apiutil.WriteError(w, http.StatusInternalServerError, "backup_failed", errMsg)
+		return
+	}
+
 	h.Pool.Exec(r.Context(),
 		`UPDATE backup_history SET status = 'completed', completed_at = now(),
-		 size_bytes = 0 WHERE id = $1`, historyID)
+		 size_bytes = $2, file_path = $3 WHERE id = $1`, historyID, sizeBytes, filePath)
 	h.Pool.Exec(r.Context(),
-		`UPDATE backup_schedules SET last_run_status = 'completed' WHERE id = $1`, scheduleID)
+		`UPDATE backup_schedules SET last_run_status = 'completed', last_run_size_bytes = $2 WHERE id = $1`,
+		scheduleID, sizeBytes)
 
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"backup_id":   historyID,
 		"schedule_id": scheduleID,
 		"status":      "completed",
+		"file_path":   filePath,
+		"size_bytes":  sizeBytes,
 		"message":     "Backup triggered successfully",
 	})
+}
+
+func (h *Handler) writeBackupManifest(ctx context.Context, scheduleID, historyID, name, storagePath string, includeDatabase, includeMedia bool) (string, int64, error) {
+	if strings.TrimSpace(storagePath) == "" {
+		storagePath = "/backups"
+	}
+	if err := os.MkdirAll(storagePath, 0o750); err != nil {
+		return "", 0, fmt.Errorf("creating backup directory: %w", err)
+	}
+
+	backupType := "data"
+	if includeMedia && !includeDatabase {
+		backupType = "media"
+	} else if includeMedia && includeDatabase {
+		backupType = "combined"
+	}
+
+	tableCounts := map[string]int64{}
+	if includeDatabase {
+		for _, table := range []string{"users", "guilds", "channels", "messages", "attachments", "roles", "guild_members"} {
+			var count int64
+			if err := h.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&count); err != nil {
+				return "", 0, fmt.Errorf("counting %s: %w", table, err)
+			}
+			tableCounts[table] = count
+		}
+	}
+
+	type mediaEntry struct {
+		ID        string    `json:"id"`
+		Filename  string    `json:"filename"`
+		Bucket    string    `json:"bucket"`
+		Key       string    `json:"key"`
+		SizeBytes int64     `json:"size_bytes"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	media := []mediaEntry{}
+	if includeMedia {
+		rows, err := h.Pool.Query(ctx,
+			`SELECT id, filename, s3_bucket, s3_key, size_bytes, created_at
+			 FROM attachments ORDER BY created_at`)
+		if err != nil {
+			return "", 0, fmt.Errorf("listing media: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var entry mediaEntry
+			if err := rows.Scan(&entry.ID, &entry.Filename, &entry.Bucket, &entry.Key, &entry.SizeBytes, &entry.CreatedAt); err != nil {
+				return "", 0, fmt.Errorf("reading media inventory: %w", err)
+			}
+			media = append(media, entry)
+		}
+		if err := rows.Err(); err != nil {
+			return "", 0, err
+		}
+	}
+
+	manifest := map[string]interface{}{
+		"format":           "amityvox-backup-manifest-v1",
+		"schedule_id":      scheduleID,
+		"history_id":       historyID,
+		"name":             name,
+		"backup_type":      backupType,
+		"include_database": includeDatabase,
+		"include_media":    includeMedia,
+		"created_at":       time.Now().UTC(),
+		"table_counts":     tableCounts,
+		"media_inventory":  media,
+	}
+
+	filePath := filepath.Join(storagePath, fmt.Sprintf("amityvox-%s-%s.json", backupType, historyID))
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return "", 0, err
+	}
+	if err := os.WriteFile(filePath, data, 0o640); err != nil {
+		return "", 0, fmt.Errorf("writing backup manifest: %w", err)
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return "", 0, err
+	}
+	return filePath, info.Size(), nil
 }
 
 // =============================================================================

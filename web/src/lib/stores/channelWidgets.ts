@@ -1,5 +1,7 @@
 import { writable } from 'svelte/store';
+import { get } from 'svelte/store';
 import { api, type ChannelWidget } from '$lib/api/client';
+import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 export const channelWidgetsByChannel = writable<Map<string, ChannelWidget[]>>(new Map());
 
@@ -7,6 +9,14 @@ let loadRequestSequence = 0;
 const latestLoadByChannel = new Map<string, number>();
 
 export async function loadChannelWidgets(channelId: string) {
+	if (!isFeatureEnabled(get(clientConfig), 'widgets')) {
+		channelWidgetsByChannel.update((map) => {
+			const next = new Map(map);
+			next.delete(channelId);
+			return next;
+		});
+		return;
+	}
 	const requestId = ++loadRequestSequence;
 	latestLoadByChannel.set(channelId, requestId);
 

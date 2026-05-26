@@ -1,6 +1,6 @@
 # Current Work Backlog
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 
 This is the active cleanup checklist. It reflects the code as it works now, not old plans or aspirational notes.
 
@@ -71,6 +71,34 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
   - Soundboard, broadcast, screen share, location, and activity/game gateway events now have store/component ownership.
   - Bot component interactions are intentionally backend/bot-worker events; visible changes are expected through `MESSAGE_UPDATE`.
 - [x] Hide or clearly gate incomplete experimental features that still lack stable backend behavior.
+- [x] Remove unreachable stale UI components that implied unfinished features were available.
+  - Removed unused bridge attribution, keyboard navigation, lazy image, notification center, and server folder components.
+  - The active notification popover/page and the documented large-component refactor stream remain the supported surfaces.
+- [x] Wire bot message components end to end enough for existing stored components to work.
+  - Fixed the interaction route to use channel/message/component IDs.
+  - Message fetch, single-message fetch, edit responses, and pinned-message fetches now include component rows.
+  - Frontend messages now render stored buttons/select menus and submit interactions through the API client.
+  - Pinned messages now include authors, attachments, and embeds instead of only bare message rows.
+- [x] Align feature-gated chat tools with current feature flag state.
+  - Guild routes now load guild-scoped client config instead of relying only on the global app load.
+  - Non-guild app routes now restore instance-scoped client config after leaving a guild, so global pages do not inherit stale guild feature flags.
+  - Guild landing onboarding and guide background loads now respect `guild_onboarding` instead of quietly probing disabled routes.
+  - Channel toolbar buttons for whiteboards, boards, activities, widgets, locations, scheduled messages, and summaries now hide when their feature is disabled.
+  - Composer tools for scheduling, expiration, polls, code snippets, GIF search, and stickers now respect feature flags.
+  - Shared location/widget/broadcast stores and sticker picker internals now self-gate before calling feature-protected endpoints.
+  - Location sharing now has a registered `location_sharing` feature key instead of relying on an undefined legacy alias.
+  - Quick channel creation now exposes supported announcement and stage channel types.
+  - Server routes now enforce feature flags for channel/guild tools instead of relying on UI-only hiding.
+  - Payload-level message features now enforce flags for encrypted sends and expiring messages.
+  - Server settings tabs for disabled guild features now hide instead of surfacing controls that fail with 403 responses.
+  - Moderation/report endpoints and visible report controls now respect `moderation_reports`.
+  - Operational federation routes, outbound federation routing, federation media proxying, and federation admin diagnostics now respect their federation feature flags.
+  - Reply/thread, announcement follower, search, theme gallery, push notification, voice broadcast/soundboard/screen-share, voice transcription, video recording, message effect, and super reaction controls now hide or no-op cleanly when the matching feature is disabled.
+  - Discovery, invite acceptance, admin federation diagnostics, moderation queues, saved messages, pins, channel gallery, hidden-thread preferences, and dashboard issue widgets now avoid disabled feature routes instead of surfacing 403s.
+  - Custom emoji pickers, direct plugin marketplace routes, channel groups, gallery channel/settings panels, open channel tool panels, historical poll interactions, and encryption setup surfaces now respect `custom_emoji`, `widgets`, `channel_groups`, `gallery_media`, related tool flags, `polls`, and `e2ee`; the channel update API also rejects new encryption when `e2ee` is disabled.
+  - ActivityPub/bridge integration routes and guild settings now respect `federated_messaging`, and ActivityPub follows have in-app list/add/remove controls instead of telling users to use raw API calls.
+  - User-facing activity/webhook fallback copy now reflects the current implemented behavior instead of stale SDK or missing-endpoint language.
+  - Code snippets are explicitly display/share only; the execution endpoint rejects requests and the stale client execution type was removed.
 
 ## Reopened Feature-Completion Backlog
 
@@ -111,10 +139,18 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
    - Done: signed inbound DM coverage verifies mirror creation, recipient rows, duplicate create/message idempotency, and remote attachment ownership.
    - Done: signed inbound guild message coverage verifies remote attachment persistence, response metadata, media `instance_id`, and nonce idempotency.
    - Done: remote guild message proxy now forwards attachment metadata after validating local upload ownership.
+   - Done: remote guild message proxy now preserves expiring-message intent and the receiving instance enforces the feature flag before storing `expires_at`.
 10. [x] Update stale federation/codebase docs after each completed tranche.
 	- Done: current backlog and large Svelte inventory reflect this tranche's federation tests and component reductions.
 	- Done: guild message attachment federation and dependency audit cleanup are reflected here.
 	- Done: async-state follow-up wording now reflects the older chat/gallery/common cleanup.
+	- Done: multi-instance profile switching is reachable from the server rail, and stale unused UI components were pruned.
+	- Done: bot message component route/display wiring and pinned-message enrichment are reflected here.
+	- Done: feature-gated channel/composer tools and quick channel type coverage are reflected here.
+	- Done: server-side feature flag enforcement and federated expiring-message preservation are reflected here.
+	- Done: follow-up feature-flag audit now covers moderation reports, federation controls/media/presence/diagnostics, threads/replies, announcement followers, search, theme gallery, push notifications, and voice/message experimental controls.
+	- Done: latest feature-flag audit now covers discover/invite federation flows, direct moderation/bookmark pages, pin/gallery toolbar entries, hidden-thread/background store loads, dashboard issue widgets, display-only code snippets, custom emoji/sticker pickers, direct plugin marketplace routing, channel groups, guild onboarding/guide probes, historical poll actions, gallery/tool panel runtime guards, stale guild-vs-instance client config, and encryption setup.
+	- Done: follow-up integration audit now covers ActivityPub follow controls, bridge/integration route feature gates, and stale user-facing API/SDK copy.
 
 ## Archived Docs
 
@@ -124,10 +160,10 @@ This is the active cleanup checklist. It reflects the code as it works now, not 
 ## Verification Targets
 
 - Frontend: `cd web && npm run check`
-  - Last result: pass, 0 errors and 0 warnings on 2026-05-22.
+  - Last result: pass, 0 errors and 0 warnings on 2026-05-24.
 - Focused frontend tests: `cd web && npm test -- --run src/lib/stores/__tests__/messages.test.ts src/lib/stores/__tests__/channels.test.ts src/lib/stores/__tests__/guilds.test.ts src/lib/stores/__tests__/channelWidgets.test.ts src/lib/stores/__tests__/guildEvents.test.ts src/lib/stores/__tests__/presence.test.ts src/lib/stores/__tests__/activityEvents.test.ts src/lib/stores/__tests__/voiceBroadcasts.test.ts src/lib/stores/__tests__/locationShares.test.ts src/lib/utils/__tests__/dm.test.ts src/lib/components/__tests__/ModerationModals.test.ts src/lib/components/__tests__/RoleHierarchy.test.ts src/lib/components/__tests__/MembersPanel.test.ts src/lib/components/__tests__/StatusPicker.test.ts src/lib/components/__tests__/RoleEditor.test.ts`
   - Last result: pass, 174 tests across 15 files on 2026-05-22.
 - Backend compile/federation smoke: `docker run --rm -v /docker/AmityVox:/build -w /build -e GOTOOLCHAIN=local golang:1.26-alpine go test -run '^$' ./internal/federation ./internal/api/... ./internal/models ./internal/database ./internal/integration`
-  - Last result: pass on 2026-05-22.
+  - Last result: focused API/admin/integration/features compile pass on 2026-05-24 with `docker run --rm -v /docker/AmityVox:/src -w /src -e GOTOOLCHAIN=local golang:1.26 go test -run '^$' ./internal/api ./internal/api/integrations ./internal/api/admin ./internal/features`.
 - Frontend dependency audit: `cd web && npm audit --json`
   - Last result: pass, 0 vulnerabilities on 2026-05-22.

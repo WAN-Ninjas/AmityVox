@@ -10,27 +10,28 @@ import (
 
 // ServiceHealth represents the health status of an individual service dependency.
 type ServiceHealth struct {
-	Status   string  `json:"status"`             // "healthy", "unhealthy", "disabled"
-	Latency  string  `json:"latency,omitempty"`   // Response time as human-readable duration
-	Error    string  `json:"error,omitempty"`      // Error message if unhealthy
-	Details  interface{} `json:"details,omitempty"` // Optional service-specific details
+	Status  string      `json:"status"`            // "healthy", "unhealthy", "disabled"
+	Latency string      `json:"latency,omitempty"` // Response time as human-readable duration
+	Error   string      `json:"error,omitempty"`   // Error message if unhealthy
+	Details interface{} `json:"details,omitempty"` // Optional service-specific details
 }
 
 // DeepHealthResponse is the response body for the deep health check endpoint.
 type DeepHealthResponse struct {
-	Status    string                   `json:"status"`    // "ok", "degraded", "unhealthy"
-	Version   string                   `json:"version"`
-	Uptime    string                   `json:"uptime"`
-	Timestamp string                   `json:"timestamp"`
-	Services  map[string]ServiceHealth `json:"services"`
-	System    SystemInfo               `json:"system"`
+	Status       string                   `json:"status"` // "ok", "degraded", "unhealthy"
+	Version      string                   `json:"version"`
+	BuildVersion string                   `json:"build_version"`
+	Uptime       string                   `json:"uptime"`
+	Timestamp    string                   `json:"timestamp"`
+	Services     map[string]ServiceHealth `json:"services"`
+	System       SystemInfo               `json:"system"`
 }
 
 // SystemInfo contains runtime information about the AmityVox process.
 type SystemInfo struct {
-	GoVersion    string `json:"go_version"`
-	NumGoroutine int    `json:"num_goroutine"`
-	NumCPU       int    `json:"num_cpu"`
+	GoVersion    string  `json:"go_version"`
+	NumGoroutine int     `json:"num_goroutine"`
+	NumCPU       int     `json:"num_cpu"`
 	MemAllocMB   float64 `json:"mem_alloc_mb"`
 	MemSysMB     float64 `json:"mem_sys_mb"`
 	MemGCCycles  uint32  `json:"mem_gc_cycles"`
@@ -144,10 +145,11 @@ func (s *Server) handleDeepHealthCheck(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&memStats)
 
 	response := DeepHealthResponse{
-		Status:    overallStatus,
-		Version:   s.Version,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Services:  services,
+		Status:       overallStatus,
+		Version:      s.Version,
+		BuildVersion: s.BuildVersion,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Services:     services,
 		System: SystemInfo{
 			GoVersion:    runtime.Version(),
 			NumGoroutine: runtime.NumGoroutine(),

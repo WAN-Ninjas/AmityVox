@@ -21,6 +21,10 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
+      args:
+        VERSION: ${AMITYVOX_VERSION:-0.5.0}
+        COMMIT: ${AMITYVOX_COMMIT:-local}
+        BUILD_DATE: ${AMITYVOX_BUILD_DATE:-unknown}
     container_name: amityvox
     restart: unless-stopped
     logging: *default-logging
@@ -207,6 +211,8 @@ services:
     container_name: amityvox-caddy
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      AMITYVOX_INSTANCE_DOMAIN: "${AMITYVOX_INSTANCE_DOMAIN:-localhost}"
     ports:
       - "80:80"
       - "443:443"

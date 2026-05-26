@@ -3,7 +3,9 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { channels } from '$lib/stores/channels';
+	import { canManageThreads } from '$lib/stores/permissions';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getErrorMessage } from '$lib/utils/apiError';
 	import GalleryPostCard from './GalleryPostCard.svelte';
 	import GalleryPostCreate from './GalleryPostCreate.svelte';
 
@@ -133,6 +135,24 @@
 		filterTagId = filterTagId === tagId ? null : tagId;
 	}
 
+	async function togglePinPost(post: GalleryPost) {
+		try {
+			await api.pinGalleryPost(channelId, post.id);
+			posts = posts.map((p) => p.id === post.id ? { ...p, pinned: !p.pinned } : p);
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update post pin'), 'error');
+		}
+	}
+
+	async function toggleClosePost(post: GalleryPost) {
+		try {
+			await api.closeGalleryPost(channelId, post.id);
+			posts = posts.map((p) => p.id === post.id ? { ...p, locked: !p.locked } : p);
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update post status'), 'error');
+		}
+	}
+
 	// Separate pinned from regular posts for display
 	let pinnedPosts = $derived(posts.filter((p) => p.pinned));
 	let regularPosts = $derived(posts.filter((p) => !p.pinned));
@@ -257,7 +277,7 @@
 						</h3>
 						<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
 							{#each pinnedPosts as post (post.id)}
-								<GalleryPostCard {post} onclick={() => openPost(post)} />
+								<GalleryPostCard {post} canManage={$canManageThreads} onclick={() => openPost(post)} onpin={togglePinPost} onclose={toggleClosePost} />
 							{/each}
 						</div>
 					</div>
@@ -266,7 +286,7 @@
 				<!-- Regular posts -->
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
 					{#each regularPosts as post (post.id)}
-						<GalleryPostCard {post} onclick={() => openPost(post)} />
+						<GalleryPostCard {post} canManage={$canManageThreads} onclick={() => openPost(post)} onpin={togglePinPost} onclose={toggleClosePost} />
 					{/each}
 				</div>
 

@@ -258,6 +258,13 @@ func HasAllPermissions(perms uint64, checkPerms ...uint64) bool {
 	return true
 }
 
+// InstanceAdminApplies reports whether an instance-level admin bypass applies
+// to a guild permission check. Instance admins only bypass permissions for
+// guilds homed on the same instance, not federated guilds from another instance.
+func InstanceAdminApplies(isAdmin bool, userInstanceID, guildInstanceID string) bool {
+	return isAdmin && userInstanceID != "" && guildInstanceID != "" && userInstanceID == guildInstanceID
+}
+
 // Names returns a slice of human-readable names for all set permission bits.
 func Names(perms uint64) []string {
 	var names []string

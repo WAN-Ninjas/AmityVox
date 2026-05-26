@@ -31,6 +31,7 @@
 	let mobileSidebarOpen = $state(false);
 	let commandPaletteOpen = $state(false);
 	let quickSwitcherOpen = $state(false);
+	let clientConfigScope = $state('');
 
 	// Track route changes for navigation history.
 	$effect(() => {
@@ -44,6 +45,17 @@
 		} else if (url.includes('/app/')) {
 			// Non-channel pages: just set current URL without pushing to recent channels.
 			setCurrentUrl(url);
+		}
+	});
+
+	$effect(() => {
+		$page.url.pathname;
+		const scope = $page.params.guildId ? 'guild' : 'instance';
+		if (scope !== clientConfigScope) {
+			clientConfigScope = scope;
+			if (scope === 'instance') {
+				loadClientConfig();
+			}
 		}
 	});
 

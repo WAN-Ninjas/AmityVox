@@ -8,6 +8,7 @@ vi.mock('$lib/api/client', () => ({
 }));
 
 import { api, type ChannelWidget } from '$lib/api/client';
+import { clientConfig } from '$lib/stores/clientConfig';
 import {
 	channelWidgetsByChannel,
 	loadChannelWidgets,
@@ -35,6 +36,7 @@ function createWidget(overrides?: Partial<ChannelWidget>): ChannelWidget {
 describe('channelWidgets store', () => {
 	beforeEach(() => {
 		channelWidgetsByChannel.set(new Map());
+		clientConfig.set({ feature_flags: { widgets: { enabled: true } } } as any);
 		vi.mocked(api.getChannelWidgets).mockReset();
 	});
 

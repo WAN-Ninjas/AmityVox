@@ -133,7 +133,7 @@ func (m *Manager) handleMessageNotification(ctx context.Context, event events.Ev
 	// DM recipients.
 	if isDM {
 		rows, err := m.pool.Query(ctx,
-			`SELECT user_id FROM dm_participants WHERE channel_id = $1 AND user_id <> $2`,
+			`SELECT user_id FROM channel_recipients WHERE channel_id = $1 AND user_id <> $2`,
 			msg.ChannelID, msg.AuthorID)
 		if err == nil {
 			for rows.Next() {

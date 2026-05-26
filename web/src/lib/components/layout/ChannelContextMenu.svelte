@@ -13,6 +13,7 @@
 		channelId: string;
 		channelName: string;
 		archived: boolean;
+		locked: boolean;
 	}
 	interface Props {
 		menu: ChannelContextMenuState;
@@ -23,10 +24,12 @@
 		onedit: (channelId: string, channelName: string) => void;
 		onremovefromgroup: (channelId: string) => void;
 		onaddtogroup: (groupId: string, channelId: string) => void;
+		onclone: (channelId: string) => void;
+		onlock: (channelId: string, locked: boolean) => void;
 		ondelete: (channelId: string) => void;
 		onclose: () => void;
 	}
-	let { menu, canManageChannels, channelGroups, getthreadfilter, onthreadfilter, onedit, onremovefromgroup, onaddtogroup, ondelete, onclose }: Props = $props();
+	let { menu, canManageChannels, channelGroups, getthreadfilter, onthreadfilter, onedit, onremovefromgroup, onaddtogroup, onclone, onlock, ondelete, onclose }: Props = $props();
 
 	let showThreadFilterSubmenu = $state(false);
 	let showMuteSubmenu = $state(false);
@@ -57,6 +60,26 @@
 				<path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
 			</svg>
 			Edit Channel
+		</button>
+		<button
+			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+			onclick={() => onclone(menu.channelId)}
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path d="M8 8h10a2 2 0 012 2v8a2 2 0 01-2 2H8a2 2 0 01-2-2V10a2 2 0 012-2z" />
+				<path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2" />
+			</svg>
+			Clone Channel
+		</button>
+		<button
+			class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-text-secondary hover:bg-brand-500 hover:text-white"
+			onclick={() => onlock(menu.channelId, menu.locked)}
+		>
+			<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<rect x="3" y="11" width="18" height="10" rx="2" />
+				<path d="M7 11V7a5 5 0 0110 0v4" />
+			</svg>
+			{menu.locked ? 'Unlock Channel' : 'Lock Channel'}
 		</button>
 	{/if}
 	<div class="relative">

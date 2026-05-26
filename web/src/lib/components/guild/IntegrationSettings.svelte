@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { api, type BridgeConnection, type Integration, type IntegrationLogEntry } from '$lib/api/client';
+	import { api, type ActivityPubFollow, type BridgeConnection, type Integration, type IntegrationLogEntry } from '$lib/api/client';
 	import type { Channel } from '$lib/types';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { confirmAction } from '$lib/stores/confirm';
@@ -31,6 +31,12 @@
 	// Detail view.
 	let selectedIntegration = $state<Integration | null>(null);
 	let selectedTab = $state<'integrations' | 'bridges' | 'log'>('integrations');
+	let activityPubFollows = $state<ActivityPubFollow[]>([]);
+	let loadFollowsOp = $state(createAsyncOp());
+	let addFollowOp = $state(createAsyncOp());
+	let newActorUri = $state('');
+	let newActorName = $state('');
+	let newActorHandle = $state('');
 
 	// Log.
 	let logEntries = $state<IntegrationLogEntry[]>([]);
@@ -125,6 +131,59 @@
 			setTimeout(() => success = '', 3000);
 		} catch (e: unknown) {
 			error = e instanceof Error ? e.message : 'Failed to delete integration';
+		}
+	}
+
+	async function selectIntegration(integration: Integration) {
+		selectedIntegration = integration;
+		activityPubFollows = [];
+		if (integration.integration_type === 'activitypub') {
+			await loadActivityPubFollows(integration.id);
+		}
+	}
+
+	async function loadActivityPubFollows(integrationId: string) {
+		const result = await loadFollowsOp.run(
+			() => api.getActivityPubFollows(guildId, integrationId)
+		);
+		if (loadFollowsOp.error) {
+			error = loadFollowsOp.error;
+		} else {
+			activityPubFollows = result ?? [];
+		}
+	}
+
+	async function addActivityPubFollow() {
+		if (!selectedIntegration || !newActorUri.trim()) return;
+		error = '';
+		const follow = await addFollowOp.run(
+			() => api.addActivityPubFollow(guildId, selectedIntegration!.id, {
+				actor_uri: newActorUri.trim(),
+				actor_name: newActorName.trim() || undefined,
+				actor_handle: newActorHandle.trim() || undefined
+			})
+		);
+		if (addFollowOp.error) {
+			error = addFollowOp.error;
+		} else if (follow) {
+			activityPubFollows = [follow, ...activityPubFollows];
+			newActorUri = '';
+			newActorName = '';
+			newActorHandle = '';
+			success = 'Follow added';
+			setTimeout(() => success = '', 3000);
+		}
+	}
+
+	async function removeActivityPubFollow(followId: string) {
+		if (!selectedIntegration) return;
+		try {
+			await api.removeActivityPubFollow(guildId, selectedIntegration.id, followId);
+			activityPubFollows = activityPubFollows.filter((follow) => follow.id !== followId);
+			success = 'Follow removed';
+			setTimeout(() => success = '', 3000);
+		} catch (e: unknown) {
+			error = e instanceof Error ? e.message : 'Failed to remove follow';
 		}
 	}
 
@@ -267,12 +326,41 @@
 					<div class="bg-bg-secondary rounded-lg p-4">
 						<h4 class="font-medium text-text-primary mb-2">ActivityPub Follows</h4>
 						<p class="text-sm text-text-muted">
-							Follow Mastodon, Lemmy, and other ActivityPub accounts. Posts from followed accounts
-							will appear as messages in the linked channel.
+							Follow Mastodon, Lemmy, and other ActivityPub actors. Posts from followed actors
+							are delivered into the linked channel when the integration worker processes them.
 						</p>
-						<p class="text-xs text-text-muted mt-3">
-							Use the API to manage follows: POST /guilds/{guildId}/integrations/{selectedIntegration.id}/activitypub/follows
-						</p>
+						<div class="mt-4 space-y-3">
+							<div class="grid gap-2 md:grid-cols-[1.4fr_1fr_1fr_auto]">
+								<input class="input text-sm" bind:value={newActorUri} placeholder="Actor URL, e.g. https://example.social/@name" />
+								<input class="input text-sm" bind:value={newActorName} placeholder="Display name (optional)" />
+								<input class="input text-sm" bind:value={newActorHandle} placeholder="@handle (optional)" />
+								<button class="btn-primary text-sm" onclick={addActivityPubFollow} disabled={addFollowOp.loading || !newActorUri.trim()}>
+									{addFollowOp.loading ? 'Adding...' : 'Follow'}
+								</button>
+							</div>
+							{#if loadFollowsOp.loading}
+								<div class="text-sm text-text-muted">Loading follows...</div>
+							{:else if activityPubFollows.length === 0}
+								<div class="rounded bg-bg-tertiary p-3 text-sm text-text-muted">No actors followed yet.</div>
+							{:else}
+								<div class="space-y-2">
+									{#each activityPubFollows as follow (follow.id)}
+										<div class="flex items-center justify-between gap-3 rounded bg-bg-tertiary p-3">
+											<div class="min-w-0">
+												<div class="truncate text-sm font-medium text-text-primary">
+													{follow.actor_name || follow.actor_handle || follow.actor_uri}
+												</div>
+												<div class="truncate text-xs text-text-muted">{follow.actor_handle || follow.actor_uri}</div>
+												<div class="text-2xs text-text-muted">Added {new Date(follow.created_at).toLocaleDateString()}</div>
+											</div>
+											<button class="text-xs text-red-400 hover:text-red-300" onclick={() => removeActivityPubFollow(follow.id)}>
+												Remove
+											</button>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
 					</div>
 				{/if}
 			</div>
@@ -329,7 +417,7 @@
 				<div class="space-y-2">
 					{#each integrations as integration}
 						<div class="bg-bg-secondary rounded-lg p-3 flex items-center justify-between group hover:bg-bg-tertiary transition-colors">
-							<button class="flex items-center gap-3 flex-1 text-left" onclick={() => selectedIntegration = integration}>
+							<button class="flex items-center gap-3 flex-1 text-left" onclick={() => selectIntegration(integration)}>
 								<span class="bg-accent/20 text-accent px-2 py-1 rounded text-xs font-mono">
 									{typeIcon(integration.integration_type)}
 								</span>

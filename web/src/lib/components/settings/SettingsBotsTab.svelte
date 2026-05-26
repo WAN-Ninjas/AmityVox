@@ -22,13 +22,18 @@
 	let editBotDescription = $state('');
 	let newCommandName = $state('');
 	let newCommandDescription = $state('');
+	let editingCommandId = $state<string | null>(null);
+	let editCommandName = $state('');
+	let editCommandDescription = $state('');
 	let loadOp = $state(createAsyncOp());
 	let createBotOp = $state(createAsyncOp());
+	let botDetailOp = $state(createAsyncOp());
 	let tokenLoadOp = $state(createAsyncOp());
 	let commandLoadOp = $state(createAsyncOp());
 	let createTokenOp = $state(createAsyncOp());
 	let saveBotOp = $state(createAsyncOp());
 	let createCommandOp = $state(createAsyncOp());
+	let saveCommandOp = $state(createAsyncOp());
 	let loaded = false;
 
 	$effect(() => {
@@ -117,6 +122,10 @@
 
 		expandedBotId = botId;
 		createdTokenRaw = null;
+		const bot = await botDetailOp.run(() => api.getBot(botId));
+		if (bot) {
+			myBots = myBots.map((entry) => entry.id === bot.id ? bot : entry);
+		}
 		if (!botTokens[botId]) {
 			tokenLoadTargetId = botId;
 			const tokens = await tokenLoadOp.run(() => api.getBotTokens(botId));
@@ -185,6 +194,32 @@
 		} catch (err: unknown) {
 			botError = getErrorMessage(err, 'Failed to delete command');
 		}
+	}
+
+	function startEditCommand(cmd: SlashCommand) {
+		editingCommandId = cmd.id;
+		editCommandName = cmd.name;
+		editCommandDescription = cmd.description;
+	}
+
+	async function handleSaveCommand(botId: string, commandId: string) {
+		if (!editCommandName.trim() || !editCommandDescription.trim()) return;
+		botError = '';
+		await saveCommandOp.run(async () => {
+			const updated = await api.updateBotCommand(botId, commandId, {
+				name: editCommandName.trim().toLowerCase(),
+				description: editCommandDescription.trim()
+			});
+			botCommands = {
+				...botCommands,
+				[botId]: (botCommands[botId] ?? []).map((cmd) => cmd.id === commandId ? updated : cmd)
+			};
+			editingCommandId = null;
+			botSuccess = `Command "/${updated.name}" updated.`;
+			setTimeout(() => (botSuccess = ''), 3000);
+		}, msg => {
+			botError = msg;
+		}, 'Failed to update command');
 	}
 
 	function copyToClipboard(text: string) {
@@ -397,18 +432,38 @@
 								<div class="space-y-2">
 									{#each botCommands[bot.id] ?? [] as cmd (cmd.id)}
 										<div class="flex items-center justify-between rounded bg-bg-primary p-2">
-											<div>
-												<span class="text-sm font-medium text-text-primary">/{cmd.name}</span>
-												<span class="ml-2 text-xs text-text-muted">{cmd.description}</span>
-												{#if cmd.guild_id}
-													<span class="ml-1 rounded bg-bg-modifier px-1 py-0.5 text-2xs text-text-muted">Server-scoped</span>
-												{:else}
-													<span class="ml-1 rounded bg-brand-500/10 px-1 py-0.5 text-2xs text-brand-400">Global</span>
-												{/if}
-											</div>
-											<button class="text-xs text-red-400 hover:text-red-300" onclick={() => handleDeleteCommand(bot.id, cmd.id)}>
-												Delete
-											</button>
+											{#if editingCommandId === cmd.id}
+												<div class="flex min-w-0 flex-1 items-center gap-2">
+													<input class="input w-40 text-sm" bind:value={editCommandName} maxlength="32" />
+													<input class="input min-w-0 flex-1 text-sm" bind:value={editCommandDescription} maxlength="100" />
+												</div>
+												<div class="ml-2 flex items-center gap-2">
+													<button class="text-xs text-brand-400 hover:text-brand-300" onclick={() => handleSaveCommand(bot.id, cmd.id)} disabled={saveCommandOp.loading}>
+														{saveCommandOp.loading ? 'Saving...' : 'Save'}
+													</button>
+													<button class="text-xs text-text-muted hover:text-text-primary" onclick={() => (editingCommandId = null)}>
+														Cancel
+													</button>
+												</div>
+											{:else}
+												<div>
+													<span class="text-sm font-medium text-text-primary">/{cmd.name}</span>
+													<span class="ml-2 text-xs text-text-muted">{cmd.description}</span>
+													{#if cmd.guild_id}
+														<span class="ml-1 rounded bg-bg-modifier px-1 py-0.5 text-2xs text-text-muted">Server-scoped</span>
+													{:else}
+														<span class="ml-1 rounded bg-brand-500/10 px-1 py-0.5 text-2xs text-brand-400">Global</span>
+													{/if}
+												</div>
+												<div class="flex items-center gap-2">
+													<button class="text-xs text-brand-400 hover:text-brand-300" onclick={() => startEditCommand(cmd)}>
+														Edit
+													</button>
+													<button class="text-xs text-red-400 hover:text-red-300" onclick={() => handleDeleteCommand(bot.id, cmd.id)}>
+														Delete
+													</button>
+												</div>
+											{/if}
 										</div>
 									{/each}
 								</div>

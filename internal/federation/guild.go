@@ -20,6 +20,7 @@ import (
 
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/features"
 	"github.com/amityvox/amityvox/internal/models"
 	"github.com/amityvox/amityvox/internal/permissions"
 )
@@ -55,11 +56,12 @@ type federatedGuildMessagesRequest struct {
 }
 
 type federatedGuildPostMessageRequest struct {
-	UserID      string                `json:"user_id"`
-	Content     string                `json:"content"`
-	Nonce       string                `json:"nonce,omitempty"`
-	ReplyToIDs  []string              `json:"reply_to_ids,omitempty"`
-	Attachments []federatedAttachment `json:"attachments,omitempty"`
+	UserID           string                `json:"user_id"`
+	Content          string                `json:"content"`
+	Nonce            string                `json:"nonce,omitempty"`
+	ReplyToIDs       []string              `json:"reply_to_ids,omitempty"`
+	Attachments      []federatedAttachment `json:"attachments,omitempty"`
+	ExpiresInSeconds *int                  `json:"expires_in_seconds,omitempty"`
 }
 
 type federatedGuildMembersRequest struct {
@@ -657,6 +659,10 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	}
 
 	ctx := r.Context()
+	if len(req.Attachments) > 0 && !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+		http.Error(w, "Federated attachments disabled", http.StatusForbidden)
+		return
+	}
 
 	// Verify the user belongs to the sender's instance.
 	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
@@ -697,6 +703,26 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 		return
 	}
 
+	var expiresAt *time.Time
+	if req.ExpiresInSeconds != nil {
+		if *req.ExpiresInSeconds < 60 || *req.ExpiresInSeconds > 60*60*24*30 {
+			http.Error(w, "expires_in_seconds must be between 60 seconds and 30 days", http.StatusBadRequest)
+			return
+		}
+		states, err := features.Resolve(ctx, ss.fed.pool, guildID)
+		if err != nil {
+			ss.logger.Error("failed to load feature flags for federated expiring message", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		if state := states["expiring_messages"]; !state.Enabled {
+			http.Error(w, "Expiring messages are disabled", http.StatusForbidden)
+			return
+		}
+		t := time.Now().UTC().Add(time.Duration(*req.ExpiresInSeconds) * time.Second)
+		expiresAt = &t
+	}
+
 	msgID := models.NewULID().String()
 	now := time.Now()
 
@@ -729,14 +755,15 @@ func (ss *SyncService) HandleFederatedGuildPostMessage(w http.ResponseWriter, r 
 	}
 
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO messages (id, channel_id, author_id, instance_id, content, nonce, message_type, reply_to_ids, created_at)
-		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9)
+		`INSERT INTO messages (id, channel_id, author_id, instance_id, content, nonce, message_type, reply_to_ids, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10)
 		 ON CONFLICT (channel_id, nonce) DO UPDATE SET
 		   content = EXCLUDED.content,
 		   reply_to_ids = EXCLUDED.reply_to_ids,
-		   message_type = EXCLUDED.message_type
+		   message_type = EXCLUDED.message_type,
+		   expires_at = EXCLUDED.expires_at
 		 RETURNING id, created_at`,
-		msgID, channelID, req.UserID, senderID, req.Content, req.Nonce, msgType, replyToIDs, now,
+		msgID, channelID, req.UserID, senderID, req.Content, req.Nonce, msgType, replyToIDs, expiresAt, now,
 	).Scan(&msgID, &now); err != nil {
 		ss.logger.Error("failed to create federated guild message", slog.String("error", err.Error()))
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -2036,10 +2063,11 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 	}
 
 	var localReq struct {
-		Content       string   `json:"content"`
-		Nonce         string   `json:"nonce"`
-		ReplyToIDs    []string `json:"reply_to_ids"`
-		AttachmentIDs []string `json:"attachment_ids"`
+		Content          string   `json:"content"`
+		Nonce            string   `json:"nonce"`
+		ReplyToIDs       []string `json:"reply_to_ids"`
+		AttachmentIDs    []string `json:"attachment_ids"`
+		ExpiresInSeconds *int     `json:"expires_in_seconds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&localReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -2067,7 +2095,27 @@ func (ss *SyncService) HandleProxyPostFederatedGuildMessage(w http.ResponseWrite
 		UserID: userID, Content: localReq.Content, Nonce: localReq.Nonce,
 		ReplyToIDs: localReq.ReplyToIDs,
 	}
+	if localReq.ExpiresInSeconds != nil {
+		if *localReq.ExpiresInSeconds < 60 || *localReq.ExpiresInSeconds > 60*60*24*30 {
+			http.Error(w, "expires_in_seconds must be between 60 seconds and 30 days", http.StatusBadRequest)
+			return
+		}
+		states, err := features.Resolve(ctx, ss.fed.pool, guildID)
+		if err != nil {
+			http.Error(w, "Failed to load feature flags", http.StatusInternalServerError)
+			return
+		}
+		if state := states["expiring_messages"]; !state.Enabled {
+			http.Error(w, "Expiring messages are disabled", http.StatusForbidden)
+			return
+		}
+		payload.ExpiresInSeconds = localReq.ExpiresInSeconds
+	}
 	if len(localReq.AttachmentIDs) > 0 {
+		if !ss.federationFeatureEnabled(ctx, "federated_attachments") {
+			http.Error(w, "Federated attachments disabled", http.StatusForbidden)
+			return
+		}
 		attachments, err := ss.federatedAttachmentsForUploadIDs(ctx, userID, localReq.AttachmentIDs)
 		if err != nil {
 			http.Error(w, "Invalid attachments", http.StatusBadRequest)

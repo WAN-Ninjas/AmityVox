@@ -2,9 +2,11 @@
 	import { api } from '$lib/api/client';
 	import Modal from '$components/common/Modal.svelte';
 	import EncryptionPanel from '$components/encryption/EncryptionPanel.svelte';
+	import ChannelSettingsPanel from '$components/channels/ChannelSettingsPanel.svelte';
 	import { updateChannel } from '$lib/stores/channels';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
-	import type { Channel } from '$lib/types';
+	import type { Channel, Role } from '$lib/types';
 
 	interface Props {
 		open: boolean;
@@ -22,8 +24,11 @@
 	let channelType = $state<'text' | 'voice'>('text');
 	let userLimit = $state(0);
 	let bitrate = $state(64000);
+	let roles = $state<Role[]>([]);
 	let error = $state('');
 	let saveOp = $state(createAsyncOp());
+	let rolesOp = $state(createAsyncOp());
+	const hasE2EE = $derived(isFeatureEnabled($clientConfig, 'e2ee'));
 
 	const userLimitOptions = [0, 5, 10, 15, 20, 25, 50, 99];
 	const bitrateOptions = [32000, 64000, 96000, 128000, 192000, 256000, 384000];
@@ -39,10 +44,22 @@
 		userLimit = channel.user_limit ?? 0;
 		bitrate = channel.bitrate ?? 64000;
 		error = '';
+		const activeChannel = channel;
+		if (activeChannel.guild_id) {
+			rolesOp.run(
+				() => api.getRoles(activeChannel.guild_id!),
+				() => undefined
+			).then((result) => {
+				if (result && open && activeChannel.id === loadedChannelId) roles = result;
+			});
+		} else {
+			roles = [];
+		}
 	});
 
 	async function saveChannel() {
 		if (!channel || !name.trim()) return;
+		const activeChannel = channel;
 		error = '';
 		const updated = await saveOp.run(async () => {
 			const updateData: Record<string, unknown> = {
@@ -54,7 +71,7 @@
 				updateData.user_limit = userLimit;
 				updateData.bitrate = bitrate;
 			}
-			return api.updateChannel(channel.id, updateData as any);
+			return api.updateChannel(activeChannel.id, updateData as any);
 		});
 		if (saveOp.error) {
 			error = saveOp.error;
@@ -112,7 +129,7 @@
 		</label>
 	</div>
 
-	{#if channelType === 'text' && channel}
+	{#if channelType === 'text' && channel && (hasE2EE || encrypted)}
 		<div class="mb-4">
 			<EncryptionPanel
 				channelId={channel.id}
@@ -145,6 +162,19 @@
 				{/each}
 			</select>
 			<p class="mt-1 text-xs text-text-muted">Higher bitrate means better audio quality but uses more bandwidth.</p>
+		</div>
+	{/if}
+
+	{#if channel && (channel.channel_type === 'text' || channel.channel_type === 'announcement' || channel.channel_type === 'forum' || channel.channel_type === 'gallery')}
+		<div class="mb-4 border-t border-bg-modifier pt-4">
+			<ChannelSettingsPanel
+				{channel}
+				{roles}
+				onUpdate={(updated) => {
+					updateChannel(updated);
+					channel = updated;
+				}}
+			/>
 		</div>
 	{/if}
 

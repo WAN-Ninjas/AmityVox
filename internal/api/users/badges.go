@@ -10,17 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/amityvox/amityvox/internal/api/apiutil"
-)
-
-// Badge constants derived from the user flags bitfield.
-// These values correspond to bit positions in the users.flags column.
-const (
-	UserFlagAdmin          = 4   // 1 << 2
-	UserBadgeEarlySupporter = 8   // 1 << 3
-	UserBadgeServerOwner   = 16  // 1 << 4
-	UserBadgeModerator     = 32  // 1 << 5
-	UserBadgeBot           = 64  // 1 << 6
-	UserBadgeVerified      = 128 // 1 << 7
+	"github.com/amityvox/amityvox/internal/models"
 )
 
 // badge represents a displayable badge on a user profile.
@@ -35,12 +25,10 @@ var badgeDefinitions = []struct {
 	flag  int
 	badge badge
 }{
-	{UserFlagAdmin, badge{ID: "admin", Name: "Admin", Icon: "shield"}},
-	{UserBadgeEarlySupporter, badge{ID: "early_supporter", Name: "Early Supporter", Icon: "heart"}},
-	{UserBadgeServerOwner, badge{ID: "server_owner", Name: "Server Owner", Icon: "crown"}},
-	{UserBadgeModerator, badge{ID: "moderator", Name: "Moderator", Icon: "hammer"}},
-	{UserBadgeBot, badge{ID: "bot", Name: "Bot", Icon: "robot"}},
-	{UserBadgeVerified, badge{ID: "verified", Name: "Verified", Icon: "check"}},
+	{models.UserFlagAdmin, badge{ID: "admin", Name: "Admin", Icon: "shield"}},
+	{models.UserFlagGlobalMod, badge{ID: "moderator", Name: "Moderator", Icon: "hammer"}},
+	{models.UserFlagBot, badge{ID: "bot", Name: "Bot", Icon: "robot"}},
+	{models.UserFlagVerified, badge{ID: "verified", Name: "Verified", Icon: "check"}},
 }
 
 // HandleGetUserBadges returns the badges for a user based on their flags bitfield.

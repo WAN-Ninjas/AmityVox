@@ -37,8 +37,11 @@
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { DragController, calculateInsertionIndex } from '$lib/utils/dragDrop';
 	import { onDestroy } from 'svelte';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	let dmProfileUserId = $state<string | null>(null);
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
+	const hasChannelGroups = $derived(isFeatureEnabled($clientConfig, 'channel_groups'));
 
 	interface Props {
 		/** Width in pixels, controlled by the layout store / resize handle. */
@@ -106,6 +109,14 @@
 	// Reload function exposed by ChannelGroups via onReady.
 	let reloadChannelGroups: (() => Promise<void>) | null = null;
 
+	$effect(() => {
+		if (!hasChannelGroups) {
+			groupedChannelIds = new Set();
+			channelGroupsData = [];
+			reloadChannelGroups = null;
+		}
+	});
+
 	// Find which group a channel belongs to (if any).
 	function findChannelGroup(channelId: string): { id: string; name: string } | null {
 		for (const g of channelGroupsData) {
@@ -117,7 +128,7 @@
 	// Move to Group submenu state
 	async function addChannelToGroup(groupId: string, channelId: string, insertIndex?: number) {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId || !hasChannelGroups) return;
 		const group = channelGroupsData.find(g => g.id === groupId);
 		if (!group) return;
 		// Build new channel list with insertion at the specified index.
@@ -136,7 +147,7 @@
 
 	async function removeChannelFromGroupCtx(channelId: string) {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId || !hasChannelGroups) return;
 		const group = findChannelGroup(channelId);
 		if (!group) return;
 		try {
@@ -206,7 +217,7 @@
 	let showInvite = $state(false);
 
 	// Context menu (channel)
-	let channelContextMenu = $state<{ x: number; y: number; channelId: string; channelName: string; archived: boolean } | null>(null);
+	let channelContextMenu = $state<{ x: number; y: number; channelId: string; channelName: string; archived: boolean; locked: boolean } | null>(null);
 
 	// Thread context menu
 	let threadContextMenu = $state<{ x: number; y: number; thread: Channel } | null>(null);
@@ -312,9 +323,42 @@
 		}
 	}
 
+	async function handleCloneChannel(channelId: string) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		try {
+			const cloned = await api.cloneChannel(guildId, channelId);
+			updateChannelStore(cloned);
+			addToast('Channel cloned', 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to clone channel'), 'error');
+		}
+		closeContextMenu();
+	}
+
+	async function handleLockChannel(channelId: string, locked: boolean) {
+		try {
+			const result = locked ? await api.unlockChannel(channelId) : await api.lockChannel(channelId);
+			const allChannels = [...$textChannels, ...$voiceChannels, ...$forumChannels, ...$galleryChannels];
+			const existing = allChannels.find((channel) => channel.id === channelId);
+			if (existing) {
+				updateChannelStore({
+					...existing,
+					locked: result.locked,
+					locked_by: result.locked ? existing.locked_by : null,
+					locked_at: result.locked ? existing.locked_at : null
+				});
+			}
+			addToast(result.locked ? 'Channel locked' : 'Channel unlocked', 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, `Failed to ${locked ? 'unlock' : 'lock'} channel`), 'error');
+		}
+		closeContextMenu();
+	}
+
 	function openContextMenu(e: MouseEvent, channel: Channel) {
 		e.preventDefault();
-		channelContextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived };
+		channelContextMenu = { x: e.clientX, y: e.clientY, channelId: channel.id, channelName: channel.name ?? '', archived: channel.archived, locked: channel.locked };
 		dmContextMenu = null;
 		threadContextMenu = null;
 	}
@@ -362,7 +406,7 @@
 	}
 
 	function openEditModal(channelId: string, channelName: string) {
-		const allChannels = [...$textChannels, ...$voiceChannels];
+		const allChannels = [...$textChannels, ...$voiceChannels, ...$forumChannels, ...$galleryChannels];
 		editChannel = allChannels.find(c => c.id === channelId) ?? {
 			id: channelId,
 			name: channelName,
@@ -636,13 +680,15 @@
 			/>
 
 			<!-- Channel Groups -->
-			<ChannelGroups
-			onGroupsLoaded={(ids) => { groupedChannelIds = ids; }}
-			onChannelContextMenu={(e, channel) => openContextMenu(e, channel as any)}
-			onThreadContextMenu={(e, thread) => openThreadContextMenu(e, thread)}
-			onGroupsChanged={(g) => { channelGroupsData = g; }}
-			onReady={(api) => { reloadChannelGroups = api.reload; }}
-		/>
+			{#if hasChannelGroups}
+				<ChannelGroups
+					onGroupsLoaded={(ids) => { groupedChannelIds = ids; }}
+					onChannelContextMenu={(e, channel) => openContextMenu(e, channel as any)}
+					onThreadContextMenu={(e, thread) => openThreadContextMenu(e, thread)}
+					onGroupsChanged={(g) => { channelGroupsData = g; }}
+					onReady={(api) => { reloadChannelGroups = api.reload; }}
+				/>
+			{/if}
 
 			<UpcomingEventsSection
 				events={upcomingEvents}
@@ -666,7 +712,7 @@
 	<VoiceConnectionBar />
 
 	<!-- User panel (bottom) -->
-	<UserPanel onreportissue={() => (showReportIssue = true)} />
+	<UserPanel canReportIssue={hasModerationReports} onreportissue={() => (showReportIssue = true)} />
 </aside>
 
 <!-- Channel context menu -->
@@ -680,6 +726,8 @@
 		onedit={openEditModal}
 		onremovefromgroup={removeChannelFromGroupCtx}
 		onaddtogroup={addChannelToGroup}
+		onclone={handleCloneChannel}
+		onlock={handleLockChannel}
 		ondelete={handleDeleteChannel}
 		onclose={closeContextMenu}
 	/>
@@ -730,7 +778,9 @@
 <CreateChannelModal bind:open={showCreateChannel} onclose={() => (showCreateChannel = false)} />
 <EditChannelModal bind:open={showEditChannel} channel={editChannel} onclose={() => (showEditChannel = false)} />
 
-<ReportIssueModal bind:open={showReportIssue} onclose={() => (showReportIssue = false)} />
+{#if hasModerationReports}
+	<ReportIssueModal bind:open={showReportIssue} onclose={() => (showReportIssue = false)} />
+{/if}
 
 <GroupDMCreateModal bind:open={showGroupDMCreate} onclose={() => (showGroupDMCreate = false)} />
 

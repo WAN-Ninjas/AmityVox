@@ -22,6 +22,7 @@ import (
 	"github.com/amityvox/amityvox/internal/api/apiutil"
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/models"
 )
 
 // Handler implements experimental feature REST API endpoints.
@@ -48,8 +49,8 @@ type msgEntry struct {
 // =============================================================================
 
 type shareLocationRequest struct {
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
+	Latitude  float64  `json:"latitude"`
+	Longitude float64  `json:"longitude"`
 	Accuracy  *float64 `json:"accuracy,omitempty"`
 	Altitude  *float64 `json:"altitude,omitempty"`
 	Label     *string  `json:"label,omitempty"`
@@ -491,13 +492,13 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 	if req.FromID != "" {
 		rows, err = h.Pool.Query(r.Context(),
 			`SELECT id, content, author_id FROM messages
-			 WHERE channel_id = $1 AND id >= $2 AND content IS NOT NULL AND content != ''
+			 WHERE channel_id = $1 AND id >= $2 AND content IS NOT NULL AND content != '' AND encrypted = false
 			 ORDER BY id ASC LIMIT $3`,
 			channelID, req.FromID, req.MessageCount)
 	} else {
 		rows, err = h.Pool.Query(r.Context(),
 			`SELECT id, content, author_id FROM messages
-			 WHERE channel_id = $1 AND content IS NOT NULL AND content != ''
+			 WHERE channel_id = $1 AND content IS NOT NULL AND content != '' AND encrypted = false
 			 ORDER BY id DESC LIMIT $2`,
 			channelID, req.MessageCount)
 	}
@@ -539,14 +540,14 @@ func (h *Handler) HandleSummarizeMessages(w http.ResponseWriter, r *http.Request
 	}
 
 	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"id":               id,
-		"channel_id":       channelID,
-		"summary":          summary,
-		"message_count":    len(messages),
-		"from_message_id":  fromMsgID,
-		"to_message_id":    toMsgID,
-		"model":            "extractive",
-		"created_at":       time.Now().UTC(),
+		"id":              id,
+		"channel_id":      channelID,
+		"summary":         summary,
+		"message_count":   len(messages),
+		"from_message_id": fromMsgID,
+		"to_message_id":   toMsgID,
+		"model":           "extractive",
+		"created_at":      time.Now().UTC(),
 	})
 }
 
@@ -677,6 +678,14 @@ func (h *Handler) HandleUpdateTranscriptionSettings(w http.ResponseWriter, r *ht
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	if enabled {
+		var engineType string
+		_ = h.Pool.QueryRow(r.Context(), `SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'transcription_engine_type'), 'none')`).Scan(&engineType)
+		if engineType == "none" {
+			apiutil.WriteError(w, http.StatusConflict, "transcription_disabled", "Voice transcription is disabled by instance policy")
+			return
+		}
+	}
 	language := "en"
 	if req.Language != nil && *req.Language != "" {
 		language = *req.Language
@@ -738,6 +747,13 @@ func (h *Handler) HandleGetTranscriptionSettings(w http.ResponseWriter, r *http.
 // GET /api/v1/channels/{channelID}/experimental/transcriptions
 func (h *Handler) HandleGetTranscriptions(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
+
+	var saveEnabled string
+	_ = h.Pool.QueryRow(r.Context(), `SELECT COALESCE((SELECT value FROM instance_settings WHERE key = 'transcription_save_enabled'), 'false')`).Scan(&saveEnabled)
+	if saveEnabled != "true" {
+		apiutil.WriteJSON(w, http.StatusOK, []interface{}{})
+		return
+	}
 
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT vt.id, vt.channel_id, vt.user_id, vt.content, vt.confidence,
@@ -922,7 +938,7 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 	var locked bool
 	var creatorID string
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT locked, creator_id FROM whiteboards WHERE id = $1`, whiteboardID).Scan(&locked, &creatorID)
+		`SELECT locked, creator_id FROM whiteboards WHERE id = $1 AND channel_id = $2`, whiteboardID, channelID).Scan(&locked, &creatorID)
 	if err == pgx.ErrNoRows {
 		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Whiteboard not found")
 		return
@@ -969,6 +985,7 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 	if h.EventBus != nil {
 		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.whiteboard_update", "WHITEBOARD_UPDATE", channelID, map[string]interface{}{
 			"whiteboard_id": whiteboardID,
+			"channel_id":    channelID,
 			"user_id":       userID,
 			"state":         req.State,
 		})
@@ -980,6 +997,7 @@ func (h *Handler) HandleUpdateWhiteboard(w http.ResponseWriter, r *http.Request)
 // HandleGetWhiteboardState returns the full state of a whiteboard for initial load.
 // GET /api/v1/channels/{channelID}/experimental/whiteboards/{whiteboardID}
 func (h *Handler) HandleGetWhiteboardState(w http.ResponseWriter, r *http.Request) {
+	requestChannelID := chi.URLParam(r, "channelID")
 	whiteboardID := chi.URLParam(r, "whiteboardID")
 
 	var state json.RawMessage
@@ -993,7 +1011,7 @@ func (h *Handler) HandleGetWhiteboardState(w http.ResponseWriter, r *http.Reques
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT id, channel_id, guild_id, name, creator_id, state, width, height,
 		        background_color, locked, max_collaborators, created_at, updated_at
-		 FROM whiteboards WHERE id = $1`, whiteboardID).Scan(
+		 FROM whiteboards WHERE id = $1 AND channel_id = $2`, whiteboardID, requestChannelID).Scan(
 		&whiteboardID, &channelID, &guildID, &name, &creatorID, &state,
 		&width, &height, &bgColor, &locked, &maxCollab, &createdAt, &updatedAt)
 	if err == pgx.ErrNoRows {
@@ -1064,8 +1082,6 @@ type createCodeSnippetRequest struct {
 	Title    string `json:"title"`
 	Language string `json:"language"`
 	Code     string `json:"code"`
-	Stdin    string `json:"stdin"`
-	Runnable bool   `json:"runnable"`
 }
 
 // HandleCreateCodeSnippet creates a code snippet in a channel.
@@ -1104,32 +1120,68 @@ func (h *Handler) HandleCreateCodeSnippet(w http.ResponseWriter, r *http.Request
 	}
 
 	id := newID()
-	_, err := h.Pool.Exec(r.Context(),
-		`INSERT INTO code_snippets (id, channel_id, author_id, title, language, code, stdin, runnable)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		id, channelID, userID, req.Title, req.Language, req.Code, req.Stdin, req.Runnable)
+	msgID := newID()
+	var title *string
+	if strings.TrimSpace(req.Title) != "" {
+		trimmed := strings.TrimSpace(req.Title)
+		title = &trimmed
+	}
+	var msg models.Message
+	var snippet models.CodeSnippet
+	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		content := req.Code
+		if title != nil {
+			content = *title
+		}
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
+			 VALUES ($1, $2, $3, $4, $5, now())
+			 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+			           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
+			           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+			           encrypted, encryption_session_id, created_at`,
+			msgID, channelID, userID, content, models.MessageTypeCodeSnippet,
+		).Scan(
+			&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+			&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+			&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+			&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+		); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO code_snippets (id, channel_id, message_id, author_id, title, language, code, runnable)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+			 RETURNING id, channel_id, message_id, author_id, title, language, code, created_at, updated_at`,
+			id, channelID, msgID, userID, title, req.Language, req.Code,
+		).Scan(
+			&snippet.ID, &snippet.ChannelID, &snippet.MessageID, &snippet.AuthorID,
+			&snippet.Title, &snippet.Language, &snippet.Code, &snippet.CreatedAt, &snippet.UpdatedAt,
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(r.Context(), `UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
+		return err
+	})
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to create code snippet", err)
 		return
 	}
 
-	result := map[string]interface{}{
-		"id":         id,
-		"channel_id": channelID,
-		"author_id":  userID,
-		"title":      req.Title,
-		"language":   req.Language,
-		"code":       req.Code,
-		"stdin":      req.Stdin,
-		"runnable":   req.Runnable,
-		"created_at": time.Now().UTC(),
-	}
+	msg.CodeSnippet = &snippet
 
 	if h.EventBus != nil {
-		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.code_snippet", "CODE_SNIPPET_CREATE", channelID, result)
+		if payload, err := json.Marshal(msg); err == nil {
+			h.EventBus.Publish(r.Context(), events.SubjectMessageCreate, events.Event{
+				Type:      "MESSAGE_CREATE",
+				ChannelID: channelID,
+				Data:      payload,
+			})
+		}
+		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.code_snippet", "CODE_SNIPPET_CREATE", channelID, snippet)
 	}
 
-	apiutil.WriteJSON(w, http.StatusCreated, result)
+	apiutil.WriteJSON(w, http.StatusCreated, snippet)
 }
 
 // HandleGetCodeSnippet returns a single code snippet.
@@ -1138,22 +1190,22 @@ func (h *Handler) HandleGetCodeSnippet(w http.ResponseWriter, r *http.Request) {
 	snippetID := chi.URLParam(r, "snippetID")
 
 	type snippet struct {
-		ID          string     `json:"id"`
-		ChannelID   string     `json:"channel_id"`
-		MessageID   *string    `json:"message_id,omitempty"`
-		AuthorID    string     `json:"author_id"`
-		Title       *string    `json:"title,omitempty"`
-		Language    string     `json:"language"`
-		Code        string     `json:"code"`
-		Stdin       *string    `json:"stdin,omitempty"`
-		Output      *string    `json:"output,omitempty"`
-		OutputError *string    `json:"output_error,omitempty"`
-		ExitCode    *int       `json:"exit_code,omitempty"`
-		RuntimeMs   *int       `json:"runtime_ms,omitempty"`
-		Runnable    bool       `json:"runnable"`
-		Public      bool       `json:"public"`
-		CreatedAt   time.Time  `json:"created_at"`
-		UpdatedAt   time.Time  `json:"updated_at"`
+		ID          string    `json:"id"`
+		ChannelID   string    `json:"channel_id"`
+		MessageID   *string   `json:"message_id,omitempty"`
+		AuthorID    string    `json:"author_id"`
+		Title       *string   `json:"title,omitempty"`
+		Language    string    `json:"language"`
+		Code        string    `json:"code"`
+		Stdin       *string   `json:"stdin,omitempty"`
+		Output      *string   `json:"output,omitempty"`
+		OutputError *string   `json:"output_error,omitempty"`
+		ExitCode    *int      `json:"exit_code,omitempty"`
+		RuntimeMs   *int      `json:"runtime_ms,omitempty"`
+		Runnable    bool      `json:"runnable"`
+		Public      bool      `json:"public"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
 	}
 
 	var s snippet
@@ -1176,45 +1228,10 @@ func (h *Handler) HandleGetCodeSnippet(w http.ResponseWriter, r *http.Request) {
 	apiutil.WriteJSON(w, http.StatusOK, s)
 }
 
-// HandleRunCodeSnippet executes a code snippet in a sandboxed environment.
+// HandleRunCodeSnippet rejects execution; snippets are intentionally display-only.
 // POST /api/v1/channels/{channelID}/experimental/code-snippets/{snippetID}/run
 func (h *Handler) HandleRunCodeSnippet(w http.ResponseWriter, r *http.Request) {
-	snippetID := chi.URLParam(r, "snippetID")
-
-	var language, code string
-	var stdin *string
-	err := h.Pool.QueryRow(r.Context(),
-		`SELECT language, code, stdin FROM code_snippets WHERE id = $1 AND runnable = true`,
-		snippetID).Scan(&language, &code, &stdin)
-	if err == pgx.ErrNoRows {
-		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Runnable code snippet not found")
-		return
-	}
-	if err != nil {
-		apiutil.InternalError(w, h.Logger, "Failed to get code snippet", err)
-		return
-	}
-
-	// NOTE: Server-side code execution requires a sandboxed runtime (not yet implemented).
-	// For now, return a stub response indicating the feature needs configuration.
-	output := fmt.Sprintf("[AmityVox] Server-side execution for %s is not yet configured.\nCode preview:\n%s",
-		language, truncate(code, 200))
-	exitCode := 0
-	runtimeMs := 0
-
-	// Cache the output.
-	h.Pool.Exec(r.Context(),
-		`UPDATE code_snippets SET output = $1, exit_code = $2, runtime_ms = $3, updated_at = NOW()
-		 WHERE id = $4`,
-		output, exitCode, runtimeMs, snippetID)
-
-	apiutil.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"id":         snippetID,
-		"output":     output,
-		"exit_code":  exitCode,
-		"runtime_ms": runtimeMs,
-		"language":   language,
-	})
+	apiutil.WriteError(w, http.StatusGone, "execution_disabled", "Code snippets are display-only and cannot be executed")
 }
 
 func truncate(s string, maxLen int) string {
@@ -1273,6 +1290,8 @@ func (h *Handler) HandleCreateVideoRecording(w http.ResponseWriter, r *http.Requ
 		"channel_id":      channelID,
 		"user_id":         userID,
 		"title":           req.Title,
+		"s3_key":          req.S3Key,
+		"s3_bucket":       req.S3Bucket,
 		"duration_ms":     req.DurationMs,
 		"file_size_bytes": req.FileSizeBytes,
 		"status":          "ready",
@@ -1288,9 +1307,11 @@ func (h *Handler) HandleGetRecordings(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Pool.Query(r.Context(),
 		`SELECT vr.id, vr.channel_id, vr.user_id, vr.title, vr.duration_ms,
 		        vr.file_size_bytes, vr.width, vr.height, vr.status, vr.created_at,
+		        a.id AS attachment_id,
 		        u.username, u.display_name, u.avatar_id
 		 FROM video_recordings vr
 		 JOIN users u ON u.id = vr.user_id
+		 LEFT JOIN attachments a ON a.s3_key = vr.s3_key
 		 WHERE vr.channel_id = $1
 		 ORDER BY vr.created_at DESC
 		 LIMIT 50`, channelID)
@@ -1311,6 +1332,7 @@ func (h *Handler) HandleGetRecordings(w http.ResponseWriter, r *http.Request) {
 		Height        *int      `json:"height,omitempty"`
 		Status        string    `json:"status"`
 		CreatedAt     time.Time `json:"created_at"`
+		AttachmentID  *string   `json:"attachment_id,omitempty"`
 		Username      string    `json:"username"`
 		DisplayName   *string   `json:"display_name,omitempty"`
 		AvatarID      *string   `json:"avatar_id,omitempty"`
@@ -1321,7 +1343,7 @@ func (h *Handler) HandleGetRecordings(w http.ResponseWriter, r *http.Request) {
 		var rec recording
 		if err := rows.Scan(&rec.ID, &rec.ChannelID, &rec.UserID, &rec.Title,
 			&rec.DurationMs, &rec.FileSizeBytes, &rec.Width, &rec.Height,
-			&rec.Status, &rec.CreatedAt, &rec.Username, &rec.DisplayName, &rec.AvatarID); err != nil {
+			&rec.Status, &rec.CreatedAt, &rec.AttachmentID, &rec.Username, &rec.DisplayName, &rec.AvatarID); err != nil {
 			continue
 		}
 		recordings = append(recordings, rec)
@@ -1340,9 +1362,9 @@ type createKanbanBoardRequest struct {
 }
 
 type createKanbanColumnRequest struct {
-	Name     string  `json:"name"`
-	Color    string  `json:"color"`
-	WipLimit *int    `json:"wip_limit"`
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	WipLimit *int   `json:"wip_limit"`
 }
 
 type createKanbanCardRequest struct {
@@ -1417,9 +1439,50 @@ func (h *Handler) HandleCreateKanbanBoard(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// HandleGetKanbanBoards returns kanban boards in a channel.
+// GET /api/v1/channels/{channelID}/experimental/kanban
+func (h *Handler) HandleGetKanbanBoards(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, channel_id, guild_id, name, description, creator_id, created_at, updated_at
+		 FROM kanban_boards
+		 WHERE channel_id = $1
+		 ORDER BY updated_at DESC, created_at DESC
+		 LIMIT 20`, channelID)
+	if err != nil {
+		apiutil.InternalError(w, h.Logger, "Failed to get kanban boards", err)
+		return
+	}
+	defer rows.Close()
+
+	type board struct {
+		ID          string    `json:"id"`
+		ChannelID   string    `json:"channel_id"`
+		GuildID     string    `json:"guild_id"`
+		Name        string    `json:"name"`
+		Description *string   `json:"description,omitempty"`
+		CreatorID   string    `json:"creator_id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+	}
+
+	boards := make([]board, 0)
+	for rows.Next() {
+		var b board
+		if err := rows.Scan(&b.ID, &b.ChannelID, &b.GuildID, &b.Name, &b.Description, &b.CreatorID, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			continue
+		}
+		boards = append(boards, b)
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, boards)
+}
+
 // HandleGetKanbanBoard returns a full kanban board with columns and cards.
 // GET /api/v1/channels/{channelID}/experimental/kanban/{boardID}
 func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
+	requestChannelID := chi.URLParam(r, "channelID")
 	boardID := chi.URLParam(r, "boardID")
 
 	var name, guildID, creatorID, channelID string
@@ -1427,7 +1490,7 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	var createdAt, updatedAt time.Time
 	err := h.Pool.QueryRow(r.Context(),
 		`SELECT id, channel_id, guild_id, name, description, creator_id, created_at, updated_at
-		 FROM kanban_boards WHERE id = $1`, boardID).Scan(
+		 FROM kanban_boards WHERE id = $1 AND channel_id = $2`, boardID, requestChannelID).Scan(
 		&boardID, &channelID, &guildID, &name, &description, &creatorID, &createdAt, &updatedAt)
 	if err == pgx.ErrNoRows {
 		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Kanban board not found")
@@ -1464,12 +1527,12 @@ func (h *Handler) HandleGetKanbanBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type column struct {
-		ID       string  `json:"id"`
-		Name     string  `json:"name"`
-		Color    string  `json:"color"`
-		Position int     `json:"position"`
-		WipLimit *int    `json:"wip_limit,omitempty"`
-		Cards    []card  `json:"cards"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Color    string `json:"color"`
+		Position int    `json:"position"`
+		WipLimit *int   `json:"wip_limit,omitempty"`
+		Cards    []card `json:"cards"`
 	}
 
 	columns := make([]column, 0)
@@ -1642,6 +1705,7 @@ func (h *Handler) HandleCreateKanbanCard(w http.ResponseWriter, r *http.Request)
 
 	result := map[string]interface{}{
 		"id":           cardID,
+		"channel_id":   channelID,
 		"column_id":    columnID,
 		"board_id":     boardID,
 		"title":        req.Title,
@@ -1692,9 +1756,10 @@ func (h *Handler) HandleMoveKanbanCard(w http.ResponseWriter, r *http.Request) {
 
 	if h.EventBus != nil {
 		h.EventBus.PublishChannelEvent(r.Context(), "amityvox.channel.kanban_update", "KANBAN_CARD_MOVE", channelID, map[string]interface{}{
-			"card_id":   cardID,
-			"column_id": req.ColumnID,
-			"position":  req.Position,
+			"card_id":    cardID,
+			"channel_id": channelID,
+			"column_id":  req.ColumnID,
+			"position":   req.Position,
 		})
 	}
 

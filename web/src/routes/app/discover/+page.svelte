@@ -7,6 +7,7 @@
 	import { fileUrl } from '$lib/utils/avatar';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import type { Guild, FederationPeer } from '$lib/types';
 
 	type DiscoverTab = 'local' | 'federated' | 'instances';
@@ -29,6 +30,7 @@
 	let remoteGuilds = $state<(Guild & { instance_domain?: string })[]>([]);
 	let remoteOp = $state(createAsyncOp());
 	let peersOp = $state(createAsyncOp());
+	const hasFederatedMessaging = $derived(isFeatureEnabled($clientConfig, 'federated_messaging'));
 
 	async function loadGuilds() {
 		const result = await localOp.run(async () => {
@@ -77,7 +79,7 @@
 	}
 
 	async function joinRemoteGuild(guild: Guild & { instance_domain?: string }) {
-		if (!guild.instance_domain) return;
+		if (!hasFederatedMessaging || !guild.instance_domain) return;
 		joining = guild.id;
 		try {
 			const resp = await api.joinFederatedGuild(guild.instance_domain, guild.id);
@@ -94,6 +96,10 @@
 	}
 
 	async function loadPeers() {
+		if (!hasFederatedMessaging) {
+			peers = [];
+			return;
+		}
 		const result = await peersOp.run(() => api.getPublicFederationPeers());
 		if (result) {
 			peers = result;
@@ -103,7 +109,7 @@
 	}
 
 	async function loadRemoteGuilds() {
-		if (!selectedPeerId) return;
+		if (!hasFederatedMessaging || !selectedPeerId) return;
 		const result = await remoteOp.run(async () => {
 			const params: Record<string, string> = { limit: '50' };
 			if (search.trim()) params.q = search.trim();
@@ -131,19 +137,24 @@
 	}
 
 	$effect(() => {
-		if (activeTab === 'federated' || activeTab === 'instances') {
+		if (!hasFederatedMessaging && activeTab !== 'local') {
+			activeTab = 'local';
+			return;
+		}
+		if (hasFederatedMessaging && (activeTab === 'federated' || activeTab === 'instances')) {
 			if (peers.length === 0 && !peersOp.loading) loadPeers();
 		}
 	});
 
 	$effect(() => {
-		if (activeTab === 'federated' && selectedPeerId && peers.length > 0) {
+		if (hasFederatedMessaging && activeTab === 'federated' && selectedPeerId && peers.length > 0) {
 			selectedCategory; // track category changes for federated filters
 			loadRemoteGuilds();
 		}
 	});
 
 	function selectPeerAndDiscover(peerId: string) {
+		if (!hasFederatedMessaging) return;
 		selectedPeerId = peerId;
 		activeTab = 'federated';
 	}
@@ -182,23 +193,25 @@
 		>
 			Local Servers
 		</button>
-		<button
-			class="px-4 py-2.5 text-sm font-medium transition-colors {activeTab === 'federated' ? 'border-b-2 border-brand-500 text-text-primary' : 'text-text-muted hover:text-text-secondary'}"
-			onclick={() => (activeTab = 'federated')}
-		>
-			<span class="flex items-center gap-1.5">
-				<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
-					<path d="M8 0a8 8 0 100 16A8 8 0 008 0zm5.3 5H11a13 13 0 00-1-3.3A6 6 0 0113.3 5zM8 1.5c.7.8 1.3 2 1.7 3.5H6.3C6.7 3.5 7.3 2.3 8 1.5zM1.5 9a6.5 6.5 0 010-2h2.8a13 13 0 000 2H1.5zm.2 1h2.5a13 13 0 001 3.3A6 6 0 011.7 10zm2.5-5H1.7A6 6 0 016 1.7 13 13 0 004.2 5zM8 14.5c-.7-.8-1.3-2-1.7-3.5h3.4c-.4 1.5-1 2.7-1.7 3.5zm2-4.5H6a12 12 0 010-4h4a12 12 0 010 4zm.1 3.3a13 13 0 001-3.3h2.5a6 6 0 01-3.5 3.3zM11.7 9a13 13 0 000-2h2.8a6.5 6.5 0 010 2h-2.8z"/>
-				</svg>
-				Federated Servers
-			</span>
-		</button>
-		<button
-			class="px-4 py-2.5 text-sm font-medium transition-colors {activeTab === 'instances' ? 'border-b-2 border-brand-500 text-text-primary' : 'text-text-muted hover:text-text-secondary'}"
-			onclick={() => (activeTab = 'instances')}
-		>
-			Federated Instances
-		</button>
+		{#if hasFederatedMessaging}
+			<button
+				class="px-4 py-2.5 text-sm font-medium transition-colors {activeTab === 'federated' ? 'border-b-2 border-brand-500 text-text-primary' : 'text-text-muted hover:text-text-secondary'}"
+				onclick={() => (activeTab = 'federated')}
+			>
+				<span class="flex items-center gap-1.5">
+					<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
+						<path d="M8 0a8 8 0 100 16A8 8 0 008 0zm5.3 5H11a13 13 0 00-1-3.3A6 6 0 0113.3 5zM8 1.5c.7.8 1.3 2 1.7 3.5H6.3C6.7 3.5 7.3 2.3 8 1.5zM1.5 9a6.5 6.5 0 010-2h2.8a13 13 0 000 2H1.5zm.2 1h2.5a13 13 0 001 3.3A6 6 0 011.7 10zm2.5-5H1.7A6 6 0 016 1.7 13 13 0 004.2 5zM8 14.5c-.7-.8-1.3-2-1.7-3.5h3.4c-.4 1.5-1 2.7-1.7 3.5zm2-4.5H6a12 12 0 010-4h4a12 12 0 010 4zm.1 3.3a13 13 0 001-3.3h2.5a6 6 0 01-3.5 3.3zM11.7 9a13 13 0 000-2h2.8a6.5 6.5 0 010 2h-2.8z"/>
+					</svg>
+					Federated Servers
+				</span>
+			</button>
+			<button
+				class="px-4 py-2.5 text-sm font-medium transition-colors {activeTab === 'instances' ? 'border-b-2 border-brand-500 text-text-primary' : 'text-text-muted hover:text-text-secondary'}"
+				onclick={() => (activeTab = 'instances')}
+			>
+				Federated Instances
+			</button>
+		{/if}
 	</div>
 
 	<!-- Search & Filters (Local + Federated tabs) -->

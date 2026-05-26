@@ -8,9 +8,11 @@ vi.mock('$lib/api/client', () => ({
 }));
 
 import { api, type VoiceBroadcast } from '$lib/api/client';
+import { clientConfig } from '$lib/stores/clientConfig';
 import {
 	handleVoiceBroadcastEnd,
 	handleVoiceBroadcastStart,
+	handleVoiceBroadcastUpdate,
 	loadVoiceBroadcast,
 	upsertVoiceBroadcast,
 	voiceBroadcastsByChannel
@@ -33,6 +35,7 @@ function createBroadcast(overrides?: Partial<VoiceBroadcast>): VoiceBroadcast {
 describe('voiceBroadcasts store', () => {
 	beforeEach(() => {
 		voiceBroadcastsByChannel.set(new Map());
+		clientConfig.set({ feature_flags: { voice_broadcasts: { enabled: true } } } as any);
 		vi.mocked(api.getVoiceBroadcast).mockReset();
 	});
 
@@ -66,5 +69,18 @@ describe('voiceBroadcasts store', () => {
 		upsertVoiceBroadcast(createBroadcast({ title: 'Updated' }));
 
 		expect(get(voiceBroadcastsByChannel).get('voice-1')?.title).toBe('Updated');
+	});
+
+	it('applies listener count updates without replacing existing broadcast details', () => {
+		upsertVoiceBroadcast(createBroadcast({ title: 'Town Hall', listener_count: 0 }));
+
+		handleVoiceBroadcastUpdate({
+			channel_id: 'voice-1',
+			listener_count: 4
+		});
+
+		const broadcast = get(voiceBroadcastsByChannel).get('voice-1');
+		expect(broadcast?.title).toBe('Town Hall');
+		expect(broadcast?.listener_count).toBe(4);
 	});
 });

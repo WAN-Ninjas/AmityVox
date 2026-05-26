@@ -66,6 +66,31 @@ func TestHasAllPermissions(t *testing.T) {
 	}
 }
 
+func TestInstanceAdminApplies(t *testing.T) {
+	tests := []struct {
+		name            string
+		isAdmin         bool
+		userInstanceID  string
+		guildInstanceID string
+		want            bool
+	}{
+		{"same instance admin", true, "inst-a", "inst-a", true},
+		{"remote guild admin", true, "inst-a", "inst-b", false},
+		{"not admin", false, "inst-a", "inst-a", false},
+		{"missing user instance", true, "", "inst-a", false},
+		{"missing guild instance", true, "inst-a", "", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := InstanceAdminApplies(tc.isAdmin, tc.userInstanceID, tc.guildInstanceID)
+			if got != tc.want {
+				t.Fatalf("InstanceAdminApplies() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCalculatePermissions_OwnerGetsAll(t *testing.T) {
 	member := MemberInfo{UserID: "owner123"}
 	guild := GuildInfo{OwnerID: "owner123", DefaultPermissions: ViewChannel}

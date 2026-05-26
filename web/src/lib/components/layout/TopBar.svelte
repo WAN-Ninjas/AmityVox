@@ -3,7 +3,10 @@
 	import { currentGuild } from '$lib/stores/guilds';
 	import { canGoBack, canGoForward, goBack, goForward } from '$lib/stores/navigation';
 	import { canManageChannels } from '$lib/stores/permissions';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import SearchModal from '$components/chat/SearchModal.svelte';
+	import ConnectionIndicator from '$components/common/ConnectionIndicator.svelte';
+	import ExportMessagesButton from '$components/common/ExportMessagesButton.svelte';
 
 	interface Props {
 		onToggleMembers?: () => void;
@@ -13,15 +16,23 @@
 		showPins?: boolean;
 		showFollowers?: boolean;
 		showGallery?: boolean;
+		canUseAnnouncementChannels?: boolean;
+		canUseGalleryMedia?: boolean;
+		canUsePins?: boolean;
 	}
 
-	let { onToggleMembers, onTogglePins, onToggleFollowers, onToggleGallery, showPins = false, showFollowers = false, showGallery = false }: Props = $props();
+	let { onToggleMembers, onTogglePins, onToggleFollowers, onToggleGallery, showPins = false, showFollowers = false, showGallery = false, canUseAnnouncementChannels = true, canUseGalleryMedia = true, canUsePins = true }: Props = $props();
 	let showSearch = $state(false);
 	let topicExpanded = $state(false);
 	let showMobileMenu = $state(false);
+	const hasFullTextSearch = $derived(isFeatureEnabled($clientConfig, 'full_text_search'));
+
+	$effect(() => {
+		if (!hasFullTextSearch) showSearch = false;
+	});
 
 	function handleKeydown(e: KeyboardEvent) {
-		if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+		if (hasFullTextSearch && (e.ctrlKey || e.metaKey) && e.key === 'k') {
 			e.preventDefault();
 			showSearch = !showSearch;
 		}
@@ -99,6 +110,14 @@
 	{/if}
 
 	<div class="ml-auto flex items-center gap-1">
+		<ConnectionIndicator />
+
+		{#if $currentChannel}
+			<div class="hidden md:block">
+				<ExportMessagesButton channelId={$currentChannel.id} />
+			</div>
+		{/if}
+
 		<!-- Channel settings gear (ManageChannels permission required) — desktop only -->
 		{#if $currentChannel && $canManageChannels}
 			<button
@@ -114,7 +133,7 @@
 		{/if}
 
 		<!-- Pinned messages toggle — desktop only -->
-		{#if $currentChannel}
+		{#if canUsePins && $currentChannel}
 			<button
 				class="hidden rounded p-1.5 transition-colors md:block {showPins ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
 				onclick={onTogglePins}
@@ -127,7 +146,7 @@
 		{/if}
 
 		<!-- Followers toggle (announcement channels only) — desktop only -->
-		{#if $currentChannel?.channel_type === 'announcement'}
+		{#if canUseAnnouncementChannels && $currentChannel?.channel_type === 'announcement'}
 			<button
 				class="hidden rounded p-1.5 transition-colors md:block {showFollowers ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
 				onclick={onToggleFollowers}
@@ -140,7 +159,7 @@
 		{/if}
 
 		<!-- Gallery toggle — desktop only -->
-		{#if $currentChannel}
+		{#if canUseGalleryMedia && $currentChannel}
 			<button
 				class="hidden rounded p-1.5 transition-colors md:block {showGallery ? 'bg-bg-modifier text-text-primary' : 'text-text-muted hover:text-text-primary'}"
 				onclick={onToggleGallery}
@@ -165,17 +184,18 @@
 			</button>
 		{/if}
 
-		<!-- Search — always visible -->
-		<button
-			class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
-			title="Search (Ctrl+K)"
-			onclick={() => (showSearch = true)}
-		>
-			<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-				<circle cx="11" cy="11" r="8" />
-				<path d="m21 21-4.35-4.35" />
-			</svg>
-		</button>
+		{#if hasFullTextSearch}
+			<button
+				class="rounded p-1.5 text-text-muted transition-colors hover:text-text-primary"
+				title="Search (Ctrl+K)"
+				onclick={() => (showSearch = true)}
+			>
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<circle cx="11" cy="11" r="8" />
+					<path d="m21 21-4.35-4.35" />
+				</svg>
+			</button>
+		{/if}
 
 		<!-- Mobile overflow menu -->
 		{#if $currentChannel}
@@ -203,14 +223,16 @@
 								Channel Settings
 							</button>
 						{/if}
-						<button
-							class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
-							onclick={() => { onTogglePins?.(); showMobileMenu = false; }}
-						>
-							<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg>
-							Pinned Messages
-						</button>
-						{#if $currentChannel?.channel_type === 'announcement'}
+						{#if canUsePins}
+							<button
+								class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
+								onclick={() => { onTogglePins?.(); showMobileMenu = false; }}
+							>
+								<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg>
+								Pinned Messages
+							</button>
+						{/if}
+						{#if canUseAnnouncementChannels && $currentChannel?.channel_type === 'announcement'}
 							<button
 								class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
 								onclick={() => { onToggleFollowers?.(); showMobileMenu = false; }}
@@ -219,13 +241,16 @@
 								Followers
 							</button>
 						{/if}
-						<button
-							class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
-							onclick={() => { onToggleGallery?.(); showMobileMenu = false; }}
-						>
-							<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-							Gallery
-						</button>
+						<ExportMessagesButton channelId={$currentChannel.id} />
+						{#if canUseGalleryMedia}
+							<button
+								class="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-modifier"
+								onclick={() => { onToggleGallery?.(); showMobileMenu = false; }}
+							>
+								<svg class="h-4 w-4 text-text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+								Gallery
+							</button>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -233,4 +258,6 @@
 	</div>
 </header>
 
-<SearchModal bind:open={showSearch} onclose={() => (showSearch = false)} />
+{#if hasFullTextSearch}
+	<SearchModal bind:open={showSearch} onclose={() => (showSearch = false)} />
+{/if}

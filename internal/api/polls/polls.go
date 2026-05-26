@@ -4,6 +4,7 @@
 package polls
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // Handler implements poll-related REST API endpoints.
@@ -75,6 +77,7 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pollID := models.NewULID().String()
+	msgID := models.NewULID().String()
 
 	var expiresAt *time.Time
 	if req.Duration > 0 {
@@ -83,14 +86,33 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var poll models.Poll
+	var msg models.Message
 	options := make([]models.PollOption, 0, len(req.Options))
 	err := apiutil.WithTx(r.Context(), h.Pool, func(tx pgx.Tx) error {
+		content := req.Question
+		if err := tx.QueryRow(r.Context(),
+			`INSERT INTO messages (id, channel_id, author_id, content, message_type, created_at)
+			 VALUES ($1, $2, $3, $4, $5, now())
+			 RETURNING id, channel_id, author_id, content, nonce, message_type, edited_at, flags,
+			           reply_to_ids, mention_user_ids, mention_role_ids, mention_here,
+			           thread_id, masquerade_name, masquerade_avatar, masquerade_color,
+			           encrypted, encryption_session_id, created_at`,
+			msgID, channelID, userID, content, models.MessageTypePoll,
+		).Scan(
+			&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.Nonce, &msg.MessageType,
+			&msg.EditedAt, &msg.Flags, &msg.ReplyToIDs, &msg.MentionUserIDs, &msg.MentionRoleIDs,
+			&msg.MentionHere, &msg.ThreadID, &msg.MasqueradeName, &msg.MasqueradeAvatar,
+			&msg.MasqueradeColor, &msg.Encrypted, &msg.EncryptionSessionID, &msg.CreatedAt,
+		); err != nil {
+			return err
+		}
+
 		// Insert the poll.
 		if err := tx.QueryRow(r.Context(),
-			`INSERT INTO polls (id, channel_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, false, now())
+			`INSERT INTO polls (id, channel_id, message_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, now())
 			 RETURNING id, channel_id, message_id, author_id, question, multi_vote, anonymous, expires_at, closed, created_at`,
-			pollID, channelID, userID, req.Question, req.MultiVote, req.Anonymous, expiresAt,
+			pollID, channelID, msgID, userID, req.Question, req.MultiVote, req.Anonymous, expiresAt,
 		).Scan(
 			&poll.ID, &poll.ChannelID, &poll.MessageID, &poll.AuthorID,
 			&poll.Question, &poll.MultiVote, &poll.Anonymous, &poll.ExpiresAt,
@@ -114,7 +136,8 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 			options = append(options, opt)
 		}
 
-		return nil
+		_, err := tx.Exec(r.Context(), `UPDATE channels SET last_message_id = $1 WHERE id = $2`, msgID, channelID)
+		return err
 	})
 	if err != nil {
 		apiutil.InternalError(w, h.Logger, "Failed to create poll", err)
@@ -124,7 +147,15 @@ func (h *Handler) HandleCreatePoll(w http.ResponseWriter, r *http.Request) {
 	poll.Options = options
 	poll.TotalVotes = 0
 	poll.UserVotes = []string{}
+	msg.Poll = &poll
 
+	if payload, err := json.Marshal(msg); err == nil {
+		h.EventBus.Publish(r.Context(), events.SubjectMessageCreate, events.Event{
+			Type:      "MESSAGE_CREATE",
+			ChannelID: channelID,
+			Data:      payload,
+		})
+	}
 	h.EventBus.PublishChannelEvent(r.Context(), events.SubjectPollCreate, "POLL_CREATE", channelID, poll)
 
 	apiutil.WriteJSON(w, http.StatusCreated, poll)
@@ -359,13 +390,21 @@ func (h *Handler) HandleClosePoll(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	pollID := chi.URLParam(r, "pollID")
 
-	// Fetch the poll to check ownership.
+	// Fetch the poll to check ownership and same-instance admin scope.
 	var authorID, channelID string
+	var guildInstanceID, userInstanceID string
+	var userFlags int
 	var closed bool
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT author_id, channel_id, closed FROM polls WHERE id = $1`,
-		pollID,
-	).Scan(&authorID, &channelID, &closed)
+		`SELECT p.author_id, p.channel_id, p.closed,
+		        COALESCE(g.instance_id, ''), COALESCE(u.instance_id, ''), COALESCE(u.flags, 0)
+		 FROM polls p
+		 LEFT JOIN channels c ON c.id = p.channel_id
+		 LEFT JOIN guilds g ON g.id = c.guild_id
+		 LEFT JOIN users u ON u.id = $2
+		 WHERE p.id = $1`,
+		pollID, userID,
+	).Scan(&authorID, &channelID, &closed, &guildInstanceID, &userInstanceID, &userFlags)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			apiutil.WriteError(w, http.StatusNotFound, "poll_not_found", "Poll not found")
@@ -380,14 +419,10 @@ func (h *Handler) HandleClosePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check authorization: only the author or an admin can close a poll.
-	if authorID != userID {
-		var userFlags int
-		h.Pool.QueryRow(r.Context(), `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-		if userFlags&models.UserFlagAdmin == 0 {
-			apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only the poll author or an admin can close this poll")
-			return
-		}
+	// Check authorization: only the author or a same-instance admin can close a poll.
+	if authorID != userID && !permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only the poll author or an admin can close this poll")
+		return
 	}
 
 	_, err = h.Pool.Exec(r.Context(),
@@ -415,12 +450,19 @@ func (h *Handler) HandleDeletePoll(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	pollID := chi.URLParam(r, "pollID")
 
-	// Fetch the poll to check ownership.
+	// Fetch the poll to check ownership and same-instance admin scope.
 	var authorID string
+	var guildInstanceID, userInstanceID string
+	var userFlags int
 	err := h.Pool.QueryRow(r.Context(),
-		`SELECT author_id FROM polls WHERE id = $1`,
-		pollID,
-	).Scan(&authorID)
+		`SELECT p.author_id, COALESCE(g.instance_id, ''), COALESCE(u.instance_id, ''), COALESCE(u.flags, 0)
+		 FROM polls p
+		 LEFT JOIN channels c ON c.id = p.channel_id
+		 LEFT JOIN guilds g ON g.id = c.guild_id
+		 LEFT JOIN users u ON u.id = $2
+		 WHERE p.id = $1`,
+		pollID, userID,
+	).Scan(&authorID, &guildInstanceID, &userInstanceID, &userFlags)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			apiutil.WriteError(w, http.StatusNotFound, "poll_not_found", "Poll not found")
@@ -430,14 +472,10 @@ func (h *Handler) HandleDeletePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check authorization: only the author or an admin can delete a poll.
-	if authorID != userID {
-		var userFlags int
-		h.Pool.QueryRow(r.Context(), `SELECT flags FROM users WHERE id = $1`, userID).Scan(&userFlags)
-		if userFlags&models.UserFlagAdmin == 0 {
-			apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only the poll author or an admin can delete this poll")
-			return
-		}
+	// Check authorization: only the author or a same-instance admin can delete a poll.
+	if authorID != userID && !permissions.InstanceAdminApplies(userFlags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
+		apiutil.WriteError(w, http.StatusForbidden, "forbidden", "Only the poll author or an admin can delete this poll")
+		return
 	}
 
 	tag, err := h.Pool.Exec(r.Context(), `DELETE FROM polls WHERE id = $1`, pollID)

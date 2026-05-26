@@ -44,21 +44,21 @@ type PushSubscription struct {
 
 // NotificationPreferences holds a user's notification settings for a guild (or global).
 type NotificationPreferences struct {
-	UserID            string     `json:"user_id"`
-	GuildID           string     `json:"guild_id,omitempty"`
-	Level             string     `json:"level"`
-	SuppressHere      bool       `json:"suppress_here"`
-	SuppressRoles     bool       `json:"suppress_roles"`
-	MutedUntil        *time.Time `json:"muted_until,omitempty"`
+	UserID        string     `json:"user_id"`
+	GuildID       string     `json:"guild_id,omitempty"`
+	Level         string     `json:"level"`
+	SuppressHere  bool       `json:"suppress_here"`
+	SuppressRoles bool       `json:"suppress_roles"`
+	MutedUntil    *time.Time `json:"muted_until,omitempty"`
 }
 
 // PushPayload is the JSON structure sent in push notifications.
 type PushPayload struct {
-	Type      string `json:"type"`                 // "message", "mention", "dm", "friend_request"
+	Type      string `json:"type"` // "message", "mention", "dm", "friend_request"
 	Title     string `json:"title"`
 	Body      string `json:"body"`
 	Icon      string `json:"icon,omitempty"`
-	URL       string `json:"url,omitempty"`         // Deep link path
+	URL       string `json:"url,omitempty"` // Deep link path
 	ChannelID string `json:"channel_id,omitempty"`
 	GuildID   string `json:"guild_id,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
@@ -76,12 +76,12 @@ type Service struct {
 
 // Config holds configuration for the notification service.
 type Config struct {
-	Pool             *pgxpool.Pool
-	Logger           *slog.Logger
-	VAPIDPublicKey   string
-	VAPIDPrivateKey  string
+	Pool              *pgxpool.Pool
+	Logger            *slog.Logger
+	VAPIDPublicKey    string
+	VAPIDPrivateKey   string
 	VAPIDContactEmail string
-	Bus              *events.Bus
+	Bus               *events.Bus
 }
 
 // NewService creates a new notification service.
@@ -106,6 +106,11 @@ func (s *Service) Enabled() bool {
 // HandleSubscribe handles POST /api/v1/notifications/subscriptions.
 // Registers a new push subscription for the authenticated user.
 func (s *Service) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
+	if !s.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "push_not_configured", "Push notifications are not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req struct {
@@ -153,6 +158,11 @@ func (s *Service) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 
 // HandleListSubscriptions handles GET /api/v1/notifications/subscriptions.
 func (s *Service) HandleListSubscriptions(w http.ResponseWriter, r *http.Request) {
+	if !s.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "push_not_configured", "Push notifications are not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 
 	rows, err := s.pool.Query(r.Context(),
@@ -184,6 +194,11 @@ func (s *Service) HandleListSubscriptions(w http.ResponseWriter, r *http.Request
 
 // HandleUnsubscribe handles DELETE /api/v1/notifications/subscriptions/{subscriptionID}.
 func (s *Service) HandleUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	if !s.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "push_not_configured", "Push notifications are not configured")
+		return
+	}
+
 	userID := auth.UserIDFromContext(r.Context())
 	subID := chi.URLParam(r, "subscriptionID")
 
@@ -256,11 +271,11 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 	userID := auth.UserIDFromContext(r.Context())
 
 	var req struct {
-		GuildID          *string    `json:"guild_id"`
-		Level            *string    `json:"level"`
-		SuppressHere *bool      `json:"suppress_here"`
-		SuppressRoles    *bool      `json:"suppress_roles"`
-		MutedUntil       *time.Time `json:"muted_until"`
+		GuildID       *string    `json:"guild_id"`
+		Level         *string    `json:"level"`
+		SuppressHere  *bool      `json:"suppress_here"`
+		SuppressRoles *bool      `json:"suppress_roles"`
+		MutedUntil    *time.Time `json:"muted_until"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
@@ -313,12 +328,12 @@ func (s *Service) HandleUpdatePreferences(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, NotificationPreferences{
-		UserID:           userID,
-		GuildID:          guildIDStr,
-		Level:            level,
-		SuppressHere: suppressHere,
-		SuppressRoles:    suppressRoles,
-		MutedUntil:       req.MutedUntil,
+		UserID:        userID,
+		GuildID:       guildIDStr,
+		Level:         level,
+		SuppressHere:  suppressHere,
+		SuppressRoles: suppressRoles,
+		MutedUntil:    req.MutedUntil,
 	})
 }
 
@@ -959,8 +974,8 @@ func (s *Service) HandleUpdateTypePreferences(w http.ResponseWriter, r *http.Req
 func (s *Service) CreateNotification(ctx context.Context, bus *events.Bus, n *models.Notification) error {
 	// Check per-type preferences.
 	var inApp, push bool
-	inApp = true  // default
-	push = true   // default
+	inApp = true // default
+	push = true  // default
 
 	err := s.pool.QueryRow(ctx,
 		`SELECT in_app, push FROM notification_type_preferences WHERE user_id = $1 AND type = $2`,

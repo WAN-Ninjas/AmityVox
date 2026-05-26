@@ -7,6 +7,7 @@
 	import { currentUser } from '$lib/stores/auth';
 	import { api } from '$lib/api/client';
 	import { getGatewayClient } from '$lib/stores/gateway';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	interface Props {
 		open?: boolean;
@@ -17,6 +18,7 @@
 	let query = $state('');
 	let selectedIndex = $state(0);
 	let inputEl = $state<HTMLInputElement | null>(null);
+	const hasMessageBookmarks = $derived(isFeatureEnabled($clientConfig, 'message_bookmarks'));
 
 	// Category type for search results.
 	interface PaletteItem {
@@ -180,7 +182,7 @@
 		}
 
 		// Actions.
-		items.push(...staticActions);
+		items.push(...staticActions.filter((item) => hasMessageBookmarks || item.id !== 'action-bookmarks'));
 
 		return items;
 	});

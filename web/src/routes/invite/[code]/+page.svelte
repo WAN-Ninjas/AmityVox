@@ -4,6 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
 	import { updateGuild, loadGuilds } from '$lib/stores/guilds';
+	import { clientConfig, isFeatureEnabled, loadClientConfig } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import FederationBadge from '$lib/components/common/FederationBadge.svelte';
@@ -25,6 +26,8 @@
 	let notFederatedDomain = $state('');
 	let requestingFederation = $state(false);
 	let federationRequested = $state(false);
+	const hasFederatedMessaging = $derived(isFeatureEnabled($clientConfig, 'federated_messaging'));
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
 
 	function extractDomainFromInvite(code: string): string {
 		if (code.includes('@')) return code.split('@').pop() ?? '';
@@ -50,9 +53,14 @@
 
 		await loadOp.run(async () => {
 			try {
+				if (!$clientConfig) await loadClientConfig();
 				const data = await api.getInvite(code);
 
 				if ((data as any).federated) {
+					if (!hasFederatedMessaging) {
+						error = 'Federated invites are disabled on this instance.';
+						return;
+					}
 					isFederated = true;
 					instanceDomain = (data as any).instance_domain ?? '';
 					inviteCode = (data as any).invite_code ?? code;
@@ -74,8 +82,12 @@
 		const apiError = err as { code?: string; message?: string; domain?: string };
 		// Check for not_federated error
 		if (apiError.code === 'not_federated' || apiError.message?.includes('not federated')) {
-			notFederated = true;
-			notFederatedDomain = apiError.domain || extractDomainFromInvite(code) || '';
+			if (hasFederatedMessaging) {
+				notFederated = true;
+				notFederatedDomain = apiError.domain || extractDomainFromInvite(code) || '';
+			} else {
+				error = 'Federated invites are disabled on this instance.';
+			}
 		} else {
 			error = getErrorMessage(err, 'Invite not found or has expired');
 		}
@@ -87,7 +99,12 @@
 
 		joining = true;
 		try {
+			if (!$clientConfig) await loadClientConfig();
 			if (isFederated) {
+				if (!hasFederatedMessaging) {
+					error = 'Federated invites are disabled on this instance.';
+					return;
+				}
 				const resp = await api.joinFederatedGuild(instanceDomain, undefined, inviteCode);
 				// Best-effort refresh — a stale guild list is acceptable; navigation
 				// must always succeed after a successful join.
@@ -98,6 +115,10 @@
 				const guild = await api.acceptInvite(code);
 
 				if ((guild as any).federated) {
+					if (!hasFederatedMessaging) {
+						error = 'Federated invites are disabled on this instance.';
+						return;
+					}
 					const fedDomain = (guild as any).instance_domain;
 					const fedResp = await api.joinFederatedGuild(fedDomain, undefined, (guild as any).invite_code);
 					// Best-effort refresh — a stale guild list is acceptable; navigation
@@ -126,6 +147,10 @@
 
 	async function requestFederation() {
 		if (!notFederatedDomain) return;
+		if (!hasModerationReports) {
+			addToast('Federation requests are disabled on this instance.', 'error');
+			return;
+		}
 		requestingFederation = true;
 		try {
 			await api.createIssue(
@@ -201,6 +226,8 @@
 				</p>
 				{#if federationRequested}
 					<p class="text-sm text-green-400">Federation request submitted! An admin will review it.</p>
+				{:else if !hasModerationReports}
+					<p class="text-sm text-text-muted">Federation requests are disabled on this instance.</p>
 				{:else}
 					<button
 						onclick={requestFederation}

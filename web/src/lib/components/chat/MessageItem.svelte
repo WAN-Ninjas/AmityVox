@@ -9,8 +9,12 @@
 	import EditHistoryModal from '$components/chat/EditHistoryModal.svelte';
 	import MarkdownRenderer from '$components/chat/MarkdownRenderer.svelte';
 	import MessageAttachments from '$components/chat/MessageAttachments.svelte';
+	import MessageComponents from '$components/chat/MessageComponents.svelte';
 	import MessageContextMenu from '$components/chat/MessageContextMenu.svelte';
 	import MessageEmbedsAndReactions from '$components/chat/MessageEmbedsAndReactions.svelte';
+	import MessageEffects from '$components/chat/MessageEffects.svelte';
+	import PollDisplay from '$components/PollDisplay.svelte';
+	import CodeSnippet from '$components/chat/CodeSnippet.svelte';
 	import TranslateButton from '$components/chat/TranslateButton.svelte';
 	import CrossChannelQuote from '$components/chat/CrossChannelQuote.svelte';
 	import Modal from '$components/common/Modal.svelte';
@@ -32,7 +36,7 @@
 	import { clientNicknames } from '$lib/stores/nicknames';
 	import { isEmojiOnly } from '$lib/utils/emoji';
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
-	import { clientConfig, isExperimentalEnabled } from '$lib/stores/clientConfig';
+	import { clientConfig, isExperimentalEnabled, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface Props {
@@ -64,6 +68,10 @@
 	let attachmentContextMenu = $state<{ x: number; y: number; attachment: any } | null>(null);
 	let showQuickReactions = $state(false);
 	let userPopover = $state<{ x: number; y: number } | null>(null);
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
+	const hasThreadsAndReplies = $derived(isFeatureEnabled($clientConfig, 'threads_and_replies'));
+	const hasPins = $derived(isFeatureEnabled($clientConfig, 'pins'));
+	const hasMessageBookmarks = $derived(isFeatureEnabled($clientConfig, 'message_bookmarks'));
 	let profileUserId = $state<string | null>(null);
 	let lightboxSrc = $state<string | null>(null);
 	let showEditHistory = $state(false);
@@ -292,6 +300,7 @@
 
 	function handleReply() {
 		contextMenu = null;
+		if (!hasThreadsAndReplies) return;
 		startReply(message);
 	}
 
@@ -312,6 +321,7 @@
 
 	async function handlePin() {
 		contextMenu = null;
+		if (!hasPins) return;
 		try {
 			if (message.pinned) {
 				await api.unpinMessage(message.channel_id, message.id);
@@ -335,7 +345,11 @@
 
 	function handleCopyLink() {
 		contextMenu = null;
-		const url = `${window.location.origin}/app/guilds/${message.channel_id}#${message.id}`;
+		const guildId = $currentChannel?.guild_id ?? $currentGuild?.id;
+		const path = guildId
+			? `/app/guilds/${guildId}/channels/${message.channel_id}#msg-${message.id}`
+			: `/app/dms/${message.channel_id}#msg-${message.id}`;
+		const url = `${window.location.origin}${path}`;
 		navigator.clipboard.writeText(url);
 		addToast('Link copied', 'info');
 	}
@@ -347,6 +361,7 @@
 
 	function handleCreateThread() {
 		contextMenu = null;
+		if (!hasThreadsAndReplies) return;
 		newThreadName = message.content?.slice(0, 50)?.trim() || 'New Thread';
 		showCreateThread = true;
 	}
@@ -370,7 +385,7 @@
 
 	function handleViewThread() {
 		contextMenu = null;
-		if (message.thread_id) {
+		if (hasThreadsAndReplies && message.thread_id) {
 			api.getChannel(message.thread_id).then((ch) => {
 				onopenthread?.(ch, message);
 			}).catch(() => {
@@ -415,6 +430,7 @@
 
 	async function handleBookmark() {
 		contextMenu = null;
+		if (!hasMessageBookmarks) return;
 		try {
 			await api.createBookmark(message.id);
 			addToast('Message bookmarked', 'success');
@@ -447,7 +463,11 @@
 		if (!reportReason.trim()) return;
 		reportSubmitting = true;
 		try {
-			await api.reportMessageToAdmins(message.channel_id, message.id, reportReason.trim());
+			if ($currentChannel?.guild_id) {
+				await api.reportMessage(message.channel_id, message.id, reportReason.trim());
+			} else {
+				await api.reportMessageToAdmins(message.channel_id, message.id, reportReason.trim());
+			}
 			addToast('Message reported to moderators', 'success');
 			showReportModal = false;
 		} catch {
@@ -526,7 +546,7 @@
 	id="msg-{message.id}"
 >
 	<!-- Reply reference -->
-	{#if repliedMessage && !isCompact}
+	{#if hasThreadsAndReplies && repliedMessage && !isCompact}
 		<div class="absolute -top-3 left-14 flex items-center gap-1 text-xs text-text-muted">
 			<svg class="h-3 w-3 rotate-180" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
 				<path d="M3 10h10a5 5 0 015 5v6M3 10l6 6m-6-6l6-6" />
@@ -598,6 +618,9 @@
 							onclick={() => (showEditHistory = true)}
 						>(edited)</button>
 					{/if}
+					{#if message.expires_at}
+						<span class="text-2xs text-orange-400" title="Expires {new Date(message.expires_at).toLocaleString()}">expires</span>
+					{/if}
 					{#if message.flags & 1}
 						<span class="flex items-center gap-0.5 text-2xs text-green-400" title="Published to followers">
 							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -606,7 +629,7 @@
 							Published
 						</span>
 					{/if}
-					{#if message.thread_id}
+					{#if hasThreadsAndReplies && message.thread_id}
 						<button
 							class="flex items-center gap-1 text-2xs text-brand-400 hover:underline"
 							onclick={handleViewThread}
@@ -711,6 +734,17 @@
 				{/if}
 			{/if}
 
+			{#if message.message_type === 'poll' && message.poll}
+				<div class="mt-2 max-w-xl">
+					<PollDisplay poll={message.poll} />
+				</div>
+			{/if}
+			{#if message.message_type === 'code_snippet' && message.code_snippet}
+				<div class="mt-2">
+					<CodeSnippet channelId={message.channel_id} snippet={message.code_snippet} />
+				</div>
+			{/if}
+
 			<!-- Cross-channel quote embed -->
 			{#if message.embeds?.some(isCrossChannelQuoteEmbed)}
 				{@const quoteEmbed = message.embeds.find(isCrossChannelQuoteEmbed)}
@@ -733,7 +767,12 @@
 				oncontextmenu={handleAttachmentContextMenu}
 			/>
 
+		<MessageComponents channelId={message.channel_id} messageId={message.id} components={message.components} />
+
 		<MessageEmbedsAndReactions embeds={message.embeds} reactions={message.reactions} ontogglereaction={toggleReaction} />
+		{#if !message.encrypted}
+			<MessageEffects messageId={message.id} channelId={message.channel_id} showTrigger={false} />
+		{/if}
 		{/if}
 	</div>
 
@@ -752,25 +791,30 @@
 					<circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
 				</svg>
 			</button>
-			<button
-				class="p-1.5 text-text-muted hover:text-text-primary"
-				title="Reply"
-				onclick={handleReply}
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-					<path d="M3 10h10a5 5 0 015 5v6M3 10l6 6m-6-6l6-6" />
-				</svg>
-			</button>
-			{#if $canCreateThreads}
+			{#if !message.encrypted}
+				<MessageEffects messageId={message.id} channelId={message.channel_id} showReactions={false} />
+			{/if}
+			{#if hasThreadsAndReplies}
 				<button
 					class="p-1.5 text-text-muted hover:text-text-primary"
-					title="Create Thread"
-					onclick={handleCreateThread}
+					title="Reply"
+					onclick={handleReply}
 				>
 					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-						<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+						<path d="M3 10h10a5 5 0 015 5v6M3 10l6 6m-6-6l6-6" />
 					</svg>
 				</button>
+				{#if $canCreateThreads}
+					<button
+						class="p-1.5 text-text-muted hover:text-text-primary"
+						title="Create Thread"
+						onclick={handleCreateThread}
+					>
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+						</svg>
+					</button>
+				{/if}
 			{/if}
 			{#if isOwnMessage}
 				<button
@@ -806,12 +850,16 @@
 		y={contextMenu.y}
 		{message}
 		{isOwnMessage}
+		canUseThreads={hasThreadsAndReplies}
 		canManageMessages={$canManageMessages}
-		canCreateThreads={$canCreateThreads}
+		canCreateThreads={$canCreateThreads && hasThreadsAndReplies}
+		canUsePins={hasPins}
+		canUseBookmarks={hasMessageBookmarks}
 		{canModerateAuthor}
 		canTimeoutMembers={$canTimeoutMembers}
 		canKickMembers={$canKickMembers}
 		canBanMembers={$canBanMembers}
+		canReport={hasModerationReports}
 		onclose={() => (contextMenu = null)}
 		onviewprofile={() => { userPopover = { x: contextMenu!.x, y: contextMenu!.y }; contextMenu = null; }}
 		onreply={handleReply}
@@ -839,7 +887,9 @@
 		<button type="button" class="absolute inset-0 h-full w-full cursor-default" aria-label="Close report message dialog" onclick={() => showReportModal = false}></button>
 		<div class="relative z-10 w-96 rounded-lg bg-bg-secondary p-4 shadow-xl">
 			<h3 id="report-message-title" class="mb-3 text-lg font-semibold text-text-primary">Report Message</h3>
-			<p class="mb-2 text-sm text-text-muted">This will be sent to instance moderators for review.</p>
+			<p class="mb-2 text-sm text-text-muted">
+				This will be sent to {$currentChannel?.guild_id ? 'server moderators' : 'instance moderators'} for review.
+			</p>
 			<textarea
 				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
 				placeholder="Why are you reporting this message?"

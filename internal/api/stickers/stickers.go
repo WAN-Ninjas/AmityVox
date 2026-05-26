@@ -16,6 +16,7 @@ import (
 	"github.com/amityvox/amityvox/internal/auth"
 	"github.com/amityvox/amityvox/internal/events"
 	"github.com/amityvox/amityvox/internal/models"
+	"github.com/amityvox/amityvox/internal/permissions"
 )
 
 // Handler implements sticker-related REST API endpoints.
@@ -53,14 +54,17 @@ func (h *Handler) isMember(ctx context.Context, guildID, userID string) bool {
 // hasManageEmojis checks if the user can manage emojis/stickers in this guild.
 func (h *Handler) hasManageEmojis(ctx context.Context, guildID, userID string) bool {
 	// Guild owner always has permission.
-	var ownerID string
-	if err := h.Pool.QueryRow(ctx, `SELECT owner_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID); err == nil && ownerID == userID {
+	var ownerID, guildInstanceID string
+	if err := h.Pool.QueryRow(ctx, `SELECT owner_id, instance_id FROM guilds WHERE id = $1`, guildID).Scan(&ownerID, &guildInstanceID); err != nil {
+		return false
+	} else if ownerID == userID {
 		return true
 	}
-	// Instance admin always has permission.
+	// Instance admins only bypass permissions in guilds homed on their own instance.
 	var flags int
-	h.Pool.QueryRow(ctx, `SELECT flags FROM users WHERE id = $1`, userID).Scan(&flags)
-	if flags&models.UserFlagAdmin != 0 {
+	var userInstanceID string
+	h.Pool.QueryRow(ctx, `SELECT flags, instance_id FROM users WHERE id = $1`, userID).Scan(&flags, &userInstanceID)
+	if permissions.InstanceAdminApplies(flags&models.UserFlagAdmin != 0, userInstanceID, guildInstanceID) {
 		return true
 	}
 	// Check ManageEmojisAndStickers permission (bit 30).
@@ -418,6 +422,55 @@ func (h *Handler) HandleGetUserPacks(w http.ResponseWriter, r *http.Request) {
 	apiutil.WriteJSON(w, http.StatusOK, packs)
 }
 
+// HandleGetUserPackStickers returns all stickers in a current user's personal pack.
+// GET /api/v1/stickers/my-packs/{packID}/stickers
+func (h *Handler) HandleGetUserPackStickers(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	packID := chi.URLParam(r, "packID")
+
+	var exists bool
+	h.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM sticker_packs WHERE id = $1 AND owner_type = 'user' AND owner_id = $2)`,
+		packID, userID,
+	).Scan(&exists)
+	if !exists {
+		apiutil.WriteError(w, http.StatusNotFound, "not_found", "Sticker pack not found")
+		return
+	}
+
+	rows, err := h.Pool.Query(r.Context(),
+		`SELECT id, pack_id, name, description, tags, file_id, format, created_at
+		 FROM stickers WHERE pack_id = $1 ORDER BY created_at`, packID)
+	if err != nil {
+		apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch stickers")
+		return
+	}
+	defer rows.Close()
+
+	stickers := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, packID, name, fileID, format string
+		var desc, tags *string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &packID, &name, &desc, &tags, &fileID, &format, &createdAt); err != nil {
+			apiutil.WriteError(w, http.StatusInternalServerError, "internal_error", "Failed to read stickers")
+			return
+		}
+		stickers = append(stickers, map[string]interface{}{
+			"id":          id,
+			"pack_id":     packID,
+			"name":        name,
+			"description": desc,
+			"tags":        tags,
+			"file_id":     fileID,
+			"format":      format,
+			"created_at":  createdAt,
+		})
+	}
+
+	apiutil.WriteJSON(w, http.StatusOK, stickers)
+}
+
 // --- Sticker Pack Sharing ---
 
 // HandleEnableSharing generates a share code for a sticker pack and enables sharing.
@@ -633,13 +686,13 @@ func (h *Handler) HandleClonePack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiutil.WriteJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":             newPackID,
-		"name":           srcName,
-		"description":    srcDesc,
-		"owner_type":     "user",
-		"owner_id":       userID,
-		"cloned_from":    srcPackID,
-		"sticker_count":  clonedCount,
-		"created_at":     now,
+		"id":            newPackID,
+		"name":          srcName,
+		"description":   srcDesc,
+		"owner_type":    "user",
+		"owner_id":      userID,
+		"cloned_from":   srcPackID,
+		"sticker_count": clonedCount,
+		"created_at":    now,
 	})
 }

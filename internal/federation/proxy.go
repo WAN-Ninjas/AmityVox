@@ -448,6 +448,9 @@ func (ss *SyncService) ProxyCreateChannelMessage(
 		}
 		payload.Attachments = attachments
 	}
+	if v, ok := opts["expires_in_seconds"].(int); ok {
+		payload.ExpiresInSeconds = &v
+	}
 
 	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/create",
 		instanceDomain, guildID, channelID)

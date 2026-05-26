@@ -1,9 +1,15 @@
 import { api, type LocationShare } from '$lib/api/client';
+import { get } from 'svelte/store';
+import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 import { createMapStore } from '$lib/stores/mapHelpers';
 
 export const locationSharesByChannel = createMapStore<string, LocationShare[]>();
 
 export async function loadLocationShares(channelId: string): Promise<LocationShare[]> {
+	if (!isFeatureEnabled(get(clientConfig), 'location_sharing')) {
+		locationSharesByChannel.removeEntry(channelId);
+		return [];
+	}
 	const locations = await api.getLocations(channelId);
 	locationSharesByChannel.setEntry(channelId, locations ?? []);
 	return locations ?? [];
@@ -15,6 +21,7 @@ export function setLocationShares(channelId: string, locations: LocationShare[])
 
 export function handleLocationShareChanged(data: { id?: string; channel_id?: string }) {
 	if (!data.channel_id) return;
+	if (!isFeatureEnabled(get(clientConfig), 'location_sharing')) return;
 	loadLocationShares(data.channel_id).catch((err) => {
 		console.warn('Failed to refresh location shares after gateway event', err);
 	});

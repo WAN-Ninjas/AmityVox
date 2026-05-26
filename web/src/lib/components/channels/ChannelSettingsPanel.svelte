@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import { addToast } from '$lib/stores/toast';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Channel, Role, ForumTag, GalleryTag } from '$lib/types';
@@ -30,6 +31,10 @@
 	let newTagName = $state('');
 	let newTagEmoji = $state('');
 	let newTagColor = $state('#6366f1');
+	let editingForumTagId = $state<string | null>(null);
+	let editForumTagName = $state('');
+	let editForumTagEmoji = $state('');
+	let editForumTagColor = $state('#6366f1');
 
 	// Gallery-specific settings
 	let galleryDefaultSort = $state<string>('newest');
@@ -39,6 +44,10 @@
 	let newGalleryTagName = $state('');
 	let newGalleryTagEmoji = $state('');
 	let newGalleryTagColor = $state('#6366f1');
+	let editingGalleryTagId = $state<string | null>(null);
+	let editGalleryTagName = $state('');
+	let editGalleryTagEmoji = $state('');
+	let editGalleryTagColor = $state('#6366f1');
 
 	let saveOp = $state(createAsyncOp());
 	let createTagOp = $state(createAsyncOp());
@@ -46,6 +55,7 @@
 
 	const isForum = $derived(channel.channel_type === 'forum');
 	const isGallery = $derived(channel.channel_type === 'gallery');
+	const hasGalleryMedia = $derived(isFeatureEnabled($clientConfig, 'gallery_media'));
 
 	// Initialize state from channel when it changes.
 	$effect(() => {
@@ -71,8 +81,10 @@
 
 	// Load gallery tags
 	$effect(() => {
-		if (isGallery) {
+		if (isGallery && hasGalleryMedia) {
 			api.getGalleryTags(channel.id).then((t) => (galleryTags = t)).catch(() => (galleryTags = []));
+		} else {
+			galleryTags = [];
 		}
 	});
 
@@ -105,6 +117,30 @@
 		}
 	}
 
+	function startEditForumTag(tag: ForumTag) {
+		editingForumTagId = tag.id;
+		editForumTagName = tag.name;
+		editForumTagEmoji = tag.emoji ?? '';
+		editForumTagColor = tag.color ?? '#6366f1';
+	}
+
+	async function saveForumTag(tagId: string) {
+		const name = editForumTagName.trim();
+		if (!name) return;
+		try {
+			const updated = await api.updateForumTag(channel.id, tagId, {
+				name,
+				emoji: editForumTagEmoji.trim() || undefined,
+				color: editForumTagColor || undefined
+			});
+			forumTags = forumTags.map((tag) => tag.id === tagId ? updated : tag);
+			editingForumTagId = null;
+			addToast('Tag updated', 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update tag'), 'error');
+		}
+	}
+
 	async function createGalleryTag() {
 		const name = newGalleryTagName.trim();
 		if (!name) return;
@@ -131,6 +167,30 @@
 			addToast('Tag deleted', 'success');
 		} catch (err: unknown) {
 			addToast(getErrorMessage(err, 'Failed to delete tag'), 'error');
+		}
+	}
+
+	function startEditGalleryTag(tag: GalleryTag) {
+		editingGalleryTagId = tag.id;
+		editGalleryTagName = tag.name;
+		editGalleryTagEmoji = tag.emoji ?? '';
+		editGalleryTagColor = tag.color ?? '#6366f1';
+	}
+
+	async function saveGalleryTag(tagId: string) {
+		const name = editGalleryTagName.trim();
+		if (!name) return;
+		try {
+			const updated = await api.updateGalleryTag(channel.id, tagId, {
+				name,
+				emoji: editGalleryTagEmoji.trim() || undefined,
+				color: editGalleryTagColor || undefined
+			});
+			galleryTags = galleryTags.map((tag) => tag.id === tagId ? updated : tag);
+			editingGalleryTagId = null;
+			addToast('Tag updated', 'success');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to update tag'), 'error');
 		}
 	}
 
@@ -161,7 +221,7 @@
 			payload.forum_post_guidelines = forumPostGuidelines || null;
 			payload.forum_require_tags = forumRequireTags;
 		}
-		if (isGallery) {
+		if (isGallery && hasGalleryMedia) {
 			payload.gallery_default_sort = galleryDefaultSort;
 			payload.gallery_post_guidelines = galleryPostGuidelines || null;
 			payload.gallery_require_tags = galleryRequireTags;
@@ -275,22 +335,41 @@
 			{#if forumTags.length > 0}
 				<div class="mb-3 flex flex-wrap gap-2">
 					{#each forumTags as tag (tag.id)}
-						<div
-							class="group inline-flex items-center gap-1.5 rounded-full border border-bg-modifier px-2.5 py-1 text-xs font-medium"
-							style="color: {tag.color || 'var(--text-secondary)'}"
-						>
-							{#if tag.emoji}<span>{tag.emoji}</span>{/if}
-							{tag.name}
-							<button
-								class="ml-0.5 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-								onclick={() => deleteTag(tag.id)}
-								title="Delete tag"
+						{#if editingForumTagId === tag.id}
+							<div class="flex items-center gap-1 rounded-md border border-bg-modifier bg-bg-tertiary p-1">
+								<input class="input h-7 w-28 text-xs" bind:value={editForumTagName} maxlength="30" />
+								<input class="input h-7 w-12 text-center text-xs" bind:value={editForumTagEmoji} maxlength="4" />
+								<input class="h-7 w-9 cursor-pointer rounded border border-bg-modifier bg-bg-secondary" type="color" bind:value={editForumTagColor} />
+								<button class="btn-primary px-2 py-1 text-xs" onclick={() => saveForumTag(tag.id)}>Save</button>
+								<button class="btn-secondary px-2 py-1 text-xs" onclick={() => (editingForumTagId = null)}>Cancel</button>
+							</div>
+						{:else}
+							<div
+								class="group inline-flex items-center gap-1.5 rounded-full border border-bg-modifier px-2.5 py-1 text-xs font-medium"
+								style="color: {tag.color || 'var(--text-secondary)'}"
 							>
-								<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-									<path d="M6 18L18 6M6 6l12 12" />
-								</svg>
-							</button>
-						</div>
+								{#if tag.emoji}<span>{tag.emoji}</span>{/if}
+								{tag.name}
+								<button
+									class="ml-0.5 opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
+									onclick={() => startEditForumTag(tag)}
+									title="Edit tag"
+								>
+									<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M15.232 5.232l3.536 3.536M4 20h4l10.5-10.5a2.5 2.5 0 00-3.536-3.536L4 16.928V20z" />
+									</svg>
+								</button>
+								<button
+									class="ml-0.5 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+									onclick={() => deleteTag(tag.id)}
+									title="Delete tag"
+								>
+									<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M6 18L18 6M6 6l12 12" />
+									</svg>
+								</button>
+							</div>
+						{/if}
 					{/each}
 				</div>
 			{/if}
@@ -340,7 +419,7 @@
 	{/if}
 
 	<!-- Gallery Settings -->
-	{#if isGallery}
+	{#if isGallery && hasGalleryMedia}
 		<!-- Default Sort -->
 		<div class="rounded-lg bg-bg-secondary p-4">
 			<h3 class="mb-2 text-sm font-semibold text-text-primary">Default Sort Order</h3>
@@ -385,22 +464,41 @@
 			{#if galleryTags.length > 0}
 				<div class="mb-3 flex flex-wrap gap-2">
 					{#each galleryTags as tag (tag.id)}
-						<div
-							class="group inline-flex items-center gap-1.5 rounded-full border border-bg-modifier px-2.5 py-1 text-xs font-medium"
-							style="color: {tag.color || 'var(--text-secondary)'}"
-						>
-							{#if tag.emoji}<span>{tag.emoji}</span>{/if}
-							{tag.name}
-							<button
-								class="ml-0.5 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-								onclick={() => deleteGalleryTag(tag.id)}
-								title="Delete tag"
+						{#if editingGalleryTagId === tag.id}
+							<div class="flex items-center gap-1 rounded-md border border-bg-modifier bg-bg-tertiary p-1">
+								<input class="input h-7 w-28 text-xs" bind:value={editGalleryTagName} maxlength="30" />
+								<input class="input h-7 w-12 text-center text-xs" bind:value={editGalleryTagEmoji} maxlength="4" />
+								<input class="h-7 w-9 cursor-pointer rounded border border-bg-modifier bg-bg-secondary" type="color" bind:value={editGalleryTagColor} />
+								<button class="btn-primary px-2 py-1 text-xs" onclick={() => saveGalleryTag(tag.id)}>Save</button>
+								<button class="btn-secondary px-2 py-1 text-xs" onclick={() => (editingGalleryTagId = null)}>Cancel</button>
+							</div>
+						{:else}
+							<div
+								class="group inline-flex items-center gap-1.5 rounded-full border border-bg-modifier px-2.5 py-1 text-xs font-medium"
+								style="color: {tag.color || 'var(--text-secondary)'}"
 							>
-								<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-									<path d="M6 18L18 6M6 6l12 12" />
-								</svg>
-							</button>
-						</div>
+								{#if tag.emoji}<span>{tag.emoji}</span>{/if}
+								{tag.name}
+								<button
+									class="ml-0.5 opacity-0 transition-opacity hover:text-text-primary group-hover:opacity-100"
+									onclick={() => startEditGalleryTag(tag)}
+									title="Edit tag"
+								>
+									<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M15.232 5.232l3.536 3.536M4 20h4l10.5-10.5a2.5 2.5 0 00-3.536-3.536L4 16.928V20z" />
+									</svg>
+								</button>
+								<button
+									class="ml-0.5 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+									onclick={() => deleteGalleryTag(tag.id)}
+									title="Delete tag"
+								>
+									<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path d="M6 18L18 6M6 6l12 12" />
+									</svg>
+								</button>
+							</div>
+						{/if}
 					{/each}
 				</div>
 			{/if}

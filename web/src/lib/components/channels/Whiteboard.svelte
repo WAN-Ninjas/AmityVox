@@ -21,6 +21,7 @@
 	let objects = $state<DrawObject[]>([]);
 	let loadOp = $state(createAsyncOp());
 	let createOp = $state(createAsyncOp());
+	let discoveredChannelId = $state<string | null>(null);
 
 	// Drawing state.
 	let tool = $state<'pen' | 'rect' | 'circle' | 'line' | 'arrow' | 'text' | 'eraser'>('pen');
@@ -74,6 +75,18 @@
 			objects = data.state?.objects ?? [];
 			initCanvas();
 			redraw();
+		}
+	}
+
+	async function loadLatestWhiteboard() {
+		discoveredChannelId = channelId;
+		const boards = await loadOp.run(() => api.getWhiteboards(channelId));
+		if (boards?.[0]) {
+			whiteboardId = boards[0].id;
+			showCreateForm = false;
+			await loadWhiteboard();
+		} else {
+			showCreateForm = true;
 		}
 	}
 
@@ -317,10 +330,31 @@
 	}
 
 	$effect(() => {
+		if (!whiteboardId && discoveredChannelId !== channelId && !loadOp.loading) {
+			loadLatestWhiteboard();
+			return;
+		}
 		if (!whiteboardId) showCreateForm = true;
 		if (whiteboardId && !showCreateForm) {
 			loadWhiteboard();
 		}
+	});
+
+	$effect(() => {
+		function handleWhiteboardUpdate(event: Event) {
+			const detail = (event as CustomEvent<{
+				whiteboard_id?: string;
+				channel_id?: string;
+				user_id?: string;
+			}>).detail;
+			if (!whiteboardId || detail?.whiteboard_id !== whiteboardId) return;
+			if (detail.channel_id && detail.channel_id !== channelId) return;
+			if (detail.user_id === $currentUser?.id) return;
+			loadWhiteboard();
+		}
+
+		window.addEventListener('amityvox:whiteboard-update', handleWhiteboardUpdate);
+		return () => window.removeEventListener('amityvox:whiteboard-update', handleWhiteboardUpdate);
 	});
 </script>
 

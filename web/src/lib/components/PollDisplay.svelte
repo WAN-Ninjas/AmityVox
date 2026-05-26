@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { currentUser } from '$lib/stores/auth';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import type { Poll } from '$lib/types';
 
@@ -11,6 +13,8 @@
 
 	let voting = $state(false);
 	let voteError = $state('');
+	let selectedOptionIds = $state<Set<string>>(new Set());
+	const hasPolls = $derived(isFeatureEnabled($clientConfig, 'polls'));
 
 	const hasVoted = $derived(poll.user_votes.length > 0);
 
@@ -30,21 +34,59 @@
 		return Math.round((voteCount / maxVoteCount) * 100);
 	}
 
-	async function handleVote(optionId: string) {
-		if (hasVoted || voting || poll.closed) return;
+	async function refreshPoll() {
+		const updated = await api.getPoll(poll.channel_id, poll.id);
+		poll.options = updated.options;
+		poll.total_votes = updated.total_votes;
+		poll.user_votes = updated.user_votes;
+		poll.closed = updated.closed;
+	}
+
+	async function submitVote(optionIds: string[]) {
+		if (!hasPolls || hasVoted || voting || poll.closed || isExpired || optionIds.length === 0) return;
 		voting = true;
 		voteError = '';
 		try {
-			const result = await api.votePoll(poll.channel_id, poll.id, [optionId]);
+			const result = await api.votePoll(poll.channel_id, poll.id, optionIds);
 			poll.user_votes = result.option_ids;
-			// Refresh the poll to get updated vote counts.
-			const updated = await api.getPoll(poll.channel_id, poll.id);
-			poll.options = updated.options;
-			poll.total_votes = updated.total_votes;
-			poll.user_votes = updated.user_votes;
-			poll.closed = updated.closed;
+			await refreshPoll();
+			selectedOptionIds = new Set();
 		} catch (err: unknown) {
 			voteError = getErrorMessage(err, 'Failed to vote');
+		} finally {
+			voting = false;
+		}
+	}
+
+	async function handleVote(optionId: string) {
+		if (!hasPolls || hasVoted || voting || poll.closed) return;
+		await submitVote([optionId]);
+	}
+
+	function toggleMultiVote(optionId: string) {
+		if (!hasPolls) return;
+		const next = new Set(selectedOptionIds);
+		if (next.has(optionId)) {
+			next.delete(optionId);
+		} else {
+			next.add(optionId);
+		}
+		selectedOptionIds = next;
+	}
+
+	async function submitMultiVote() {
+		await submitVote([...selectedOptionIds]);
+	}
+
+	async function closePoll() {
+		if (!hasPolls || voting || poll.closed) return;
+		voting = true;
+		voteError = '';
+		try {
+			await api.closePoll(poll.channel_id, poll.id);
+			poll.closed = true;
+		} catch (err: unknown) {
+			voteError = getErrorMessage(err, 'Failed to close poll');
 		} finally {
 			voting = false;
 		}
@@ -57,6 +99,9 @@
 	const sortedOptions = $derived(
 		[...poll.options].sort((a, b) => a.position - b.position)
 	);
+
+	const canVote = $derived(hasPolls && !hasVoted && !poll.closed && !isExpired);
+	const canClose = $derived(hasPolls && !poll.closed && !isExpired && poll.author_id === $currentUser?.id);
 </script>
 
 <div class="rounded-lg bg-bg-secondary p-4">
@@ -82,17 +127,28 @@
 
 					<div class="relative flex items-center justify-between px-3 py-2">
 						<div class="flex items-center gap-2">
-							{#if !hasVoted && !poll.closed && !isExpired}
-								<button
-									class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-text-muted text-text-muted transition-colors hover:border-brand-500 hover:text-brand-500"
-									onclick={() => handleVote(option.id)}
-									disabled={voting}
-									title="Vote for this option"
-								>
-									{#if voting}
-										<div class="h-3 w-3 animate-spin rounded-full border border-brand-500 border-t-transparent"></div>
-									{/if}
-								</button>
+							{#if canVote}
+								{#if poll.multi_vote}
+									<input
+										type="checkbox"
+										class="h-4 w-4 rounded accent-brand-500"
+										checked={selectedOptionIds.has(option.id)}
+										onchange={() => toggleMultiVote(option.id)}
+										disabled={voting}
+										aria-label={`Select ${option.text}`}
+									/>
+								{:else}
+									<button
+										class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-text-muted text-text-muted transition-colors hover:border-brand-500 hover:text-brand-500"
+										onclick={() => handleVote(option.id)}
+										disabled={voting}
+										title="Vote for this option"
+									>
+										{#if voting}
+											<div class="h-3 w-3 animate-spin rounded-full border border-brand-500 border-t-transparent"></div>
+										{/if}
+									</button>
+								{/if}
 							{:else if poll.user_votes.includes(option.id)}
 								<div class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-500 text-white">
 									<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
@@ -135,4 +191,18 @@
 			<span class="text-xs text-text-muted">Multiple votes allowed</span>
 		{/if}
 	</div>
+	{#if canVote && poll.multi_vote}
+		<div class="mt-3 flex justify-end">
+			<button class="btn-secondary text-xs" onclick={submitMultiVote} disabled={voting || selectedOptionIds.size === 0}>
+				{voting ? 'Voting...' : 'Vote'}
+			</button>
+		</div>
+	{/if}
+	{#if canClose}
+		<div class="mt-3 flex justify-end">
+			<button class="text-xs font-medium text-text-muted hover:text-text-primary" onclick={closePoll} disabled={voting}>
+				Close poll
+			</button>
+		</div>
+	{/if}
 </div>

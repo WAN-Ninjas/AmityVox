@@ -9,12 +9,16 @@
 		y: number;
 		message: Message;
 		isOwnMessage: boolean;
+		canUseThreads: boolean;
 		canManageMessages: boolean;
 		canCreateThreads: boolean;
+		canUsePins: boolean;
+		canUseBookmarks: boolean;
 		canModerateAuthor: boolean;
 		canTimeoutMembers: boolean;
 		canKickMembers: boolean;
 		canBanMembers: boolean;
+		canReport: boolean;
 		onclose: () => void;
 		onviewprofile: () => void;
 		onreply: () => void;
@@ -49,31 +53,35 @@
 <ContextMenu x={props.x} y={props.y} onclose={props.onclose}>
 	<ContextMenuItem label="View Profile" onclick={props.onviewprofile} />
 	<ContextMenuDivider />
-	<ContextMenuItem label="Reply" onclick={props.onreply} />
+	{#if props.canUseThreads}
+		<ContextMenuItem label="Reply" onclick={props.onreply} />
+	{/if}
 	{#if props.message.content}
 		<ContextMenuItem label="Copy Text" onclick={props.oncopytext} />
 	{/if}
 	{#if props.isOwnMessage}
 		<ContextMenuItem label="Edit Message" onclick={props.onedit} />
 	{/if}
-	{#if props.isOwnMessage || props.canManageMessages}
+	{#if props.canUsePins && (props.isOwnMessage || props.canManageMessages)}
 		<ContextMenuItem label={props.message.pinned ? 'Unpin Message' : 'Pin Message'} onclick={props.onpin} />
 	{/if}
-	{#if !props.message.thread_id}
-		{#if props.canCreateThreads}
+	{#if props.canUseThreads}
+		{#if !props.message.thread_id && props.canCreateThreads}
 			<ContextMenuItem label="Create Thread" onclick={props.oncreatethread} />
+		{:else if props.message.thread_id}
+			<ContextMenuItem label="View Thread" onclick={props.onviewthread} />
 		{/if}
-	{:else}
-		<ContextMenuItem label="View Thread" onclick={props.onviewthread} />
 	{/if}
 	<ContextMenuItem label="Copy Message Link" onclick={props.oncopylink} />
 	<ContextMenuItem label="Copy User ID" onclick={props.oncopyuserid} />
-	<ContextMenuItem label="Bookmark" onclick={props.onbookmark} />
+	{#if props.canUseBookmarks}
+		<ContextMenuItem label="Bookmark" onclick={props.onbookmark} />
+	{/if}
 	<ContextMenuItem label="Forward" onclick={props.onforward} />
 	{#if props.message.content}
 		<ContextMenuItem label="Quote in Channel" onclick={props.onquote} />
 	{/if}
-	{#if !props.isOwnMessage}
+	{#if !props.isOwnMessage && props.canReport}
 		<ContextMenuDivider />
 		<ContextMenuItem label="Report Message" danger onclick={props.onreport} />
 	{/if}

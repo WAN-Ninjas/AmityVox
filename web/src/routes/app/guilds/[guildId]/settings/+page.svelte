@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { currentGuild } from '$lib/stores/guilds';
+	import { channels as channelsStore } from '$lib/stores/channels';
 	import { currentUser } from '$lib/stores/auth';
 	import { goto } from '$app/navigation';
 	import SoundboardSettings from '$lib/components/guild/SoundboardSettings.svelte';
@@ -8,6 +9,7 @@
 	import LevelingSettings from '$lib/components/guild/LevelingSettings.svelte';
 	import StarboardSettings from '$lib/components/guild/StarboardSettings.svelte';
 	import WelcomeSettings from '$lib/components/guild/WelcomeSettings.svelte';
+	import WidgetSettings from '$lib/components/guild/WidgetSettings.svelte';
 	import BoostPanel from '$lib/components/guild/BoostPanel.svelte';
 	import GuildInsights from '$lib/components/guild/GuildInsights.svelte';
 	import GuildRetentionSettings from '$lib/components/guild/GuildRetentionSettings.svelte';
@@ -27,13 +29,20 @@
 	import GuildRolesSettings from '$lib/components/guild/GuildRolesSettings.svelte';
 	import GuildOverviewSettings from '$lib/components/guild/GuildOverviewSettings.svelte';
 	import GuildMembersSettings from '$lib/components/guild/GuildMembersSettings.svelte';
+	import IntegrationSettings from '$lib/components/guild/IntegrationSettings.svelte';
+	import PluginSettings from '$lib/components/guild/PluginSettings.svelte';
+	import GuildFeatureFlagsSettings from '$lib/components/guild/GuildFeatureFlagsSettings.svelte';
+	import GuildGuideSettings from '$lib/components/guild/GuildGuideSettings.svelte';
+	import TagEditor from '$lib/components/gallery/TagEditor.svelte';
 	import { canManageGuild, canManageRoles, canBanMembers, canKickMembers, canViewAuditLog } from '$lib/stores/permissions';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
-	type Tab = 'overview' | 'boosts' | 'roles' | 'auto-roles' | 'members' | 'categories' | 'invites' | 'bans' | 'emoji' | 'soundboard' | 'stickers' | 'webhooks' | 'audit' | 'insights' | 'automod' | 'moderation' | 'leveling' | 'raid' | 'onboarding' | 'starboard' | 'welcome' | 'ban-lists' | 'templates' | 'retention';
+	type Tab = 'overview' | 'boosts' | 'roles' | 'auto-roles' | 'members' | 'categories' | 'invites' | 'bans' | 'emoji' | 'soundboard' | 'stickers' | 'media-tags' | 'webhooks' | 'integrations' | 'plugins' | 'features' | 'guide' | 'audit' | 'insights' | 'automod' | 'moderation' | 'leveling' | 'raid' | 'onboarding' | 'starboard' | 'welcome' | 'widgets' | 'ban-lists' | 'templates' | 'retention';
 	let currentTab = $state<Tab>('overview');
 
 	const routeGuildId = $derived($page.params.guildId);
 	const isOwner = $derived($currentGuild?.owner_id === $currentUser?.id);
+	const guildChannels = $derived(Array.from($channelsStore.values()).filter((channel) => channel.guild_id === routeGuildId));
 
 	// --- Helpers ---
 
@@ -49,7 +58,12 @@
 		{ id: 'emoji', label: 'Emoji' },
 		{ id: 'soundboard', label: 'Soundboard' },
 		{ id: 'stickers', label: 'Stickers' },
+		{ id: 'media-tags', label: 'Media Tags' },
 		{ id: 'webhooks', label: 'Webhooks' },
+		{ id: 'integrations', label: 'Integrations' },
+		{ id: 'plugins', label: 'Plugins' },
+		{ id: 'features', label: 'Features' },
+		{ id: 'guide', label: 'Server Guide' },
 		{ id: 'audit', label: 'Audit Log' },
 		{ id: 'insights', label: 'Insights' },
 		{ id: 'automod', label: 'AutoMod' },
@@ -59,6 +73,7 @@
 		{ id: 'onboarding', label: 'Onboarding' },
 		{ id: 'starboard', label: 'Starboard' },
 		{ id: 'welcome', label: 'Welcome' },
+		{ id: 'widgets', label: 'Widgets' },
 		{ id: 'ban-lists', label: 'Ban Lists' },
 		{ id: 'templates', label: 'Templates' },
 		{ id: 'retention', label: 'Message Retention' }
@@ -73,13 +88,36 @@
 		'audit': () => isOwner || $canViewAuditLog,
 	};
 
+	const featureGatedTabs: Partial<Record<Tab, string>> = {
+		emoji: 'custom_emoji',
+		soundboard: 'voice_broadcasts',
+		stickers: 'sticker_packs',
+		'media-tags': 'gallery_media',
+		webhooks: 'webhooks',
+		integrations: 'federated_messaging',
+		plugins: 'widgets',
+		guide: 'guild_onboarding',
+		audit: 'audit_logs',
+		automod: 'automod',
+		moderation: 'moderation_reports',
+		onboarding: 'guild_onboarding',
+		widgets: 'widgets'
+	};
+
 	const tabs = $derived(allTabs.filter((tab) => {
 		const gate = permissionGatedTabs[tab.id];
-		return !gate || gate();
+		const feature = featureGatedTabs[tab.id];
+		return (!gate || gate()) && (!feature || isFeatureEnabled($clientConfig, feature));
 	}));
 
+	$effect(() => {
+		if (!tabs.some((tab) => tab.id === currentTab)) {
+			currentTab = 'overview';
+		}
+	});
+
 	// Tabs that need full width instead of max-w-xl.
-	const wideContentTabs = new Set<Tab>(['roles', 'members', 'webhooks', 'audit', 'automod', 'moderation', 'ban-lists', 'onboarding']);
+	const wideContentTabs = new Set<Tab>(['roles', 'members', 'webhooks', 'integrations', 'plugins', 'features', 'guide', 'audit', 'automod', 'moderation', 'ban-lists', 'onboarding']);
 
 </script>
 
@@ -162,10 +200,40 @@
 					<GuildStickersSettings guildId={$currentGuild.id} instanceId={$currentGuild.instance_id} />
 				{/if}
 
+			<!-- ==================== MEDIA TAGS ==================== -->
+			{:else if currentTab === 'media-tags'}
+				{#if routeGuildId}
+					<TagEditor guildId={routeGuildId} />
+				{/if}
+
 			<!-- ==================== WEBHOOKS ==================== -->
 			{:else if currentTab === 'webhooks'}
 				{#if $currentGuild}
 					<GuildWebhooksSettings guildId={$currentGuild.id} />
+				{/if}
+
+			<!-- ==================== INTEGRATIONS ==================== -->
+			{:else if currentTab === 'integrations'}
+				{#if routeGuildId}
+					<IntegrationSettings guildId={routeGuildId} channels={guildChannels} />
+				{/if}
+
+			<!-- ==================== PLUGINS ==================== -->
+			{:else if currentTab === 'plugins'}
+				{#if routeGuildId}
+					<PluginSettings guildId={routeGuildId} />
+				{/if}
+
+			<!-- ==================== FEATURES ==================== -->
+			{:else if currentTab === 'features'}
+				{#if routeGuildId}
+					<GuildFeatureFlagsSettings guildId={routeGuildId} />
+				{/if}
+
+			<!-- ==================== SERVER GUIDE ==================== -->
+			{:else if currentTab === 'guide'}
+				{#if routeGuildId}
+					<GuildGuideSettings guildId={routeGuildId} channels={guildChannels} />
 				{/if}
 
 			<!-- ==================== AUDIT LOG ==================== -->
@@ -232,6 +300,12 @@
 			{:else if currentTab === 'welcome'}
 				{#if routeGuildId}
 					<WelcomeSettings guildId={routeGuildId} />
+				{/if}
+
+			<!-- ==================== WIDGETS ==================== -->
+			{:else if currentTab === 'widgets'}
+				{#if routeGuildId}
+					<WidgetSettings guildId={routeGuildId} channels={guildChannels} />
 				{/if}
 
 			<!-- ==================== BOOSTS ==================== -->

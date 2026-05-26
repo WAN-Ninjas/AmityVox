@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { GuildMember, Role } from '$lib/types';
+	import type { GuildMember, MemberWarning, Role } from '$lib/types';
 	import { memberListWidth } from '$lib/stores/layout';
 	import { currentGuildId, currentGuild } from '$lib/stores/guilds';
 	import { currentUser } from '$lib/stores/auth';
@@ -25,6 +25,7 @@
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { avatarUrl } from '$lib/utils/avatar';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 	// Members are derived from the guildMembers store so real-time updates
 	// (e.g. avatar changes via USER_UPDATE) are reflected immediately.
@@ -51,6 +52,7 @@
 	let guildRoles = $state<Role[]>([]);
 	let memberRoleIds = $state<Set<string>>(new Set());
 	let rolesOp = $state(createAsyncOp());
+	const hasModerationReports = $derived(isFeatureEnabled($clientConfig, 'moderation_reports'));
 
 	$effect(() => {
 		const guildId = $currentGuildId;
@@ -306,6 +308,14 @@
 	let reportUserTarget = $state<GuildMember | null>(null);
 	let reportUserReason = $state('');
 	let reportUserOp = $state(createAsyncOp());
+	let showWarnModal = $state(false);
+	let warnTarget = $state<GuildMember | null>(null);
+	let warnReason = $state('');
+	let warnOp = $state(createAsyncOp());
+	let showWarningsModal = $state(false);
+	let warningsTarget = $state<GuildMember | null>(null);
+	let warnings = $state<MemberWarning[]>([]);
+	let warningsOp = $state(createAsyncOp());
 
 	function openReportUser(member: GuildMember) {
 		reportUserTarget = member;
@@ -323,6 +333,52 @@
 		if (!reportUserOp.error) {
 			addToast('User reported to moderators', 'success');
 			showReportUserModal = false;
+		}
+	}
+
+	function openWarnMember(member: GuildMember) {
+		warnTarget = member;
+		warnReason = '';
+		showWarnModal = true;
+		closeContextMenu();
+	}
+
+	async function submitWarnMember() {
+		const guildId = $currentGuildId;
+		if (!guildId || !warnTarget || !warnReason.trim()) return;
+		await warnOp.run(
+			() => api.warnMember(guildId, warnTarget!.user_id, warnReason.trim()),
+			msg => addToast(msg, 'error')
+		);
+		if (!warnOp.error) {
+			addToast('Member warned', 'success');
+			showWarnModal = false;
+		}
+	}
+
+	async function openMemberWarnings(member: GuildMember) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		warningsTarget = member;
+		showWarningsModal = true;
+		closeContextMenu();
+		const result = await warningsOp.run(
+			() => api.getMemberWarnings(guildId, member.user_id),
+			msg => addToast(msg, 'error'),
+			'Failed to load warnings'
+		);
+		warnings = result ?? [];
+	}
+
+	async function deleteMemberWarning(warningId: string) {
+		const guildId = $currentGuildId;
+		if (!guildId) return;
+		try {
+			await api.deleteWarning(guildId, warningId);
+			warnings = warnings.filter((warning) => warning.id !== warningId);
+			addToast('Warning deleted', 'info');
+		} catch (err: unknown) {
+			addToast(getErrorMessage(err, 'Failed to delete warning'), 'error');
 		}
 	}
 
@@ -505,6 +561,9 @@
 				</div>
 			{/if}
 
+			<ContextMenuItem label="Warn" onclick={() => openWarnMember(contextMenu!.member)} />
+			<ContextMenuItem label="Warnings" onclick={() => openMemberWarnings(contextMenu!.member)} />
+
 			<!-- Destructive moderation actions -->
 			{#if $canKickMembers || $canBanMembers}
 				<ContextMenuDivider />
@@ -518,11 +577,71 @@
 		{/if}
 
 		<!-- Report (always visible for non-self) -->
-		{#if !isContextSelf}
+		{#if !isContextSelf && hasModerationReports}
 			<ContextMenuDivider />
 			<ContextMenuItem label="Report User" danger onclick={() => openReportUser(contextMenu!.member)} />
 		{/if}
 	</ContextMenu>
+{/if}
+
+{#if showWarnModal && warnTarget}
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showWarnModal = false} onkeydown={(e) => e.key === 'Escape' && (showWarnModal = false)} role="dialog" aria-modal="true" aria-labelledby="warn-member-title" tabindex="-1">
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+		<div class="mx-4 w-full max-w-sm rounded-lg bg-bg-secondary p-4 shadow-xl md:mx-0" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
+			<h3 id="warn-member-title" class="mb-3 text-lg font-semibold text-text-primary">Warn Member</h3>
+			<p class="mb-2 text-sm text-text-muted">
+				Warn <strong class="text-text-primary">{warnTarget.nickname ?? warnTarget.user?.username ?? 'this member'}</strong>.
+			</p>
+			<textarea
+				class="mb-3 w-full rounded-md border border-bg-modifier bg-bg-primary p-2 text-sm text-text-primary placeholder:text-text-muted focus:border-brand-500 focus:outline-none"
+				placeholder="Reason for warning"
+				rows="3"
+				bind:value={warnReason}
+			></textarea>
+			<div class="flex justify-end gap-2">
+				<button class="rounded-md px-3 py-1.5 text-sm text-text-muted hover:text-text-primary" onclick={() => showWarnModal = false}>Cancel</button>
+				<button
+					class="rounded-md bg-yellow-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+					disabled={!warnReason.trim() || warnOp.loading}
+					onclick={submitWarnMember}
+				>{warnOp.loading ? 'Saving...' : 'Warn'}</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if showWarningsModal && warningsTarget}
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onclick={() => showWarningsModal = false} onkeydown={(e) => e.key === 'Escape' && (showWarningsModal = false)} role="dialog" aria-modal="true" aria-labelledby="member-warnings-title" tabindex="-1">
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+		<div class="mx-4 w-full max-w-lg rounded-lg bg-bg-secondary p-4 shadow-xl md:mx-0" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="document" tabindex="-1">
+			<h3 id="member-warnings-title" class="mb-3 text-lg font-semibold text-text-primary">Warnings</h3>
+			<p class="mb-3 text-sm text-text-muted">{warningsTarget.nickname ?? warningsTarget.user?.username ?? warningsTarget.user_id}</p>
+			{#if warningsOp.loading}
+				<p class="py-4 text-sm text-text-muted">Loading warnings...</p>
+			{:else if warnings.length === 0}
+				<p class="rounded bg-bg-primary p-3 text-sm text-text-muted">No warnings.</p>
+			{:else}
+				<div class="max-h-72 space-y-2 overflow-y-auto">
+					{#each warnings as warning (warning.id)}
+						<div class="rounded bg-bg-primary p-3">
+							<div class="flex items-start justify-between gap-3">
+								<div>
+									<p class="text-sm text-text-secondary">{warning.reason}</p>
+									<p class="mt-1 text-xs text-text-muted">{new Date(warning.created_at).toLocaleString()}</p>
+								</div>
+								<button class="text-xs text-red-400 hover:text-red-300" onclick={() => deleteMemberWarning(warning.id)}>Delete</button>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			<div class="mt-4 flex justify-end">
+				<button class="btn-secondary text-sm" onclick={() => showWarningsModal = false}>Close</button>
+			</div>
+		</div>
+	</div>
 {/if}
 
 	<!-- Report user modal -->

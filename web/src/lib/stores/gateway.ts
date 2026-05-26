@@ -5,19 +5,27 @@ import { goto } from '$app/navigation';
 import { GatewayClient } from '$lib/api/ws';
 import { api } from '$lib/api/client';
 import { currentUser } from './auth';
-import { loadGuilds, updateGuild, removeGuild, currentGuildId } from './guilds';
+import { loadGuilds, updateGuild, removeGuild, currentGuildId, guilds } from './guilds';
 import { updateChannel, removeChannel, loadChannels, channels as channelsStore, currentChannelId } from './channels';
 import { appendMessage, updateMessage, removeMessage, removeMessages, loadMessages, applyReactionEvent, reconcileLoadedChannels } from './messages';
-import { updatePresence } from './presence';
+import { updateActivity, updatePresence } from './presence';
 import { addTypingUser, clearTypingUser } from './typing';
 import { loadDMs, addDMChannel, removeDMChannel, updateUserInDMs, updateDMChannel, dmChannels } from './dms';
 import { incrementUnread, incrementMention, loadReadState, loadChannelGuildMap, registerChannelGuild, channelGuildMap } from './unreads';
-import { handleNotificationCreate, handleNotificationUpdate, handleNotificationDelete, loadNotifications } from './notifications';
+import {
+	handleNotificationCreate,
+	handleNotificationUpdate,
+	handleNotificationDelete,
+	handleNotificationsMarkAllRead,
+	handleNotificationsClearAll,
+	loadNotifications
+} from './notifications';
+import { clientConfig, isFeatureEnabled } from './clientConfig';
 import { initPushNotifications } from '$lib/utils/pushNotifications';
 import { handleScreenShareEvent, handleSoundboardPlay, handleVoiceStateUpdate, clearChannelVoiceUsers } from './voice';
 import { loadRelationships, addOrUpdateRelationship, removeRelationship } from './relationships';
 import { loadPermissions, invalidatePermissions } from './permissions';
-import { loadChannelMutePrefs, isChannelMuted, isGuildMuted } from './muting';
+import { loadChannelMutePrefs, loadGuildMutePrefs, isChannelMuted, isGuildMuted } from './muting';
 import {
 	loadGuildMembersAndRoles,
 	removeGuildMember,
@@ -28,13 +36,14 @@ import {
 } from './members';
 import { startIdleDetection, stopIdleDetection, setManualStatus } from '$lib/utils/idle';
 import { addToast } from './toast';
+import { markConnected, markDisconnected, resetConnectionState } from './gateway.reconnect';
 import { addAnnouncement, updateAnnouncement, removeAnnouncement } from './announcements';
 import { upsertGuildEvent, removeGuildEvent as removeStoredGuildEvent } from './guildEvents';
 import { upsertChannelWidget, removeChannelWidget as removeStoredChannelWidget } from './channelWidgets';
 import { addIncomingCall, dismissIncomingCall, clearIncomingCalls } from './callRing';
 import { clearChannelUnreads } from './unreads';
 import { handleLocationShareChanged, removeLocationShare } from './locationShares';
-import { handleVoiceBroadcastEnd, handleVoiceBroadcastStart } from './voiceBroadcasts';
+import { handleVoiceBroadcastEnd, handleVoiceBroadcastStart, handleVoiceBroadcastUpdate } from './voiceBroadcasts';
 import { invalidateChannelActivity } from './activityEvents';
 import type { ChannelWidget } from '$lib/api/client';
 import type { User, Guild, Channel, Message, ReadyEvent, TypingEvent, Relationship, ServerNotification, GuildEvent, GuildMember } from '$lib/types';
@@ -99,20 +108,24 @@ export function connectGateway(token: string) {
 				const ready = data as ReadyEvent;
 				currentUser.set(ready.user);
 				gatewayConnected.set(true);
-				loadGuilds();
+				markConnected();
+				loadGuilds().then(() => loadGuildMutePrefs(Array.from(get(guilds).keys()))).catch(() => {});
 				loadDMs();
 				loadReadState();
 				loadChannelGuildMap();
 				loadRelationships();
 				loadChannelMutePrefs();
 				loadNotifications();
-				initPushNotifications();
+				if (isFeatureEnabled(get(clientConfig), 'pwa_push')) {
+					initPushNotifications();
+				}
 				// Preserve the user's chosen status. The DB defaults status_presence
 				// to 'offline', which just means "never explicitly set" — treat as online.
 				const raw = ready.user.status_presence;
 				const savedStatus = (!raw || raw === 'offline') ? 'online' : raw;
 				const displayStatus = savedStatus === 'invisible' ? 'offline' : savedStatus;
 				updatePresence(ready.user.id, displayStatus);
+				updateActivity(ready.user.id, ready.user.activity_type, ready.user.activity_name);
 				// Load initial presence for all online guild members.
 				if (ready.presences) {
 					for (const [uid, status] of Object.entries(ready.presences)) {
@@ -153,7 +166,7 @@ export function connectGateway(token: string) {
 					if (activeChannelId) {
 						loadMessages(activeChannelId);
 					}
-					loadGuilds();
+					loadGuilds().then(() => loadGuildMutePrefs(Array.from(get(guilds).keys()))).catch(() => {});
 					loadDMs();
 					loadReadState();
 					loadChannelGuildMap();
@@ -170,11 +183,16 @@ export function connectGateway(token: string) {
 				}
 				break;
 			}
+			case 'RESUMED':
+				gatewayConnected.set(true);
+				markConnected();
+				break;
 
 			// --- Gateway lifecycle ---
 			case 'GATEWAY_DISCONNECTED':
 				// Connection dropped — mark disconnected immediately for UI feedback.
 				gatewayConnected.set(false);
+				markDisconnected();
 				addToast('Connection lost. Reconnecting...', 'warning', 5000);
 				break;
 			case 'GATEWAY_AUTH_FAILED':
@@ -185,6 +203,7 @@ export function connectGateway(token: string) {
 			case 'GATEWAY_EXHAUSTED':
 				// Too many failed reconnects — mark disconnected.
 				gatewayConnected.set(false);
+				markDisconnected();
 				break;
 
 			// --- Guild events ---
@@ -287,12 +306,21 @@ export function connectGateway(token: string) {
 				break;
 
 			// --- Presence events ---
-			case 'PRESENCE_UPDATE':
-				updatePresence(
-					(data as { user_id: string }).user_id,
-					(data as { status: string }).status
-				);
+			case 'PRESENCE_UPDATE': {
+				const presence = data as {
+					user_id: string;
+					status?: string;
+					activity_type?: string | null;
+					activity_name?: string | null;
+				};
+				if (presence.status) {
+					updatePresence(presence.user_id, presence.status);
+				}
+				if ('activity_type' in presence || 'activity_name' in presence) {
+					updateActivity(presence.user_id, presence.activity_type, presence.activity_name);
+				}
 				break;
+			}
 
 			// --- Typing events ---
 			case 'TYPING_START': {
@@ -447,6 +475,62 @@ export function connectGateway(token: string) {
 				}
 				break;
 			}
+			case 'GUILD_MEMBERS_PRUNE': {
+				const prune = data as { guild_id?: string };
+				if (prune.guild_id === get(currentGuildId)) {
+					loadGuildMembersAndRoles(prune.guild_id).catch(() => {});
+				}
+				break;
+			}
+			case 'GUILD_MEMBERS_CHUNK': {
+				const chunk = data as {
+					guild_id?: string;
+					members?: Array<{
+						user_id: string;
+						username: string;
+						display_name?: string | null;
+						avatar_id?: string | null;
+						status_presence?: User['status_presence'];
+						nickname?: string | null;
+						joined_at: string;
+					}>;
+				};
+				if (chunk.guild_id === get(currentGuildId) && chunk.members) {
+					for (const member of chunk.members) {
+						upsertGuildMember({
+							guild_id: chunk.guild_id,
+							user_id: member.user_id,
+							nickname: member.nickname ?? null,
+							avatar_id: member.avatar_id ?? null,
+							joined_at: member.joined_at,
+							timeout_until: null,
+							deaf: false,
+							mute: false,
+							user: {
+								id: member.user_id,
+								instance_id: '',
+								username: member.username,
+								display_name: member.display_name ?? null,
+								avatar_id: member.avatar_id ?? null,
+								status_text: null,
+								status_emoji: null,
+								status_presence: member.status_presence ?? 'offline',
+								status_expires_at: null,
+								bio: null,
+								bot_owner_id: null,
+								email: null,
+								banner_id: null,
+								accent_color: null,
+								pronouns: null,
+								flags: 0,
+								last_online: null,
+								created_at: ''
+							}
+						});
+					}
+				}
+				break;
+			}
 
 			// --- Guild role create ---
 			case 'GUILD_ROLE_CREATE': {
@@ -498,6 +582,13 @@ export function connectGateway(token: string) {
 				// Onboarding config changed — no-op for non-admin users.
 				break;
 
+			// --- Guild webhooks ---
+			case 'WEBHOOK_CREATE':
+			case 'WEBHOOK_UPDATE':
+			case 'WEBHOOK_DELETE':
+				window.dispatchEvent(new CustomEvent('amityvox:webhooks-changed', { detail: data }));
+				break;
+
 			// --- Channel pins update ---
 			case 'CHANNEL_PINS_UPDATE': {
 				const pinData = data as { channel_id?: string };
@@ -528,6 +619,13 @@ export function connectGateway(token: string) {
 				break;
 			}
 
+			case 'CHANNEL_GROUP_CREATE':
+			case 'CHANNEL_GROUP_UPDATE':
+			case 'CHANNEL_GROUP_DELETE':
+			case 'CHANNEL_GROUP_ITEMS_UPDATE':
+				window.dispatchEvent(new CustomEvent('amityvox:channel-groups-changed', { detail: data }));
+				break;
+
 			// --- Message reaction events ---
 			case 'MESSAGE_REACTION_ADD':
 			case 'MESSAGE_REACTION_REMOVE': {
@@ -543,6 +641,16 @@ export function connectGateway(token: string) {
 					event === 'MESSAGE_REACTION_ADD' ? 'add' : 'remove',
 					get(currentUser)?.id
 				);
+				break;
+			}
+
+			case 'MESSAGE_EFFECT_CREATE': {
+				window.dispatchEvent(new CustomEvent('amityvox:message-effect', { detail: data }));
+				break;
+			}
+
+			case 'SUPER_REACTION_ADD': {
+				window.dispatchEvent(new CustomEvent('amityvox:super-reaction', { detail: data }));
 				break;
 			}
 
@@ -575,6 +683,19 @@ export function connectGateway(token: string) {
 				break;
 			}
 
+			case 'CODE_SNIPPET_CREATE':
+				// Code snippets are rendered through the MESSAGE_CREATE payload.
+				break;
+
+			case 'WHITEBOARD_UPDATE':
+				window.dispatchEvent(new CustomEvent('amityvox:whiteboard-update', { detail: data }));
+				break;
+
+			case 'KANBAN_CARD_CREATE':
+			case 'KANBAN_CARD_MOVE':
+				window.dispatchEvent(new CustomEvent('amityvox:kanban-update', { detail: data }));
+				break;
+
 			// --- Automod action ---
 			case 'AUTOMOD_ACTION':
 				// Automod notification — could show a toast for guild moderators.
@@ -589,6 +710,12 @@ export function connectGateway(token: string) {
 				break;
 			case 'NOTIFICATION_DELETE':
 				handleNotificationDelete(data as { id: string });
+				break;
+			case 'NOTIFICATION_MARK_ALL_READ':
+				handleNotificationsMarkAllRead();
+				break;
+			case 'NOTIFICATION_CLEAR_ALL':
+				handleNotificationsClearAll();
 				break;
 
 			// --- Activity/game events ---
@@ -616,6 +743,10 @@ export function connectGateway(token: string) {
 					user_id?: string;
 				}, get(currentUser)?.id);
 				break;
+			case 'SOUNDBOARD_SOUND_CREATE':
+			case 'SOUNDBOARD_SOUND_DELETE':
+				window.dispatchEvent(new CustomEvent('amityvox:soundboard-changed', { detail: data }));
+				break;
 
 			// --- Voice broadcast events ---
 			case 'VOICE_BROADCAST_START':
@@ -633,9 +764,24 @@ export function connectGateway(token: string) {
 			case 'VOICE_BROADCAST_END':
 				handleVoiceBroadcastEnd(data as { channel_id: string });
 				break;
+			case 'VOICE_BROADCAST_UPDATE':
+				handleVoiceBroadcastUpdate(data as {
+					broadcast_id?: string;
+					id?: string;
+					guild_id?: string;
+					channel_id: string;
+					broadcaster_id?: string;
+					title?: string;
+					started_at?: string;
+					listener_count?: number;
+				});
+				break;
 
 			// --- Screen share events ---
 			case 'SCREEN_SHARE_START':
+				handleScreenShareEvent(data as { channel_id: string; user_id: string }, true);
+				break;
+			case 'SCREEN_SHARE_UPDATE':
 				handleScreenShareEvent(data as { channel_id: string; user_id: string }, true);
 				break;
 			case 'SCREEN_SHARE_END':
@@ -688,6 +834,7 @@ export function disconnectGateway() {
 	client?.disconnect();
 	client = null;
 	gatewayConnected.set(false);
+	resetConnectionState();
 	hasReceivedReady = false;
 }
 

@@ -1,10 +1,11 @@
 // Channel store — manages channels for the current guild.
 
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type { Channel } from '$lib/types';
 import { api } from '$lib/api/client';
 import { createMapStore } from '$lib/stores/mapHelpers';
 import { currentGuildId } from '$lib/stores/guilds';
+import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 
 export const channels = createMapStore<string, Channel>();
 export const currentChannelId = writable<string | null>(null);
@@ -51,6 +52,10 @@ export const currentChannel = derived(
 export const hiddenThreadIds = writable<Set<string>>(new Set());
 
 export async function loadHiddenThreads() {
+	if (!isFeatureEnabled(get(clientConfig), 'threads_and_replies')) {
+		hiddenThreadIds.set(new Set());
+		return;
+	}
 	try {
 		const ids = await api.getHiddenThreads();
 		hiddenThreadIds.set(new Set(ids));
@@ -60,6 +65,7 @@ export async function loadHiddenThreads() {
 }
 
 export async function hideThread(channelId: string, threadId: string) {
+	if (!isFeatureEnabled(get(clientConfig), 'threads_and_replies')) return;
 	// Optimistic update.
 	hiddenThreadIds.update((set) => {
 		const next = new Set(set);
@@ -80,6 +86,7 @@ export async function hideThread(channelId: string, threadId: string) {
 }
 
 export async function unhideThread(channelId: string, threadId: string) {
+	if (!isFeatureEnabled(get(clientConfig), 'threads_and_replies')) return;
 	// Optimistic update.
 	hiddenThreadIds.update((set) => {
 		const next = new Set(set);

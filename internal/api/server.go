@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amityvox/amityvox/internal/api/activities"
@@ -44,6 +45,7 @@ import (
 	"github.com/amityvox/amityvox/internal/database"
 	"github.com/amityvox/amityvox/internal/encryption"
 	"github.com/amityvox/amityvox/internal/events"
+	"github.com/amityvox/amityvox/internal/features"
 	"github.com/amityvox/amityvox/internal/federation"
 	"github.com/amityvox/amityvox/internal/media"
 	"github.com/amityvox/amityvox/internal/models"
@@ -71,6 +73,7 @@ type Server struct {
 	WebAuthn      *webauthn.WebAuthn
 	InstanceID    string
 	Version       string
+	BuildVersion  string
 	Logger        *slog.Logger
 	FedSvc        *federation.Service     // exposed for admin federation handlers
 	FedProxy      apiutil.FederationProxy // optional, set after sync service creation
@@ -144,6 +147,127 @@ func RequireAdmin(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func (s *Server) requireInstanceFeature(featureKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !s.featureEnabled(w, r, featureKey, "") {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (s *Server) requireGuildFeature(featureKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			guildID := chi.URLParam(r, "guildID")
+			if !s.featureEnabled(w, r, featureKey, guildID) {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (s *Server) requireChannelFeature(featureKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			channelID := chi.URLParam(r, "channelID")
+			if channelID == "" {
+				if !s.featureEnabled(w, r, featureKey, "") {
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			guildID, ok := s.guildIDForChannel(w, r, channelID)
+			if !ok {
+				return
+			}
+			if !s.featureEnabled(w, r, featureKey, guildID) {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (s *Server) requireMessageFeature(featureKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			messageID := chi.URLParam(r, "messageID")
+			if messageID == "" {
+				if !s.featureEnabled(w, r, featureKey, "") {
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			var guildID *string
+			err := s.DB.Pool.QueryRow(r.Context(), `
+				SELECT c.guild_id
+				FROM messages m
+				JOIN channels c ON c.id = m.channel_id
+				WHERE m.id = $1
+			`, messageID).Scan(&guildID)
+			if err != nil {
+				if err == pgx.ErrNoRows {
+					next.ServeHTTP(w, r)
+					return
+				}
+				apiutil.InternalError(w, s.Logger, "Failed to load message feature scope", err)
+				return
+			}
+			if !s.featureEnabled(w, r, featureKey, stringValue(guildID)) {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (s *Server) guildIDForChannel(w http.ResponseWriter, r *http.Request, channelID string) (string, bool) {
+	var guildID *string
+	err := s.DB.Pool.QueryRow(r.Context(), `SELECT guild_id FROM channels WHERE id = $1`, channelID).Scan(&guildID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			apiutil.WriteError(w, http.StatusNotFound, "channel_not_found", "Channel not found")
+			return "", false
+		}
+		apiutil.InternalError(w, s.Logger, "Failed to load channel feature scope", err)
+		return "", false
+	}
+	return stringValue(guildID), true
+}
+
+func (s *Server) featureEnabled(w http.ResponseWriter, r *http.Request, featureKey string, guildID string) bool {
+	if !features.IsKnown(featureKey) {
+		apiutil.WriteError(w, http.StatusInternalServerError, "unknown_feature", "Feature gate is not configured")
+		return false
+	}
+	states, err := features.Resolve(r.Context(), s.DB.Pool, guildID)
+	if err != nil {
+		apiutil.InternalError(w, s.Logger, "Failed to load feature flags", err)
+		return false
+	}
+	state := states[featureKey]
+	if !state.Enabled {
+		apiutil.WriteError(w, http.StatusForbidden, "feature_disabled", state.Name+" is disabled")
+		return false
+	}
+	return true
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // registerMiddleware adds global middleware to the router.
@@ -337,18 +461,21 @@ func (s *Server) registerRoutes() {
 				r.Patch("/@me/settings", userH.HandleUpdateUserSettings)
 				r.Get("/@me/relationships", userH.HandleGetRelationships)
 				r.Get("/@me/blocked", userH.HandleGetBlockedUsers)
-				r.Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
+				r.With(s.requireInstanceFeature("message_bookmarks")).Get("/@me/bookmarks", bookmarkH.HandleListBookmarks)
 				r.Get("/@me/bots", botH.HandleListMyBots)
 				r.Post("/@me/bots", botH.HandleCreateBot)
 				r.Get("/@me/export", userH.HandleExportUserData)
 				r.Get("/@me/export-account", userH.HandleExportAccount)
 				r.Post("/@me/import-account", userH.HandleImportAccount)
+				r.Get("/@me/instance-profiles", adminH.HandleGetInstanceProfiles)
+				r.Post("/@me/instance-profiles", adminH.HandleAddInstanceProfile)
+				r.Delete("/@me/instance-profiles/{profileID}", adminH.HandleRemoveInstanceProfile)
 				r.Put("/@me/activity", userH.HandleUpdateActivity)
 				r.Get("/@me/activity", userH.HandleGetActivity)
-				r.Get("/@me/hidden-threads", channelH.HandleGetHiddenThreads)
-				r.Get("/@me/emoji", userH.HandleGetUserEmoji)
-				r.Post("/@me/emoji", userH.HandleCreateUserEmoji)
-				r.Delete("/@me/emoji/{emojiID}", userH.HandleDeleteUserEmoji)
+				r.With(s.requireInstanceFeature("threads_and_replies")).Get("/@me/hidden-threads", channelH.HandleGetHiddenThreads)
+				r.With(s.requireInstanceFeature("custom_emoji")).Get("/@me/emoji", userH.HandleGetUserEmoji)
+				r.With(s.requireInstanceFeature("custom_emoji")).Post("/@me/emoji", userH.HandleCreateUserEmoji)
+				r.With(s.requireInstanceFeature("custom_emoji")).Delete("/@me/emoji/{emojiID}", userH.HandleDeleteUserEmoji)
 
 				// Profile links.
 				r.Get("/@me/links", userH.HandleGetMyLinks)
@@ -357,7 +484,7 @@ func (s *Server) registerRoutes() {
 				r.Delete("/@me/links/{linkID}", userH.HandleDeleteLink)
 
 				// User's own issues.
-				r.Get("/@me/issues", modH.HandleGetMyIssues)
+				r.With(s.requireInstanceFeature("moderation_reports")).Get("/@me/issues", modH.HandleGetMyIssues)
 
 				// Group DMs.
 				r.Post("/@me/group-dms", userH.HandleCreateGroupDM)
@@ -381,7 +508,7 @@ func (s *Server) registerRoutes() {
 				r.Get("/{userID}/mutual-guilds", userH.HandleGetMutualGuilds)
 				r.Get("/{userID}/badges", userH.HandleGetUserBadges)
 				r.Get("/{userID}/links", userH.HandleGetUserLinks)
-				r.Post("/{userID}/report", modH.HandleReportUser)
+				r.With(s.requireInstanceFeature("moderation_reports")).Post("/{userID}/report", modH.HandleReportUser)
 			})
 
 			// Bot management routes.
@@ -412,8 +539,6 @@ func (s *Server) registerRoutes() {
 					r.Delete("/{subscriptionID}", botH.HandleDeleteEventSubscription)
 				})
 			})
-			r.Post("/bots/interactions", botH.HandleComponentInteraction)
-
 			// Guild routes.
 			r.Route("/guilds", func(r chi.Router) {
 				r.Post("/", guildH.HandleCreateGuild)
@@ -430,14 +555,14 @@ func (s *Server) registerRoutes() {
 				r.Patch("/{guildID}/channels", guildH.HandleReorderGuildChannels)
 				r.Post("/{guildID}/channels", guildH.HandleCreateGuildChannel)
 				r.Post("/{guildID}/channels/{channelID}/clone", guildH.HandleCloneChannel)
-				r.Get("/{guildID}/guide", guildH.HandleGetServerGuide)
-				r.Put("/{guildID}/guide", guildH.HandleUpdateServerGuide)
+				r.With(s.requireGuildFeature("guild_onboarding")).Get("/{guildID}/guide", guildH.HandleGetServerGuide)
+				r.With(s.requireGuildFeature("guild_onboarding")).Put("/{guildID}/guide", guildH.HandleUpdateServerGuide)
 				r.Get("/{guildID}/bump", guildH.HandleGetBumpStatus)
 				r.Post("/{guildID}/bump", guildH.HandleBumpGuild)
-				r.Get("/{guildID}/plugins", widgetH.HandleGetGuildPlugins)
-				r.Post("/{guildID}/plugins", widgetH.HandleInstallPlugin)
-				r.Patch("/{guildID}/plugins/{installID}", widgetH.HandleUpdateGuildPlugin)
-				r.Delete("/{guildID}/plugins/{installID}", widgetH.HandleUninstallPlugin)
+				r.With(s.requireGuildFeature("widgets")).Get("/{guildID}/plugins", widgetH.HandleGetGuildPlugins)
+				r.With(s.requireGuildFeature("widgets")).Post("/{guildID}/plugins", widgetH.HandleInstallPlugin)
+				r.With(s.requireGuildFeature("widgets")).Patch("/{guildID}/plugins/{installID}", widgetH.HandleUpdateGuildPlugin)
+				r.With(s.requireGuildFeature("widgets")).Delete("/{guildID}/plugins/{installID}", widgetH.HandleUninstallPlugin)
 				r.Get("/{guildID}/channel-templates", channelH.HandleGetChannelTemplates)
 				r.Post("/{guildID}/channel-templates", channelH.HandleCreateChannelTemplate)
 				r.Delete("/{guildID}/channel-templates/{templateID}", channelH.HandleDeleteChannelTemplate)
@@ -476,23 +601,33 @@ func (s *Server) registerRoutes() {
 				r.Post("/{guildID}/categories", guildH.HandleCreateGuildCategory)
 				r.Patch("/{guildID}/categories/{categoryID}", guildH.HandleUpdateGuildCategory)
 				r.Delete("/{guildID}/categories/{categoryID}", guildH.HandleDeleteGuildCategory)
-				r.Get("/{guildID}/audit-log", guildH.HandleGetGuildAuditLog)
-				r.Get("/{guildID}/emoji", guildH.HandleGetGuildEmoji)
-				r.Post("/{guildID}/emoji", guildH.HandleCreateGuildEmoji)
-				r.Patch("/{guildID}/emoji/{emojiID}", guildH.HandleUpdateGuildEmoji)
-				r.Delete("/{guildID}/emoji/{emojiID}", guildH.HandleDeleteGuildEmoji)
-				r.Get("/{guildID}/webhooks", guildH.HandleGetGuildWebhooks)
-				r.Post("/{guildID}/webhooks", guildH.HandleCreateGuildWebhook)
-				r.Patch("/{guildID}/webhooks/{webhookID}", guildH.HandleUpdateGuildWebhook)
-				r.Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
-				r.Get("/{guildID}/webhooks/{webhookID}/logs", webhookH.HandleGetWebhookLogs)
+				r.With(s.requireGuildFeature("audit_logs")).Get("/{guildID}/audit-log", guildH.HandleGetGuildAuditLog)
+				r.With(s.requireGuildFeature("custom_emoji")).Get("/{guildID}/emoji", guildH.HandleGetGuildEmoji)
+				r.With(s.requireGuildFeature("custom_emoji")).Post("/{guildID}/emoji", guildH.HandleCreateGuildEmoji)
+				r.With(s.requireGuildFeature("custom_emoji")).Patch("/{guildID}/emoji/{emojiID}", guildH.HandleUpdateGuildEmoji)
+				r.With(s.requireGuildFeature("custom_emoji")).Delete("/{guildID}/emoji/{emojiID}", guildH.HandleDeleteGuildEmoji)
+				r.With(s.requireGuildFeature("webhooks")).Get("/{guildID}/webhooks", guildH.HandleGetGuildWebhooks)
+				r.With(s.requireGuildFeature("webhooks")).Post("/{guildID}/webhooks", guildH.HandleCreateGuildWebhook)
+				r.With(s.requireGuildFeature("webhooks")).Patch("/{guildID}/webhooks/{webhookID}", guildH.HandleUpdateGuildWebhook)
+				r.With(s.requireGuildFeature("webhooks")).Delete("/{guildID}/webhooks/{webhookID}", guildH.HandleDeleteGuildWebhook)
+				r.With(s.requireGuildFeature("widgets")).Get("/{guildID}/widget", widgetH.HandleGetGuildWidget)
+				r.With(s.requireGuildFeature("widgets")).Patch("/{guildID}/widget", widgetH.HandleUpdateGuildWidget)
+				r.With(s.requireGuildFeature("voice_broadcasts")).Get("/{guildID}/soundboard/config", s.handleGetSoundboardConfig)
+				r.With(s.requireGuildFeature("voice_broadcasts")).Patch("/{guildID}/soundboard/config", s.handleUpdateSoundboardConfig)
+				r.With(s.requireGuildFeature("voice_broadcasts")).Get("/{guildID}/soundboard/sounds", s.handleGetSoundboardSounds)
+				r.With(s.requireGuildFeature("voice_broadcasts")).Post("/{guildID}/soundboard/sounds", s.handleCreateSoundboardSound)
+				r.With(s.requireGuildFeature("voice_broadcasts")).Delete("/{guildID}/soundboard/sounds/{soundID}", s.handleDeleteSoundboardSound)
+				r.With(s.requireGuildFeature("voice_broadcasts")).Post("/{guildID}/soundboard/sounds/{soundID}/play", s.handlePlaySoundboardSound)
+				r.With(s.requireGuildFeature("webhooks")).Get("/{guildID}/webhooks/{webhookID}/logs", webhookH.HandleGetWebhookLogs)
 				r.Get("/{guildID}/vanity-url", guildH.HandleGetGuildVanityURL)
 				r.Patch("/{guildID}/vanity-url", guildH.HandleSetGuildVanityURL)
 				r.Delete("/{guildID}/warnings/{warningID}", modH.HandleDeleteWarning)
-				r.Get("/{guildID}/reports", modH.HandleGetReports)
-				r.Patch("/{guildID}/reports/{reportID}", modH.HandleResolveReport)
+				r.With(s.requireGuildFeature("moderation_reports")).Get("/{guildID}/reports", modH.HandleGetReports)
+				r.With(s.requireGuildFeature("moderation_reports")).Patch("/{guildID}/reports/{reportID}", modH.HandleResolveReport)
 				r.Get("/{guildID}/raid-config", modH.HandleGetRaidConfig)
 				r.Patch("/{guildID}/raid-config", modH.HandleUpdateRaidConfig)
+				r.Get("/{guildID}/features", guildH.HandleGetFeatureFlags)
+				r.Patch("/{guildID}/features/{featureKey}", guildH.HandleUpdateFeatureFlag)
 
 				// Ban list routes.
 				r.Route("/{guildID}/ban-lists", func(r chi.Router) {
@@ -511,6 +646,7 @@ func (s *Server) registerRoutes() {
 
 				// Guild sticker pack routes.
 				r.Route("/{guildID}/sticker-packs", func(r chi.Router) {
+					r.Use(s.requireGuildFeature("sticker_packs"))
 					r.Post("/", stickerH.HandleCreateGuildPack)
 					r.Get("/", stickerH.HandleGetGuildPacks)
 					r.Delete("/{packID}", stickerH.HandleDeletePack)
@@ -521,6 +657,7 @@ func (s *Server) registerRoutes() {
 
 				// Guild onboarding routes.
 				r.Route("/{guildID}/onboarding", func(r chi.Router) {
+					r.Use(s.requireGuildFeature("guild_onboarding"))
 					r.Get("/", onboardH.HandleGetOnboarding)
 					r.Put("/", onboardH.HandleUpdateOnboarding)
 					r.Post("/prompts", onboardH.HandleCreatePrompt)
@@ -552,6 +689,7 @@ func (s *Server) registerRoutes() {
 
 				// Guild channel group routes (admin-managed).
 				r.Route("/{guildID}/channel-groups", func(r chi.Router) {
+					r.Use(s.requireGuildFeature("channel_groups"))
 					r.Get("/", guildH.HandleGetChannelGroups)
 					r.Post("/", guildH.HandleCreateChannelGroup)
 					r.Patch("/{groupID}", guildH.HandleUpdateChannelGroup)
@@ -561,14 +699,14 @@ func (s *Server) registerRoutes() {
 				})
 
 				// Media gallery and tag routes.
-				r.Get("/{guildID}/gallery", guildH.HandleGetGuildGallery)
-				r.Get("/{guildID}/media-tags", guildH.HandleGetMediaTags)
-				r.Post("/{guildID}/media-tags", guildH.HandleCreateMediaTag)
-				r.Delete("/{guildID}/media-tags/{tagID}", guildH.HandleDeleteMediaTag)
+				r.With(s.requireGuildFeature("gallery_media")).Get("/{guildID}/gallery", guildH.HandleGetGuildGallery)
+				r.With(s.requireGuildFeature("gallery_media")).Get("/{guildID}/media-tags", guildH.HandleGetMediaTags)
+				r.With(s.requireGuildFeature("gallery_media")).Post("/{guildID}/media-tags", guildH.HandleCreateMediaTag)
+				r.With(s.requireGuildFeature("gallery_media")).Delete("/{guildID}/media-tags/{tagID}", guildH.HandleDeleteMediaTag)
 
 				// AutoMod rules management.
 				if s.AutoMod != nil {
-					r.Route("/{guildID}/automod", func(r chi.Router) {
+					r.With(s.requireGuildFeature("automod")).Route("/{guildID}/automod", func(r chi.Router) {
 						r.Get("/rules", s.AutoMod.HandleListRules)
 						r.Post("/rules", s.AutoMod.HandleCreateRule)
 						r.Post("/rules/test", s.AutoMod.HandleTestRule)
@@ -592,31 +730,32 @@ func (s *Server) registerRoutes() {
 				r.Patch("/{channelID}/messages/{messageID}", channelH.HandleUpdateMessage)
 				r.Delete("/{channelID}/messages/{messageID}", channelH.HandleDeleteMessage)
 				r.Get("/{channelID}/messages/{messageID}/edits", channelH.HandleGetMessageEdits)
-				r.Post("/{channelID}/messages/{messageID}/crosspost", channelH.HandleCrosspostMessage)
+				r.With(s.requireChannelFeature("announcement_channels")).Post("/{channelID}/messages/{messageID}/crosspost", channelH.HandleCrosspostMessage)
+				r.Post("/{channelID}/messages/{messageID}/components/{componentID}/interact", botH.HandleComponentInteraction)
 				r.Get("/{channelID}/messages/{messageID}/reactions", channelH.HandleGetReactions)
 				r.Put("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleAddReaction)
 				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}", channelH.HandleRemoveReaction)
 				r.Delete("/{channelID}/messages/{messageID}/reactions/{emoji}/{targetUserID}", channelH.HandleRemoveUserReaction)
-				r.Get("/{channelID}/pins", channelH.HandleGetPins)
-				r.Put("/{channelID}/pins/{messageID}", channelH.HandlePinMessage)
-				r.Delete("/{channelID}/pins/{messageID}", channelH.HandleUnpinMessage)
+				r.With(s.requireChannelFeature("pins")).Get("/{channelID}/pins", channelH.HandleGetPins)
+				r.With(s.requireChannelFeature("pins")).Put("/{channelID}/pins/{messageID}", channelH.HandlePinMessage)
+				r.With(s.requireChannelFeature("pins")).Delete("/{channelID}/pins/{messageID}", channelH.HandleUnpinMessage)
 				r.Post("/{channelID}/typing", channelH.HandleTriggerTyping)
 				r.Post("/{channelID}/decrypt-messages", channelH.HandleBatchDecryptMessages)
 				r.Post("/{channelID}/ack", channelH.HandleAckChannel)
 				r.Put("/{channelID}/permissions/{overrideID}", channelH.HandleSetChannelPermission)
 				r.Delete("/{channelID}/permissions/{overrideID}", channelH.HandleDeleteChannelPermission)
-				r.Post("/{channelID}/messages/{messageID}/threads", channelH.HandleCreateThread)
-				r.Post("/{channelID}/messages/{messageID}/report", modH.HandleReportMessage)
-				r.Post("/{channelID}/messages/{messageID}/report-admin", modH.HandleReportToAdmin)
-				r.Post("/{channelID}/messages/{messageID}/translate", channelH.HandleTranslateMessage)
-				r.Get("/{channelID}/threads", channelH.HandleGetThreads)
-				r.Post("/{channelID}/threads/{threadID}/hide", channelH.HandleHideThread)
-				r.Delete("/{channelID}/threads/{threadID}/hide", channelH.HandleUnhideThread)
+				r.With(s.requireChannelFeature("threads_and_replies")).Post("/{channelID}/messages/{messageID}/threads", channelH.HandleCreateThread)
+				r.With(s.requireChannelFeature("moderation_reports")).Post("/{channelID}/messages/{messageID}/report", modH.HandleReportMessage)
+				r.With(s.requireChannelFeature("moderation_reports")).Post("/{channelID}/messages/{messageID}/report-admin", modH.HandleReportToAdmin)
+				r.With(s.requireChannelFeature("translation")).Post("/{channelID}/messages/{messageID}/translate", channelH.HandleTranslateMessage)
+				r.With(s.requireChannelFeature("threads_and_replies")).Get("/{channelID}/threads", channelH.HandleGetThreads)
+				r.With(s.requireChannelFeature("threads_and_replies")).Post("/{channelID}/threads/{threadID}/hide", channelH.HandleHideThread)
+				r.With(s.requireChannelFeature("threads_and_replies")).Delete("/{channelID}/threads/{threadID}/hide", channelH.HandleUnhideThread)
 				r.Post("/{channelID}/lock", modH.HandleLockChannel)
 				r.Post("/{channelID}/unlock", modH.HandleUnlockChannel)
-				r.Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
+				r.With(s.requireChannelFeature("webhooks")).Get("/{channelID}/webhooks", channelH.HandleGetChannelWebhooks)
 				r.Get("/{channelID}/export", userH.HandleExportChannelMessages)
-				r.Get("/{channelID}/gallery", channelH.HandleGetChannelGallery)
+				r.With(s.requireChannelFeature("gallery_media")).Get("/{channelID}/gallery", channelH.HandleGetChannelGallery)
 
 				// Forum tag routes.
 				r.Get("/{channelID}/tags", channelH.HandleGetForumTags)
@@ -631,16 +770,16 @@ func (s *Server) registerRoutes() {
 				r.Post("/{channelID}/posts/{postID}/close", channelH.HandleCloseForumPost)
 
 				// Gallery tag routes.
-				r.Get("/{channelID}/gallery-tags", channelH.HandleGetGalleryTags)
-				r.Post("/{channelID}/gallery-tags", channelH.HandleCreateGalleryTag)
-				r.Patch("/{channelID}/gallery-tags/{tagID}", channelH.HandleUpdateGalleryTag)
-				r.Delete("/{channelID}/gallery-tags/{tagID}", channelH.HandleDeleteGalleryTag)
+				r.With(s.requireChannelFeature("gallery_media")).Get("/{channelID}/gallery-tags", channelH.HandleGetGalleryTags)
+				r.With(s.requireChannelFeature("gallery_media")).Post("/{channelID}/gallery-tags", channelH.HandleCreateGalleryTag)
+				r.With(s.requireChannelFeature("gallery_media")).Patch("/{channelID}/gallery-tags/{tagID}", channelH.HandleUpdateGalleryTag)
+				r.With(s.requireChannelFeature("gallery_media")).Delete("/{channelID}/gallery-tags/{tagID}", channelH.HandleDeleteGalleryTag)
 
 				// Gallery post routes.
-				r.Get("/{channelID}/gallery-posts", channelH.HandleGetGalleryPosts)
-				r.Post("/{channelID}/gallery-posts", channelH.HandleCreateGalleryPost)
-				r.Post("/{channelID}/gallery-posts/{postID}/pin", channelH.HandlePinGalleryPost)
-				r.Post("/{channelID}/gallery-posts/{postID}/close", channelH.HandleCloseGalleryPost)
+				r.With(s.requireChannelFeature("gallery_media")).Get("/{channelID}/gallery-posts", channelH.HandleGetGalleryPosts)
+				r.With(s.requireChannelFeature("gallery_media")).Post("/{channelID}/gallery-posts", channelH.HandleCreateGalleryPost)
+				r.With(s.requireChannelFeature("gallery_media")).Post("/{channelID}/gallery-posts/{postID}/pin", channelH.HandlePinGalleryPost)
+				r.With(s.requireChannelFeature("gallery_media")).Post("/{channelID}/gallery-posts/{postID}/close", channelH.HandleCloseGalleryPost)
 
 				// Channel template routes.
 				r.Route("/{channelID}/templates", func(r chi.Router) {
@@ -651,37 +790,37 @@ func (s *Server) registerRoutes() {
 				})
 
 				// Channel emoji routes.
-				r.Get("/{channelID}/emoji", channelEmojiH.HandleGetChannelEmoji)
-				r.Post("/{channelID}/emoji", channelEmojiH.HandleCreateChannelEmoji)
-				r.Delete("/{channelID}/emoji/{emojiID}", channelEmojiH.HandleDeleteChannelEmoji)
+				r.With(s.requireChannelFeature("custom_emoji")).Get("/{channelID}/emoji", channelEmojiH.HandleGetChannelEmoji)
+				r.With(s.requireChannelFeature("custom_emoji")).Post("/{channelID}/emoji", channelEmojiH.HandleCreateChannelEmoji)
+				r.With(s.requireChannelFeature("custom_emoji")).Delete("/{channelID}/emoji/{emojiID}", channelEmojiH.HandleDeleteChannelEmoji)
 
 				// Announcement channel follower routes.
-				r.Post("/{channelID}/followers", channelH.HandleFollowChannel)
-				r.Get("/{channelID}/followers", channelH.HandleGetChannelFollowers)
-				r.Delete("/{channelID}/followers/{followerID}", channelH.HandleUnfollowChannel)
-				r.Post("/{channelID}/messages/{messageID}/publish", channelH.HandlePublishMessage)
+				r.With(s.requireChannelFeature("announcement_channels")).Post("/{channelID}/followers", channelH.HandleFollowChannel)
+				r.With(s.requireChannelFeature("announcement_channels")).Get("/{channelID}/followers", channelH.HandleGetChannelFollowers)
+				r.With(s.requireChannelFeature("announcement_channels")).Delete("/{channelID}/followers/{followerID}", channelH.HandleUnfollowChannel)
+				r.With(s.requireChannelFeature("announcement_channels")).Post("/{channelID}/messages/{messageID}/publish", channelH.HandlePublishMessage)
 
 				// Scheduled message routes.
-				r.Post("/{channelID}/scheduled-messages", channelH.HandleScheduleMessage)
-				r.Get("/{channelID}/scheduled-messages", channelH.HandleGetScheduledMessages)
-				r.Delete("/{channelID}/scheduled-messages/{messageID}", channelH.HandleDeleteScheduledMessage)
+				r.With(s.requireChannelFeature("scheduled_messages")).Post("/{channelID}/scheduled-messages", channelH.HandleScheduleMessage)
+				r.With(s.requireChannelFeature("scheduled_messages")).Get("/{channelID}/scheduled-messages", channelH.HandleGetScheduledMessages)
+				r.With(s.requireChannelFeature("scheduled_messages")).Delete("/{channelID}/scheduled-messages/{messageID}", channelH.HandleDeleteScheduledMessage)
 
 				// Group DM recipient routes.
 				r.Put("/{channelID}/recipients/{userID}", channelH.HandleAddGroupDMRecipient)
 				r.Delete("/{channelID}/recipients/{userID}", channelH.HandleRemoveGroupDMRecipient)
 
 				// Poll routes.
-				r.Post("/{channelID}/polls", pollH.HandleCreatePoll)
-				r.Get("/{channelID}/polls/{pollID}", pollH.HandleGetPoll)
-				r.Post("/{channelID}/polls/{pollID}/votes", pollH.HandleVotePoll)
-				r.Post("/{channelID}/polls/{pollID}/close", pollH.HandleClosePoll)
-				r.Delete("/{channelID}/polls/{pollID}", pollH.HandleDeletePoll)
+				r.With(s.requireChannelFeature("polls")).Post("/{channelID}/polls", pollH.HandleCreatePoll)
+				r.With(s.requireChannelFeature("polls")).Get("/{channelID}/polls/{pollID}", pollH.HandleGetPoll)
+				r.With(s.requireChannelFeature("polls")).Post("/{channelID}/polls/{pollID}/votes", pollH.HandleVotePoll)
+				r.With(s.requireChannelFeature("polls")).Post("/{channelID}/polls/{pollID}/close", pollH.HandleClosePoll)
+				r.With(s.requireChannelFeature("polls")).Delete("/{channelID}/polls/{pollID}", pollH.HandleDeletePoll)
 			})
 
 			// Message bookmark routes (top-level, not channel-scoped).
 			r.Route("/messages", func(r chi.Router) {
-				r.Put("/{messageID}/bookmark", bookmarkH.HandleCreateBookmark)
-				r.Delete("/{messageID}/bookmark", bookmarkH.HandleDeleteBookmark)
+				r.With(s.requireMessageFeature("message_bookmarks")).Put("/{messageID}/bookmark", bookmarkH.HandleCreateBookmark)
+				r.With(s.requireMessageFeature("message_bookmarks")).Delete("/{messageID}/bookmark", bookmarkH.HandleDeleteBookmark)
 			})
 
 			// Voice routes.
@@ -698,32 +837,33 @@ func (s *Server) registerRoutes() {
 				r.Patch("/preferences", s.handleUpdateVoicePreferences)
 				r.Post("/{channelID}/input-mode", s.handleSetInputMode)
 				r.Post("/{channelID}/priority-speaker", s.handleSetPrioritySpeaker)
+				r.Post("/{channelID}/members/{userID}/priority", s.handleSetPrioritySpeaker)
 
 				// Soundboard.
-				r.Get("/{channelID}/soundboard", s.handleGetSoundboardSounds)
-				r.Post("/{channelID}/soundboard", s.handleCreateSoundboardSound)
-				r.Delete("/{channelID}/soundboard/{soundID}", s.handleDeleteSoundboardSound)
-				r.Post("/{channelID}/soundboard/{soundID}/play", s.handlePlaySoundboardSound)
-				r.Get("/{channelID}/soundboard/config", s.handleGetSoundboardConfig)
-				r.Patch("/{channelID}/soundboard/config", s.handleUpdateSoundboardConfig)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Get("/{channelID}/soundboard", s.handleGetSoundboardSounds)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Post("/{channelID}/soundboard", s.handleCreateSoundboardSound)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Delete("/{channelID}/soundboard/{soundID}", s.handleDeleteSoundboardSound)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Post("/{channelID}/soundboard/{soundID}/play", s.handlePlaySoundboardSound)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Get("/{channelID}/soundboard/config", s.handleGetSoundboardConfig)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Patch("/{channelID}/soundboard/config", s.handleUpdateSoundboardConfig)
 
 				// Voice broadcast.
-				r.Post("/{channelID}/broadcast", s.handleStartBroadcast)
-				r.Delete("/{channelID}/broadcast", s.handleStopBroadcast)
-				r.Get("/{channelID}/broadcast", s.handleGetBroadcast)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Post("/{channelID}/broadcast", s.handleStartBroadcast)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Delete("/{channelID}/broadcast", s.handleStopBroadcast)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Get("/{channelID}/broadcast", s.handleGetBroadcast)
 
 				// Screen sharing.
-				r.Post("/{channelID}/screen-share", s.handleStartScreenShare)
-				r.Delete("/{channelID}/screen-share", s.handleStopScreenShare)
-				r.Patch("/{channelID}/screen-share", s.handleUpdateScreenShare)
-				r.Get("/{channelID}/screen-shares", s.handleGetScreenShares)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Post("/{channelID}/screen-share", s.handleStartScreenShare)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Delete("/{channelID}/screen-share", s.handleStopScreenShare)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Patch("/{channelID}/screen-share", s.handleUpdateScreenShare)
+				r.With(s.requireChannelFeature("voice_broadcasts")).Get("/{channelID}/screen-shares", s.handleGetScreenShares)
 			})
 
 			// Issue reporting (any authenticated user).
-			r.Post("/issues", modH.HandleCreateIssue)
+			r.With(s.requireInstanceFeature("moderation_reports")).Post("/issues", modH.HandleCreateIssue)
 
 			// Moderation panel routes (permission checks inside handlers).
-			r.Route("/moderation", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("moderation_reports")).Route("/moderation", func(r chi.Router) {
 				r.Get("/stats", modH.HandleGetModerationStats)
 				r.Get("/user-reports", modH.HandleGetUserReports)
 				r.Patch("/user-reports/{reportID}", modH.HandleResolveUserReport)
@@ -737,7 +877,7 @@ func (s *Server) registerRoutes() {
 			r.Get("/ban-lists/public", modH.HandleGetPublicBanLists)
 
 			// Webhook templates, preview, and outgoing events.
-			r.Route("/webhooks", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("webhooks")).Route("/webhooks", func(r chi.Router) {
 				r.Get("/templates", webhookH.HandleGetWebhookTemplates)
 				r.Post("/preview", webhookH.HandlePreviewWebhookMessage)
 				r.Get("/outgoing-events", webhookH.HandleGetOutgoingEvents)
@@ -745,8 +885,10 @@ func (s *Server) registerRoutes() {
 
 			// User sticker packs.
 			r.Route("/stickers", func(r chi.Router) {
+				r.Use(s.requireInstanceFeature("sticker_packs"))
 				r.Get("/my-packs", stickerH.HandleGetUserPacks)
 				r.Post("/my-packs", stickerH.HandleCreateUserPack)
+				r.Get("/my-packs/{packID}/stickers", stickerH.HandleGetUserPackStickers)
 				r.Post("/packs/{packID}/share", stickerH.HandleEnableSharing)
 				r.Delete("/packs/{packID}/share", stickerH.HandleDisableSharing)
 				r.Get("/shared/{shareCode}", stickerH.HandleGetSharedPack)
@@ -754,7 +896,7 @@ func (s *Server) registerRoutes() {
 			})
 
 			// Theme gallery routes.
-			r.Route("/themes", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("theme_editor")).Route("/themes", func(r chi.Router) {
 				r.Get("/", themeH.HandleListSharedThemes)
 				r.Post("/", themeH.HandleShareTheme)
 				r.Get("/{shareCode}", themeH.HandleGetSharedTheme)
@@ -765,16 +907,18 @@ func (s *Server) registerRoutes() {
 
 			// Widget and plugin routes.
 			r.Route("/widgets", func(r chi.Router) {
-				r.Get("/guilds/{guildID}", widgetH.HandleGetGuildWidget)
-				r.Patch("/guilds/{guildID}", widgetH.HandleUpdateGuildWidget)
+				r.With(s.requireGuildFeature("widgets")).Get("/guilds/{guildID}", widgetH.HandleGetGuildWidget)
+				r.With(s.requireGuildFeature("widgets")).Patch("/guilds/{guildID}", widgetH.HandleUpdateGuildWidget)
 			})
 			r.Route("/channels/{channelID}/widgets", func(r chi.Router) {
+				r.Use(s.requireChannelFeature("widgets"))
 				r.Get("/", widgetH.HandleGetChannelWidgets)
 				r.Post("/", widgetH.HandleCreateChannelWidget)
 				r.Patch("/{widgetID}", widgetH.HandleUpdateChannelWidget)
 				r.Delete("/{widgetID}", widgetH.HandleDeleteChannelWidget)
 			})
 			r.Route("/plugins", func(r chi.Router) {
+				r.Use(s.requireInstanceFeature("widgets"))
 				r.Get("/", widgetH.HandleListPlugins)
 				r.Get("/{pluginID}", widgetH.HandleGetPlugin)
 				r.Post("/{pluginID}/install", widgetH.HandleInstallPlugin)
@@ -782,7 +926,7 @@ func (s *Server) registerRoutes() {
 				r.Patch("/guilds/{guildID}/{pluginID}", widgetH.HandleUpdateGuildPlugin)
 				r.Delete("/guilds/{guildID}/{pluginID}", widgetH.HandleUninstallPlugin)
 			})
-			r.Route("/encryption/key-backup", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("e2ee")).Route("/encryption/key-backup", func(r chi.Router) {
 				r.Post("/", widgetH.HandleCreateKeyBackup)
 				r.Get("/", widgetH.HandleGetKeyBackup)
 				r.Get("/download", widgetH.HandleDownloadKeyBackup)
@@ -793,67 +937,68 @@ func (s *Server) registerRoutes() {
 			// Experimental features.
 			r.Route("/channels/{channelID}/experimental", func(r chi.Router) {
 				// Location sharing.
-				r.Post("/location", experimentalH.HandleShareLocation)
-				r.Patch("/location/{shareID}", experimentalH.HandleUpdateLiveLocation)
-				r.Delete("/location/{shareID}", experimentalH.HandleStopLiveLocation)
-				r.Get("/locations", experimentalH.HandleGetLocationShares)
+				r.With(s.requireChannelFeature("location_sharing")).Post("/location", experimentalH.HandleShareLocation)
+				r.With(s.requireChannelFeature("location_sharing")).Patch("/location/{shareID}", experimentalH.HandleUpdateLiveLocation)
+				r.With(s.requireChannelFeature("location_sharing")).Delete("/location/{shareID}", experimentalH.HandleStopLiveLocation)
+				r.With(s.requireChannelFeature("location_sharing")).Get("/locations", experimentalH.HandleGetLocationShares)
 				// Message effects & super reactions.
-				r.Post("/messages/{messageID}/effects", experimentalH.HandleCreateMessageEffect)
-				r.Post("/messages/{messageID}/super-reactions", experimentalH.HandleAddSuperReaction)
-				r.Get("/messages/{messageID}/super-reactions", experimentalH.HandleGetSuperReactions)
+				r.With(s.requireChannelFeature("message_effects")).Post("/messages/{messageID}/effects", experimentalH.HandleCreateMessageEffect)
+				r.With(s.requireChannelFeature("super_reactions")).Post("/messages/{messageID}/super-reactions", experimentalH.HandleAddSuperReaction)
+				r.With(s.requireChannelFeature("super_reactions")).Get("/messages/{messageID}/super-reactions", experimentalH.HandleGetSuperReactions)
 				// Message summaries.
-				r.Post("/summarize", experimentalH.HandleSummarizeMessages)
-				r.Get("/summaries", experimentalH.HandleGetSummaries)
+				r.With(s.requireChannelFeature("message_summaries")).Post("/summarize", experimentalH.HandleSummarizeMessages)
+				r.With(s.requireChannelFeature("message_summaries")).Get("/summaries", experimentalH.HandleGetSummaries)
 				// Voice transcription.
-				r.Get("/transcription/settings", experimentalH.HandleGetTranscriptionSettings)
-				r.Patch("/transcription/settings", experimentalH.HandleUpdateTranscriptionSettings)
-				r.Get("/transcriptions", experimentalH.HandleGetTranscriptions)
+				r.With(s.requireChannelFeature("voice_transcription")).Get("/transcription/settings", experimentalH.HandleGetTranscriptionSettings)
+				r.With(s.requireChannelFeature("voice_transcription")).Patch("/transcription/settings", experimentalH.HandleUpdateTranscriptionSettings)
+				r.With(s.requireChannelFeature("voice_transcription")).Get("/transcriptions", experimentalH.HandleGetTranscriptions)
 				// Whiteboards.
-				r.Post("/whiteboards", experimentalH.HandleCreateWhiteboard)
-				r.Get("/whiteboards", experimentalH.HandleGetWhiteboards)
-				r.Patch("/whiteboards/{whiteboardID}", experimentalH.HandleUpdateWhiteboard)
-				r.Get("/whiteboards/{whiteboardID}", experimentalH.HandleGetWhiteboardState)
+				r.With(s.requireChannelFeature("whiteboards")).Post("/whiteboards", experimentalH.HandleCreateWhiteboard)
+				r.With(s.requireChannelFeature("whiteboards")).Get("/whiteboards", experimentalH.HandleGetWhiteboards)
+				r.With(s.requireChannelFeature("whiteboards")).Patch("/whiteboards/{whiteboardID}", experimentalH.HandleUpdateWhiteboard)
+				r.With(s.requireChannelFeature("whiteboards")).Get("/whiteboards/{whiteboardID}", experimentalH.HandleGetWhiteboardState)
 				// Code snippets.
-				r.Post("/code-snippets", experimentalH.HandleCreateCodeSnippet)
-				r.Get("/code-snippets/{snippetID}", experimentalH.HandleGetCodeSnippet)
-				r.Post("/code-snippets/{snippetID}/run", experimentalH.HandleRunCodeSnippet)
+				r.With(s.requireChannelFeature("code_snippets")).Post("/code-snippets", experimentalH.HandleCreateCodeSnippet)
+				r.With(s.requireChannelFeature("code_snippets")).Get("/code-snippets/{snippetID}", experimentalH.HandleGetCodeSnippet)
+				r.With(s.requireChannelFeature("code_snippets")).Post("/code-snippets/{snippetID}/run", experimentalH.HandleRunCodeSnippet)
 				// Video recordings.
-				r.Post("/recordings", experimentalH.HandleCreateVideoRecording)
-				r.Get("/recordings", experimentalH.HandleGetRecordings)
+				r.With(s.requireChannelFeature("video_recordings")).Post("/recordings", experimentalH.HandleCreateVideoRecording)
+				r.With(s.requireChannelFeature("video_recordings")).Get("/recordings", experimentalH.HandleGetRecordings)
 				// Kanban boards.
-				r.Post("/kanban", experimentalH.HandleCreateKanbanBoard)
-				r.Get("/kanban/{boardID}", experimentalH.HandleGetKanbanBoard)
-				r.Post("/kanban/{boardID}/columns", experimentalH.HandleCreateKanbanColumn)
-				r.Post("/kanban/{boardID}/columns/{columnID}/cards", experimentalH.HandleCreateKanbanCard)
-				r.Patch("/kanban/{boardID}/cards/{cardID}/move", experimentalH.HandleMoveKanbanCard)
-				r.Delete("/kanban/{boardID}/cards/{cardID}", experimentalH.HandleDeleteKanbanCard)
+				r.With(s.requireChannelFeature("kanban_boards")).Post("/kanban", experimentalH.HandleCreateKanbanBoard)
+				r.With(s.requireChannelFeature("kanban_boards")).Get("/kanban", experimentalH.HandleGetKanbanBoards)
+				r.With(s.requireChannelFeature("kanban_boards")).Get("/kanban/{boardID}", experimentalH.HandleGetKanbanBoard)
+				r.With(s.requireChannelFeature("kanban_boards")).Post("/kanban/{boardID}/columns", experimentalH.HandleCreateKanbanColumn)
+				r.With(s.requireChannelFeature("kanban_boards")).Post("/kanban/{boardID}/columns/{columnID}/cards", experimentalH.HandleCreateKanbanCard)
+				r.With(s.requireChannelFeature("kanban_boards")).Patch("/kanban/{boardID}/cards/{cardID}/move", experimentalH.HandleMoveKanbanCard)
+				r.With(s.requireChannelFeature("kanban_boards")).Delete("/kanban/{boardID}/cards/{cardID}", experimentalH.HandleDeleteKanbanCard)
 			})
 
 			// Activities and games.
-			r.Route("/activities", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("activities")).Route("/activities", func(r chi.Router) {
 				r.Get("/", activityH.HandleListActivities)
 				r.Get("/{activityID}", activityH.HandleGetActivity)
 				r.Post("/", activityH.HandleCreateActivity)
 				r.Post("/{activityID}/rate", activityH.HandleRateActivity)
-				r.Post("/{activityID}/sessions", activityH.HandleStartActivitySession)
-				r.Get("/{activityID}/sessions/active", activityH.HandleGetActiveSession)
+				r.Post("/{channelID}/sessions", activityH.HandleStartActivitySession)
+				r.Get("/{channelID}/sessions/active", activityH.HandleGetActiveSession)
 				r.Post("/sessions/{sessionID}/join", activityH.HandleJoinActivitySession)
 				r.Post("/sessions/{sessionID}/leave", activityH.HandleLeaveActivitySession)
 				r.Post("/sessions/{sessionID}/end", activityH.HandleEndActivitySession)
 				r.Patch("/sessions/{sessionID}/state", activityH.HandleUpdateActivityState)
 			})
-			r.Route("/games", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("activities")).Route("/games", func(r chi.Router) {
 				r.Post("/", activityH.HandleCreateGame)
 				r.Post("/{gameSessionID}/join", activityH.HandleJoinGame)
 				r.Post("/{gameSessionID}/move", activityH.HandleGameMove)
 				r.Get("/{gameSessionID}", activityH.HandleGetGame)
 				r.Get("/leaderboard/{activityID}", activityH.HandleGetLeaderboard)
 			})
-			r.Route("/watch-together", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("activities")).Route("/watch-together", func(r chi.Router) {
 				r.Post("/", activityH.HandleStartWatchTogether)
 				r.Post("/{sessionID}/sync", activityH.HandleSyncWatchTogether)
 			})
-			r.Route("/music-party", func(r chi.Router) {
+			r.With(s.requireInstanceFeature("activities")).Route("/music-party", func(r chi.Router) {
 				r.Post("/", activityH.HandleStartMusicParty)
 				r.Post("/{sessionID}/queue", activityH.HandleAddToMusicQueue)
 			})
@@ -898,7 +1043,7 @@ func (s *Server) registerRoutes() {
 			})
 
 			// Integration routes.
-			r.Route("/guilds/{guildID}/integrations", func(r chi.Router) {
+			r.With(s.requireGuildFeature("federated_messaging")).Route("/guilds/{guildID}/integrations", func(r chi.Router) {
 				r.Get("/", integrationH.HandleListIntegrations)
 				r.Post("/", integrationH.HandleCreateIntegration)
 				r.Get("/log", integrationH.HandleGetIntegrationLog)
@@ -909,7 +1054,7 @@ func (s *Server) registerRoutes() {
 				r.Post("/{integrationID}/activitypub/follows", integrationH.HandleAddActivityPubFollow)
 				r.Delete("/{integrationID}/activitypub/follows/{followID}", integrationH.HandleRemoveActivityPubFollow)
 			})
-			r.Route("/guilds/{guildID}/bridge-connections", func(r chi.Router) {
+			r.With(s.requireGuildFeature("federated_messaging")).Route("/guilds/{guildID}/bridge-connections", func(r chi.Router) {
 				r.Get("/", integrationH.HandleListBridgeConnections)
 				r.Post("/", integrationH.HandleCreateBridgeConnection)
 				r.Patch("/{connectionID}", integrationH.HandleUpdateBridgeConnection)
@@ -938,7 +1083,7 @@ func (s *Server) registerRoutes() {
 
 			// MLS encryption delivery service routes.
 			if s.Encryption != nil {
-				r.Route("/encryption", func(r chi.Router) {
+				r.With(s.requireInstanceFeature("e2ee")).Route("/encryption", func(r chi.Router) {
 					// Key package management.
 					r.Post("/key-packages", s.Encryption.HandleUploadKeyPackage)
 					r.Get("/key-packages/{userID}", s.Encryption.HandleGetKeyPackages)
@@ -983,26 +1128,26 @@ func (s *Server) registerRoutes() {
 					r.Patch("/preferences/channels", s.Notifications.HandleUpdateChannelPreference)
 					r.Delete("/preferences/channels/{channelID}", s.Notifications.HandleDeleteChannelPreference)
 
-					// Push subscription routes (require VAPID keys).
-					if s.Notifications.Enabled() {
-						r.Get("/vapid-key", s.Notifications.HandleGetVAPIDKey)
-						r.Post("/subscriptions", s.Notifications.HandleSubscribe)
-						r.Get("/subscriptions", s.Notifications.HandleListSubscriptions)
-						r.Delete("/subscriptions/{subscriptionID}", s.Notifications.HandleUnsubscribe)
-					}
+					// Push subscription routes. The VAPID probe is always registered so
+					// clients can detect disabled push without falling through to
+					// /notifications/{id} and receiving a misleading 405.
+					r.With(s.requireInstanceFeature("pwa_push")).Get("/vapid-key", s.Notifications.HandleGetVAPIDKey)
+					r.With(s.requireInstanceFeature("pwa_push")).Post("/subscriptions", s.Notifications.HandleSubscribe)
+					r.With(s.requireInstanceFeature("pwa_push")).Get("/subscriptions", s.Notifications.HandleListSubscriptions)
+					r.With(s.requireInstanceFeature("pwa_push")).Delete("/subscriptions/{subscriptionID}", s.Notifications.HandleUnsubscribe)
 				})
 			}
 
 			// Search routes (with search-specific rate limit).
 			r.With(s.RateLimitSearch).Route("/search", func(r chi.Router) {
-				r.Get("/messages", s.handleSearchMessages)
+				r.With(s.requireInstanceFeature("full_text_search")).Get("/messages", s.handleSearchMessages)
 				r.Get("/users", s.handleSearchUsers)
 				r.Get("/guilds", s.handleSearchGuilds)
 			})
 
 			// Giphy proxy routes (only if enabled).
 			if s.Config.Giphy.Enabled && s.Config.Giphy.APIKey != "" {
-				r.Route("/giphy", func(r chi.Router) {
+				r.With(s.requireInstanceFeature("gif_search")).Route("/giphy", func(r chi.Router) {
 					r.Get("/search", s.handleGiphySearch)
 					r.Get("/trending", s.handleGiphyTrending)
 					r.Get("/categories", s.handleGiphyCategories)
@@ -1023,9 +1168,9 @@ func (s *Server) registerRoutes() {
 					r.Use(RequireAdmin(s.DB.Pool))
 					r.Get("/instance", adminH.HandleGetInstance)
 					r.Patch("/instance", adminH.HandleUpdateInstance)
-					r.Get("/federation/peers", adminH.HandleGetFederationPeers)
-					r.Post("/federation/peers", adminH.HandleAddFederationPeer)
-					r.Delete("/federation/peers/{peerID}", adminH.HandleRemoveFederationPeer)
+					r.With(s.requireInstanceFeature("federated_messaging")).Get("/federation/peers", adminH.HandleGetFederationPeers)
+					r.With(s.requireInstanceFeature("federated_messaging")).Post("/federation/peers", adminH.HandleAddFederationPeer)
+					r.With(s.requireInstanceFeature("federated_messaging")).Delete("/federation/peers/{peerID}", adminH.HandleRemoveFederationPeer)
 					r.Get("/stats", adminH.HandleGetStats)
 					r.Get("/users", adminH.HandleListUsers)
 					r.Post("/users/{userID}/suspend", adminH.HandleSuspendUser)
@@ -1041,6 +1186,10 @@ func (s *Server) registerRoutes() {
 					r.Get("/users/{userID}/guilds", adminH.HandleGetUserGuilds)
 					r.Get("/registration", adminH.HandleGetRegistrationConfig)
 					r.Patch("/registration", adminH.HandleUpdateRegistrationConfig)
+					r.Get("/features", adminH.HandleGetFeatureFlags)
+					r.Patch("/features/{featureKey}", adminH.HandleUpdateFeatureFlag)
+					r.Get("/transcription", adminH.HandleGetTranscriptionConfig)
+					r.Patch("/transcription", adminH.HandleUpdateTranscriptionConfig)
 					r.Post("/registration/tokens", adminH.HandleCreateRegistrationToken)
 					r.Get("/registration/tokens", adminH.HandleListRegistrationTokens)
 					r.Delete("/registration/tokens/{tokenID}", adminH.HandleDeleteRegistrationToken)
@@ -1048,7 +1197,7 @@ func (s *Server) registerRoutes() {
 					r.Get("/announcements", adminH.HandleListAllAnnouncements)
 					r.Patch("/announcements/{announcementID}", adminH.HandleUpdateAnnouncement)
 					r.Delete("/announcements/{announcementID}", adminH.HandleDeleteAnnouncement)
-					r.Get("/reports", modH.HandleGetAdminReports)
+					r.With(s.requireInstanceFeature("moderation_reports")).Get("/reports", modH.HandleGetAdminReports)
 					r.Get("/bots", botH.HandleAdminListAllBots)
 					r.Get("/rate-limits/stats", adminH.HandleGetRateLimitStats)
 					r.Get("/rate-limits/log", adminH.HandleGetRateLimitLog)
@@ -1064,27 +1213,27 @@ func (s *Server) registerRoutes() {
 					r.Patch("/captcha", adminH.HandleUpdateCaptchaConfig)
 
 					// Federation dashboard and management.
-					r.Get("/federation/dashboard", adminH.HandleGetFederationDashboard)
-					r.Put("/federation/peers/{peerID}/control", adminH.HandleUpdatePeerControl)
-					r.Post("/federation/peers/{peerID}/approve", adminH.HandleApproveFederationPeer)
-					r.Post("/federation/peers/{peerID}/reject", adminH.HandleRejectFederationPeer)
-					r.Get("/federation/peers/controls", adminH.HandleGetPeerControls)
-					r.Get("/federation/key-audit", adminH.HandleGetKeyAudit)
-					r.Post("/federation/key-audit/{auditID}/acknowledge", adminH.HandleAcknowledgeKeyChange)
-					r.Get("/federation/delivery-receipts", adminH.HandleGetDeliveryReceipts)
-					r.Post("/federation/delivery-receipts/{receiptID}/retry", adminH.HandleRetryDelivery)
-					r.Get("/federation/search-config", adminH.HandleGetFederatedSearchConfig)
-					r.Patch("/federation/search-config", adminH.HandleUpdateFederatedSearchConfig)
-					r.Get("/federation/protocol", adminH.HandleGetProtocolInfo)
-					r.Patch("/federation/protocol", adminH.HandleUpdateProtocolConfig)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/dashboard", adminH.HandleGetFederationDashboard)
+					r.With(s.requireInstanceFeature("federated_messaging")).Put("/federation/peers/{peerID}/control", adminH.HandleUpdatePeerControl)
+					r.With(s.requireInstanceFeature("federated_messaging")).Post("/federation/peers/{peerID}/approve", adminH.HandleApproveFederationPeer)
+					r.With(s.requireInstanceFeature("federated_messaging")).Post("/federation/peers/{peerID}/reject", adminH.HandleRejectFederationPeer)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/peers/controls", adminH.HandleGetPeerControls)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/key-audit", adminH.HandleGetKeyAudit)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Post("/federation/key-audit/{auditID}/acknowledge", adminH.HandleAcknowledgeKeyChange)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/delivery-receipts", adminH.HandleGetDeliveryReceipts)
+					r.With(s.requireInstanceFeature("federated_messaging")).Post("/federation/delivery-receipts/{receiptID}/retry", adminH.HandleRetryDelivery)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/search-config", adminH.HandleGetFederatedSearchConfig)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Patch("/federation/search-config", adminH.HandleUpdateFederatedSearchConfig)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/protocol", adminH.HandleGetProtocolInfo)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Patch("/federation/protocol", adminH.HandleUpdateProtocolConfig)
 
 					// Instance blocklist/allowlist.
-					r.Get("/federation/blocklist", adminH.HandleGetInstanceBlocklist)
-					r.Get("/federation/allowlist", adminH.HandleGetInstanceAllowlist)
-					r.Get("/federation/profiles", adminH.HandleGetInstanceProfiles)
-					r.Post("/federation/profiles", adminH.HandleAddInstanceProfile)
-					r.Delete("/federation/profiles/{profileID}", adminH.HandleRemoveInstanceProfile)
-					r.Get("/federation/users/{instanceID}/{userID}", adminH.HandleGetFederatedUserProfile)
+					r.With(s.requireInstanceFeature("federated_messaging")).Get("/federation/blocklist", adminH.HandleGetInstanceBlocklist)
+					r.With(s.requireInstanceFeature("federated_messaging")).Get("/federation/allowlist", adminH.HandleGetInstanceAllowlist)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/profiles", adminH.HandleGetInstanceProfiles)
+					r.With(s.requireInstanceFeature("federated_messaging")).Post("/federation/profiles", adminH.HandleAddInstanceProfile)
+					r.With(s.requireInstanceFeature("federated_messaging")).Delete("/federation/profiles/{profileID}", adminH.HandleRemoveInstanceProfile)
+					r.With(s.requireInstanceFeature("federation_admin_diagnostics")).Get("/federation/users/{instanceID}/{userID}", adminH.HandleGetFederatedUserProfile)
 
 					// Self-hosting management.
 					r.Get("/updates", adminH.HandleCheckUpdates)
@@ -1108,7 +1257,7 @@ func (s *Server) registerRoutes() {
 						r.Post("/{domainID}/verify", adminH.HandleVerifyCustomDomain)
 						r.Delete("/{domainID}", adminH.HandleDeleteCustomDomain)
 					})
-					r.Route("/backups", func(r chi.Router) {
+					r.With(s.requireInstanceFeature("admin_backups")).Route("/backups", func(r chi.Router) {
 						r.Get("/", adminH.HandleGetBackupSchedules)
 						r.Post("/", adminH.HandleCreateBackupSchedule)
 						r.Patch("/{scheduleID}", adminH.HandleUpdateBackupSchedule)
@@ -1118,7 +1267,7 @@ func (s *Server) registerRoutes() {
 					})
 
 					// Bridge management.
-					r.Route("/bridges", func(r chi.Router) {
+					r.With(s.requireInstanceFeature("federated_messaging")).Route("/bridges", func(r chi.Router) {
 						r.Get("/", adminH.HandleGetBridges)
 						r.Post("/", adminH.HandleCreateBridge)
 						r.Patch("/{bridgeID}", adminH.HandleUpdateBridge)
@@ -1147,9 +1296,9 @@ func (s *Server) registerRoutes() {
 			}
 
 			// Federation media proxy — streams remote instance media to avoid CORS issues.
-			r.Get("/federation/media/{instanceId}/{fileId}", s.handleFederationMediaProxy)
+			r.With(s.requireInstanceFeature("federated_attachments")).Get("/federation/media/{instanceId}/{fileId}", s.handleFederationMediaProxy)
 
-			r.With(s.RateLimitWebhooks).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
+			r.With(s.RateLimitWebhooks, s.requireInstanceFeature("webhooks")).Post("/webhooks/{webhookID}/{token}", webhookH.HandleExecute)
 		})
 	})
 
@@ -1160,23 +1309,36 @@ func (s *Server) registerRoutes() {
 }
 
 type clientConfigResponse struct {
-	FileUploadsEnabled bool            `json:"file_uploads_enabled"`
-	MaxUploadBytes     int64           `json:"max_upload_bytes"`
-	LocalInstanceID    string          `json:"local_instance_id"`
-	Experimental       map[string]bool `json:"experimental_features"`
+	FileUploadsEnabled bool                      `json:"file_uploads_enabled"`
+	MaxUploadBytes     int64                     `json:"max_upload_bytes"`
+	LocalInstanceID    string                    `json:"local_instance_id"`
+	Version            string                    `json:"version"`
+	BuildVersion       string                    `json:"build_version"`
+	FeatureFlags       map[string]features.State `json:"feature_flags"`
+	Experimental       map[string]bool           `json:"experimental_features"`
 }
 
 func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
+	guildID := r.URL.Query().Get("guild_id")
+	states, err := features.Resolve(r.Context(), s.DB.Pool, guildID)
+	if err != nil {
+		apiutil.InternalError(w, s.Logger, "Failed to load feature flags", err)
+		return
+	}
+	enabled := features.EnabledMap(states)
 	resp := clientConfigResponse{
 		FileUploadsEnabled: s.Media != nil,
 		LocalInstanceID:    s.InstanceID,
+		Version:            s.Version,
+		BuildVersion:       s.BuildVersion,
+		FeatureFlags:       states,
 		Experimental: map[string]bool{
-			"translation":    false,
-			"whiteboard":     false,
-			"kanban":         false,
-			"location_share": false,
-			"code_snippets":  false,
-			"transcription":  false,
+			"translation":    enabled["translation"],
+			"whiteboard":     enabled["whiteboards"],
+			"kanban":         enabled["kanban_boards"],
+			"location_share": enabled["location_sharing"],
+			"code_snippets":  enabled["code_snippets"],
+			"transcription":  enabled["voice_transcription"],
 		},
 	}
 	if s.Media != nil {
@@ -1399,7 +1561,11 @@ func (s *Server) handleChangeEmail(w http.ResponseWriter, r *http.Request) {
 
 // handleHealthCheck responds with the health status of the server and its dependencies.
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	status := map[string]string{"status": "ok", "version": s.Version}
+	status := map[string]string{
+		"status":        "ok",
+		"version":       s.Version,
+		"build_version": s.BuildVersion,
+	}
 
 	if err := s.DB.HealthCheck(r.Context()); err != nil {
 		status["status"] = "degraded"

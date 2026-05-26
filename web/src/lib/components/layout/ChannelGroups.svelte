@@ -13,6 +13,7 @@
 	import { confirmAction } from '$lib/stores/confirm';
 	import { unlockedChannels } from '$lib/encryption/e2eeManager';
 	import { canManageChannels } from '$lib/stores/permissions';
+	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { getErrorMessage } from '$lib/utils/apiError';
 
 	interface ChannelGroup {
@@ -41,6 +42,7 @@
 	let newGroupName = $state('');
 	let newGroupColor = $state('#5c6bc0');
 	let creating = $state(false);
+	const hasChannelGroups = $derived(isFeatureEnabled($clientConfig, 'channel_groups'));
 
 	// Edit state
 	let editingGroupId = $state<string | null>(null);
@@ -61,9 +63,9 @@
 	});
 
 	onMount(async () => {
-		await loadGroups();
 		// Expose reload function to parent.
 		onReady?.({ reload: loadGroups });
+		await loadGroups();
 		// Restore collapsed state from localStorage.
 		try {
 			const stored = localStorage.getItem('amityvox_collapsed_channel_groups');
@@ -76,9 +78,33 @@
 		}
 	});
 
+	$effect(() => {
+		if (!hasChannelGroups) {
+			groups = [];
+			loading = false;
+			showCreateModal = false;
+		}
+	});
+
+	$effect(() => {
+		function handleChannelGroupsChanged(event: Event) {
+			if (!hasChannelGroups) return;
+			const detail = (event as CustomEvent<{ guild_id?: string }>).detail;
+			if (!detail?.guild_id || detail.guild_id === $currentGuildId) {
+				loadGroups();
+			}
+		}
+
+		window.addEventListener('amityvox:channel-groups-changed', handleChannelGroupsChanged);
+		return () => {
+			window.removeEventListener('amityvox:channel-groups-changed', handleChannelGroupsChanged);
+		};
+	});
+
 	async function loadGroups() {
 		const guildId = $currentGuildId;
-		if (!guildId) {
+		if (!guildId || !hasChannelGroups) {
+			groups = [];
 			loading = false;
 			return;
 		}
@@ -105,7 +131,7 @@
 
 	async function createGroup() {
 		const guildId = $currentGuildId;
-		if (!newGroupName.trim() || !guildId) return;
+		if (!newGroupName.trim() || !guildId || !hasChannelGroups) return;
 		creating = true;
 		try {
 			const group = await api.createChannelGroup(guildId, {
@@ -126,7 +152,7 @@
 
 	async function updateGroup(groupId: string) {
 		const guildId = $currentGuildId;
-		if (!editGroupName.trim() || !guildId) return;
+		if (!editGroupName.trim() || !guildId || !hasChannelGroups) return;
 		try {
 			const updated = await api.updateChannelGroup(guildId, groupId, {
 				name: editGroupName.trim(),
@@ -141,7 +167,7 @@
 
 	async function deleteGroup(groupId: string) {
 		const guildId = $currentGuildId;
-		if (!guildId || !(await confirmAction({ title: 'Delete Channel Group', message: 'Delete this channel group?', confirmLabel: 'Delete' }))) return;
+		if (!guildId || !hasChannelGroups || !(await confirmAction({ title: 'Delete Channel Group', message: 'Delete this channel group?', confirmLabel: 'Delete' }))) return;
 		try {
 			await api.deleteChannelGroup(guildId, groupId);
 			groups = groups.filter(g => g.id !== groupId);
@@ -153,7 +179,7 @@
 
 	async function removeChannel(groupId: string, channelId: string) {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId || !hasChannelGroups) return;
 		try {
 			await api.removeChannelFromGroup(guildId, groupId, channelId);
 			groups = groups.map(g => {
@@ -476,7 +502,7 @@
 
 	async function handleChannelReorderInGroup(sourceId: string, targetIndex: number, groupId: string) {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId || !hasChannelGroups) return;
 		const group = groups.find(g => g.id === groupId);
 		if (!group) return;
 
@@ -501,7 +527,7 @@
 
 	async function handleChannelMoveToGroup(channelId: string, fromGroupId: string, toGroupId: string, insertIndex: number) {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId || !hasChannelGroups) return;
 		const fromGroup = groups.find(g => g.id === fromGroupId);
 		const toGroup = groups.find(g => g.id === toGroupId);
 		if (!fromGroup || !toGroup) return;
@@ -563,7 +589,7 @@
 
 	async function handleGroupReorder(sourceId: string, targetIndex: number) {
 		const guildId = $currentGuildId;
-		if (!guildId) return;
+		if (!guildId || !hasChannelGroups) return;
 		const reordered = [...groups];
 		const sourceIdx = reordered.findIndex(g => g.id === sourceId);
 		if (sourceIdx === -1) return;
@@ -627,7 +653,7 @@
 	onkeydown={handleWindowKeyDown}
 />
 
-{#if !loading && groups.length > 0}
+{#if hasChannelGroups && !loading && groups.length > 0}
 	<div bind:this={groupListEl} class="relative">
 	{#each groups as group (group.id)}
 		{@const uniqueChannels = [...new Set(group.channels)]}
@@ -828,7 +854,7 @@
 {/if}
 
 <!-- Create group button (shown when there are existing groups or always at bottom) -->
-{#if !loading}
+{#if hasChannelGroups && !loading}
 	<button
 		class="mt-2 flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-text-muted transition-colors hover:bg-bg-modifier hover:text-text-secondary"
 		onclick={() => (showCreateModal = true)}
@@ -840,11 +866,13 @@
 	</button>
 {/if}
 
-<ChannelGroupCreateModal
-	open={showCreateModal}
-	bind:name={newGroupName}
-	bind:color={newGroupColor}
-	{creating}
-	onclose={() => (showCreateModal = false)}
-	oncreate={createGroup}
-/>
+{#if hasChannelGroups}
+	<ChannelGroupCreateModal
+		open={showCreateModal}
+		bind:name={newGroupName}
+		bind:color={newGroupColor}
+		{creating}
+		onclose={() => (showCreateModal = false)}
+		oncreate={createGroup}
+	/>
+{/if}

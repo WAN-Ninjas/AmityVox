@@ -149,7 +149,7 @@
 		if (result) {
 			availableOutgoingEvents = result;
 		} else {
-			// Fallback to hardcoded list if endpoint not available yet.
+			// Keep the form usable if the event metadata request fails.
 			availableOutgoingEvents = Object.keys(eventLabels);
 		}
 	}
@@ -168,25 +168,18 @@
 
 	async function handleCreateWebhook() {
 		if (!newWebhookName.trim() || !newWebhookChannel) return;
-		if (newWebhookType === 'outgoing' && !newOutgoingUrl.trim()) return;
+		if (newWebhookType === 'outgoing' && (!newOutgoingUrl.trim() || newOutgoingEvents.length === 0)) return;
 		const whType = newWebhookType;
 		const whName = newWebhookName.trim();
 		await createWebhookOp.run(async () => {
 			const webhook = await api.createWebhook(guildId, {
 				name: whName,
-				channel_id: newWebhookChannel
+				channel_id: newWebhookChannel,
+				webhook_type: whType,
+				outgoing_url: whType === 'outgoing' ? newOutgoingUrl.trim() : null,
+				outgoing_events: whType === 'outgoing' ? newOutgoingEvents : []
 			});
-			// If outgoing type, update it with outgoing fields.
-			if (whType === 'outgoing') {
-				const updated = await api.updateWebhook(guildId, webhook.id, {
-					name: whName
-				});
-				// Note: outgoing_url and outgoing_events will need server.go route
-				// updates to fully work through the existing PATCH endpoint.
-				webhooks = [...webhooks, updated];
-			} else {
-				webhooks = [...webhooks, webhook];
-			}
+			webhooks = [webhook, ...webhooks];
 		}, msg => onError(msg));
 		if (!createWebhookOp.error) {
 			newWebhookName = '';
@@ -225,7 +218,7 @@
 		editWebhookChannel = wh.channel_id;
 		editWebhookType = wh.webhook_type;
 		editOutgoingUrl = wh.outgoing_url || '';
-		editOutgoingEvents = [];
+		editOutgoingEvents = wh.outgoing_events ?? [];
 		loadOutgoingEvents();
 	}
 
@@ -235,11 +228,15 @@
 
 	async function handleSaveEdit() {
 		if (!editingWebhookId || !editWebhookName.trim()) return;
+		if (editWebhookType === 'outgoing' && (!editOutgoingUrl.trim() || editOutgoingEvents.length === 0)) return;
 		const whId = editingWebhookId;
 		const updated = await saveEditOp.run(
 			() => api.updateWebhook(guildId, whId, {
 				name: editWebhookName.trim(),
-				channel_id: editWebhookChannel
+				channel_id: editWebhookChannel,
+				webhook_type: editWebhookType,
+				outgoing_url: editWebhookType === 'outgoing' ? editOutgoingUrl.trim() : null,
+				outgoing_events: editWebhookType === 'outgoing' ? editOutgoingEvents : []
 			}),
 			msg => onError(msg)
 		);
@@ -305,6 +302,12 @@
 	$effect(() => {
 		if (subTab === 'templates') {
 			loadTemplates();
+		}
+	});
+
+	$effect(() => {
+		if (subTab === 'create' && newWebhookType === 'outgoing') {
+			loadOutgoingEvents();
 		}
 	});
 </script>
@@ -409,7 +412,7 @@
 			<button
 				class="btn-primary"
 				onclick={handleCreateWebhook}
-				disabled={createWebhookOp.loading || !newWebhookName.trim() || !newWebhookChannel || (newWebhookType === 'outgoing' && !newOutgoingUrl.trim())}
+				disabled={createWebhookOp.loading || !newWebhookName.trim() || !newWebhookChannel || (newWebhookType === 'outgoing' && (!newOutgoingUrl.trim() || newOutgoingEvents.length === 0))}
 			>
 				{createWebhookOp.loading ? 'Creating...' : 'Create Webhook'}
 			</button>
@@ -557,7 +560,11 @@
 								{/if}
 
 								<div class="flex gap-2">
-									<button class="btn-primary text-xs" onclick={handleSaveEdit} disabled={saveEditOp.loading || !editWebhookName.trim()}>
+									<button
+										class="btn-primary text-xs"
+										onclick={handleSaveEdit}
+										disabled={saveEditOp.loading || !editWebhookName.trim() || (editWebhookType === 'outgoing' && (!editOutgoingUrl.trim() || editOutgoingEvents.length === 0))}
+									>
 										{saveEditOp.loading ? 'Saving...' : 'Save'}
 									</button>
 									<button class="btn-secondary text-xs" onclick={cancelEditing}>Cancel</button>
@@ -579,6 +586,9 @@
 									{#if wh.webhook_type === 'outgoing' && wh.outgoing_url}
 										<p class="mt-0.5 text-xs text-text-muted">
 											URL: {wh.outgoing_url}
+										</p>
+										<p class="mt-0.5 text-xs text-text-muted">
+											Events: {(wh.outgoing_events ?? []).map((event) => eventLabels[event] ?? event).join(', ') || 'None'}
 										</p>
 									{/if}
 								</div>
