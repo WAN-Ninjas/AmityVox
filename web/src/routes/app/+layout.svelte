@@ -113,14 +113,14 @@
 <QuickSwitcher bind:open={quickSwitcherOpen} />
 
 {#if $isLoading}
-	<div class="flex h-screen items-center justify-center bg-bg-primary">
+	<div class="flex h-[var(--amityvox-shell-height,100vh)] items-center justify-center bg-bg-primary">
 		<div class="text-center">
 			<div class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
 			<p class="text-text-muted">Connecting...</p>
 		</div>
 	</div>
 {:else if $currentUser}
-	<div class="flex h-screen flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => { if (e.button === 2) e.preventDefault(); }} role="application">
+	<div class="flex h-[var(--amityvox-shell-height,100vh)] flex-col overflow-hidden bg-bg-primary" oncontextmenu={(e) => { if (e.button === 2) e.preventDefault(); }} role="application">
 		<div class="accent-stripe"></div>
 		<!-- Reconnecting banner -->
 		{#if !$gatewayConnected}

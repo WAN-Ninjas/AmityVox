@@ -478,6 +478,182 @@ func (ss *SyncService) ProxyCreateChannelMessage(
 	return true
 }
 
+// ProxyAckChannel checks if the channel belongs to a federated guild and, if
+// so, forwards read acknowledgement to the home instance. Returns true if
+// proxied (handler should return), false if local.
+func (ss *SyncService) ProxyAckChannel(w http.ResponseWriter, r *http.Request, channelID string) bool {
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+
+	var guildID string
+	var instanceID *string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT g.id, g.instance_id
+		 FROM channels c JOIN guilds g ON g.id = c.guild_id
+		 WHERE c.id = $1`, channelID,
+	).Scan(&guildID, &instanceID)
+	if err != nil {
+		return false
+	}
+	if instanceID == nil || *instanceID == ss.fed.instanceID {
+		return false
+	}
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT domain FROM instances WHERE id = $1`, *instanceID,
+	).Scan(&instanceDomain); err != nil {
+		ss.logger.Error("failed to resolve home instance domain for ack proxy",
+			slog.String("instance_id", *instanceID),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to resolve home instance",
+			},
+		})
+		return true
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/ack",
+		instanceDomain, guildID, channelID)
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, federatedGuildAckChannelRequest{UserID: userID})
+	if err != nil {
+		ss.logger.Error("failed to proxy channel ack to home instance",
+			slog.String("channel_id", channelID),
+			slog.String("guild_id", guildID),
+			slog.String("domain", instanceDomain),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to acknowledge channel on home instance",
+			},
+		})
+		return true
+	}
+
+	if statusCode >= 200 && statusCode < 300 {
+		var lastMessageID *string
+		if err := ss.fed.pool.QueryRow(ctx,
+			`SELECT last_message_id FROM channels WHERE id = $1`, channelID,
+		).Scan(&lastMessageID); err == nil && lastMessageID != nil {
+			if _, err := ss.fed.pool.Exec(ctx,
+				`INSERT INTO read_state (user_id, channel_id, last_read_id, mention_count)
+				 VALUES ($1, $2, $3, 0)
+				 ON CONFLICT (user_id, channel_id) DO UPDATE SET last_read_id = $3, mention_count = 0`,
+				userID, channelID, lastMessageID,
+			); err != nil {
+				ss.logger.Warn("failed to mirror proxied channel ack locally",
+					slog.String("channel_id", channelID),
+					slog.String("user_id", userID),
+					slog.String("error", err.Error()))
+			}
+		}
+	}
+
+	if statusCode == http.StatusNoContent {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
+	return true
+}
+
+// ProxyTranslateChannelMessage checks if the channel belongs to a federated
+// guild and, if so, forwards message translation to the home instance. Returns
+// true if proxied (handler should return), false if local.
+func (ss *SyncService) ProxyTranslateChannelMessage(w http.ResponseWriter, r *http.Request, channelID string, messageID string) bool {
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+
+	var guildID string
+	var instanceID *string
+	err := ss.fed.pool.QueryRow(ctx,
+		`SELECT g.id, g.instance_id
+		 FROM channels c JOIN guilds g ON g.id = c.guild_id
+		 WHERE c.id = $1`, channelID,
+	).Scan(&guildID, &instanceID)
+	if err != nil {
+		return false
+	}
+	if instanceID == nil || *instanceID == ss.fed.instanceID {
+		return false
+	}
+
+	var instanceDomain string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT domain FROM instances WHERE id = $1`, *instanceID,
+	).Scan(&instanceDomain); err != nil {
+		ss.logger.Error("failed to resolve home instance domain for translation proxy",
+			slog.String("instance_id", *instanceID),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to resolve home instance",
+			},
+		})
+		return true
+	}
+
+	var req struct {
+		TargetLang string `json:"target_lang"`
+		Force      bool   `json:"force,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "INVALID_JSON",
+				"message": "Invalid request body",
+			},
+		})
+		return true
+	}
+
+	payload := federatedGuildTranslateMessageRequest{
+		UserID:     userID,
+		TargetLang: req.TargetLang,
+		Force:      req.Force,
+	}
+
+	remoteURL := fmt.Sprintf("https://%s/federation/v1/guilds/%s/channels/%s/messages/%s/translate",
+		instanceDomain, guildID, channelID, messageID)
+	respBody, statusCode, err := ss.signAndPost(ctx, remoteURL, payload)
+	if err != nil {
+		ss.logger.Error("failed to proxy message translation to home instance",
+			slog.String("channel_id", channelID),
+			slog.String("message_id", messageID),
+			slog.String("guild_id", guildID),
+			slog.String("domain", instanceDomain),
+			slog.String("error", err.Error()))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "FEDERATION_PROXY_ERROR",
+				"message": "Failed to translate message on home instance",
+			},
+		})
+		return true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
+	return true
+}
+
 func (ss *SyncService) federatedAttachmentsForUploadIDs(ctx context.Context, userID string, attachmentIDs []string) ([]federatedAttachment, error) {
 	rows, err := ss.fed.pool.Query(ctx,
 		`SELECT id, message_id, uploader_id, filename, content_type, size_bytes,

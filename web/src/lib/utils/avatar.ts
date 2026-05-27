@@ -1,4 +1,6 @@
 /** Build the correct avatar/file URL, routing through federation proxy for remote instances. */
+import { getApiBase } from '$lib/desktop/instances';
+
 let localInstanceId: string | null = null;
 
 export function setLocalInstanceId(instanceId: string | null | undefined) {
@@ -11,12 +13,12 @@ function isRemoteInstance(instanceId: string | null | undefined): boolean {
 
 export function avatarUrl(avatarId: string | null | undefined, instanceId?: string | null): string | null {
 	if (!avatarId) return null;
-	if (isRemoteInstance(instanceId)) return `/api/v1/federation/media/${encodeURIComponent(instanceId!)}/${encodeURIComponent(avatarId)}`;
-	return `/api/v1/files/${avatarId}`;
+	if (isRemoteInstance(instanceId)) return `${getApiBase()}/federation/media/${encodeURIComponent(instanceId!)}/${encodeURIComponent(avatarId)}`;
+	return `${getApiBase()}/files/${avatarId}`;
 }
 
 /** Build a file URL, routing through federation proxy for remote instances. */
 export function fileUrl(fileId: string, instanceId?: string | null): string {
-	if (isRemoteInstance(instanceId)) return `/api/v1/federation/media/${encodeURIComponent(instanceId!)}/${encodeURIComponent(fileId)}`;
-	return `/api/v1/files/${fileId}`;
+	if (isRemoteInstance(instanceId)) return `${getApiBase()}/federation/media/${encodeURIComponent(instanceId!)}/${encodeURIComponent(fileId)}`;
+	return `${getApiBase()}/files/${fileId}`;
 }

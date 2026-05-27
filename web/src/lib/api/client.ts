@@ -72,8 +72,11 @@ import type {
 	NotificationTypePreference,
 	KeyAuditEntry
 } from '$lib/types';
+import { getApiBase, getScopedStorageKey } from '$lib/desktop/instances';
 
-const API_BASE = '/api/v1';
+function apiUrl(path: string): string {
+	return `${getApiBase()}${path}`;
+}
 
 export interface SharedTheme {
 	id: string;
@@ -753,19 +756,27 @@ export interface ChannelWidget {
 
 class ApiClient {
 	private token: string | null = null;
+	private tokenStorageKey: string | null = null;
 
 	setToken(token: string | null) {
+		const storageKey = getScopedStorageKey('token');
 		this.token = token;
+		this.tokenStorageKey = storageKey;
 		if (token) {
-			localStorage.setItem('token', token);
+			localStorage.setItem(storageKey, token);
 		} else {
-			localStorage.removeItem('token');
+			localStorage.removeItem(storageKey);
 		}
 	}
 
 	getToken(): string | null {
+		const storageKey = getScopedStorageKey('token');
+		if (this.tokenStorageKey !== storageKey) {
+			this.token = null;
+			this.tokenStorageKey = storageKey;
+		}
 		if (!this.token) {
-			this.token = localStorage.getItem('token');
+			this.token = localStorage.getItem(storageKey);
 		}
 		return this.token;
 	}
@@ -780,7 +791,7 @@ class ApiClient {
 			headers['Authorization'] = `Bearer ${token}`;
 		}
 
-		const res = await fetch(`${API_BASE}${path}`, {
+		const res = await fetch(apiUrl(path), {
 			method,
 			headers,
 			body: body ? JSON.stringify(body) : undefined
@@ -1387,7 +1398,7 @@ class ApiClient {
 
 		let res: Response;
 		try {
-			res = await fetch(`${API_BASE}/files/upload`, {
+			res = await fetch(apiUrl('/files/upload'), {
 				method: 'POST',
 				headers,
 				body: formData
@@ -2010,7 +2021,7 @@ class ApiClient {
 		const token = this.getToken();
 		if (token) headers['Authorization'] = `Bearer ${token}`;
 
-		const res = await fetch(`${API_BASE}/guilds/${guildId}/emoji`, {
+		const res = await fetch(apiUrl(`/guilds/${guildId}/emoji`), {
 			method: 'POST',
 			headers,
 			body: formData

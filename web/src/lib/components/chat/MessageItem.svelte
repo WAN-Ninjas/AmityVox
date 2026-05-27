@@ -38,6 +38,7 @@
 	import { avatarUrl, fileUrl } from '$lib/utils/avatar';
 	import { clientConfig, isExperimentalEnabled, isFeatureEnabled } from '$lib/stores/clientConfig';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { getPublicOrigin } from '$lib/desktop/instances';
 
 	interface Props {
 		message: Message;
@@ -349,9 +350,13 @@
 		const path = guildId
 			? `/app/guilds/${guildId}/channels/${message.channel_id}#msg-${message.id}`
 			: `/app/dms/${message.channel_id}#msg-${message.id}`;
-		const url = `${window.location.origin}${path}`;
+		const url = `${getPublicOrigin()}${path}`;
 		navigator.clipboard.writeText(url);
 		addToast('Link copied', 'info');
+	}
+
+	function toPublicUrl(path: string): string {
+		return /^https?:\/\//i.test(path) ? path : `${getPublicOrigin()}${path}`;
 	}
 
 	function handleCopyUserId() {
@@ -424,7 +429,7 @@
 
 	function copyAttachmentUrl(attachment: any) {
 		attachmentContextMenu = null;
-		navigator.clipboard.writeText(`${window.location.origin}${fileUrl(attachment.id, attachment.instance_id || undefined)}`);
+		navigator.clipboard.writeText(toPublicUrl(fileUrl(attachment.id, attachment.instance_id || undefined)));
 		addToast('URL copied', 'info');
 	}
 

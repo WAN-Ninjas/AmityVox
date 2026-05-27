@@ -2,13 +2,9 @@
 // Handles connection, heartbeating, identify, resume, and event dispatch.
 
 import { GatewayOp, type GatewayMessage, type ReadyEvent } from '$lib/types';
+import { getWebSocketUrl } from '$lib/desktop/instances';
 
 export type EventHandler = (eventType: string, data: unknown) => void;
-
-function getWsUrl(): string {
-	if (typeof location === 'undefined') return 'ws://localhost/ws';
-	return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
-}
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const MAX_RECONNECT_ATTEMPTS = 50;
@@ -51,7 +47,7 @@ export class GatewayClient {
 		if (this.ws) return;
 		this.closed = false;
 
-		const url = getWsUrl();
+		const url = getWebSocketUrl();
 		try {
 			this.ws = new WebSocket(url);
 		} catch {

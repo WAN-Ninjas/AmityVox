@@ -425,6 +425,8 @@ func runServe() error {
 	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/invite-accept", syncSvc.HandleFederatedGuildInviteAccept)
 	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages", syncSvc.HandleFederatedGuildMessages)
 	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/create", syncSvc.HandleFederatedGuildPostMessage)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/ack", syncSvc.HandleFederatedGuildAckChannel)
+	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/translate", syncSvc.HandleFederatedGuildTranslateMessage)
 	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/members", syncSvc.HandleFederatedGuildMembers)
 	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions", syncSvc.HandleFederatedGuildReactionAdd)
 	srv.Router.With(requireFederatedMessaging).Post("/federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/reactions/remove", syncSvc.HandleFederatedGuildReactionRemove)

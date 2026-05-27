@@ -941,7 +941,7 @@
 
 					{#if hasExpiringMessages}
 						<select
-							class="hidden h-7 rounded border border-transparent bg-transparent px-1 text-xs text-text-muted outline-none hover:border-bg-modifier hover:text-text-primary md:block"
+							class="message-expiry-select hidden h-7 rounded border border-transparent bg-bg-secondary px-1 text-xs text-text-secondary outline-none hover:border-bg-modifier hover:text-text-primary md:block"
 							title="Message expiry"
 							value={expirySeconds ?? ''}
 							onchange={(e) => setExpiryFromSelect((e.currentTarget as HTMLSelectElement).value)}
@@ -1090,7 +1090,7 @@
 								{/if}
 								{#if hasExpiringMessages}
 									<select
-										class="h-8 rounded border border-bg-modifier bg-bg-secondary px-1 text-xs text-text-secondary outline-none"
+										class="message-expiry-select h-8 rounded border border-bg-modifier bg-bg-secondary px-1 text-xs text-text-secondary outline-none"
 										title="Message expiry"
 										value={expirySeconds ?? ''}
 										onchange={(e) => setExpiryFromSelect((e.currentTarget as HTMLSelectElement).value)}
@@ -1212,3 +1212,11 @@
 		oncreated={handleCodeSnippetCreated}
 	/>
 </Modal>
+
+<style>
+	.message-expiry-select,
+	.message-expiry-select option {
+		background-color: var(--bg-secondary);
+		color: var(--text-primary);
+	}
+</style>

@@ -159,6 +159,33 @@ export APP_DIR=/home/user/amityvox
 
 `down` stops containers but keeps Docker volumes unless you add `-v`.
 
+## Desktop App Testing
+
+AmityVox includes an experimental Tauri desktop shell in `web/src-tauri`. The desktop client packages the existing SvelteKit frontend and connects to a hosted AmityVox instance over HTTPS/WSS.
+
+Install Tauri prerequisites first:
+
+- Rust via `rustup`
+- Linux WebKit/GTK build packages such as `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`, `pkg-config`, and build tools
+- Platform signing tools when building release installers
+
+Run the desktop app in development:
+
+```bash
+cd web
+npm install
+npm run tauri:dev
+```
+
+Build desktop bundles:
+
+```bash
+cd web
+npm run tauri:build
+```
+
+The desktop shell shows an instance bar at the top only when running inside Tauri. Add instance URLs there, such as `https://app.amityvox.chat` or a self-hosted domain. Browser users do not see this bar. Login tokens are stored per instance URL so multiple instances can be switched without sharing sessions.
+
 ## Configuration
 
 All runtime settings are controlled via environment variables in `.env`. The key variables:

@@ -41,6 +41,7 @@ deploy/garage/garage.toml
 
 # Dependencies (vendored separately if needed)
 /vendor/
+web/src-tauri/target/
 
 # Docker volumes and local data
 data/

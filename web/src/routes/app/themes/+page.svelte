@@ -6,6 +6,7 @@
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { clientConfig, isFeatureEnabled } from '$lib/stores/clientConfig';
+	import { getPublicOrigin } from '$lib/desktop/instances';
 
 	let themes = $state<SharedTheme[]>([]);
 	let loadOp = $state(createAsyncOp(true));
@@ -112,7 +113,7 @@
 
 	function copyShareLink(shareCode: string) {
 		if (!hasThemeEditor) return;
-		const url = `${window.location.origin}/app/themes?code=${shareCode}`;
+		const url = `${getPublicOrigin()}/app/themes?code=${shareCode}`;
 		navigator.clipboard.writeText(url).then(
 			() => addToast('Share link copied to clipboard', 'success'),
 			() => addToast('Failed to copy link', 'error')

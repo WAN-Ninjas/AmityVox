@@ -5,6 +5,7 @@
 	import { confirmAction } from '$lib/stores/confirm';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { getPublicOrigin } from '$lib/desktop/instances';
 	import {
 		instanceProfiles,
 		crossInstanceUnreadCount,
@@ -101,7 +102,7 @@
 	}
 
 	onMount(() => {
-		currentOrigin = window.location.origin;
+		currentOrigin = getPublicOrigin();
 		restoreActiveInstance();
 		loadProfiles();
 	});

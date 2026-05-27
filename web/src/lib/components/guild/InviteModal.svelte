@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import { currentGuildId } from '$lib/stores/guilds';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getPublicOrigin } from '$lib/desktop/instances';
 	import type { Invite } from '$lib/types';
 
 	interface Props {
@@ -40,7 +41,7 @@
 
 	function copyInvite() {
 		if (!invite) return;
-		const url = `${location.origin}/invite/${invite.code}`;
+		const url = `${getPublicOrigin()}/invite/${invite.code}`;
 		navigator.clipboard.writeText(url).then(() => {
 			copied = true;
 			setTimeout(() => (copied = false), 2000);
@@ -74,7 +75,7 @@
 					type="text"
 					class="input flex-1"
 					readonly
-					value={`${location.origin}/invite/${invite.code}`}
+					value={`${getPublicOrigin()}/invite/${invite.code}`}
 				/>
 				<button class="btn-primary" onclick={copyInvite}>
 					{copied ? 'Copied!' : 'Copy'}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
+	import { getApiBase, getPublicOrigin } from '$lib/desktop/instances';
 	import { addToast } from '$lib/stores/toast';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
@@ -73,11 +74,11 @@
 	}
 
 	function getEmbedUrl() {
-		return `${location.origin}/app/embed/${guildId}`;
+		return `${getPublicOrigin()}/app/embed/${guildId}`;
 	}
 
 	function getJsonUrl() {
-		return `${location.origin}/api/v1/guilds/${guildId}/widget.json`;
+		return `${getApiBase()}/guilds/${guildId}/widget.json`;
 	}
 
 	function copyEmbed() {

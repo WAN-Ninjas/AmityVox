@@ -3,6 +3,7 @@
 	import { api, type VideoRecording } from '$lib/api/client';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
+	import { fileUrl as buildFileUrl } from '$lib/utils/avatar';
 
 	interface Props {
 		channelId: string;
@@ -30,7 +31,7 @@
 	}
 
 	function fileUrl(recording: VideoRecording): string | null {
-		return recording.attachment_id ? `/api/v1/files/${recording.attachment_id}` : null;
+		return recording.attachment_id ? buildFileUrl(recording.attachment_id) : null;
 	}
 
 	async function loadRecordings() {

@@ -1707,6 +1707,14 @@ func (h *Handler) HandleAckChannel(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	channelID := chi.URLParam(r, "channelID")
 
+	// Federation proxy: read state for remote-guild channels is authoritative on
+	// the guild's home instance.
+	if h.FedProxy != nil {
+		if h.FedProxy.ProxyAckChannel(w, r, channelID) {
+			return
+		}
+	}
+
 	// Permission check: ViewChannel.
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")

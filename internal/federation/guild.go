@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	neturl "net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +63,31 @@ type federatedGuildPostMessageRequest struct {
 	ReplyToIDs       []string              `json:"reply_to_ids,omitempty"`
 	Attachments      []federatedAttachment `json:"attachments,omitempty"`
 	ExpiresInSeconds *int                  `json:"expires_in_seconds,omitempty"`
+}
+
+type federatedGuildTranslateMessageRequest struct {
+	UserID     string `json:"user_id"`
+	TargetLang string `json:"target_lang"`
+	Force      bool   `json:"force,omitempty"`
+}
+
+type federatedGuildAckChannelRequest struct {
+	UserID string `json:"user_id"`
+}
+
+type libreTranslateRequest struct {
+	Q      string `json:"q"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Format string `json:"format"`
+}
+
+type libreTranslateResponse struct {
+	TranslatedText   string `json:"translatedText"`
+	DetectedLanguage struct {
+		Confidence float64 `json:"confidence"`
+		Language   string  `json:"language"`
+	} `json:"detectedLanguage"`
 }
 
 type federatedGuildMembersRequest struct {
@@ -631,6 +657,234 @@ func (ss *SyncService) HandleFederatedGuildMessages(w http.ResponseWriter, r *ht
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": messages})
+}
+
+// HandleFederatedGuildAckChannel marks a guild channel as read for a federated
+// user after validating membership and channel permissions on the guild's home
+// instance.
+// POST /federation/v1/guilds/{guildID}/channels/{channelID}/ack
+func (ss *SyncService) HandleFederatedGuildAckChannel(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	if guildID == "" || channelID == "" {
+		http.Error(w, "Missing guild or channel ID", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildAckChannelRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" {
+		http.Error(w, "Missing user_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	var channelGuildID *string
+	var channelType *string
+	var lastMessageID *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type, last_message_id FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType, &lastMessageID); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil {
+		ss.logger.Error("failed to check guild membership", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+	if !ss.hasChannelPermission(ctx, guildID, channelID, req.UserID, permissions.ViewChannel) {
+		http.Error(w, "Missing ViewChannel permission", http.StatusForbidden)
+		return
+	}
+
+	if lastMessageID != nil {
+		if _, err := ss.fed.pool.Exec(ctx,
+			`INSERT INTO read_state (user_id, channel_id, last_read_id, mention_count)
+			 VALUES ($1, $2, $3, 0)
+			 ON CONFLICT (user_id, channel_id) DO UPDATE SET last_read_id = $3, mention_count = 0`,
+			req.UserID, channelID, lastMessageID,
+		); err != nil {
+			ss.logger.Error("failed to update federated read state", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleFederatedGuildTranslateMessage translates a guild channel message for a
+// federated user after validating membership and channel permissions on the
+// guild's home instance.
+// POST /federation/v1/guilds/{guildID}/channels/{channelID}/messages/{messageID}/translate
+func (ss *SyncService) HandleFederatedGuildTranslateMessage(w http.ResponseWriter, r *http.Request) {
+	signed, senderID, ok := ss.verifyFederationRequest(w, r)
+	if !ok {
+		return
+	}
+
+	guildID := chi.URLParam(r, "guildID")
+	channelID := chi.URLParam(r, "channelID")
+	messageID := chi.URLParam(r, "messageID")
+	if guildID == "" || channelID == "" || messageID == "" {
+		http.Error(w, "Missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	var req federatedGuildTranslateMessageRequest
+	if err := json.Unmarshal(signed.Payload, &req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.UserID == "" {
+		http.Error(w, "Missing user_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	if !ss.validateSenderUser(ctx, w, senderID, req.UserID) {
+		return
+	}
+
+	var channelGuildID *string
+	var channelType *string
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT guild_id, channel_type FROM channels WHERE id = $1`, channelID,
+	).Scan(&channelGuildID, &channelType); err != nil || channelGuildID == nil || *channelGuildID != guildID {
+		http.Error(w, "Channel not found in guild", http.StatusNotFound)
+		return
+	}
+	if channelType != nil && *channelType == "private" {
+		http.Error(w, "Channel not accessible", http.StatusForbidden)
+		return
+	}
+
+	var isMember bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND user_id = $2)`,
+		guildID, req.UserID,
+	).Scan(&isMember); err != nil {
+		ss.logger.Error("failed to check guild membership", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if !isMember {
+		http.Error(w, "Not a guild member", http.StatusForbidden)
+		return
+	}
+	if !ss.hasChannelPermission(ctx, guildID, channelID, req.UserID, permissions.ViewChannel|permissions.ReadHistory) {
+		http.Error(w, "Missing ViewChannel or ReadHistory permission", http.StatusForbidden)
+		return
+	}
+
+	enabled, apiURL, defaultLang := getFederationTranslationConfig()
+	if !enabled {
+		writeFederatedJSONError(w, http.StatusBadRequest, "translation_disabled", "Translation is not enabled on this instance")
+		return
+	}
+	if req.TargetLang == "" {
+		req.TargetLang = defaultLang
+	}
+	if len(req.TargetLang) < 2 || len(req.TargetLang) > 5 {
+		writeFederatedJSONError(w, http.StatusBadRequest, "invalid_lang", "Target language must be a 2-5 character language code")
+		return
+	}
+
+	var content *string
+	var encrypted bool
+	if err := ss.fed.pool.QueryRow(ctx,
+		`SELECT content, encrypted FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, channelID,
+	).Scan(&content, &encrypted); err != nil {
+		if err == pgx.ErrNoRows {
+			writeFederatedJSONError(w, http.StatusNotFound, "message_not_found", "Message not found")
+			return
+		}
+		ss.logger.Error("failed to fetch message for translation", slog.String("error", err.Error()))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if encrypted {
+		writeFederatedJSONError(w, http.StatusBadRequest, "encrypted_message", "Encrypted messages cannot be translated server-side")
+		return
+	}
+	if content == nil || *content == "" {
+		writeFederatedJSONError(w, http.StatusBadRequest, "no_content", "Message has no text content to translate")
+		return
+	}
+
+	if !req.Force {
+		var cachedText string
+		var cachedSourceLang string
+		err := ss.fed.pool.QueryRow(ctx,
+			`SELECT translated_text, source_lang FROM translation_cache
+			 WHERE message_id = $1 AND target_lang = $2`,
+			messageID, req.TargetLang,
+		).Scan(&cachedText, &cachedSourceLang)
+		if err == nil {
+			writeFederatedJSON(w, http.StatusOK, map[string]interface{}{
+				"message_id":      messageID,
+				"source_lang":     cachedSourceLang,
+				"target_lang":     req.TargetLang,
+				"translated_text": cachedText,
+				"cached":          true,
+			})
+			return
+		}
+	}
+
+	translated, sourceLang, err := ss.translateMessageContent(ctx, apiURL, *content, req.TargetLang)
+	if err != nil {
+		ss.logger.Error("failed to translate federated message", slog.String("error", err.Error()))
+		writeFederatedJSONError(w, http.StatusBadGateway, "translation_error", err.Error())
+		return
+	}
+
+	cacheID := models.NewULID().String()
+	if _, err := ss.fed.pool.Exec(ctx,
+		`INSERT INTO translation_cache (id, message_id, source_lang, target_lang, translated_text, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (message_id, target_lang) DO UPDATE SET
+		   translated_text = EXCLUDED.translated_text,
+		   source_lang = EXCLUDED.source_lang`,
+		cacheID, messageID, sourceLang, req.TargetLang, translated, time.Now(),
+	); err != nil {
+		ss.logger.Warn("failed to cache federated translation", slog.String("error", err.Error()))
+	}
+
+	writeFederatedJSON(w, http.StatusOK, map[string]interface{}{
+		"message_id":      messageID,
+		"source_lang":     sourceLang,
+		"target_lang":     req.TargetLang,
+		"translated_text": translated,
+		"cached":          false,
+	})
 }
 
 // HandleFederatedGuildPostMessage creates a message in a guild channel from a federated user.
@@ -2732,6 +2986,118 @@ func (ss *SyncService) signAndPost(ctx context.Context, targetURL string, payloa
 		return nil, resp.StatusCode, fmt.Errorf("reading response from %s: %w", targetURL, err)
 	}
 	return respBody, resp.StatusCode, nil
+}
+
+func getFederationTranslationConfig() (bool, string, string) {
+	enabled := os.Getenv("AMITYVOX_TRANSLATION_ENABLED")
+	if enabled != "true" && enabled != "1" {
+		return false, "", ""
+	}
+	apiURL := os.Getenv("AMITYVOX_TRANSLATION_API_URL")
+	if apiURL == "" {
+		apiURL = "http://localhost:5000"
+	}
+	defaultLang := os.Getenv("AMITYVOX_TRANSLATION_DEFAULT_LANG")
+	if defaultLang == "" {
+		defaultLang = "en"
+	}
+	return true, apiURL, defaultLang
+}
+
+func (ss *SyncService) translateMessageContent(ctx context.Context, apiURL, content, targetLang string) (string, string, error) {
+	ltReq := libreTranslateRequest{
+		Q:      content,
+		Source: "auto",
+		Target: targetLang,
+		Format: "text",
+	}
+	body, err := json.Marshal(ltReq)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to prepare translation request")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/translate", bytes.NewReader(body))
+	if err != nil {
+		return "", "", fmt.Errorf("failed to prepare translation request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("translation service is unavailable")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		ss.logger.Error("LibreTranslate returned error",
+			slog.Int("status", resp.StatusCode),
+			slog.String("body", string(respBody)),
+		)
+		return "", "", fmt.Errorf("translation service returned status %d", resp.StatusCode)
+	}
+
+	var ltResp libreTranslateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ltResp); err != nil {
+		return "", "", fmt.Errorf("failed to parse translation response")
+	}
+	if isRepeatedWordGarbage(ltResp.TranslatedText) {
+		return "", "", fmt.Errorf("translation service returned invalid output — check LibreTranslate configuration")
+	}
+
+	sourceLang := ltResp.DetectedLanguage.Language
+	if sourceLang == "" {
+		sourceLang = "auto"
+	}
+	return ltResp.TranslatedText, sourceLang, nil
+}
+
+func writeFederatedJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+}
+
+func writeFederatedJSONError(w http.ResponseWriter, status int, code string, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]string{
+			"code":    code,
+			"message": message,
+		},
+	})
+}
+
+func isRepeatedWordGarbage(text string) bool {
+	words := strings.Fields(text)
+	if len(words) >= 3 {
+		first := strings.ToLower(words[0])
+		allSame := true
+		for _, w := range words[1:] {
+			if strings.ToLower(w) != first {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return true
+		}
+	}
+
+	lower := strings.ToLower(text)
+	if len(lower) < 30 {
+		return false
+	}
+	for subLen := 3; subLen <= 20 && subLen <= len(lower)/5; subLen++ {
+		sub := lower[:subLen]
+		count := strings.Count(lower, sub)
+		if count >= 5 && len(sub)*count >= len(lower)/2 {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleProxyEnsureFederatedUser creates or updates a local user stub for a

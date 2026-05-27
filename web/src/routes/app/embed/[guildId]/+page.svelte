@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { getApiBase, getPublicOrigin } from '$lib/desktop/instances';
 	import { avatarUrl as buildAvatarUrl } from '$lib/utils/avatar';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { getErrorMessage } from '$lib/utils/apiError';
@@ -41,7 +42,7 @@
 	async function loadWidget(id: string) {
 		error = '';
 		await loadOp.run(async () => {
-			const resp = await fetch(`/api/v1/guilds/${id}/widget.json`);
+			const resp = await fetch(`${getApiBase()}/guilds/${id}/widget.json`);
 			if (!resp.ok) {
 				const err = await resp.json();
 				throw new Error(getErrorMessage(err, 'Widget not available'));
@@ -59,7 +60,7 @@
 	}
 
 	function getInviteUrl(code: string): string {
-		return `${location.origin}/invite/${code}`;
+		return `${getPublicOrigin()}/invite/${code}`;
 	}
 </script>
 

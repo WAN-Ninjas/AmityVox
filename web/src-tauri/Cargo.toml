@@ -1,0 +1,16 @@
+[package]
+name = "amityvox"
+version = "0.5.0"
+description = "AmityVox desktop client"
+authors = ["AmityVox"]
+edition = "2021"
+
+[lib]
+name = "amityvox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

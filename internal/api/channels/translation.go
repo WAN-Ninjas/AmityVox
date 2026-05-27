@@ -73,6 +73,14 @@ func (h *Handler) HandleTranslateMessage(w http.ResponseWriter, r *http.Request)
 	channelID := chi.URLParam(r, "channelID")
 	messageID := chi.URLParam(r, "messageID")
 
+	// Federation proxy: translate remote-guild messages on the home instance,
+	// where membership and channel permissions are authoritative.
+	if h.FedProxy != nil {
+		if h.FedProxy.ProxyTranslateChannelMessage(w, r, channelID, messageID) {
+			return
+		}
+	}
+
 	// Check that the user can view this channel.
 	if !h.hasChannelPermission(r.Context(), channelID, userID, permissions.ViewChannel) {
 		apiutil.WriteError(w, http.StatusForbidden, "missing_permission", "You need VIEW_CHANNEL permission")

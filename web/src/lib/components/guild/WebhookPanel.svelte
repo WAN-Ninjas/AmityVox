@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Webhook, Channel } from '$lib/types';
 	import { api } from '$lib/api/client';
+	import { getApiBase } from '$lib/desktop/instances';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
 	import { confirmAction } from '$lib/stores/confirm';
 	import { getErrorMessage } from '$lib/utils/apiError';
@@ -207,9 +208,13 @@
 	}
 
 	function copyWebhookUrl(webhook: Webhook) {
-		const url = `${window.location.origin}/api/v1/webhooks/${webhook.id}/${webhook.token}`;
+		const url = `${getApiBase()}/webhooks/${webhook.id}/${webhook.token}`;
 		navigator.clipboard.writeText(url);
 		onSuccess('Webhook URL copied to clipboard');
+	}
+
+	function webhookUrl(webhook: Webhook) {
+		return `${getApiBase()}/webhooks/${webhook.id}/${webhook.token}`;
 	}
 
 	function startEditing(wh: Webhook) {
@@ -625,7 +630,7 @@
 							{#if wh.webhook_type === 'incoming'}
 								<div class="mt-2 rounded bg-bg-primary p-2">
 									<code class="break-all text-2xs text-text-muted">
-										{window.location.origin}/api/v1/webhooks/{wh.id}/{wh.token}
+										{webhookUrl(wh)}
 									</code>
 								</div>
 							{/if}

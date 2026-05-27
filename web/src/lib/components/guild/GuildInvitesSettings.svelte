@@ -3,6 +3,7 @@
 	import { addToast } from '$lib/stores/toast';
 	import { getErrorMessage } from '$lib/utils/apiError';
 	import { createAsyncOp } from '$lib/utils/asyncOp';
+	import { getPublicOrigin } from '$lib/desktop/instances';
 	import type { Invite } from '$lib/types';
 
 	interface Props {
@@ -68,7 +69,7 @@
 	}
 
 	function copyInviteLink(code: string) {
-		navigator.clipboard.writeText(`${window.location.origin}/invite/${code}`).then(
+		navigator.clipboard.writeText(`${getPublicOrigin()}/invite/${code}`).then(
 			() => addToast('Invite link copied', 'success'),
 			() => addToast('Failed to copy invite link', 'error')
 		);
