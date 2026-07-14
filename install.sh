@@ -23,6 +23,14 @@
 #   AMITYVOX_ADMIN_EMAIL=admin@example.com \
 #   AMITYVOX_ADMIN_PASS=secretpassword \
 #   curl -fsSL .../install.sh | bash
+#
+# External reverse proxy mode (non-interactive):
+#   AMITYVOX_PROXY_MODE=external \
+#   AMITYVOX_HTTP_PORT=8080 \
+#   AMITYVOX_WS_PORT=8081 \
+#   AMITYVOX_WEB_PORT=3000 \
+#   AMITYVOX_RTC_PORT=7880 \
+#   ... (plus domain, admin, etc.)
 
 set -euo pipefail
 set -E
@@ -47,6 +55,7 @@ REPO_URL="${AMITYVOX_REPO:-https://github.com/WAN-Ninjas/AmityVox.git}"
 INSTALL_DIR="${AMITYVOX_DIR:-$HOME/amityvox}"
 BRANCH="${AMITYVOX_BRANCH:-main}"
 COMPOSE_FILE="deploy/docker/docker-compose.yml"
+COMPOSE_OVERRIDE=""
 NONINTERACTIVE="${AMITYVOX_NONINTERACTIVE:-0}"
 INSTALL_LOG_DIR="${AMITYVOX_INSTALL_LOG_DIR:-}"
 CURRENT_STEP="startup"
@@ -334,20 +343,34 @@ start_and_enable_service() {
 }
 
 compose() {
+    local compose_args=()
+    compose_args+=("--env-file" ".env") 2>/dev/null || true
+    compose_args+=("-f" "$COMPOSE_FILE")
+    if [ -n "$COMPOSE_OVERRIDE" ]; then
+        compose_args+=("-f" "$COMPOSE_OVERRIDE")
+    fi
+
     if [ -f ".env" ]; then
-        # Compose v2 generally auto-loads .env from the working directory, but
-        # some wrappers/package builds do not. Pass it explicitly for consistency.
-        $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" "$@"
+        $COMPOSE_CMD "${compose_args[@]}" "$@"
     else
-        $COMPOSE_CMD -f "$COMPOSE_FILE" "$@"
+        # No .env yet — omit --env-file.
+        local no_env_args=("-f" "$COMPOSE_FILE")
+        if [ -n "$COMPOSE_OVERRIDE" ]; then
+            no_env_args+=("-f" "$COMPOSE_OVERRIDE")
+        fi
+        $COMPOSE_CMD "${no_env_args[@]}" "$@"
     fi
 }
 
 compose_display() {
+    local extra=""
+    if [ -n "$COMPOSE_OVERRIDE" ]; then
+        extra=" -f $COMPOSE_OVERRIDE"
+    fi
     if [ -f ".env" ]; then
-        printf '%s --env-file .env -f %s' "$COMPOSE_CMD" "$COMPOSE_FILE"
+        printf '%s --env-file .env -f %s%s' "$COMPOSE_CMD" "$COMPOSE_FILE" "$extra"
     else
-        printf '%s -f %s' "$COMPOSE_CMD" "$COMPOSE_FILE"
+        printf '%s -f %s%s' "$COMPOSE_CMD" "$COMPOSE_FILE" "$extra"
     fi
 }
 
@@ -866,6 +889,40 @@ collect_config() {
     ask "Domain name (e.g. chat.example.com, or localhost for testing)" "localhost" "AMITYVOX_DOMAIN"
     DOMAIN="$REPLY"
 
+    # Reverse proxy mode
+    PROXY_MODE="${AMITYVOX_PROXY_MODE:-}"
+    if [ -z "$PROXY_MODE" ]; then
+        echo
+        ask_choice "Reverse proxy:" \
+            "Built-in Caddy (automatic TLS, recommended)" \
+            "External (I have my own reverse proxy on the network)"
+        case "$REPLY" in
+            "External"*) PROXY_MODE="external" ;;
+            *)           PROXY_MODE="caddy"    ;;
+        esac
+    fi
+
+    EXT_HTTP_PORT="${AMITYVOX_HTTP_PORT:-8080}"
+    EXT_WS_PORT="${AMITYVOX_WS_PORT:-8081}"
+    EXT_WEB_PORT="${AMITYVOX_WEB_PORT:-3000}"
+    EXT_RTC_PORT="${AMITYVOX_RTC_PORT:-7880}"
+
+    if [ "$PROXY_MODE" = "external" ]; then
+        echo
+        info "External proxy mode selected."
+        info "Ports will be exposed directly on this machine:"
+        if [ "$NONINTERACTIVE" != "1" ]; then
+            ask "HTTP API port" "$EXT_HTTP_PORT" "AMITYVOX_HTTP_PORT"
+            EXT_HTTP_PORT="$REPLY"
+            ask "WebSocket gateway port" "$EXT_WS_PORT" "AMITYVOX_WS_PORT"
+            EXT_WS_PORT="$REPLY"
+            ask "Frontend static files port" "$EXT_WEB_PORT" "AMITYVOX_WEB_PORT"
+            EXT_WEB_PORT="$REPLY"
+            ask "LiveKit signaling (HTTP) port" "$EXT_RTC_PORT" "AMITYVOX_RTC_PORT"
+            EXT_RTC_PORT="$REPLY"
+        fi
+    fi
+
     # Instance name
     ask "Instance name (shown in the UI)" "AmityVox" "AMITYVOX_NAME"
     INSTANCE_NAME="$REPLY"
@@ -1090,14 +1147,35 @@ AMITYVOX_MEDIA_MAX_UPLOAD_SIZE=$q_max_upload_size
 # ============================================================
 AMITYVOX_LOGGING_LEVEL=info
 AMITYVOX_LOGGING_FORMAT=json
+
+# ============================================================
+# Reverse Proxy Mode
+# ============================================================
+# "caddy" = built-in Caddy with auto-TLS (default)
+# "external" = ports exposed for an external reverse proxy
+AMITYVOX_PROXY_MODE=$PROXY_MODE
+AMITYVOX_HTTP_PORT=${EXT_HTTP_PORT:-8080}
+AMITYVOX_WS_PORT=${EXT_WS_PORT:-8081}
+AMITYVOX_WEB_PORT=${EXT_WEB_PORT:-3000}
+AMITYVOX_RTC_PORT=${EXT_RTC_PORT:-7880}
 EOF
 
     # Restrict permissions — .env contains all secrets.
     chmod 600 .env
     log "Configuration written to .env"
 
+    # Set compose override if using external proxy.
+    if [ "${PROXY_MODE:-caddy}" = "external" ]; then
+        COMPOSE_OVERRIDE="deploy/docker/docker-compose.external-proxy.yml"
+        log "External proxy mode: Caddy disabled, ports exposed directly."
+    fi
+
     # Generate config files that are .gitignored (domain/instance-specific).
-    generate_caddyfile
+    if [ "${PROXY_MODE:-caddy}" = "caddy" ]; then
+        generate_caddyfile
+    else
+        log "Skipping Caddyfile generation (external proxy mode)."
+    fi
     generate_garage_toml
     generate_livekit_yaml
 }
@@ -1622,7 +1700,39 @@ print_summary() {
     echo -e "  ${BOLD}Documentation:${NC}   https://github.com/WAN-Ninjas/AmityVox"
     echo
 
-    if [ "$DOMAIN" != "localhost" ]; then
+    if [ "${PROXY_MODE:-caddy}" = "external" ]; then
+        local http_port ws_port web_port rtc_port
+        http_port="$(env_file_value AMITYVOX_HTTP_PORT)"
+        http_port="${http_port:-8080}"
+        ws_port="$(env_file_value AMITYVOX_WS_PORT)"
+        ws_port="${ws_port:-8081}"
+        web_port="$(env_file_value AMITYVOX_WEB_PORT)"
+        web_port="${web_port:-3000}"
+        rtc_port="$(env_file_value AMITYVOX_RTC_PORT)"
+        rtc_port="${rtc_port:-7880}"
+        local this_ip
+        this_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<this-server>")
+
+        echo -e "  ${BOLD}${YELLOW}External Reverse Proxy Configuration${NC}"
+        echo
+        echo -e "  Your reverse proxy must route the following to this server ($this_ip):"
+        echo
+        echo -e "    ${CYAN}/api/*${NC}                  → http://$this_ip:$http_port"
+        echo -e "    ${CYAN}/health${NC}                 → http://$this_ip:$http_port"
+        echo -e "    ${CYAN}/.well-known/amityvox${NC}   → http://$this_ip:$http_port"
+        echo -e "    ${CYAN}/federation/*${NC}           → http://$this_ip:$http_port"
+        echo -e "    ${CYAN}/ws${NC}                     → ws://$this_ip:$ws_port  ${DIM}(WebSocket upgrade)${NC}"
+        echo -e "    ${CYAN}/rtc, /rtc/*${NC}            → http://$this_ip:$rtc_port  ${DIM}(LiveKit signaling)${NC}"
+        echo -e "    ${CYAN}/* (everything else)${NC}    → http://$this_ip:$web_port  ${DIM}(frontend SPA)${NC}"
+        echo
+        echo -e "  LiveKit UDP ports are also exposed on this host:"
+        echo -e "    ${CYAN}443/udp${NC}                 → TURN/STUN"
+        echo -e "    ${CYAN}50000-50100/udp${NC}         → WebRTC media"
+        echo
+        echo -e "  ${DIM}A sample nginx config is provided at:${NC}"
+        echo -e "  ${DIM}  deploy/nginx/reverse-proxy-sample.conf${NC}"
+        echo
+    elif [ "$DOMAIN" != "localhost" ]; then
         info "Caddy will automatically provision a TLS certificate for $DOMAIN."
         info "Make sure ports 80 and 443 are open and DNS points to this server."
         echo
@@ -1676,14 +1786,21 @@ main() {
                 ask_pass "Admin password (min 8 characters)" "AMITYVOX_ADMIN_PASS"
                 ADMIN_PASS="$REPLY"
             fi
-            # Read domain from existing .env for summary.
+            # Read domain and proxy mode from existing .env for summary.
             DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
             DOMAIN="$(strip_env_quotes "$DOMAIN")"
             DOMAIN="${DOMAIN:-localhost}"
+            PROXY_MODE=$(sed -n 's/^AMITYVOX_PROXY_MODE=//p' .env 2>/dev/null | head -1)
+            PROXY_MODE="${PROXY_MODE:-caddy}"
+            if [ "$PROXY_MODE" = "external" ]; then
+                COMPOSE_OVERRIDE="deploy/docker/docker-compose.external-proxy.yml"
+            fi
             # Ensure gitignored config files exist and are up to date.
             # Each function handles existing files by updating values in-place.
             step "refreshing generated config files"
-            generate_caddyfile
+            if [ "$PROXY_MODE" = "caddy" ]; then
+                generate_caddyfile
+            fi
             generate_garage_toml
             generate_livekit_yaml
         fi

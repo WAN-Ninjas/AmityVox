@@ -1,0 +1,64 @@
+# AmityVox Docker Compose Override — external reverse proxy mode.
+#
+# Disables the built-in Caddy reverse proxy and exposes service ports
+# directly so an external reverse proxy (nginx, Caddy, Traefik, HAProxy,
+# etc.) running elsewhere on the network can route traffic.
+#
+# Usage:
+#   docker compose -f deploy/docker/docker-compose.yml \
+#                  -f deploy/docker/docker-compose.external-proxy.yml up -d
+#
+# Exposed ports (all configurable via .env):
+#   ${AMITYVOX_HTTP_PORT:-8080}   → REST API, health, federation
+#   ${AMITYVOX_WS_PORT:-8081}     → WebSocket gateway
+#   ${AMITYVOX_WEB_PORT:-3000}    → Frontend static files (SPA)
+#   LiveKit UDP ports are already exposed in the base compose file.
+#
+# Your external reverse proxy must route:
+#   /api/*                  → http://<host>:${AMITYVOX_HTTP_PORT:-8080}
+#   /health                 → http://<host>:${AMITYVOX_HTTP_PORT:-8080}
+#   /.well-known/amityvox   → http://<host>:${AMITYVOX_HTTP_PORT:-8080}
+#   /federation/*           → http://<host>:${AMITYVOX_HTTP_PORT:-8080}
+#   /ws                     → ws://<host>:${AMITYVOX_WS_PORT:-8081}   (WebSocket upgrade)
+#   /rtc, /rtc/*            → http://<host>:${AMITYVOX_RTC_PORT:-7880} (LiveKit signaling)
+#   /* (everything else)    → http://<host>:${AMITYVOX_WEB_PORT:-3000} (frontend SPA)
+
+services:
+  # Expose AmityVox API and WebSocket ports to the host network.
+  amityvox:
+    ports:
+      - "${AMITYVOX_HTTP_PORT:-8080}:8080"
+      - "${AMITYVOX_WS_PORT:-8081}:8081"
+
+  # Expose LiveKit WebRTC signaling (HTTP) to the host.
+  livekit:
+    ports:
+      - "${AMITYVOX_RTC_PORT:-7880}:7880"
+
+  # Disable the built-in Caddy reverse proxy.
+  caddy:
+    profiles:
+      - disabled
+
+  # Lightweight static file server for the frontend SPA.
+  # Replaces Caddy's file_server role. Your external proxy routes
+  # non-API requests here.
+  web-static:
+    image: nginx:alpine
+    container_name: amityvox-web-static
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+    ports:
+      - "${AMITYVOX_WEB_PORT:-3000}:80"
+    volumes:
+      - web_build:/usr/share/nginx/html:ro
+      - ../../deploy/nginx/spa.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      web-init:
+        condition: service_completed_successfully
+    networks:
+      - amityvox
