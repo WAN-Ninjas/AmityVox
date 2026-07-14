@@ -12,6 +12,7 @@
 #   ${AMITYVOX_HTTP_PORT:-8080}   → REST API, health, federation
 #   ${AMITYVOX_WS_PORT:-8081}     → WebSocket gateway
 #   ${AMITYVOX_WEB_PORT:-3000}    → Frontend static files (SPA)
+#   ${AMITYVOX_RTC_PORT:-7880}    → LiveKit signaling (HTTP)
 #   LiveKit UDP ports are already exposed in the base compose file.
 #
 # Your external reverse proxy must route:
@@ -25,15 +26,18 @@
 
 services:
   # Expose AmityVox API and WebSocket ports to the host network.
+  # Set AMITYVOX_BIND_ADDR to restrict which interface these bind to
+  # (e.g. "127.0.0.1" if the proxy is on the same machine, or the
+  # LAN IP if the proxy is elsewhere). Default: all interfaces.
   amityvox:
     ports:
-      - "${AMITYVOX_HTTP_PORT:-8080}:8080"
-      - "${AMITYVOX_WS_PORT:-8081}:8081"
+      - "${AMITYVOX_BIND_ADDR:-0.0.0.0}:${AMITYVOX_HTTP_PORT:-8080}:8080"
+      - "${AMITYVOX_BIND_ADDR:-0.0.0.0}:${AMITYVOX_WS_PORT:-8081}:8081"
 
   # Expose LiveKit WebRTC signaling (HTTP) to the host.
   livekit:
     ports:
-      - "${AMITYVOX_RTC_PORT:-7880}:7880"
+      - "${AMITYVOX_BIND_ADDR:-0.0.0.0}:${AMITYVOX_RTC_PORT:-7880}:7880"
 
   # Disable the built-in Caddy reverse proxy.
   caddy:
@@ -53,7 +57,7 @@ services:
         max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
         max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     ports:
-      - "${AMITYVOX_WEB_PORT:-3000}:80"
+      - "${AMITYVOX_BIND_ADDR:-0.0.0.0}:${AMITYVOX_WEB_PORT:-3000}:80"
     volumes:
       - web_build:/usr/share/nginx/html:ro
       - ../../deploy/nginx/spa.conf:/etc/nginx/conf.d/default.conf:ro
