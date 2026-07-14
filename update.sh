@@ -25,6 +25,7 @@ REPO_URL="${AMITYVOX_REPO:-https://github.com/WAN-Ninjas/AmityVox.git}"
 INSTALL_DIR="${AMITYVOX_DIR:-$HOME/amityvox}"
 BRANCH="${AMITYVOX_BRANCH:-main}"
 COMPOSE_FILE="deploy/docker/docker-compose.yml"
+COMPOSE_OVERRIDE=""
 NONINTERACTIVE="${AMITYVOX_NONINTERACTIVE:-0}"
 SKIP_BACKUP="${AMITYVOX_SKIP_BACKUP:-0}"
 BACKUP_ROOT="${AMITYVOX_UPDATE_BACKUP_DIR:-./backups}"
@@ -96,18 +97,26 @@ run_verbose() {
 }
 
 compose() {
+    local args=("-f" "$COMPOSE_FILE")
+    if [ -n "$COMPOSE_OVERRIDE" ]; then
+        args+=("-f" "$COMPOSE_OVERRIDE")
+    fi
     if [ -f ".env" ]; then
-        $COMPOSE_CMD --env-file .env -f "$COMPOSE_FILE" "$@"
+        $COMPOSE_CMD --env-file .env "${args[@]}" "$@"
     else
-        $COMPOSE_CMD -f "$COMPOSE_FILE" "$@"
+        $COMPOSE_CMD "${args[@]}" "$@"
     fi
 }
 
 compose_display() {
+    local extra=""
+    if [ -n "$COMPOSE_OVERRIDE" ]; then
+        extra=" -f $COMPOSE_OVERRIDE"
+    fi
     if [ -f ".env" ]; then
-        echo "$COMPOSE_CMD --env-file .env -f $COMPOSE_FILE"
+        echo "$COMPOSE_CMD --env-file .env -f $COMPOSE_FILE$extra"
     else
-        echo "$COMPOSE_CMD -f $COMPOSE_FILE"
+        echo "$COMPOSE_CMD -f $COMPOSE_FILE$extra"
     fi
 }
 
@@ -188,6 +197,19 @@ preflight() {
     fi
 
     PREVIOUS_COMMIT="$(git rev-parse HEAD)"
+
+    # Detect proxy mode from .env and set compose override accordingly.
+    local proxy_mode
+    proxy_mode="$(sed -n 's/^AMITYVOX_PROXY_MODE=//p' .env | head -1)"
+    if [ "$proxy_mode" = "external" ]; then
+        if [ -f "deploy/docker/docker-compose.external-proxy.yml" ]; then
+            COMPOSE_OVERRIDE="deploy/docker/docker-compose.external-proxy.yml"
+            log "External proxy mode detected — using compose override."
+        else
+            warn "AMITYVOX_PROXY_MODE=external but override file is missing."
+            warn "Falling back to default compose (Caddy mode)."
+        fi
+    fi
 }
 
 create_backup() {
@@ -259,8 +281,12 @@ update_services() {
     log "Recreating changed services without removing volumes..."
     run_verbose compose up -d
 
-    log "Refreshing Caddy so updated web assets are served..."
-    run_verbose compose restart caddy
+    if [ -z "$COMPOSE_OVERRIDE" ]; then
+        log "Refreshing Caddy so updated web assets are served..."
+        run_verbose compose restart caddy
+    else
+        log "External proxy mode — skipping Caddy restart."
+    fi
 }
 
 health_check() {
@@ -303,7 +329,9 @@ on_error() {
         err "  git checkout $PREVIOUS_COMMIT"
         err "  $(compose_display) build amityvox web-init"
         err "  $(compose_display) up -d"
-        err "  $(compose_display) restart caddy"
+        if [ -z "$COMPOSE_OVERRIDE" ]; then
+            err "  $(compose_display) restart caddy"
+        fi
     fi
 }
 

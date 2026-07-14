@@ -891,6 +891,10 @@ collect_config() {
 
     # Reverse proxy mode
     PROXY_MODE="${AMITYVOX_PROXY_MODE:-}"
+    if [ -n "$PROXY_MODE" ] && [ "$PROXY_MODE" != "caddy" ] && [ "$PROXY_MODE" != "external" ]; then
+        err "Invalid AMITYVOX_PROXY_MODE='$PROXY_MODE'. Must be 'caddy' or 'external'."
+        exit 1
+    fi
     if [ -z "$PROXY_MODE" ]; then
         echo
         ask_choice "Reverse proxy:" \
@@ -920,6 +924,22 @@ collect_config() {
             EXT_WEB_PORT="$REPLY"
             ask "LiveKit signaling (HTTP) port" "$EXT_RTC_PORT" "AMITYVOX_RTC_PORT"
             EXT_RTC_PORT="$REPLY"
+        fi
+
+        # Validate port values.
+        for port_val in "$EXT_HTTP_PORT" "$EXT_WS_PORT" "$EXT_WEB_PORT" "$EXT_RTC_PORT"; do
+            if ! [[ "$port_val" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$port_val" -gt 65535 ]; then
+                err "Invalid port number: $port_val (must be 1-65535)."
+                exit 1
+            fi
+        done
+
+        # Ensure no duplicate ports.
+        if [ "$EXT_HTTP_PORT" = "$EXT_WS_PORT" ] || [ "$EXT_HTTP_PORT" = "$EXT_WEB_PORT" ] ||
+           [ "$EXT_HTTP_PORT" = "$EXT_RTC_PORT" ] || [ "$EXT_WS_PORT" = "$EXT_WEB_PORT" ] ||
+           [ "$EXT_WS_PORT" = "$EXT_RTC_PORT" ] || [ "$EXT_WEB_PORT" = "$EXT_RTC_PORT" ]; then
+            err "External proxy ports must all be unique (got: $EXT_HTTP_PORT, $EXT_WS_PORT, $EXT_WEB_PORT, $EXT_RTC_PORT)."
+            exit 1
         fi
     fi
 
@@ -1158,6 +1178,10 @@ AMITYVOX_HTTP_PORT=${EXT_HTTP_PORT:-8080}
 AMITYVOX_WS_PORT=${EXT_WS_PORT:-8081}
 AMITYVOX_WEB_PORT=${EXT_WEB_PORT:-3000}
 AMITYVOX_RTC_PORT=${EXT_RTC_PORT:-7880}
+# Bind address for exposed ports in external proxy mode.
+# Set to 127.0.0.1 if the proxy is on the same machine, or a specific
+# LAN IP to restrict access. Default 0.0.0.0 binds all interfaces.
+AMITYVOX_BIND_ADDR=${AMITYVOX_BIND_ADDR:-0.0.0.0}
 EOF
 
     # Restrict permissions — .env contains all secrets.
@@ -1710,8 +1734,13 @@ print_summary() {
         web_port="${web_port:-3000}"
         rtc_port="$(env_file_value AMITYVOX_RTC_PORT)"
         rtc_port="${rtc_port:-7880}"
-        local this_ip
-        this_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<this-server>")
+        local this_ip="<your-server-ip>"
+        # Try to detect a useful IP, but fall back to a placeholder.
+        local detected_ip
+        detected_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+        if [ -n "$detected_ip" ] && [ "$detected_ip" != "127.0.0.1" ]; then
+            this_ip="$detected_ip"
+        fi
 
         echo -e "  ${BOLD}${YELLOW}External Reverse Proxy Configuration${NC}"
         echo
@@ -1790,8 +1819,12 @@ main() {
             DOMAIN=$(sed -n 's/^AMITYVOX_INSTANCE_DOMAIN=//p' .env 2>/dev/null | head -1)
             DOMAIN="$(strip_env_quotes "$DOMAIN")"
             DOMAIN="${DOMAIN:-localhost}"
-            PROXY_MODE=$(sed -n 's/^AMITYVOX_PROXY_MODE=//p' .env 2>/dev/null | head -1)
+            PROXY_MODE="$(env_file_value AMITYVOX_PROXY_MODE)"
             PROXY_MODE="${PROXY_MODE:-caddy}"
+            if [ "$PROXY_MODE" != "caddy" ] && [ "$PROXY_MODE" != "external" ]; then
+                warn "Unknown AMITYVOX_PROXY_MODE='$PROXY_MODE' in .env — defaulting to caddy."
+                PROXY_MODE="caddy"
+            fi
             if [ "$PROXY_MODE" = "external" ]; then
                 COMPOSE_OVERRIDE="deploy/docker/docker-compose.external-proxy.yml"
             fi
