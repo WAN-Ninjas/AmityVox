@@ -18,7 +18,7 @@ services:
   # AmityVox Core Server
   # ============================================================
   amityvox:
-    image: ghcr.io/wan-ninjas/amityvox:${AMITYVOX_TAG:-0.5.0}
+    image: ghcr.io/wan-ninjas/amityvox:${AMITYVOX_TAG:-latest}
     container_name: amityvox
     restart: unless-stopped
     logging: *default-logging
@@ -77,7 +77,7 @@ services:
   # Web Init — copies frontend build to shared volume for Caddy
   # ============================================================
   web-init:
-    image: ghcr.io/wan-ninjas/amityvox:${AMITYVOX_TAG:-0.5.0}
+    image: ghcr.io/wan-ninjas/amityvox:${AMITYVOX_TAG:-latest}
     container_name: amityvox-web-init
     logging: *default-logging
     entrypoint: ["sh", "-c", "rm -rf /srv/_app && cp -r /srv/web/* /srv/public/"]
